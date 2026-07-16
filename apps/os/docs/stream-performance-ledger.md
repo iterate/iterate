@@ -5237,7 +5237,10 @@ the roughly 30% aggregate.
 Evidence, rejected startup output, exact metadata, analyzer, and results are in
 `/Users/jonastemplestein/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz`,
 SHA-256
-`79bb331467846640c7f60d1cc045a9130e13622cffc03e3117e4fc81223f1c7a`.
+`2e4c17b1d1283e9d2daeafb4c178f9abf26009388d1994af546620f6cb1a7eab`.
+The copied analyzer's stale default identities and log prefix were repaired
+before re-archiving. Re-running it produced byte-identical `analysis.json` and
+`analysis.txt`; only the reproducibility source and archive checksum changed.
 Production remains untouched.
 
 ## 2026-07-16: Flattened Dispatch Telemetry Is Not Clean
@@ -5299,3 +5302,50 @@ watchdog remains a real host-time bound.
 This fix is not considered closed until the exact revision is deployed, the
 onboarding flow passes, and the complete preview telemetry contains no new
 unexplained errors. Production remains untouched.
+
+## 2026-07-16: Checkpoint 18 Seals The Corrected Candidate
+
+The landing checkpoint compared exact corrected candidate
+`0e1e944699ecfec83a3ed9f73e36389a7934bfea` with still-current exact main
+`8a10191f4d50055f263d61b6acd5c81d4da7013d`. The server and client for each arm
+ran from clean detached worktrees. Five alternating processes per revision ran
+the complete suite, append/reactivation tail, live-delivery tail, cross-post,
+and storage/reactivation lanes. All elapsed measurements came from the Node
+host around completed network work, never a Worker-local clock.
+
+The first runner invocation stopped before a benchmark process because the two
+new worktree paths lacked local Doppler scopes. After both paths resolved to
+`os/dev`, the unchanged runner completed all 50 measurement processes without a
+retry. The analyzer accepted 35,750 finite observations with exact revisions,
+metric sets, sample cardinalities, and passing test markers.
+
+| Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
+| ------------------------- | --------------: | --------------: | ---------------: |
+| Unmodified full suite     |         30.871% |         19.578% |          28.221% |
+| Conservative substitution |         30.718% |         29.691% |          30.566% |
+
+The enlarged controls retained the central gains: acknowledgement-only 1 KiB
+append improved p50 65.56%; 1,000 tiny events improved p50 42.26% and
+throughput 73.20%; 32 concurrent singleton appends improved p50 37.51% and
+throughput 60.02%; one live subscriber improved p50 50.98%; inline 768 KiB
+append improved p50 50.05%; and sparse read after reactivation improved p50
+56.27%.
+
+The result is not uniform. Low-sample full-suite 100-event append and
+25-subscriber p95 regressed 101.90% and 110.65%, while their 200/300-sample
+focused lanes improved p95 17.55% and 9.44%. The focused forced-reactivation
+lane improved p50 5.47% but regressed p95 50.72% and mean 1.18%. Replay p95
+regressed 9.45% in the full lane and 28.79% in the cross-post lane while its
+p50, mean, and throughput remained positive. The conservative aggregate uses
+the enlarged controls but does not erase these negative rows.
+
+The exact candidate also passes root typecheck, lint, formatting, and the
+recursive workspace test matrix from its clean detached worktree. The OS suite
+passes 1,979 tests with one intentional skip across 190 files.
+
+Evidence, exact metadata, runner, analyzer, all accepted logs, and server
+lifecycle logs are archived at
+`/Users/jonastemplestein/stream-performance-evidence-2026-07-16-checkpoint-18.tar.gz`,
+SHA-256
+`788ab90ed9112529096ef33da67a919d2c54e306a53f907f76183909e0a7d251`.
+Production remains untouched.

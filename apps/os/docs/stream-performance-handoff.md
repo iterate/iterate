@@ -6,11 +6,13 @@ integrating `origin/main` through `8a10191f4` into draft PR
 includes the #2002 processor runner/registry redesign, #2038 explicit processor
 births, #2040 native trace roots for Stream retry alarms, and #2046's
 runtime-neutral inspector UI. The latest exact checkpoint compares branch head
-`b234b1df6` with exact current main `8a10191f4`; earlier candidate `b2712ad09`
+`0e1e94469` with exact current main `8a10191f4`; earlier candidate `b2712ad09`
 versus main `7495c6802` isolated the activation checkpoint regression. Commit
 `c263535fe` fixes that regression, merge `6d77a8fe5` accepts main's task-document
 cleanup, and `d0e92dc38` makes the deployed benchmark wait for repository
-readiness. Production has not been deployed, erased, or otherwise changed.
+readiness. Commit `0e1e94469` removes the recursive project-birth wait and makes
+the root capability-host subscription retry-idempotent. Production has not been
+deployed, erased, or otherwise changed.
 
 ## 2026-07-16 Integration Update
 
@@ -34,13 +36,12 @@ that option, so the RPC contract intentionally exposes one union result and
 callers narrow an explicitly requested projection with shared helpers. No
 public `appendAck` compatibility verb was reintroduced.
 
-The resolved tree passes root typecheck, lint, formatting, and the recursive
-workspace test matrix. The focused Stream matrix passes 478 tests; the affected
-cross-domain matrix passes 208. The complete OS unit suite passes 1,969 tests
-with one intentional skip across 188 files. Generated OS and package ITX
-APIs/examples were regenerated from source. Later bootstrap/idempotency fixes
-pass 544 Stream-domain tests, and the exact post-merge cumulative checkpoint is
-recorded below.
+The exact detached candidate passes root typecheck, lint, formatting, and the
+recursive workspace test matrix. The complete OS unit suite passes 1,979 tests
+with one intentional skip across 190 files. Generated OS and package ITX
+APIs/examples were regenerated from source. The project-bootstrap correction's
+focused suite passes all six tests, including injected partial failure and
+retry, and the exact post-merge cumulative checkpoint is recorded below.
 
 ### Preview-9 correctness findings
 
@@ -138,40 +139,42 @@ pass, and the complete preview telemetry is coherent.
 ### Exact current-main checkpoint
 
 Two immutable local Worker stacks compared exact branch head
-`b234b1df664725a57f3fad9a1a95fb591b5b41dc` with freshly fetched exact main
+`0e1e944699ecfec83a3ed9f73e36389a7934bfea` with freshly fetched exact main
 `8a10191f4d50055f263d61b6acd5c81d4da7013d`. Five alternating fresh processes
 per revision ran each of the complete suite, enlarged append/reactivation,
 live delivery, enlarged cross-post, and storage/reactivation lanes. All 50
 processes and 35,750 host-timed observations passed identity, cardinality,
-finiteness, and semantic validation.
+finiteness, and semantic validation without a measurement retry.
 
 | Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
 | ------------------------- | --------------: | --------------: | ---------------: |
-| Unmodified full suite     |     **30.204%** |     **28.590%** |      **31.906%** |
-| Conservative substitution |     **29.651%** |     **27.002%** |      **30.356%** |
+| Unmodified full suite     |     **30.871%** |     **19.578%** |      **28.221%** |
+| Conservative substitution |     **30.718%** |     **29.691%** |      **30.566%** |
 
 The conservative row replaces low-count full-suite singleton append,
 100-event append, concurrent append, and one/25-subscriber rows with their
 larger focused controls. It is an equal-workload geometric summary, not a
-production-traffic weighting. Checkpoint 16, candidate `b2712ad09` versus main
-`7495c6802`, reported 28.889%/18.188%/29.914% for the unmodified suite and
-30.568%/27.018%/31.619% conservatively. Both establish the same roughly 30%
-central result; their lane spread is the more useful warning about local-run
-tail variance.
+production-traffic weighting. Checkpoints 16 and 17 reported conservative
+p50/p95/mean improvements of 30.568%/27.018%/31.619% and
+29.651%/27.002%/30.356%. All three establish the same roughly 30% central
+result; their lane spread is the more useful warning about local-run tail
+variance.
 
-The larger controls retain the useful wins: p50 improved 66.00% for
-acknowledgement-only 1 KiB append, 29.75% for 100 tiny events, 30.58% for 100 x
-1 KiB, 39.52% for 1,000 tiny, 30.70% for 32 concurrent singleton calls, 50.54%
-for one live subscriber, 3.64% for 25 live subscribers, and 43.75% for one
-inline 768 KiB event. Corresponding throughput improved 42.35%, 44.04%, 65.33%,
-44.30%, and 3.78% in the batch/concurrent/fanout lanes.
+The larger controls retain the useful wins: p50 improved 65.56% for
+acknowledgement-only 1 KiB append, 30.01% for 100 tiny events, 34.47% for 100 x
+1 KiB, 42.26% for 1,000 tiny, 37.51% for 32 concurrent singleton calls, 50.98%
+for one live subscriber, 7.11% for 25 live subscribers, 50.05% for one inline
+768 KiB event, and 56.27% for sparse read after reactivation. Throughput
+improved 42.88%, 52.60%, 73.20%, 60.02%, and 7.66% in the corresponding
+batch/concurrent/fanout lanes.
 
-The result is not uniform. The focused 25-subscriber lane regressed p95 17.73%
-and mean 2.16%; its p50 and throughput still improved. Focused dense cross-post
-regressed p50/p95/mean 13.51%/13.05%/12.83%, while the full-suite dense row was
-near neutral and sparse cross-post improved. The enlarged reactivation lane
-improved p50 4.71% but regressed p95 55.95% and mean 13.07%. These tails remain
-visible in the archive rather than being inferred away from the aggregate.
+The result is not uniform. Low-sample full-suite 100-event append and
+25-subscriber p95 regressed 101.90% and 110.65%, while their 200/300-sample
+focused lanes improved p95 17.55% and 9.44%. The enlarged reactivation lane
+improved p50 5.47% but regressed p95 50.72% and mean 1.18%. Replay p95 regressed
+9.45% in the full lane and 28.79% in the cross-post lane while p50, mean, and
+throughput remained positive. These tails remain visible in the archive rather
+than being inferred away from the aggregate.
 
 The checkpoint exposed one activation regression: across five 100-sample
 processes, forced-reactivation head p50 was neutral at 0.62% slower but p95 was
@@ -194,10 +197,17 @@ In checkpoint 17, dense post-reactivation read improved 15.16% p50 and 5.55%
 p95; sparse read improved 31.91% p50 and 15.31% p95. The 1.1 MiB chunked append
 improved 13.50% p50, 16.02% p95, and 10.70% mean.
 
-Checkpoint 17's logs, metadata, validator, run repair, and analyses are archived
-at `~/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz` (4.6 MiB),
+Checkpoint 18's logs, metadata, validator, and analyses are archived at
+`~/stream-performance-evidence-2026-07-16-checkpoint-18.tar.gz` (4.5 MiB),
 SHA-256
-`79bb331467846640c7f60d1cc045a9130e13622cffc03e3117e4fc81223f1c7a`.
+`788ab90ed9112529096ef33da67a919d2c54e306a53f907f76183909e0a7d251`.
+Checkpoint 17 remains archived at
+`~/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz` (4.6 MiB),
+SHA-256
+`2e4c17b1d1283e9d2daeafb4c178f9abf26009388d1994af546620f6cb1a7eab`.
+Its copied analyzer had stale default revisions and a stale log prefix; repairing
+those defaults reproduced byte-identical `analysis.json` and `analysis.txt`
+before this replacement archive was created.
 The earlier checkpoint-16 matrices remain at
 `~/stream-performance-evidence-2026-07-16.tar.gz`, SHA-256
 `09caee4e742ab454ea2e8e2047c8146c24bbe965963a4790ee2e2ab9c2ba9552`.
@@ -297,12 +307,13 @@ acceptance gates are in the
 
 The measured merged implementation is a large, real performance win. Its
 latest exact-current-main checkpoint used 50 valid fresh Node/Vitest processes
-and reported an equal-workload geometric improvement of 29.651% p50, 27.002%
-p95, and 30.356% mean under the conservative substitution rule. The
-unmodified suite improved 30.204%/28.590%/31.906%. Checkpoint 16's prior
-conservative result was 30.568%/27.018%/31.619%; the small difference is
-local-run variance rather than an additive change. These are equal-workload
-summaries, not production-traffic weighting or a sum of isolated wins.
+and reported an equal-workload geometric improvement of 30.718% p50, 29.691%
+p95, and 30.566% mean under the conservative substitution rule. The
+unmodified suite improved 30.871%/19.578%/28.221%; its lower p95 headline is
+driven by two low-sample tails whose enlarged controls were positive.
+Checkpoints 16 and 17 independently reported roughly the same 30% central
+result. These are equal-workload summaries, not production-traffic weighting
+or a sum of isolated wins.
 
 The strongest mechanisms are straightforward:
 
@@ -325,28 +336,28 @@ and performance oracle.
 
 ## Measured Result
 
-The latest cumulative comparison used branch head `b234b1df6` against exact
+The latest cumulative comparison used branch head `0e1e94469` against exact
 current main `8a10191f4`. Every timer was on the Node host around
 awaited network/RPC work or host-observed delivery; no claim relies on a
 Worker-local clock advancing while Cloudflare has no network I/O in flight.
 
 | Workload                            |  Main p50 | Candidate p50 |        Change |
 | ----------------------------------- | --------: | ------------: | ------------: |
-| Append one 1 KiB event, no result   |  2.433 ms |      0.827 ms | 66.00% faster |
-| Append 100 tiny events              |  4.289 ms |      3.013 ms | 29.75% faster |
-| Append 100 x 1 KiB events           |  7.729 ms |      5.366 ms | 30.58% faster |
-| Append 1,000 tiny events            | 25.742 ms |     15.569 ms | 39.52% faster |
-| 32 concurrent singleton appends     | 10.694 ms |      7.411 ms | 30.70% faster |
-| Append to one live subscriber       |  1.864 ms |      0.922 ms | 50.54% faster |
-| Append to 25 live subscribers       |  3.405 ms |      3.281 ms |  3.64% faster |
-| Read hot head                       |  0.674 ms |      0.529 ms | 21.52% faster |
-| Read 500 dense 4 KiB events         | 15.083 ms |     12.842 ms | 14.86% faster |
-| Read 20 selected events from 2,000  |  0.875 ms |      0.841 ms |  3.95% faster |
-| Read latest selected event          |  0.803 ms |      0.572 ms | 28.78% faster |
-| Append one inline 768 KiB event     | 41.642 ms |     23.424 ms | 43.75% faster |
-| Append one chunked 1.1 MiB event    | 36.174 ms |     31.291 ms | 13.50% faster |
-| Dense durable cross-post            |  4.713 ms |      4.582 ms |  2.80% faster |
-| Sparse durable cross-post, 1 of 100 |  6.205 ms |      5.671 ms |  8.62% faster |
+| Append one 1 KiB event, no result   |  2.322 ms |      0.800 ms | 65.56% faster |
+| Append 100 tiny events              |  4.007 ms |      2.805 ms | 30.01% faster |
+| Append 100 x 1 KiB events           |  7.201 ms |      4.719 ms | 34.47% faster |
+| Append 1,000 tiny events            | 24.486 ms |     14.138 ms | 42.26% faster |
+| 32 concurrent singleton appends     | 10.094 ms |      6.308 ms | 37.51% faster |
+| Append to one live subscriber       |  1.677 ms |      0.822 ms | 50.98% faster |
+| Append to 25 live subscribers       |  3.172 ms |      2.947 ms |  7.11% faster |
+| Read hot head                       |  0.594 ms |      0.501 ms | 15.70% faster |
+| Read 500 dense 4 KiB events         | 14.927 ms |     12.216 ms | 18.16% faster |
+| Read 20 selected events from 2,000  |  0.819 ms |      0.743 ms |  9.23% faster |
+| Read latest selected event          |  0.743 ms |      0.534 ms | 28.11% faster |
+| Append one inline 768 KiB event     | 40.773 ms |     20.367 ms | 50.05% faster |
+| Append one chunked 1.1 MiB event    | 34.710 ms |     30.235 ms | 12.89% faster |
+| Dense durable cross-post            |  4.476 ms |      4.270 ms |  4.61% faster |
+| Sparse durable cross-post, 1 of 100 |  5.579 ms |      4.434 ms | 20.52% faster |
 
 Focused demand-bound replay used 1,000 Streams with 500 events each. Compared
 with exact main, the shipping implementation improved p50/p95/p99/mean by
@@ -477,11 +488,10 @@ StreamDurableObject
   `-- subscriber-sinks                  RPC/webhook transport and ownership
 ```
 
-Against current main `8a10191f4`, branch head before this documentation update
-differs by 137 files and `+22,987/-3,162` lines. That number is
-dominated by this evidence ledger, tests, generated API output, and call-site
-migration. The Stream domain has 25 changed non-test production files at
-`+4,517/-1,233`, net +3,284 lines.
+Against current main `8a10191f4`, exact candidate `0e1e94469` differs by 140
+files and `+23,534/-3,264` lines. That number is dominated by this evidence
+ledger, tests, generated API output, and call-site migration. The Stream domain
+has 24 changed non-test production files at `+4,511/-1,227`, net +3,284 lines.
 
 After the current-main integration, the eight largest runtime
 coordination/storage/runner files total 8,437 lines. The old pre-runner estimate
@@ -766,7 +776,10 @@ The final dispatch and callback experiments are archived at:
 sha256: 736bb5abd16f03a2dcca19b973fdb9dd1153930929a1d2e665082259beba1afe
 
 /Users/jonastemplestein/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz
-sha256: 79bb331467846640c7f60d1cc045a9130e13622cffc03e3117e4fc81223f1c7a
+sha256: 2e4c17b1d1283e9d2daeafb4c178f9abf26009388d1994af546620f6cb1a7eab
+
+/Users/jonastemplestein/stream-performance-evidence-2026-07-16-checkpoint-18.tar.gz
+sha256: 788ab90ed9112529096ef33da67a919d2c54e306a53f907f76183909e0a7d251
 
 /Users/jonastemplestein/stream-process-event-adapter-evidence-2026-07-16.tar.gz
 sha256: 16e18816359f3bc080de3e167029901dc1aab70b5ce4822df1bdca9af31ebf90
@@ -788,6 +801,8 @@ High-value live paths:
 | Checkpoint 16 live analysis   | `~/stream-performance-evidence-2026-07-16-current-main/analysis.{txt,json}`                         |
 | Checkpoint 17 archive         | `~/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz`                                     |
 | Checkpoint 17 live analysis   | `~/stream-performance-evidence-2026-07-16-checkpoint-17/analysis.{txt,json}`                        |
+| Checkpoint 18 archive         | `~/stream-performance-evidence-2026-07-16-checkpoint-18.tar.gz`                                     |
+| Checkpoint 18 live analysis   | `~/stream-performance-evidence-2026-07-16-checkpoint-18/analysis.{txt,json}`                        |
 | Activation checkpoint A/B     | `~/stream-activation-checkpoint-evidence-2026-07-16-clean/{RESULTS.md,activation-*}`                |
 | Flattened dispatch A/B        | `~/stream-flattened-dispatch-evidence-2026-07-16/{README.md,aggregate.json,telemetry-summary.json}` |
 | Singular callback adapter     | `~/stream-process-event-adapter-evidence-2026-07-16/{README.md,*aggregate.json}`                    |
@@ -808,8 +823,8 @@ important source locations are:
 | Coherent kernel                 | `/Users/jonastemplestein/.superset/worktrees/iterate/graceful-snowplow-stream-kernel`            | Seven untracked experiment files; volatile until committed |
 | Pull/demand kernel              | `/private/tmp/iterate-stream-pull-track-b`                                                       | Committed core plus uncommitted demand-session files       |
 | Storage explorer                | `/private/tmp/iterate-stream-storage-explorer-a`                                                 | Modified storage source/tests/ledger; uncommitted          |
-| Current-main checkpoint control | `/private/tmp/iterate-stream-current-main-20260716`                                              | Detached exact `8a10191f4` baseline                        |
-| Current candidate control       | `/private/tmp/iterate-stream-current-candidate-20260716`                                         | Detached exact `b234b1df6` candidate                       |
+| Current-main checkpoint control | `/private/tmp/iterate-stream-current-main-20260716-checkpoint18`                                 | Detached exact `8a10191f4` baseline                        |
+| Current candidate control       | `/private/tmp/iterate-stream-current-candidate-20260716-checkpoint18`                            | Detached exact `0e1e94469` candidate                       |
 | Legacy KV implementations       | `/private/tmp/iterate-stream-kv-yolo`, `/private/tmp/iterate-stream-legacy-kv-yolo`              | Clean experiment branches                                  |
 | Radical journal/pump            | `/private/tmp/iterate-stream-radical-journal`, `/private/tmp/iterate-stream-radical-credit-pump` | Clean experiment branches                                  |
 
@@ -829,7 +844,7 @@ Give another agent this document and ask it to read, in order:
    `stream-delivery-frame-reader.ts`, `stream-subscribers.ts`, and
    `subscription-cursor-store.ts`.
 3. The coherent-kernel experimental source and tests in the separate worktree.
-4. `~/stream-performance-evidence-2026-07-16-checkpoint-17/analysis.txt` and the
+4. `~/stream-performance-evidence-2026-07-16-checkpoint-18/analysis.txt` and the
    shipping replay summary JSON.
 5. The `README.md` and aggregate JSON in the flattened-dispatch,
    process-event-adapter, and singular-worker-RPC evidence directories.

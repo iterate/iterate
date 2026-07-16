@@ -83,11 +83,12 @@ that has been removed is the pull that merely rediscovered a scanned-through
 boundary already supplied by a frame.
 
 The exact-current-main broad gate is complete. Latest measured candidate
-`b234b1df6` versus exact current main `8a10191f4` improved conservative
-equal-workload p50/p95/mean by 29.651%/27.002%/30.356% across 50 passing fresh
+`0e1e94469` versus exact current main `8a10191f4` improved conservative
+equal-workload p50/p95/mean by 30.718%/29.691%/30.566% across 50 passing fresh
 processes and 35,750 host-timed observations. The unmodified suite improved
-30.204%/28.590%/31.906%. This proves the merged implementation retained a large
-cumulative win; it does not isolate the compact frame's contribution.
+30.871%/19.578%/28.221%; the lower raw p95 reflects two low-sample tails whose
+enlarged controls were positive. This proves the merged implementation retained
+a large cumulative win; it does not isolate the compact frame's contribution.
 
 The remaining focused attribution should cover warm and cold agent,
 capability-host, repo, scheduler, secret, and full project births from a Node
@@ -266,11 +267,10 @@ The merge met the semantic gates:
   frames, cursor completion, and segmented exports.
 - OS/package ITX API graphs and examples were regenerated from resolved source.
 
-Root typecheck, lint, formatting, and recursive workspace tests pass at the
-integration snapshot. The focused Stream matrix passes 478 tests, the affected
-cross-domain matrix passes 208, and the full OS suite passes 1,969 tests with
-one intentional skip. Later Stream bootstrap/idempotency fixes pass 544 Stream
-tests and deployed preview proof. The exact-current-main cumulative gate is
+Root typecheck, lint, formatting, and recursive workspace tests pass from a
+clean detached candidate. The full OS suite passes 1,979 tests with one
+intentional skip across 190 files. The project-bootstrap correction passes its
+six-test partial-failure/retry matrix. The exact-current-main cumulative gate is
 complete; the corrected full preview and destructive rollout runbook remain
 before this tree is a shipping candidate.
 
