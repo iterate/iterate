@@ -18,19 +18,25 @@ import { appendedOffsets } from "../../src/domains/streams/rpc-types.ts";
 import type { WakeableStreamProcessorRpc } from "../../src/itx-api.generated.ts";
 
 test("creates a disposable project and uses project streams through itx", async ({ expect }) => {
-  await using handle = await createTestProject({ slugPrefix: "admin-fixture" });
+  await using handle = await createTestProject({
+    slugPrefix: "admin-fixture",
+    waitUntilReady: false,
+  });
   using itx = handle.itx();
 
-  // Project creation waits for every universally available sibling processor
-  // to consume its birth batch. This assertion deliberately goes through the
-  // public email capability: the email router shares the Project DO with the
-  // project processor, so its relay must select the email processor's own
-  // read facade rather than the host's default `processor` property.
-  expect((await itx.email.processor.snapshot()).state).toMatchObject({
-    birthCertificate: { config: {} },
-    threads: {},
-    threadByMessageId: {},
-  });
+  // The fast create boundary durably appends sibling births without joining
+  // their processors. Each public facade must therefore catch up on its first
+  // immediate read through actual Workers RPC.
+  const [capabilityHost, scheduler, repo, email] = await Promise.all([
+    itx.capabilityHost.processor.snapshot(),
+    itx.scheduler.processor.snapshot(),
+    itx.repo.processor.snapshot(),
+    itx.email.processor.snapshot(),
+  ]);
+  for (const snapshot of [capabilityHost, scheduler, repo, email]) {
+    expect(snapshot.state).toMatchObject({ birthCertificate: { config: {} } });
+  }
+  expect(email.state).toMatchObject({ threads: {}, threadByMessageId: {} });
 
   // Slack and Telegram routers have the same multi-processor hosting shape.
   // Build their public birth batches without connecting an external account,

@@ -5062,8 +5062,10 @@ prototype did not eliminate or attribute the `ItxEntrypoint.get` error rows.
 Hold it outside the shipping branch. Repeat only with tighter pairing and
 per-mode telemetry attribution. Evidence is archived at
 `/Users/jonastemplestein/stream-flattened-dispatch-evidence-2026-07-16.tar.gz`,
-SHA-256
+whose initial performance-only SHA-256 was
 `95ca6ed5e9192af51affc183a182faf26355cbb71942c7a4af9d09df9603c494`.
+The later telemetry audit augmented and re-archived it; the current checksum is
+recorded in the chronological update below.
 
 ### Singular public callback: keep
 
@@ -5140,3 +5142,160 @@ SHA-256
 `21a797eeb6e8fa63f639f037cbc8f3f52b6dad82066ec4e7b5a61c73bc4e7606`.
 Preview 6's manual lease was released after collection. No experiment code was
 merged into the shipping branch. Production remains untouched.
+
+## 2026-07-16: Synchronous ITX Authority Return Rejected
+
+The remaining `ItxEntrypoint.get` error telemetry had one minimal hypothesis:
+an `async get(): Promise<RpcTarget>` might keep a promise or capability
+completion membrane alive after the authority root was returned. An isolated
+candidate removed only `async` and returned `RpcTarget` directly. OS typecheck,
+file lint, and formatting passed before it was deployed to preview 6 as exact
+Worker version `36b9f109-c85f-43e6-a0f1-6dd146fca882`.
+
+The same deployed five-test ITX Worker suite ran against that version and,
+after reverting the line, exact asynchronous control version
+`a438fb40-5fde-4e4d-8075-0e1b440be2fa`. Both suites passed all project,
+repository, dynamic-Worker, nested-capability, returned-`RpcTarget`, and
+cross-call assertions. Cloudflare telemetry was filtered by service,
+`jsrpc.method=get`, `cloudflare.entrypoint=ItxEntrypoint`, exact Worker version,
+and the test's UTC window.
+
+| Mode                  | Calls | Exception | Canceled |  OK | Exception rate |
+| --------------------- | ----: | --------: | -------: | --: | -------------: |
+| Synchronous candidate |    58 |        51 |        5 |   2 |          87.9% |
+| Asynchronous control  |    82 |        68 |       12 |   2 |          82.9% |
+
+The native `cloudflare-workers` query independently returned 51 and 68
+error-level `get` rows with fingerprint
+`b4d28d67058b74c0c62752a73fe65c25`, exactly matching each arm's OTel exception
+count. The test durations are not a latency A/B: each integration arm ran once
+and creates a variable number of capabilities. The outcome result is decisive
+because both return forms retain a dominant exception rate while user-visible
+work succeeds.
+
+Cloudflare workerd source at exact commit `f71dab4d2` supplies the mechanism.
+`JsRpcTargetBase::callImpl()` normalizes synchronous and asynchronous return
+values through `js.toPromise()` (`src/workerd/api/worker-rpc.c++:1095-1142`).
+Serializing the returned `RpcTarget` creates a session-owned capability around
+line 1683. The direct session path reports `OK` when capabilities disappear,
+but the forwarded `sendRpc()` bridge at lines 2135-2194 races remote resolution
+against its local completion membrane and can cancel the remote session on
+last-local-capability release. Scope exit rejects that membrane with
+`DISCONNECTED: JS-RPC session canceled`; generic native rejection maps to
+`EventOutcome::EXCEPTION` in `src/workerd/io/observer.c++:53`.
+
+Reject the synchronous change. Promise syntax is not the lifecycle boundary,
+and dropping explicit disposal would only defer or leak capability release.
+The smallest next operational experiment is a correlated direct/forwarded
+probe comparing a minimal capability return with identical server-side work
+that returns plain structured data. A clean flat forwarded result would justify
+bounded operation-specific ITX calls; otherwise the options are a non-JS-RPC
+fetch boundary or an upstream workerd protocol correction. The earlier generic
+148-line flattened-expression prototype remains held because its performance
+intervals crossed zero and it lacked per-mode outcome attribution.
+
+Evidence is archived at
+`/Users/jonastemplestein/stream-sync-itx-get-evidence-2026-07-16.tar.gz`, SHA-256
+`e089091d8650503b069f8629b67fe549a4bcc75f66246256eee65969cb383401`.
+Preview 6 was restored to the unmodified asynchronous implementation.
+Its manual lease was then released. Production remains untouched.
+
+## 2026-07-16: Checkpoint 17 Revalidates Exact Current Main
+
+The four-hour cumulative checkpoint compared exact candidate
+`b234b1df664725a57f3fad9a1a95fb591b5b41dc` with freshly fetched exact main
+`8a10191f4d50055f263d61b6acd5c81d4da7013d`. Five alternating fresh processes
+per revision ran each of the complete suite, enlarged append/reactivation,
+live delivery, enlarged cross-post, and storage/reactivation lanes. All elapsed
+measurements were taken by the Node host around completed network work.
+
+The first candidate live-delivery run failed during immediate local WebSocket
+startup after 14 ms, before a benchmark observation. That log is preserved. The
+candidate run passed on retry, and all five corresponding main processes were
+rerun afterward so final pairing did not retain an older control. The analyzer
+accepted exactly 50 passing processes and 35,750 finite host observations, with
+exact revision, identity, cardinality, and semantic checks.
+
+| Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
+| ------------------------- | --------------: | --------------: | ---------------: |
+| Unmodified full suite     |         30.204% |         28.590% |          31.906% |
+| Conservative substitution |         29.651% |         27.002% |          30.356% |
+
+The enlarged controls retained the central gains: acknowledgement-only 1 KiB
+append improved p50 66.00%; 100 tiny, 100 x 1 KiB, 1,000 tiny, and 32 concurrent
+appends improved 29.75%, 30.58%, 39.52%, and 30.70%; one live subscriber
+improved 50.54%; inline 768 KiB improved 43.75%; and chunked 1.1 MiB improved
+p50/p95/mean 13.50%/16.02%/10.70%.
+
+The result is not uniform. Focused dense cross-post regressed
+p50/p95/mean 13.51%/13.05%/12.83%. The enlarged forced-reactivation lane
+improved p50 4.71% but regressed p95 55.95% and mean 13.07%. The 25-subscriber
+lane improved p50 and throughput 3.64%/3.78% while regressing p95 17.73% and
+mean 2.16%. These tails remain open attribution targets; they are not hidden by
+the roughly 30% aggregate.
+
+Evidence, rejected startup output, exact metadata, analyzer, and results are in
+`/Users/jonastemplestein/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz`,
+SHA-256
+`79bb331467846640c7f60d1cc045a9130e13622cffc03e3117e4fc81223f1c7a`.
+Production remains untouched.
+
+## 2026-07-16: Flattened Dispatch Telemetry Is Not Clean
+
+The ten accepted generic flattened-expression processes were audited by exact
+UTC boundaries and exact historical Worker version. OTel contained 2,438
+`evaluateExpression` rows: 2,313 `ok`, 117 `exception`, and 8 `canceled`. Every
+accepted process had 4-20 exceptions. Native invocation logs independently
+contained 2,439 rows, including exactly 117 error-level rows with fingerprint
+`65899ee645d52f3d0c0661284fe7a02e`; the one-row count difference was an
+additional native info row.
+
+`evaluateExpression` handled both plain/undefined push operations and
+capability-returning wake operations. The audit therefore cannot attribute the
+117 exceptions to a return shape, but it decisively rejects the claim that the
+generic flattened boundary is telemetry-clean. The only useful follow-up is a
+fixed-cardinality probe comparing identical plain-data and capability returns
+through both direct and forwarded bindings.
+
+The augmented archive is
+`/Users/jonastemplestein/stream-flattened-dispatch-evidence-2026-07-16.tar.gz`,
+SHA-256
+`736bb5abd16f03a2dcca19b973fdb9dd1153930929a1d2e665082259beba1afe`.
+
+## 2026-07-16: Preview Timeout Exposes Recursive Project Bootstrap
+
+Draft PR #1902's second preview attempt timed out the OS test job at 240.2
+seconds. The sequential onboarding smoke emitted no post-create log. Trace
+`80e4f1c6272412416c38d76f1ccba27a` showed the root GET canceled after 239.5
+seconds and `ProjectCollection.create` still open after 238.5 seconds for
+project `prj_4eb...`. A code-update reset during the email-router append had
+forced the recovery path.
+
+The explicit-birth integration made `ProjectProcessor` append the capability
+host, scheduler, config-repository, and email-router birth batches, then wait
+for all four sibling processors. Those processors can call
+`project.processEventBatch()` and re-enter the Project Durable Object through
+search indexing. Joining that fan-out from the still-running project birth
+reaction creates a recursive RPC lineage whose waits do not settle after
+recovery.
+
+The correction keeps the durable boundary and removes the recursive one:
+project birth awaits all four sibling appends, but not sibling processor
+completion. Read-through processor facades catch up at point of use. The unit
+harness now asserts that every sibling birth batch was committed and no
+processor wait was issued. Its injected email-birth failure initially exposed a
+missing idempotency key on the root capability-host subscription: the other
+streams committed, retry duplicated that subscription, and processor state
+correctly remained unadvanced. The durable-name-derived key now makes the
+partial replay exact; all six focused tests pass. The onboarding smoke also
+logs immediately before project creation so a pre-description wedge is
+observable. The deployed admin fixture now requests the fast
+`waitUntilReady: false` boundary and immediately snapshots the capability host,
+scheduler, config repo, and email processor facades. A Worker-local wall-clock
+timeout was deliberately not added:
+Cloudflare may freeze isolate time without network I/O, while the outer Node
+watchdog remains a real host-time bound.
+
+This fix is not considered closed until the exact revision is deployed, the
+onboarding flow passes, and the complete preview telemetry contains no new
+unexplained errors. Production remains untouched.

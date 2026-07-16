@@ -15,23 +15,12 @@ const PROJECT_CREATED = {
   },
 };
 
-function makeHarness(
-  options: {
-    capabilityHostBirthBarrier?: Promise<void>;
-    workerResponses?: Response[];
-  } = {},
-) {
+function makeHarness(options: { workerResponses?: Response[] } = {}) {
   const network = new MemoryStreamNetwork();
   let workerFetchCalls = 0;
   const processorWaits: { offset: number; processor: string }[] = [];
-  let resolveProcessorWaitsStarted!: () => void;
-  const processorWaitsStarted = new Promise<void>((resolve) => {
-    resolveProcessorWaitsStarted = resolve;
-  });
   const waitUntilProcessed = (processor: string) => async (input: { offset: number }) => {
     processorWaits.push({ offset: input.offset, processor });
-    if (processorWaits.length === 4) resolveProcessorWaitsStarted();
-    if (processor === "capability-host") await options.capabilityHostBirthBarrier;
   };
   const itx = {
     capabilityHost: {
@@ -62,7 +51,6 @@ function makeHarness(
     driver: driveProcessor(processor, stream),
     network,
     processorWaits,
-    processorWaitsStarted,
     stream,
     workerFetchCalls: () => workerFetchCalls,
   };
@@ -109,36 +97,44 @@ describe("ProjectProcessor bootstrap", () => {
     });
   });
 
-  it("does not finish project birth until every sibling processor has folded its batch", async () => {
-    let releaseCapabilityHostBirth!: () => void;
-    const capabilityHostBirthBarrier = new Promise<void>((resolve) => {
-      releaseCapabilityHostBirth = resolve;
-    });
-    const { driver, processorWaits, processorWaitsStarted, stream } = makeHarness({
-      capabilityHostBirthBarrier,
-    });
-
+  it("commits sibling births without recursively waiting on their processors", async () => {
+    const { driver, network, processorWaits, stream } = makeHarness();
     await stream.append(PROJECT_CREATED);
-    let settled = false;
-    const delivery = driver.deliver().then(() => {
-      settled = true;
-    });
+    await driver.deliver();
 
-    await processorWaitsStarted;
-    expect(settled).toBe(false);
-    expect(processorWaits).toEqual(
-      expect.arrayContaining([
-        { offset: 3, processor: "capability-host" },
-        { offset: 2, processor: "scheduler" },
-        { offset: 3, processor: "repo" },
-        { offset: 3, processor: "email" },
-      ]),
+    expect(processorWaits).toEqual([]);
+    expect(network.eventsAt("/").map((event) => event.type)).toContain(
+      "events.iterate.com/capability-host/created",
     );
-    expect(processorWaits).toHaveLength(4);
+    expect(network.eventsAt("/scheduler/primary")).toHaveLength(2);
+    expect(network.eventsAt("/repos/config")).toHaveLength(3);
+    expect(network.eventsAt("/integrations/email")).toHaveLength(3);
+  });
 
-    releaseCapabilityHostBirth();
-    await delivery;
-    expect(settled).toBe(true);
+  it("retries a partially committed sibling birth without advancing or duplicating", async () => {
+    const { driver, network, processorWaits, stream } = makeHarness();
+    const email = network.get("/integrations/email");
+    email.failAppendsOfType = "events.iterate.com/email/created";
+    await stream.append(PROJECT_CREATED);
+
+    await expect(driver.deliver()).rejects.toThrow(
+      "injected append failure for events.iterate.com/email/created",
+    );
+    expect(driver.state.birthCertificate).toBeNull();
+    expect(network.eventsAt("/")).toHaveLength(3);
+    expect(network.eventsAt("/scheduler/primary")).toHaveLength(2);
+    expect(network.eventsAt("/repos/config")).toHaveLength(3);
+    expect(network.eventsAt("/integrations/email")).toHaveLength(0);
+
+    email.failAppendsOfType = undefined;
+    await driver.deliver();
+
+    expect(processorWaits).toEqual([]);
+    expect(network.eventsAt("/")).toHaveLength(3);
+    expect(network.eventsAt("/scheduler/primary")).toHaveLength(2);
+    expect(network.eventsAt("/repos/config")).toHaveLength(3);
+    expect(network.eventsAt("/integrations/email")).toHaveLength(3);
+    expect(driver.state.birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
 
   it("throws when a second project birth certificate is reduced", async () => {

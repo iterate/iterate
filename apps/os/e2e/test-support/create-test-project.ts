@@ -14,13 +14,13 @@ import { connectItx } from "~/itx-client.ts";
  * are periodically reset. The `await using` shape is kept so tests don't churn
  * when removal lands.
  */
-export async function createTestProject(opts: { slugPrefix: string }) {
+export async function createTestProject(opts: { slugPrefix: string; waitUntilReady?: boolean }) {
   const baseUrl = requireBaseUrl();
   // Trimmed: you get invalid DNS name errors if the slug is too long.
   const slug = uniqueFixtureSlug(opts.slugPrefix, { maxPrefixLength: 20 });
 
   using session = createAdminOsItx({ baseUrl });
-  using created = session.projects.create({ slug });
+  using created = session.projects.create({ slug, waitUntilReady: opts.waitUntilReady });
   const description = await created.__describe();
   const project = { id: description.projectId, slug };
 

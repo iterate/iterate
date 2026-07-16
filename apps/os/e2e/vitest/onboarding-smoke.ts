@@ -35,6 +35,7 @@ async function attemptOnboardingSmoke(): Promise<void> {
   using session = connectItx({ baseUrl });
   const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
+  console.log(`creating onboarding smoke project (attempt marker ${marker})`);
   using project = root.projects.create({ slug: `onboarding-smoke-${marker}` });
   const description = await project.__describe();
   console.log(`project created in ${Date.now() - start}ms:`, description.projectId);

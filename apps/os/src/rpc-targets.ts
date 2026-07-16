@@ -4786,8 +4786,13 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
         offset: Math.max(created.offset, subscription.offset),
       }),
     );
-    // The project now EXISTS and its birth has been processed. Whether to
-    // also wait for bootstrap readiness is the caller's choice.
+    // Project birth awaits every universal sibling's individually atomic,
+    // idempotent birth batch. Do not force those independent processors to
+    // catch up here: their event delivery can call back into the Project DO,
+    // so joining them turns create into a recursive, high-fan-out RPC lineage.
+    // Their public processor facades catch up at point of use. Whether to wait
+    // for the seeded project worker's bootstrap readiness is the caller's
+    // choice.
     if (args.waitUntilReady !== false) {
       await timedStep("create-timing", timing, "wait-project-ready", () =>
         stream.waitForEvent({

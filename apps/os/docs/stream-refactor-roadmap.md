@@ -82,11 +82,12 @@ frame exists; those are availability and recovery paths. The duplicate work
 that has been removed is the pull that merely rediscovered a scanned-through
 boundary already supplied by a frame.
 
-The exact-current-main broad gate is complete. Candidate `b2712ad09` versus
-main `7495c6802` improved the conservative equal-workload p50/p95/mean by
-30.568%/27.018%/31.619% across 50 passing fresh processes and 35,750
-host-timed observations. This proves the merged implementation retained a
-large cumulative win; it does not isolate the compact frame's contribution.
+The exact-current-main broad gate is complete. Latest measured candidate
+`b234b1df6` versus exact current main `8a10191f4` improved conservative
+equal-workload p50/p95/mean by 29.651%/27.002%/30.356% across 50 passing fresh
+processes and 35,750 host-timed observations. The unmodified suite improved
+30.204%/28.590%/31.906%. This proves the merged implementation retained a large
+cumulative win; it does not isolate the compact frame's contribution.
 
 The remaining focused attribution should cover warm and cold agent,
 capability-host, repo, scheduler, secret, and full project births from a Node
@@ -165,7 +166,7 @@ This is higher upside than the keyed insert but also higher risk. Do not start
 it until the landing branch is either frozen or copied to an isolated
 experiment worktree.
 
-### 6. Flatten internal expression dispatch (hold)
+### 6. Flatten generic expression dispatch (hold; isolate lifecycle next)
 
 The scoped entrypoint experiment is complete. It evaluated the whole persisted
 expression server-side instead of retaining the transient authority root and
@@ -182,6 +183,26 @@ eliminate or attribute the `ItxEntrypoint.get` exception telemetry, so it fails
 both the performance-confidence and operational gates. Repeat only with a
 tighter paired design and per-mode telemetry attribution; do not create a
 canonical-expression special case or second delivery protocol.
+
+The exact ten-process telemetry audit closes the broader cleanliness claim.
+The scoped `evaluateExpression` method produced 2,438 OTel rows: 2,313 `ok`,
+117 `exception`, and 8 `canceled`; every accepted process had 4-20 exceptions.
+Native invocation logs independently contained exactly 117 error rows with one
+fingerprint. The method mixed plain-returning pushes and capability-returning
+wakes, so this does not isolate return shape, but generic flattening itself is
+not an operationally clean boundary.
+
+A subsequent exact deployed A/B rules out the one-line alternative. A
+synchronous `get(): RpcTarget` produced 51 exceptions among 58 calls; restored
+`async get(): Promise<RpcTarget>` produced 68 among 82. Both five-test
+capability suites passed. Workerd commit `f71dab4d2` normalizes both through
+`js.toPromise()`, then serializes the same session-owned capability. Its
+forwarding bridge can turn last-local-capability release into remote-session
+cancellation and a generic `EXCEPTION`. The next experiment is therefore a
+minimal correlated lifecycle probe, not another generic expression rewrite:
+compare capability return with identical server-side work returning plain data
+through direct and forwarded bindings. Never remove explicit disposal to make
+telemetry quieter.
 
 ### 7. Preserve batched transport behind singular callbacks (complete)
 
@@ -248,18 +269,31 @@ The merge met the semantic gates:
 Root typecheck, lint, formatting, and recursive workspace tests pass at the
 integration snapshot. The focused Stream matrix passes 478 tests, the affected
 cross-domain matrix passes 208, and the full OS suite passes 1,969 tests with
-one intentional skip. Later bootstrap/idempotency fixes pass 544 Stream tests
-and deployed preview proof. The exact-current-main cumulative gate is complete;
-the corrected full preview and destructive rollout runbook remain before this
-tree is a shipping candidate.
+one intentional skip. Later Stream bootstrap/idempotency fixes pass 544 Stream
+tests and deployed preview proof. The exact-current-main cumulative gate is
+complete; the corrected full preview and destructive rollout runbook remain
+before this tree is a shipping candidate.
 
 Latest `origin/main` `8a10191f4` was merged as `6d77a8fe5`; it removes completed
 task artifacts and does not change Stream runtime. Post-merge OS typecheck and
 all 545 Stream-domain tests pass. The branch also includes the activation
 checkpoint correction and the benchmark repository-readiness boundary. A
 complete preview test retry passed, but thousands of error-level
-`ItxEntrypoint.get` rows remain unclassified. That telemetry, rather than a
-missing performance experiment, is the current release blocker.
+`ItxEntrypoint.get` rows remain. The deployed synchronous A/B and workerd source
+inspection now attribute them to forwarded capability-session teardown rather
+than promise syntax or singular event delivery. Successful use is still
+represented as error telemetry, so eliminating that capability-returning
+boundary remains a release blocker.
+
+A later preview retry exposed a separate creation deadlock after a code update.
+`ProjectProcessor` committed four universal sibling birth batches and then
+waited for all four sibling processors while those processors could re-enter
+the same Project Durable Object through indexing. The local correction awaits
+the durable appends only; each public processor facade performs read-through
+catch-up at point of use. A partial-failure regression test also found and fixed
+the root capability-host subscription's missing idempotency key. Its focused
+six-test matrix passes, but the fix still requires a deployed onboarding rerun
+and a telemetry-clean complete preview before it can be called resolved.
 
 ## Replacement Architecture
 
@@ -431,9 +465,12 @@ Correctness must prove:
 
 ## Decision Order
 
-1. Resolve the `ItxEntrypoint.get` error telemetry, rerun the complete preview,
-   and obtain explicit destructive rollout/rollback approval. Do not add more
-   runtime mechanisms to the shipping branch meanwhile.
+1. Run the minimal direct/forwarded capability-versus-plain-data lifecycle
+   probe. If flat forwarded calls terminate cleanly, replace retained authority
+   roots with bounded operation-specific calls; otherwise use fetch or pursue
+   the workerd protocol fix. Rerun the complete preview and obtain explicit
+   destructive rollout/rollback approval. Do not add unrelated runtime
+   mechanisms to the shipping branch meanwhile.
 2. Choose ship-current or replace-now. If shipping current, land the measured
    branch and stop broad experimentation. If replacing, freeze this exact tree
    and its evidence as the oracle.
@@ -448,8 +485,10 @@ Correctness must prove:
 6. For a big-bang replacement, build the feature-complete vertical slice and
    compare it against the frozen oracle before porting secondary transports.
 
-Flattened expression dispatch, singular Worker transport, legacy KV, generic
-credit pull, and broad coalescing are closed at current evidence. This order
-spends the next engineering effort on deleting duplicate work or collapsing
-ownership, not adding coordination to a kernel already beyond its intended
-complexity budget.
+The generic flattened-expression prototype, synchronous `get`, singular Worker
+transport, legacy KV, generic credit pull, and broad coalescing are closed at
+current evidence. The narrow lifecycle probe remains open because it is the
+operational gate, not a speculative Stream optimization. This order spends the
+next engineering effort on deleting duplicate work or collapsing ownership,
+not adding coordination to a kernel already beyond its intended complexity
+budget.

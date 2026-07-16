@@ -5,12 +5,12 @@ integrating `origin/main` through `8a10191f4` into draft PR
 [#1902](https://github.com/iterate/iterate/pull/1902). The integrated history
 includes the #2002 processor runner/registry redesign, #2038 explicit processor
 births, #2040 native trace roots for Stream retry alarms, and #2046's
-runtime-neutral inspector UI. Exact runtime candidate `b2712ad09` has been
-benchmarked against exact runtime main `7495c6802`; later commit `c263535fe`
-fixes the isolated activation checkpoint regression, merge `6d77a8fe5` accepts
-main's task-document cleanup, and `d0e92dc38` makes the deployed benchmark wait
-for repository readiness. No later commit changes the measured steady-state
-Stream runtime. Production has not been deployed, erased, or otherwise changed.
+runtime-neutral inspector UI. The latest exact checkpoint compares branch head
+`b234b1df6` with exact current main `8a10191f4`; earlier candidate `b2712ad09`
+versus main `7495c6802` isolated the activation checkpoint regression. Commit
+`c263535fe` fixes that regression, merge `6d77a8fe5` accepts main's task-document
+cleanup, and `d0e92dc38` makes the deployed benchmark wait for repository
+readiness. Production has not been deployed, erased, or otherwise changed.
 
 ## 2026-07-16 Integration Update
 
@@ -98,22 +98,48 @@ OS E2E files and 151 passing tests. Exact OS Worker version
 `76b793ca-efa8-4673-8d50-17fe6b09d0b5` again had no schema-bootstrap
 collision. The broader audit did expose a separate release blocker: 3,248
 error-level `ItxEntrypoint.get` RPC invocations during the preview window,
-3,225 while E2E was active. Workerd's current JS-RPC session code resolves an
-orderly last-capability release as `OK`; it maps cancellation/abort to an
-exception. The Stream push dial deliberately caches the transient authority
-root returned by `get()` for an incarnation, so caller teardown is a credible
-cause, but not yet a proved exclusive attribution because dynamic workers use
-the same entrypoint. Do not call the deployment telemetry-clean until a
-controlled generic-versus-flattened dispatch reproducer classifies or removes
-these rows. Two additional browser `GET /api` rows were explicitly reported by
-Cloudflare as `outcome: canceled` with `Network connection lost`; they coincide
-with WebSocket E2E activity and remain separately classified from Stream RPC.
+3,225 while E2E was active. A later exact deployed A/B proved that removing
+`async` from `get()` does not help: the synchronous version produced 51
+exceptions among 58 calls and the restored asynchronous control produced 68
+among 82, while both five-test capability suites passed. Workerd source at
+commit `f71dab4d2` explains the result: both return shapes pass through
+`js.toPromise()`, and serializing the `RpcTarget` extends a forwarded JS-RPC
+session. Last-local-capability release can cancel the remote session through
+the forwarding membrane and surface as `EXCEPTION`. The relevant boundary is
+the returned capability, not promise adoption. Do not call the deployment
+telemetry-clean until a bounded operation returning plain data, a non-JS-RPC
+path, or an upstream protocol fix removes this false terminal error without
+weakening explicit disposal. Two additional browser `GET /api` rows were
+explicitly reported by Cloudflare as `outcome: canceled` with `Network
+connection lost`; they coincide with WebSocket E2E activity and remain
+separately classified from Stream RPC.
+
+### Latest preview bootstrap finding
+
+The next draft-PR preview attempt timed out its OS test job after 240.2 seconds.
+The sequential onboarding smoke was stuck inside project creation. Trace
+`80e4f1c6272412416c38d76f1ccba27a` showed `ProjectCollection.create` still open
+after 238.5 seconds following a code-update reset during email-router birth.
+The merged explicit-birth path had created a recursive RPC lineage:
+`ProjectProcessor` waited for four sibling processors whose delivery and search
+indexing could re-enter the same Project Durable Object.
+
+The local correction preserves the durable sibling appends but removes sibling
+processor completion from project birth. Each public processor facade performs
+read-through catch-up at point of use. A new partial-failure test also exposed
+and fixed a missing idempotency key on the root capability-host subscription;
+replay now leaves all four sibling batches duplicate-free. The focused six-test
+processor suite passes. The deployed admin fixture now requests
+`waitUntilReady: false` and immediately snapshots all four read-through facades;
+the onboarding smoke logs before the create call so this class of wedge is
+visible. This is not closed until the exact correction is deployed, those flows
+pass, and the complete preview telemetry is coherent.
 
 ### Exact current-main checkpoint
 
-Two immutable local Worker stacks compared exact merged candidate
-`b2712ad0934de105bdc8d112fc1d042226a5d5a6` with freshly fetched exact main
-`7495c680220d3c8cf0c7ffeb7ffec28a6c2c18f8`. Five alternating fresh processes
+Two immutable local Worker stacks compared exact branch head
+`b234b1df664725a57f3fad9a1a95fb591b5b41dc` with freshly fetched exact main
+`8a10191f4d50055f263d61b6acd5c81d4da7013d`. Five alternating fresh processes
 per revision ran each of the complete suite, enlarged append/reactivation,
 live delivery, enlarged cross-post, and storage/reactivation lanes. All 50
 processes and 35,750 host-timed observations passed identity, cardinality,
@@ -121,24 +147,31 @@ finiteness, and semantic validation.
 
 | Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
 | ------------------------- | --------------: | --------------: | ---------------: |
-| Unmodified full suite     |     **28.889%** |     **18.188%** |      **29.914%** |
-| Conservative substitution |     **30.568%** |     **27.018%** |      **31.619%** |
+| Unmodified full suite     |     **30.204%** |     **28.590%** |      **31.906%** |
+| Conservative substitution |     **29.651%** |     **27.002%** |      **30.356%** |
 
 The conservative row replaces low-count full-suite singleton append,
 100-event append, concurrent append, and one/25-subscriber rows with their
 larger focused controls. It is an equal-workload geometric summary, not a
-production-traffic weighting. A separate immediately preceding 50-process
-matrix against `c2582c200` reported 34.582%/36.349%/33.763% for the unmodified
-suite and 33.422%/36.498%/33.430% conservatively. The intervening main commit
-changed only inspector UI, so the spread quantifies local-run variance rather
-than a Stream-runtime attribution.
+production-traffic weighting. Checkpoint 16, candidate `b2712ad09` versus main
+`7495c6802`, reported 28.889%/18.188%/29.914% for the unmodified suite and
+30.568%/27.018%/31.619% conservatively. Both establish the same roughly 30%
+central result; their lane spread is the more useful warning about local-run
+tail variance.
 
-The larger controls retain the useful wins: p50 improved 69.16% for
-acknowledgement-only 1 KiB append, 32.35% for 100 tiny events, 30.40% for 100 x
-1 KiB, 36.27% for 1,000 tiny, 33.18% for 32 concurrent singleton calls, 49.27%
-for one live subscriber, 9.01% for 25 live subscribers, and 46.08% for one
-inline 768 KiB event. Corresponding p50 throughput improved 47.82%, 43.68%,
-56.92%, 49.65%, and 9.90% in the batch/concurrent/fanout lanes.
+The larger controls retain the useful wins: p50 improved 66.00% for
+acknowledgement-only 1 KiB append, 29.75% for 100 tiny events, 30.58% for 100 x
+1 KiB, 39.52% for 1,000 tiny, 30.70% for 32 concurrent singleton calls, 50.54%
+for one live subscriber, 3.64% for 25 live subscribers, and 43.75% for one
+inline 768 KiB event. Corresponding throughput improved 42.35%, 44.04%, 65.33%,
+44.30%, and 3.78% in the batch/concurrent/fanout lanes.
+
+The result is not uniform. The focused 25-subscriber lane regressed p95 17.73%
+and mean 2.16%; its p50 and throughput still improved. Focused dense cross-post
+regressed p50/p95/mean 13.51%/13.05%/12.83%, while the full-suite dense row was
+near neutral and sparse cross-post improved. The enlarged reactivation lane
+improved p50 4.71% but regressed p95 55.95% and mean 13.07%. These tails remain
+visible in the archive rather than being inferred away from the aggregate.
 
 The checkpoint exposed one activation regression: across five 100-sample
 processes, forced-reactivation head p50 was neutral at 0.62% slower but p95 was
@@ -157,13 +190,16 @@ deterministic tail claim. The policy is encoded in `CoreCheckpointSchedule`:
 constructor catch-up flushes once, while the new incarnation's `woken` fact
 starts a fresh warm 64-event/one-second debounce window.
 
-Dense post-reactivation read still improved 15.73% p50 while regressing 9.98%
-p95; sparse read improved 22.24% p50 and remained neutral at 2.58% slower p95.
-The 1.1 MiB chunked append is neutral at 2.22% faster p50 and 1.36% faster mean.
+In checkpoint 17, dense post-reactivation read improved 15.16% p50 and 5.55%
+p95; sparse read improved 31.91% p50 and 15.31% p95. The 1.1 MiB chunked append
+improved 13.50% p50, 16.02% p95, and 10.70% mean.
 
-Both matrices, server logs, metadata, validator, and analyses are archived at
-`~/stream-performance-evidence-2026-07-16.tar.gz` (9.1 MiB compressed),
+Checkpoint 17's logs, metadata, validator, run repair, and analyses are archived
+at `~/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz` (4.6 MiB),
 SHA-256
+`79bb331467846640c7f60d1cc045a9130e13622cffc03e3117e4fc81223f1c7a`.
+The earlier checkpoint-16 matrices remain at
+`~/stream-performance-evidence-2026-07-16.tar.gz`, SHA-256
 `09caee4e742ab454ea2e8e2047c8146c24bbe965963a4790ee2e2ab9c2ba9552`.
 The isolated activation A/B is archived at
 `~/stream-activation-checkpoint-evidence-2026-07-16-clean.tar.gz` (1.0 MiB),
@@ -206,7 +242,7 @@ not inflate this shipping PR. A durable archive is at
 
 ### Final transport and dispatch experiments
 
-Three final deployed experiments narrow the landing decisions:
+Four final deployed experiments narrow the landing decisions:
 
 - The public singular `processEvent(event)` adapter is neutral against an
   explicit receiver batch loop when both use the same private batched RPC.
@@ -226,6 +262,11 @@ Three final deployed experiments narrow the landing decisions:
   7.07x slower at p50 and 8.25x at p95. The process-cluster 95% interval for
   batching's p50 gain is 72.04%-88.51%. Singular transport also produced 3,186
   native `jsrpc` spans versus 1,579 and 1,564 dynamic-worker calls versus 408.
+- Making `ItxEntrypoint.get()` synchronous is a decisive operational negative.
+  It left exception outcomes dominant at 87.9%, versus 82.9% in the restored
+  asynchronous control, with both exact deployed capability suites green.
+  Workerd normalizes both return shapes through a promise and then serializes
+  the same session-owned capability. The experiment was reverted.
 
 The singular-wire experiment also established two correctness boundaries. A
 cross-posted acknowledgement deadlocked a reentrant Stream cycle. A cursor
@@ -236,10 +277,14 @@ decision is therefore firm: singular public callback, bounded private batch
 wire, ordered durable acknowledgement.
 
 All 12 matrix processes and 1,740 measured events passed, but the exact window
-still contained 119 error-level `default.get` rows matching the known transient
-ITX entrypoint-session fingerprint. The error count did not scale with singular
-event calls, so singular delivery is not its exclusive cause. The rows remain
-unexplained and release-blocking. Preview 6 was released after the audit.
+still contained 119 error-level `default.get` rows matching the ITX
+entrypoint-session fingerprint. The error count did not scale with singular
+event calls, and the follow-up synchronous A/B plus workerd source inspection
+attributes the fingerprint to capability-returning forwarded JS-RPC teardown,
+not the callback transport or JavaScript promise syntax. It remains
+release-blocking because successful disposal is still represented as an error.
+Preview 6 was restored to the asynchronous control and its manual lease was
+released after collection.
 
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
@@ -252,11 +297,12 @@ acceptance gates are in the
 
 The measured merged implementation is a large, real performance win. Its
 latest exact-current-main checkpoint used 50 valid fresh Node/Vitest processes
-and reported an equal-workload geometric improvement of 30.568% p50, 27.018%
-p95, and 31.619% mean under the conservative substitution rule. The unmodified
-full suite improved 28.889% p50, 18.188% p95, and 29.914% mean. These are
-equal-workload summaries, not production-traffic weighting or a sum of
-isolated wins.
+and reported an equal-workload geometric improvement of 29.651% p50, 27.002%
+p95, and 30.356% mean under the conservative substitution rule. The
+unmodified suite improved 30.204%/28.590%/31.906%. Checkpoint 16's prior
+conservative result was 30.568%/27.018%/31.619%; the small difference is
+local-run variance rather than an additive change. These are equal-workload
+summaries, not production-traffic weighting or a sum of isolated wins.
 
 The strongest mechanisms are straightforward:
 
@@ -279,26 +325,26 @@ and performance oracle.
 
 ## Measured Result
 
-The latest cumulative comparison used merged candidate `b2712ad09` against
-exact current main `7495c6802`. Every timer was on the Node host around
+The latest cumulative comparison used branch head `b234b1df6` against exact
+current main `8a10191f4`. Every timer was on the Node host around
 awaited network/RPC work or host-observed delivery; no claim relies on a
 Worker-local clock advancing while Cloudflare has no network I/O in flight.
 
 | Workload                            |  Main p50 | Candidate p50 |        Change |
 | ----------------------------------- | --------: | ------------: | ------------: |
-| Append one 1 KiB event, no result   |  2.535 ms |      0.782 ms | 69.16% faster |
-| Append 100 tiny events              |  4.358 ms |      2.948 ms | 32.35% faster |
-| Append 100 x 1 KiB events           |  8.043 ms |      5.598 ms | 30.40% faster |
-| Append 1,000 tiny events            | 25.911 ms |     16.513 ms | 36.27% faster |
-| 32 concurrent singleton appends     | 10.915 ms |      7.294 ms | 33.18% faster |
-| Append to one live subscriber       |  1.810 ms |      0.918 ms | 49.27% faster |
-| Append to 25 live subscribers       |  3.526 ms |      3.208 ms |  9.01% faster |
-| Read hot head                       |  0.707 ms |      0.507 ms | 28.19% faster |
-| Read 500 dense 4 KiB events         | 15.108 ms |     13.164 ms | 12.87% faster |
-| Read 20 selected events from 2,000  |  0.800 ms |      0.848 ms |  6.04% slower |
-| Read latest selected event          |  0.776 ms |      0.564 ms | 27.37% faster |
-| Append one inline 768 KiB event     | 42.974 ms |     23.171 ms | 46.08% faster |
-| Append one chunked 1.1 MiB event    | 36.314 ms |     35.509 ms |  2.22% faster |
+| Append one 1 KiB event, no result   |  2.433 ms |      0.827 ms | 66.00% faster |
+| Append 100 tiny events              |  4.289 ms |      3.013 ms | 29.75% faster |
+| Append 100 x 1 KiB events           |  7.729 ms |      5.366 ms | 30.58% faster |
+| Append 1,000 tiny events            | 25.742 ms |     15.569 ms | 39.52% faster |
+| 32 concurrent singleton appends     | 10.694 ms |      7.411 ms | 30.70% faster |
+| Append to one live subscriber       |  1.864 ms |      0.922 ms | 50.54% faster |
+| Append to 25 live subscribers       |  3.405 ms |      3.281 ms |  3.64% faster |
+| Read hot head                       |  0.674 ms |      0.529 ms | 21.52% faster |
+| Read 500 dense 4 KiB events         | 15.083 ms |     12.842 ms | 14.86% faster |
+| Read 20 selected events from 2,000  |  0.875 ms |      0.841 ms |  3.95% faster |
+| Read latest selected event          |  0.803 ms |      0.572 ms | 28.78% faster |
+| Append one inline 768 KiB event     | 41.642 ms |     23.424 ms | 43.75% faster |
+| Append one chunked 1.1 MiB event    | 36.174 ms |     31.291 ms | 13.50% faster |
 | Dense durable cross-post            |  4.713 ms |      4.582 ms |  2.80% faster |
 | Sparse durable cross-post, 1 of 100 |  6.205 ms |      5.671 ms |  8.62% faster |
 
@@ -575,6 +621,26 @@ mean 25.41% worse, and the extra scoped entrypoint did not classify the
 error fingerprint can be attributed by dispatch mode and a tighter paired
 matrix can be run without adding a second protocol.
 
+The ten accepted flattened-process windows were subsequently audited by exact
+UTC boundary and Worker version. `otel` returned 2,438
+`evaluateExpression` rows: 2,313 `ok`, 117 `exception`, and 8 `canceled`; every
+process had 4-20 exceptions. Native invocation logs independently contained
+exactly 117 error-level rows with fingerprint
+`65899ee645d52f3d0c0661284fe7a02e`. Because the generic method serves both
+plain-returning pushes and capability-returning wakes, this does not isolate
+the return shape. It does prove that generic flattening is not itself a clean
+operational boundary.
+
+The source-backed operational experiment is narrower than reviving that
+prototype: compare one minimal capability-returning probe with one flat
+operation that performs identical work and returns plain structured data,
+through both direct and forwarded bindings. Correlate explicit disposal with
+the terminal outcome and use fixed call counts so the two return shapes cannot
+mix. If plain-data forwarded calls are clean, replace retained ITX authority
+roots with bounded operation-specific calls; if they are not, use a non-JS-RPC
+fetch boundary or pursue the workerd forwarding fix. Renaming the method,
+removing `async`, or omitting disposal are closed.
+
 The highest-value bounded clarity change is now the typed post-commit delta:
 carry the reducer's parsed subscription-control fact across the synchronous
 commit boundary instead of schema-parsing it again. It should remove work and
@@ -627,10 +693,11 @@ evidence to decide.
    kernels or add compatibility dispatch.
 3. If shipping current, treat the exact-current-main checkpoint and activation
    diagnosis as complete. The flattened-dispatch and actual singular-RPC
-   experiments are also complete and do not belong in the shipping diff. Keep
-   the PR draft until the `ItxEntrypoint.get` errors are eliminated or explicitly
-   classified outside error telemetry, the complete preview is green, and the
-   wipe/rollback runbook is in the PR body. Then stop broad benchmarking.
+   experiments, plus the synchronous-`get` rejection, are complete and do not
+   belong in the shipping diff. Keep the PR draft until the
+   `ItxEntrypoint.get` errors are eliminated or represented outside error
+   telemetry, the complete preview is green, and the wipe/rollback runbook is
+   in the PR body. Then stop broad benchmarking.
 4. If replacing now, freeze the public API and benchmark corpus. The
    replacement must pass the current Stream suite, crash matrix, post-GC replay
    profile, and deployed Worker-consumer lanes before the current code is
@@ -696,33 +763,42 @@ The final dispatch and callback experiments are archived at:
 
 ```text
 /Users/jonastemplestein/stream-flattened-dispatch-evidence-2026-07-16.tar.gz
-sha256: 95ca6ed5e9192af51affc183a182faf26355cbb71942c7a4af9d09df9603c494
+sha256: 736bb5abd16f03a2dcca19b973fdb9dd1153930929a1d2e665082259beba1afe
+
+/Users/jonastemplestein/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz
+sha256: 79bb331467846640c7f60d1cc045a9130e13622cffc03e3117e4fc81223f1c7a
 
 /Users/jonastemplestein/stream-process-event-adapter-evidence-2026-07-16.tar.gz
 sha256: 16e18816359f3bc080de3e167029901dc1aab70b5ce4822df1bdca9af31ebf90
 
 /Users/jonastemplestein/stream-singular-worker-rpc-evidence-2026-07-16.tar.gz
 sha256: 21a797eeb6e8fa63f639f037cbc8f3f52b6dad82066ec4e7b5a61c73bc4e7606
+
+/Users/jonastemplestein/stream-sync-itx-get-evidence-2026-07-16.tar.gz
+sha256: e089091d8650503b069f8629b67fe549a4bcc75f66246256eee65969cb383401
 ```
 
 High-value live paths:
 
-| Evidence                      | Path                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------------ |
-| Checkpoint 15 raw pool        | `/tmp/cumulative-15-{full,tail,live,crosspost,storage}-{main,candidate}-r{1..5}.log` |
-| Checkpoint 15 validation      | `/tmp/cumulative-15-analysis.txt`                                                    |
-| Checkpoint 16 archive         | `~/stream-performance-evidence-2026-07-16.tar.gz`                                    |
-| Checkpoint 16 live analysis   | `~/stream-performance-evidence-2026-07-16-current-main/analysis.{txt,json}`          |
-| Activation checkpoint A/B     | `~/stream-activation-checkpoint-evidence-2026-07-16-clean/{RESULTS.md,activation-*}` |
-| Flattened dispatch A/B        | `~/stream-flattened-dispatch-evidence-2026-07-16/{README.md,aggregate.json}`         |
-| Singular callback adapter     | `~/stream-process-event-adapter-evidence-2026-07-16/{README.md,*aggregate.json}`     |
-| Singular Worker RPC matrix    | `~/stream-singular-worker-rpc-evidence-2026-07-16/{README.md,aggregate.json}`        |
-| Shipping replay profile       | `/private/tmp/replay-workerd-profile-shipping-release-focused.cpuprofile`            |
-| Shipping replay summary       | `/private/tmp/replay-workerd-profile-shipping-release-focused-summary.json`          |
-| Deployed final callback proof | `/tmp/payload-release-deployed-{durable,ephemeral}-886b5ecf1-r*.log`                 |
-| Fair processEvent proof       | `/tmp/process-event-preview5-b65-*.log`                                              |
-| Legacy KV comparison          | `/tmp/stream-json-array-ab-r{1..3}.log` and branch paths in the ledger               |
-| Previous Claude review        | `/Users/jonastemplestein/.claude/plans/act-as-an-independent-eager-pretzel.md`       |
+| Evidence                      | Path                                                                                                |
+| ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| Checkpoint 15 raw pool        | `/tmp/cumulative-15-{full,tail,live,crosspost,storage}-{main,candidate}-r{1..5}.log`                |
+| Checkpoint 15 validation      | `/tmp/cumulative-15-analysis.txt`                                                                   |
+| Checkpoint 16 archive         | `~/stream-performance-evidence-2026-07-16.tar.gz`                                                   |
+| Checkpoint 16 live analysis   | `~/stream-performance-evidence-2026-07-16-current-main/analysis.{txt,json}`                         |
+| Checkpoint 17 archive         | `~/stream-performance-evidence-2026-07-16-checkpoint-17.tar.gz`                                     |
+| Checkpoint 17 live analysis   | `~/stream-performance-evidence-2026-07-16-checkpoint-17/analysis.{txt,json}`                        |
+| Activation checkpoint A/B     | `~/stream-activation-checkpoint-evidence-2026-07-16-clean/{RESULTS.md,activation-*}`                |
+| Flattened dispatch A/B        | `~/stream-flattened-dispatch-evidence-2026-07-16/{README.md,aggregate.json,telemetry-summary.json}` |
+| Singular callback adapter     | `~/stream-process-event-adapter-evidence-2026-07-16/{README.md,*aggregate.json}`                    |
+| Singular Worker RPC matrix    | `~/stream-singular-worker-rpc-evidence-2026-07-16/{README.md,aggregate.json}`                       |
+| Synchronous ITX get rejection | `~/stream-sync-itx-get-evidence-2026-07-16/{README.md,telemetry-summary.json}`                      |
+| Shipping replay profile       | `/private/tmp/replay-workerd-profile-shipping-release-focused.cpuprofile`                           |
+| Shipping replay summary       | `/private/tmp/replay-workerd-profile-shipping-release-focused-summary.json`                         |
+| Deployed final callback proof | `/tmp/payload-release-deployed-{durable,ephemeral}-886b5ecf1-r*.log`                                |
+| Fair processEvent proof       | `/tmp/process-event-preview5-b65-*.log`                                                             |
+| Legacy KV comparison          | `/tmp/stream-json-array-ab-r{1..3}.log` and branch paths in the ledger                              |
+| Previous Claude review        | `/Users/jonastemplestein/.claude/plans/act-as-an-independent-eager-pretzel.md`                      |
 
 There are 40 `/private/tmp/iterate-stream-*` experiment worktrees. The most
 important source locations are:
@@ -732,8 +808,8 @@ important source locations are:
 | Coherent kernel                 | `/Users/jonastemplestein/.superset/worktrees/iterate/graceful-snowplow-stream-kernel`            | Seven untracked experiment files; volatile until committed |
 | Pull/demand kernel              | `/private/tmp/iterate-stream-pull-track-b`                                                       | Committed core plus uncommitted demand-session files       |
 | Storage explorer                | `/private/tmp/iterate-stream-storage-explorer-a`                                                 | Modified storage source/tests/ledger; uncommitted          |
-| Current-main checkpoint control | `/private/tmp/iterate-stream-current-main-20260716`                                              | Detached exact `7495c6802` baseline                        |
-| Current candidate control       | `/private/tmp/iterate-stream-current-candidate-20260716`                                         | Detached exact `b2712ad09` candidate                       |
+| Current-main checkpoint control | `/private/tmp/iterate-stream-current-main-20260716`                                              | Detached exact `8a10191f4` baseline                        |
+| Current candidate control       | `/private/tmp/iterate-stream-current-candidate-20260716`                                         | Detached exact `b234b1df6` candidate                       |
 | Legacy KV implementations       | `/private/tmp/iterate-stream-kv-yolo`, `/private/tmp/iterate-stream-legacy-kv-yolo`              | Clean experiment branches                                  |
 | Radical journal/pump            | `/private/tmp/iterate-stream-radical-journal`, `/private/tmp/iterate-stream-radical-credit-pump` | Clean experiment branches                                  |
 
@@ -753,7 +829,7 @@ Give another agent this document and ask it to read, in order:
    `stream-delivery-frame-reader.ts`, `stream-subscribers.ts`, and
    `subscription-cursor-store.ts`.
 3. The coherent-kernel experimental source and tests in the separate worktree.
-4. `~/stream-performance-evidence-2026-07-16-current-main/analysis.txt` and the
+4. `~/stream-performance-evidence-2026-07-16-checkpoint-17/analysis.txt` and the
    shipping replay summary JSON.
 5. The `README.md` and aggregate JSON in the flattened-dispatch,
    process-event-adapter, and singular-worker-RPC evidence directories.

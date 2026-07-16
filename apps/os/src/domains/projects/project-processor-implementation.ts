@@ -130,6 +130,10 @@ export class ProjectProcessor extends StreamProcessor<
               `project create: search instance ensure failed (lazy self-heal remains): ${String(error).slice(0, 200)}`,
             );
           });
+          const rootDurableObjectName = DurableObjectNameCodec.stringify({
+            projectId: this.deps.itx.projectId,
+            path: "/",
+          });
           const siblingBirths = Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -139,10 +143,8 @@ export class ProjectProcessor extends StreamProcessor<
                   payload: { config: {} },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.itx.projectId,
-                    path: "/",
-                  }),
+                  durableObjectName: rootDurableObjectName,
+                  idempotencyKey: `stream/subscription-configured:${rootDurableObjectName}#${CapabilityHostProcessorContract.slug}`,
                   processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
                 }),
@@ -246,55 +248,12 @@ export class ProjectProcessor extends StreamProcessor<
               ),
             ),
           ]);
-          const [capabilityHostBirth, schedulerBirth, configRepoBirth, emailRouterBirth] =
-            await siblingBirths;
-
-          const capabilityHostOffset = capabilityHostBirth.reduce(
-            (maximum, offset) => Math.max(maximum, offset),
-            0,
-          );
-          const schedulerOffset = schedulerBirth.reduce(
-            (maximum, offset) => Math.max(maximum, offset),
-            0,
-          );
-          const configRepoOffset = configRepoBirth.reduce(
-            (maximum, offset) => Math.max(maximum, offset),
-            0,
-          );
-          const emailRouterOffset = emailRouterBirth.reduce(
-            (maximum, offset) => Math.max(maximum, offset),
-            0,
-          );
-          if (
-            capabilityHostOffset === 0 ||
-            schedulerOffset === 0 ||
-            configRepoOffset === 0 ||
-            emailRouterOffset === 0
-          ) {
-            throw new Error("project birth saga committed an incomplete sibling birth batch");
-          }
-
-          // `projects.create()` waits for this Project processor to finish the
-          // birth reaction. Do not let that boundary race the sibling
-          // processors it created: once the Project birth is processed, every
-          // universally available project capability must have folded its own
-          // complete birth batch too.
-          await Promise.all([
-            timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
-              this.deps.itx.capabilityHost.processor.waitUntilProcessed({
-                offset: capabilityHostOffset,
-              }),
-            ),
-            timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
-              this.deps.itx.scheduler.processor.waitUntilProcessed({ offset: schedulerOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-config-repo-birth", () =>
-              this.deps.itx.repo.processor.waitUntilProcessed({ offset: configRepoOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-email-router-birth", () =>
-              this.deps.itx.email.processor.waitUntilProcessed({ offset: emailRouterOffset }),
-            ),
-          ]);
+          // This processor owns the durable sibling appends, not their
+          // execution. Waiting for sibling processors here is a recursive RPC
+          // cycle: their delivery calls project.processEventBatch(), whose
+          // indexing fan-in re-enters this Project Durable Object. Once these
+          // appends commit, each read-through facade catches up at point of use.
+          await siblingBirths;
         });
         break;
       }
