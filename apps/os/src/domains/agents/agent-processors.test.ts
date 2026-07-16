@@ -3190,10 +3190,21 @@ describe("busy/idle status announcements", () => {
         (announcements(stream) as { busy?: boolean }[]).filter((patch) => patch.busy === false),
       ).toEqual([]);
 
-      // Release the tail: the at-head pass announces the newer busy. The
-      // idle blip never journals at all.
+      // Advancing the virtual clock also fires the already-armed scheduling
+      // attempt, which appends beyond the held stream/woken frame. Releasing
+      // that stale frame must therefore NOT reconcile: the runner's home-
+      // append head fence waits for a fresh pull that includes those facts.
+      // The idle blip never journals in either pass.
       releaseTail();
       await pull;
+      expect(announcements(stream)).toEqual([
+        { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
+      ]);
+
+      // Once the processor honestly reaches the new head, it announces the
+      // committed busy generation. This is the same next-delivery/recovery
+      // lane production uses after an append invalidates a queued head frame.
+      await runner.catchUp();
       expect(announcements(stream)).toEqual([
         { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
         { busy: true, phase: "llm", sinceOffset: busyMessage!.offset },
