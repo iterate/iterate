@@ -1335,6 +1335,9 @@ export type PreviewRetrySummary = {
  * (marathon loops) can't leak stale telemetry.
  */
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+/** Same contract for the streams-example-app lane's vitest sub-lane. */
+const streamsExampleVitestRetryTelemetryFile =
+  "/tmp/os-preview-streams-example-vitest-retries.json";
 
 /** Reads the JSON written by RetryTelemetryReporter (vitest sub-lane). */
 async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetrySummary["retried"]> {
@@ -1357,12 +1360,14 @@ async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetryS
 }
 
 /**
- * Reads Playwright's JSON report (already written by the root
- * playwright.config.ts json reporter). A retried spec has more than one
- * result attempt; Playwright reports "flaky" for passed-after-retry.
+ * Reads Playwright's JSON report (written by a config's json reporter — the
+ * root playwright.config.ts for the os specs, the app-local config for the
+ * streams example app). A retried spec has more than one result attempt;
+ * Playwright reports "flaky" for passed-after-retry.
  */
 async function readPlaywrightRetryTelemetry(
   filePath: string,
+  lane = "specs",
 ): Promise<PreviewRetrySummary["retried"]> {
   /** The subset of Playwright's JSON-reporter suite tree we walk. */
   type PlaywrightJsonSuite = {
@@ -1382,7 +1387,7 @@ async function readPlaywrightRetryTelemetry(
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
         if (retryCount > 0) {
           retried.push({
-            lane: "specs",
+            lane,
             name: spec.title ?? "(unknown spec)",
             retryCount,
             passedAfterRetry: test.status === "flaky",
@@ -1617,7 +1622,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // targets prd and leaks through into this nested env — never the right
     // credential for a preview slot. Unsetting it makes the e2e forge-mint a
     // slot-scoped admin token instead (scripts/auth/semaphore-token.ts).
-    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e:preview"],
+    //
+    // Full `test:e2e` (both files, sequential, well under a minute), not a
+    // preview-only subset: live.e2e.test.ts uniquely covers blocking waitMs
+    // acquire, holder + force acquire/release, and least-recently-released
+    // handout order — the exact semantics this preview machinery's own slot
+    // leasing depends on — and was previously invoked by NOTHING
+    // (docs/testing.md#lanes).
+    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e"],
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -1635,11 +1647,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
     previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-    previewTestCommandArgs: [
-      "bash",
-      "-c",
-      'curl -fsS "$AUTH_BASE_URL/api/auth/.well-known/openid-configuration" | grep -q \'"authorization_endpoint"\'',
-    ],
+    // The OAuth2/OIDC provider e2e (apps/auth/e2e): discovery-vs-origin,
+    // dynamic registration, authorize → consent → code → token exchange with
+    // RFC 8707 resource validation, against the live worker — the lane that
+    // would have caught the 2026-07-11 streams.iterate.com stale-registration
+    // incident (a bare discovery curl used to be all that ran here). The
+    // doppler wrap supplies APP_CONFIG_SERVICE_AUTH_TOKEN for the internal.*
+    // seeding procedures; preview auth bakes the fixed test OTP the suite
+    // signs in with.
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
   "streams-example-app": {
     slug: "streams-example-app",
@@ -1650,24 +1666,53 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "streams-example-app",
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewTestBaseUrlEnvVar: "WORKER_URL",
+    // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
+    // a tagged subset: a title-tag filter here once silently reduced CI to 3
+    // of ~37 tests while the rest rotted (docs/testing.md#lanes). Two
+    // sub-lanes run concurrently, each under its own watchdog `timeout`
+    // (fail, never retry — docs/testing.md#retries-and-timeouts); the
+    // Playwright config runs 4 parallel workers in CI so the browser suite
+    // fits its watchdog.
     previewTestCommandArgs: [
       "bash",
       "-c",
       [
+        "set -euo pipefail",
+        // Stale telemetry/report files from a previous run on the same
+        // machine (marathon loops) must not be reported against this one.
+        `rm -f ${streamsExampleVitestRetryTelemetryFile} test-results/playwright-results.json`,
         // Deployed playgrounds are admin-only: the node vitest lane rides a
         // forge-minted admin bearer (e2e/auth.ts); Playwright signs itself in
         // via its global setup.
         'export STREAMS_PLAYGROUND_TOKEN="$(pnpm exec tsx e2e/auth.ts)"',
-        "pnpm exec playwright install chromium & install_pid=$!",
-        "STREAM_STAGING_E2E=true pnpm vitest -t @preview & vitest_pid=$!",
-        "install_status=0",
-        "vitest_status=0",
-        'wait "$install_pid" || install_status=$?',
-        'wait "$vitest_pid" || vitest_status=$?',
-        'if [ "$install_status" -ne 0 ] || [ "$vitest_status" -ne 0 ]; then exit 1; fi',
-        "pnpm playwright --grep @preview --reporter=list",
+        "pnpm exec playwright install chromium > /tmp/os-preview-streams-example-pw-install.log 2>&1 & install_pid=$!",
+        `E2E_RETRY_TELEMETRY_FILE=${streamsExampleVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm vitest > /tmp/os-preview-streams-example-vitest.log 2>&1 & vitest_pid=$!`,
+        'wait "$install_pid" || { cat /tmp/os-preview-streams-example-pw-install.log; exit 1; }',
+        // Capture Playwright's exit without aborting (set -e) so the vitest
+        // sub-lane always finishes and its log is replayed.
+        `PW_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
+        'VITEST_OK=0; wait "$vitest_pid" || VITEST_OK=$?',
+        "cat /tmp/os-preview-streams-example-vitest.log",
+        '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',
       ].join("; "),
     ],
+    collectRetryTelemetry: async ({ repositoryRoot }) => {
+      const [vitest, playwright] = await Promise.all([
+        readRetryTelemetryLane("streams-example-app vitest lane", () =>
+          readVitestRetryTelemetry(streamsExampleVitestRetryTelemetryFile),
+        ),
+        readRetryTelemetryLane("streams-example-app playwright lane", () =>
+          readPlaywrightRetryTelemetry(
+            resolve(
+              repositoryRoot,
+              "apps/streams-example-app/test-results/playwright-results.json",
+            ),
+            "playwright",
+          ),
+        ),
+      ]);
+      return { retried: [...vitest, ...playwright] };
+    },
   },
   "dummy-petshop": {
     slug: "dummy-petshop",

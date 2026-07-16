@@ -5,7 +5,7 @@
 // return plain mutable objects on purpose: edge-case tests reshape them
 // (delete fields, add subtypes) rather than growing an option per mutation.
 
-export const SLACK_TEAM_ID = "T0TEAM";
+const SLACK_TEAM_ID = "T0TEAM";
 /** The authorized (our) bot, as Slack reports it in `authorizations`. */
 const SLACK_BOT_USER_ID = "UBOT";
 const SLACK_BOT_ID = "BBOT";
@@ -81,8 +81,8 @@ export function slackBotMessageWebhookPayload(
   return payload;
 }
 
-export const TELEGRAM_BOT_ID = "7000001";
-export const TELEGRAM_CHAT_ID = 42424242;
+const TELEGRAM_BOT_ID = "7000001";
+const TELEGRAM_CHAT_ID = 42424242;
 
 export function telegramMessageWebhookPayload(input: {
   chatId?: number;

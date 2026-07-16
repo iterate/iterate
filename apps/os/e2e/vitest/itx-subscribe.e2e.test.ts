@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
-import type { ProcessorSnapshot } from "../../src/domains/streams/rpc-types.ts";
+import {
+  StreamProcessorRunner,
+  type ProcessorProgress,
+} from "../../src/domains/streams/stream-processor-runner.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   PROJECT_WORKER_FORWARDED_EVENT_TYPE,
@@ -66,22 +69,33 @@ test("Project stream subscribe can observe project worker processEventBatch forw
   });
 
   const outputStream = project.streams.get(outputPath);
-  let storedSnapshot: ProcessorSnapshot<ProjectWorkerForwardingProbeState> | undefined;
+  let storedProgress: ProcessorProgress<ProjectWorkerForwardingProbeState> | undefined;
   const processor = new ProjectWorkerForwardingProbeProcessor({
-    readState: () => storedSnapshot,
     stream: outputStream as never,
     path: outputPath,
     projectId: null,
-    writeState: (snapshot) => {
-      storedSnapshot = snapshot;
+  });
+  // REAL runner drive over the live subscription: the runner owns cursors +
+  // fold; the progress store below is the durable-checkpoint seam the old
+  // readState/writeState deps used to be.
+  const runner = new StreamProcessorRunner({
+    processor,
+    stream: outputStream as never,
+    durability: {
+      progress: {
+        read: () => storedProgress,
+        commit: (progress) => {
+          storedProgress = progress;
+        },
+      },
     },
   });
 
-  const initial = await processor.snapshot();
+  const opened = await runner.openDelivery();
   using subscription = await outputStream.subscribe({
     eventTypes: [PROJECT_WORKER_FORWARDED_EVENT_TYPE],
-    processEventBatch: (batch) => processor.ingest(batch),
-    replayAfterOffset: initial.offset,
+    processEventBatch: opened.sink,
+    replayAfterOffset: opened.checkpointOffset,
     subscriber: {
       description: "minimal-itx-v4 e2e local project worker forwarding probe",
     },
@@ -92,18 +106,18 @@ test("Project stream subscribe can observe project worker processEventBatch forw
     payload: { marker },
   });
 
-  await processor.waitUntilEvent({
+  await runner.waitUntilEvent({
     predicate: (event) =>
       event.type === PROJECT_WORKER_FORWARDED_EVENT_TYPE && event.payload?.marker === marker,
     timeoutMs: 8_000,
   });
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: state must be exactly these keys, and the receiver is a live processor instance, not a data object
-  expect(processor.state).toEqual({
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: state must be exactly these keys
+  expect(runner.currentState).toEqual({
     childPaths: [triggerPath],
     markers: [marker],
   });
-  expect(storedSnapshot).toEqual({
-    offset: expect.any(Number),
+  expect(storedProgress?.reduction).toMatchObject({
+    reducedThroughOffset: expect.any(Number),
     state: {
       childPaths: [triggerPath],
       markers: [marker],
@@ -111,7 +125,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
   });
 
   await subscription.unsubscribe();
-  const stateAtUnsubscribe = processor.state;
+  const stateAtUnsubscribe = runner.currentState;
   await outputStream.append({
     type: PROJECT_WORKER_FORWARDED_EVENT_TYPE,
     payload: {
@@ -122,7 +136,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
   });
   await new Promise((resolve) => setTimeout(resolve, 750));
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: asserts state is frozen after unsubscribe; toMatchObject subset-matching would weaken the check
-  expect(processor.state).toEqual(stateAtUnsubscribe);
+  expect(runner.currentState).toEqual(stateAtUnsubscribe);
 });
 
 test("Cap'n Web stream subscribe callback survives the stateless Worker proxy", async () => {

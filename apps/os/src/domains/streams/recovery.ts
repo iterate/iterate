@@ -11,7 +11,7 @@ const StreamRecoveryCoordinate = z
   })
   .strict();
 
-/** One bounded page from the storage-level recovery export of a stream. */
+/** One byte- and count-bounded page from the storage-level recovery export of a stream. */
 export const StreamRecoveryExportPage = z
   .object({
     format: z.literal(STREAM_RECOVERY_FORMAT),
@@ -39,6 +39,24 @@ export const StreamRecoveryRestoreInput = z
 
 /** One bounded page of a stream's storage-level recovery export. */
 export type StreamRecoveryExportPage = z.infer<typeof StreamRecoveryExportPage>;
+
+/** Acknowledged page sink used by one long-running recovery export RPC. */
+export type StreamRecoveryExportSink = {
+  write(page: StreamRecoveryExportPage): Promise<void>;
+};
+
+/** Small result returned after every exported page has been acknowledged. */
+export type StreamRecoveryExportSummary = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  throughOffset: number;
+  exportedEventCount: number;
+  pageCount: number;
+  lastExportedOffset: number;
+  complete: boolean;
+};
+
 /** A complete normalized stream log accepted by storage-level recovery restore. */
 export type StreamRecoveryRestoreInput = z.infer<typeof StreamRecoveryRestoreInput>;
 

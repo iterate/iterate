@@ -34,11 +34,13 @@ consequential forks unless they explicitly waive consultation.
    `session.streamRecovery.get({ projectId, path }).exportForRecovery()` read-only
    through `pnpm cli itx run` in production.
    A breaking PR cannot introduce and use this plumbing in the same deployment.
-3. Create a temporary itx script rather than adding a permanent orchestrator. For
-   each selected project, inventory secrets, built-in integrations, and the config
-   repo. Export the root, every listed `/secrets/**` stream, every built-in connection
-   stream, and the global integration directory. Page with a fixed `throughOffset`;
-   save `{format, version, stream, events, highestAssignedOffset: throughOffset}`.
+3. For each selected project, inventory secrets, built-in integrations, and the
+   config repo. Export the root, every listed `/secrets/**` stream, every built-in
+   connection stream, and the global integration directory with
+   [`scripts/export-stream-recovery.itx.js`](scripts/export-stream-recovery.itx.js).
+   Its acknowledged export sessions write byte-bounded pages atomically at one
+   fixed `throughOffset`, stay within Durable Object CPU limits, and resume an
+   interrupted output directory. Never combine a large raw journal into one RPC value.
 4. Reduce the package deliberately: keep bootstrap facts in `/`, secret journals
    intact, current integration lifecycle/subscription facts, and only active global
    claims for retained project IDs. Do not renumber events: encrypted secret material
@@ -57,18 +59,25 @@ consequential forks unless they explicitly waive consultation.
 2. Merge, check out the exact merged commit, run
    `pnpm erase-data --env prd --yes-i-mean-prd --preserve-auth`, and manually deploy
    **OS only** from that commit. Stop on unexplained erase or deploy warnings.
-3. Use a temporary itx script to call `restoreFromRecovery()` in this order: project
-   root, secret streams, integration streams, then the global directory. The target
-   code validates and folds the complete journal before replacing storage.
-4. For each project, call `repo.linkGithub()` with the recorded connection/owner/repo,
-   then `repo.syncFromGithub({ force: true })` with no depth. Let GitHub win.
+3. Restore each reduced payload with
+   [`scripts/restore-stream-recovery.itx.js`](scripts/restore-stream-recovery.itx.js),
+   in this order: project root, secret streams, integration streams, then the global
+   directory. Pass `vars.inputFile` as an absolute path. The target code validates and
+   folds the complete journal before replacing storage; never send an unreduced large
+   traffic journal as one restore value.
+4. The erased Artifacts config repo does not come back from root-stream facts alone.
+   For each project, call `await itx.repo.create()`, then `repo.linkGithub()` with the
+   recorded connection/owner/repo, then `repo.syncFromGithub({ force: true })` with no
+   depth. Require the synced local head to equal the recorded GitHub head. Let GitHub
+   win and retain its full history.
 5. Re-enable automatic deployment if it was disabled.
 
 ## Finish only after proof
 
 Verify project IDs/routing, every secret through a harmless real consumer, every
-integration's connected status and external ID, active directory claims, Slack
-webhook delivery, an authenticated GitHub request, equal local/remote config heads,
+integration's connected status and external ID, active directory claims,
+[Slack webhook delivery](../../../docs/slack-testing.md#post-recreation-proof), the
+complete [GitHub production smoke](../../../docs/github-smoke-testing.md),
 project-worker boot, and AI Search reindexing. Add PR-specific checks for whatever
 changed. Do not trigger externally visible provider actions without approval.
 

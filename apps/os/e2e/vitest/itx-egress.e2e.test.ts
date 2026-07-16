@@ -435,23 +435,31 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     );
     expect((await project.repos.list()).some((item) => item.path === "/repos/config")).toBe(true);
     expect((await project.repos.list()).some((item) => item.path.startsWith("/repos/"))).toBe(true);
-    // Birth now seeds one boot-context input item (platform context: project
-    // id, agent path, repo layout) with dont-trigger-request — so history has
-    // exactly that item and no LLM turn ran. Ingest is async: wait for the
-    // processor to fold the birth events before asserting (cold slots under
-    // CI load have been seen to lag).
+    // Birth seeds keyed boot context in the system lane (platform context:
+    // project id, agent path, repo layout), so no LLM turn runs. Ingest is
+    // async: wait for the processor to fold the birth events before asserting
+    // (cold slots under CI load have been seen to lag).
     const agentProcessor = project.agents.get(agentPath).processor;
-    await waitForCondition(async () => (await agentProcessor.snapshot()).state.history.length > 0, {
-      description: "agent boot-context input to fold into history",
-      timeoutMs: 30_000,
-    });
+    await waitForCondition(
+      async () =>
+        (await agentProcessor.snapshot()).state.context.system.some(
+          (item) => item.key === "agent/boot-context",
+        ),
+      {
+        description: "agent boot context to fold into system context",
+        timeoutMs: 30_000,
+      },
+    );
     expect((await agentProcessor.snapshot()).state).toMatchObject({
-      history: [
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
-        }),
-      ],
+      context: {
+        system: expect.arrayContaining([
+          expect.objectContaining({
+            role: "system",
+            key: "agent/boot-context",
+            content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
+          }),
+        ]),
+      },
     });
     expect((await project.repo.processor.snapshot()).state).toMatchObject({ created: true });
     // oxlint-disable-next-line iterate/prefer-object-property-match -- toEqual pins the exact egress config; a subset match would tolerate extra keys

@@ -47,6 +47,28 @@ this file tracks how we get there.
   axes, while still using vanilla vitest/playwright CLIs "Misha style".
   Draft proposal now lives in docs/testing.md § "Test dimensions (DRAFT)";
   grilling round 2 queued on its open questions.
+- **2026-07-15 — unit-lane campaign landed** (#2012 consolidation, #2014
+  knife; corpus ratified as ~90% legitimate, the 17k march dropped).
+- **2026-07-15 — ItxScriptBuilder is the standard script-authoring door.**
+  Typed `execute()` is the default (scripts are real TypeScript in the test
+  file); `executeSource()` is the deliberate string sibling for scripts that
+  must stay strings (malformed input, typecheck-gate probes, fence repros,
+  syntax the test-file transform downlevels — `using`). Self-containment is
+  enforced twice: a runtime guard in `define()` (transform-helper markers)
+  and the `iterate/itx-script-fn-self-contained` oxlint rule over
+  `apps/os/e2e/**`.
+- **2026-07-15 — examples catalogue = typed functions + generated strings +
+  typecheck guard** (options A+B). Entries are authored as typed functions
+  in `examples-source.ts`; `pnpm generate:itx-examples` emits the plain-JS
+  `code` artifact the runtimes ship (freshness-guarded), and
+  `examples-typecheck.test.ts` compiles every generated body against the
+  itx type graph (name resolution + execution-gate verdict for all;
+  advisory-clean with a per-entry, reasons-attached gap list). Option C
+  arrived early in mechanics: the generator derives bodies from the
+  functions' ORIGINAL source text (never Function.toString — tsx minifies,
+  the oxc transform drops comments' blank-line structure), which is the
+  first step toward the end state of generating script/catalogue source
+  from the type graph itself.
 
 ## How the lint enforcement got disarmed (for the record)
 

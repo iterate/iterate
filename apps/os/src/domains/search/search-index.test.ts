@@ -27,7 +27,7 @@ import {
 
 function event(overrides: Partial<StreamEvent> & { offset: number }): StreamEvent {
   return {
-    type: "events.iterate.com/agent/message-received",
+    type: "events.iterate.com/agents/context-added",
     createdAt: "2026-07-08T00:00:00.000Z",
     path: "/agents/slack/T1/thr-9",
     payload: { text: "hello world" },
@@ -140,7 +140,7 @@ describe("renderStreamSegmentDocument", () => {
       streamPath: "/agents/slack/T1/thr-9",
     });
     expect(document).toContain("# Stream /agents/slack/T1/thr-9 — events 101–200");
-    expect(document).toContain("events.iterate.com/agent/message-received (offset 101)");
+    expect(document).toContain("events.iterate.com/agents/context-added (offset 101)");
     expect(document).toContain('"text": "hello world"');
     expect(document).toContain('"text": "again"');
   });

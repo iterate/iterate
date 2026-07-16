@@ -10,7 +10,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
-import { StreamOffsetConflictError } from "./rpc-types.ts";
+import { StreamOffsetConflictError, streamOffsetConflictMessage } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import {
@@ -19,6 +19,8 @@ import {
   STREAM_RECOVERY_VERSION,
   StreamRecoveryRestoreInput as StreamRecoveryRestoreInputSchema,
   type StreamRecoveryExportPage,
+  type StreamRecoveryExportSink,
+  type StreamRecoveryExportSummary,
   type StreamRecoveryRestoreInput,
 } from "./recovery.ts";
 import { compileEventSelector } from "./event-selector.ts";
@@ -44,6 +46,10 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+/** Keep recovery callback frames far below Cap'n Web's 32 MiB value limit. */
+const RECOVERY_EXPORT_PAGE_BYTE_LIMIT = 1024 * 1024;
+/** Bound CPU per RPC; the client continues the same fixed export window. */
+const RECOVERY_EXPORT_SESSION_PAGE_LIMIT = 32;
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -279,7 +285,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
         throw new StreamOffsetConflictError(
-          `expected next offset ${expectedOffset}, found ${committed.offset}`,
+          streamOffsetConflictMessage(expectedOffset, committed.offset),
         );
       }
 
@@ -411,19 +417,98 @@ export class StreamDurableObject extends DurableObject<Env> {
         `recovery export throughOffset must be an integer from 0 to ${currentHighestAssignedOffset}`,
       );
     }
-    const events = this.#log.getRange({
+    const sizes = this.#log.getRangeSizes({
       afterOffset,
       beforeOffset: throughOffset + 1,
       limit,
       includeEphemeral: true,
     });
+    let pageLength = sizes.length;
+    let pageBytes = 0;
+    for (let index = 0; index < sizes.length; index += 1) {
+      pageBytes += sizes[index]!.byteLength;
+      // A single event may exceed the soft cap, but is still the smallest
+      // possible recovery unit. Ordinary stream events are already RPC-sized.
+      if (pageBytes > RECOVERY_EXPORT_PAGE_BYTE_LIMIT && index > 0) {
+        pageLength = index;
+        break;
+      }
+    }
+    const events = this.#log.getRange({
+      afterOffset,
+      beforeOffset: throughOffset + 1,
+      limit: pageLength,
+      includeEphemeral: true,
+    });
+    const truncatedByBytes = pageLength < sizes.length;
     return {
       format: STREAM_RECOVERY_FORMAT,
       version: STREAM_RECOVERY_VERSION,
       stream: { projectId: this.name.projectId, path: this.name.path },
       events,
       throughOffset,
-      complete: events.length < limit || events.at(-1)?.offset === throughOffset,
+      complete:
+        !truncatedByBytes && (sizes.length < limit || events.at(-1)?.offset === throughOffset),
+    };
+  }
+
+  /** Export part of a fixed recovery window through one acknowledged callback session. */
+  async exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    maxPages?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary> {
+    const maxPages = args.maxPages ?? RECOVERY_EXPORT_SESSION_PAGE_LIMIT;
+    if (
+      !Number.isInteger(maxPages) ||
+      maxPages <= 0 ||
+      maxPages > RECOVERY_EXPORT_SESSION_PAGE_LIMIT
+    ) {
+      throw new Error(
+        `recovery export maxPages must be an integer from 1 to ${RECOVERY_EXPORT_SESSION_PAGE_LIMIT}`,
+      );
+    }
+    const throughOffset = args.throughOffset ?? this.#log.highestAssignedOffset();
+    let afterOffset = args.afterOffset ?? 0;
+    let exportedEventCount = 0;
+    let pageCount = 0;
+    let complete = false;
+
+    for (;;) {
+      const page = this.exportForRecovery({
+        afterOffset,
+        limit: args.limit,
+        throughOffset,
+      });
+      await args.sink.write(page);
+      pageCount += 1;
+      exportedEventCount += page.events.length;
+      const nextOffset = page.events.at(-1)?.offset;
+      if (nextOffset !== undefined && nextOffset <= afterOffset) {
+        throw new Error("recovery export produced an empty or non-advancing incomplete page");
+      }
+      if (nextOffset !== undefined) afterOffset = nextOffset;
+      if (page.complete) {
+        complete = true;
+        break;
+      }
+      if (nextOffset === undefined) {
+        throw new Error("recovery export produced an empty incomplete page");
+      }
+      if (pageCount >= maxPages) break;
+    }
+
+    return {
+      format: STREAM_RECOVERY_FORMAT,
+      version: STREAM_RECOVERY_VERSION,
+      stream: { projectId: this.name.projectId, path: this.name.path },
+      throughOffset,
+      exportedEventCount,
+      pageCount,
+      lastExportedOffset: afterOffset,
+      complete,
     };
   }
 

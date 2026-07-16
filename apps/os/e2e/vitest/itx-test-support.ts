@@ -1,14 +1,77 @@
 import http from "node:http";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import type { Stream, StreamEvent, StreamEventInput } from "../../src/itx-api.generated.ts";
 import { defineProcessorContract } from "../../src/domains/streams/processor-contracts.ts";
+import { isStreamOffsetConflictError } from "../../src/domains/streams/rpc-types.ts";
 import { StreamProcessor } from "../../src/domains/streams/stream-processor.ts";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 
 export const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
 export const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
-export const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
+export const AGENT_CONTEXT_ADDED_TYPE = "events.iterate.com/agents/context-added";
 export const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
+
+/** Journal a synthetic provider response with the same durable request/start
+ * evidence the agent processor requires before assistant code is executable.
+ * Keeping this in one helper prevents e2e from weakening or lying about that
+ * trust boundary merely to bypass the paid provider call. */
+export async function appendSyntheticProviderOutput(
+  stream: Stream,
+  content: string,
+): Promise<{ assistantContext: StreamEvent; llmRequestOffset: number }> {
+  const model = "e2e/synthetic-provider";
+  const requestId = `e2e-synthetic-provider:${crypto.randomUUID()}`;
+  // `offset` is the Stream DO's hidden optimistic assertion. Keeping the
+  // whole lifecycle in one asserted append means no subscriber can observe a
+  // bare requested event and start a real provider attempt in the gap. The
+  // generated public type omits this expert-only assertion intentionally, so
+  // this e2e helper contains the one local cast.
+  const asserted = (offset: number, event: StreamEventInput): StreamEventInput =>
+    ({ ...event, offset }) as StreamEventInput;
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const { coreProcessorState } = await stream.runtimeState();
+    if (
+      coreProcessorState == null ||
+      typeof coreProcessorState !== "object" ||
+      typeof (coreProcessorState as { maxOffset?: unknown }).maxOffset !== "number"
+    ) {
+      throw new Error("Synthetic provider output could not read the stream's maxOffset.");
+    }
+    const llmRequestOffset = (coreProcessorState as { maxOffset: number }).maxOffset + 1;
+    try {
+      const [, , assistantContext] = await stream.append(
+        asserted(llmRequestOffset, {
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: { model, requestId, expiresAt: Date.now() + 60_000 },
+        }),
+        asserted(llmRequestOffset + 1, {
+          type: "events.iterate.com/agent/llm-request-started",
+          idempotencyKey: `agent/llm-request-started@${llmRequestOffset}`,
+          payload: { model, llmRequestOffset },
+        }),
+        asserted(llmRequestOffset + 2, {
+          type: AGENT_CONTEXT_ADDED_TYPE,
+          payload: { role: "assistant", content, llmRequestOffset },
+        }),
+        asserted(llmRequestOffset + 3, {
+          type: "events.iterate.com/agent/llm-request-completed",
+          idempotencyKey: `agent/llm-request-completed@${llmRequestOffset}`,
+          payload: {
+            durationMs: 0,
+            llmRequestOffset,
+            result: { status: "success" },
+          },
+        }),
+      );
+      return { assistantContext: assistantContext!, llmRequestOffset };
+    } catch (error) {
+      if (!isStreamOffsetConflictError(error) || attempt === 19) throw error;
+    }
+  }
+  throw new Error("Synthetic provider output exhausted its offset retries.");
+}
 
 // Not exported: only the processor class below crosses module boundaries;
 // the contract value/type stay internal (knip flags unused exports).

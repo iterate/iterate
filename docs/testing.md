@@ -3,7 +3,7 @@
 How the test lanes are organized, how to run each against any environment,
 the canonical environment variables, and [the retry/timeout
 policy](#retries-and-timeouts) every lane follows. For unit-test style (fake
-timers, inline snapshots, `test.for` tables), see
+timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
 ## Philosophy
@@ -57,12 +57,23 @@ away from.
 
 ## Lanes
 
-| Lane             | Command (from `apps/os` unless noted) | Lives in                                | Proves                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------- | ------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Unit             | `pnpm test`                           | `apps/os/src/**/*.test.ts` (colocated)  | In-process logic; no deployment needed.                                                                                                                                                                                                                                                                                                                                                                            |
-| OS e2e           | `pnpm e2e`                            | `apps/os/e2e/` (`e2e/vitest.config.ts`) | One config, one project (`node`) against a live deployment through the itx surface: engine e2e (`e2e/vitest/` — streams, security, ingress, agents, admin, preview smoke) plus the itx catalogue matrix (`e2e/examples/` — every example across the four server-side runtimes: node, cli, run-script, project-worker). Browser coverage for the catalogue is `specs/repl-examples.spec.ts`, through the real REPL. |
-| TUI              | `pnpm exec tsx e2e/tui-test/run.ts`   | `apps/os/e2e/tui-test/`                 | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                       |
-| Playwright specs | `pnpm spec` (repo root)               | `specs/` (`playwright.config.ts`)       | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                      |
+The geography rule: `specs/` tests the product through a browser;
+`<app>/e2e/` tests that deployable's own contract. Every e2e suite must be
+wired to a CI lane or explicitly documented as manual — a tag filter or
+unset env var that silently skips tests is the failure mode this table
+exists to prevent (a `@preview` title filter once quietly reduced the
+streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
+
+| Lane                | Command (from `apps/os` unless noted)             | Lives in                                | In CI                                                                                                                       | Proves                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------- | ------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit                | `pnpm test`                                       | `apps/os/src/**/*.test.ts` (colocated)  | Depot **Test** workflow, every PR — full suite                                                                              | In-process logic; no deployment needed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| OS e2e              | `pnpm e2e`                                        | `apps/os/e2e/` (`e2e/vitest.config.ts`) | Preview CI when OS is selected — full `node` project (`browser` project covered by the REPL specs instead)                  | One config, one project (`node`) against a live deployment through the itx surface: engine e2e (`e2e/vitest/` — streams, security, ingress, agents, admin, preview smoke) plus the itx catalogue matrix (`e2e/examples/` — every example across the four server-side runtimes: node, cli, run-script, project-worker). Browser coverage for the catalogue is `specs/repl-examples.spec.ts`, through the real REPL.                                                                                                                                                                 |
+| TUI                 | `pnpm exec tsx e2e/tui-test/run.ts`               | `apps/os/e2e/tui-test/`                 | **Manual by design** — a real PTY needs an attended terminal; nothing in CI invokes it                                      | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Playwright specs    | `pnpm spec` (repo root)                           | `specs/` (`playwright.config.ts`)       | Preview CI when OS is selected — full suite                                                                                 | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Semaphore e2e       | `pnpm test:e2e` (from `apps/semaphore`)           | `apps/semaphore/e2e/`                   | Preview CI when semaphore is selected — full suite (both files); fails fast without `SEMAPHORE_BASE_URL`                    | The lease API's full contract against a live worker: auth rejection, CRUD, blocking `waitMs` acquire, holder + force acquire/release, least-recently-released handout order, the typed contract client.                                                                                                                                                                                                                                                                                                                                                                            |
+| Auth e2e            | `pnpm test:e2e` (from `apps/auth`)                | `apps/auth/e2e/`                        | Preview CI whenever auth deploys (selected directly, or as the os/semaphore dependency); fails fast without `AUTH_BASE_URL` | The OAuth2/OIDC provider's own contract against a live worker: discovery endpoints match the deployed origin, dynamic registration → authorize (PKCE) → consent → code → token exchange, JWKS-verified access-token claims, the RFC 8707 resource allowlist (the streams.iterate.com incident resource accepted, unknown origins' exact rejection), and redirect_uri pinning at both authorize and exchange. Needs the auth Doppler config (service token + fixed test OTP), so it targets dev/preview, never prd — the lane the PR #1862 stale-registration incident was missing. |
+| Streams example app | `pnpm test:e2e` (from `apps/streams-example-app`) | `apps/streams-example-app/e2e/`         | Preview CI when the app is selected — full suite (vitest + Playwright), no tag filter                                       | The streams stack from very far away: capnweb wire protocol over real WebSockets, node-hosted processors, and the browser OPFS/SQLite mirror UI (leadership, virtualization, kill/reconnect) against a deployed playground.                                                                                                                                                                                                                                                                                                                                                        |
+| Dummy petshop e2e   | `pnpm test:e2e` (from `apps/dummy-petshop`)       | `apps/dummy-petshop/e2e/`               | Preview CI when the app is selected — full suite; fails fast without `PETSHOP_BASE_URL`                                     | The OAuth/API fixture's own contract against its deployed worker.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 The normal Depot **Test** workflow runs `pnpm test` from the repo root. That
 recursively runs every workspace's `test` script, including the `iterate` CLI
@@ -73,9 +84,11 @@ dummy-petshop first, then passes that same leased preview's recorded
 `PETSHOP_BASE_URL` into the OS e2e lane. The OS Petshop integration specs fail
 CI if that URL is absent; they cannot silently skip back out of preview CI.
 
-Two narrower lanes are deliberate. The TUI lane above is manual-only. The
-streams example app runs its `@preview`-tagged Vitest and Playwright coverage
-in preview CI; its full `pnpm test:e2e` suite remains a local/manual lane.
+The TUI lane is the one deliberate manual lane, and the table says so — any
+other suite a CI lane does not run in full is a wiring bug, not a convention.
+A test that genuinely cannot run against a deployed target carries an
+explicit in-code skip with a named guard and a comment saying why, so
+exclusion is always visible where the test lives.
 
 Smoke-testing a deployment (what the deploy pipeline probes automatically,
 plus manual/agent recipes for production): [Smoke testing](smoke-testing.md).
@@ -102,12 +115,12 @@ two ways:
 New work of these shapes ships WITH these tests. Absence is a review
 blocker, not a style note:
 
-| You built                                           | It ships with                                                                                                                                                                             |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A stream processor, or a new side-effect arm in one | A harness suite including a **refold test** (replay the whole journal ⇒ zero side effects, zero appends); if it holds obligations, an **eviction-recovery** test (`h.crash()` mid-flight) |
-| An itx capability or API surface                    | A catalogue example proven by the examples matrix (and thereby every runtime), plus engine e2e for its failure arms                                                                       |
-| A product flow in the dashboard                     | A Playwright spec under `specs/`, readable as a product spec                                                                                                                              |
-| An incident fix with a journal-shaped cause         | A captured-journal repro named for the PR (`stream-repros/`)                                                                                                                              |
+| You built                                           | It ships with                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A stream processor, or a new side-effect arm in one | A harness suite including a **refold test** (replay the whole journal ⇒ zero side effects, zero appends); if it holds obligations, an **eviction-recovery** test (`h.crash()` mid-flight)                                                                                                 |
+| An itx capability or API surface                    | A catalogue example proven by the examples matrix (and thereby every runtime), plus engine e2e for its failure arms. A test exercising a catalogue pattern runs the entry itself by id (`runExample`, `apps/os/e2e/test-support/run-example.ts`); hand-rolled scripts are for probes only |
+| A product flow in the dashboard                     | A Playwright spec under `specs/`, readable as a product spec                                                                                                                                                                                                                              |
+| An incident fix with a journal-shaped cause         | A captured-journal repro named for the PR (`stream-repros/`)                                                                                                                                                                                                                              |
 
 What we do NOT want:
 
@@ -410,3 +423,28 @@ retries: ...` (the `RetryTelemetryReporter` in
 
 When telemetry trends up without failures, treat it exactly like a budget
 `::warning::`: find the cause, don't wait for red.
+
+### Parked tests expire
+
+A skip/fixme/todo marker that parks a KNOWN issue is a loan against the
+suite, and it carries its terms in a comment on (or right above) the marker:
+
+```ts
+// parked: <what is broken, with evidence> — revisit by 2026-08-15
+test.fixme(true, "Known regression: ...");
+```
+
+— or it points at a tracking task (`tasks/<name>.md`) that owns the revisit
+instead. Markers without a date are for **structural** reasons only:
+platform- or env-gated suites that cannot run in a given context (the
+email-OTP specs skip on deployments with OTP disabled — that is a property
+of the target, not a parked bug).
+
+`lint/dated-skips.test.ts` enforces this in the unit lane: it scans the
+test corpus for skip/fixme/todo markers and **fails on any `revisit by`
+date in the past**, printing the file and the parked reason. An expired
+date is a decision point, not a nag to bump: fix and un-park the test, or
+renew the date with the reason re-argued. Undated markers must be either
+task-referenced or allowlisted in that guard with a note — structural
+gates live there permanently; parked markers that predate this convention
+are grandfathered there once and the grandfather list only shrinks.

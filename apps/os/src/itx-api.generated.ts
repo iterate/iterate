@@ -276,16 +276,24 @@ export interface Ai {
   /** List the Workers AI model catalog. */
   models(): Promise<unknown>;
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
-   * The optional third argument is the binding's own options object — e.g.
-   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
-   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
-  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
-  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
+   * Outputs are model-shaped: instantiate `run<T>` with the response shape you
+   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
+   * `unknown`. The optional third argument is the binding's own options object
+   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
+  /** Calling with no arguments lists the file formats the converter accepts. */
+  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
+  /** Convert one document (`{ name, blob }`) to Markdown. */
   toMarkdown(
-    ...args: CfMarkdownConversionArgs
-  ): Promise<
-    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
-  >;
+    document: CfMarkdownDocument,
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult>;
+  /** Convert a batch of documents to Markdown; results come back in input order. */
+  toMarkdown(
+    documents: CfMarkdownDocument[],
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult[]>;
 }
 
 /** Cloudflare Browser Run binding exposed through itx. */
@@ -340,9 +348,9 @@ export interface Agent {
   chat: AgentChat;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
-   * event's `from` derives from the calling scope: inside an agent script
+   * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
-   * `{ kind: "agent", path }` and does NOT refill the receiver's autonomous
+   * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. Messaging a path that
    * never existed births the agent: the first append creates the stream and
@@ -374,7 +382,7 @@ export interface Agent {
    * Update this agent's status record — the title, note, and shortStatus that
    * project surfaces (the agents list, the Slack thread status) show for it.
    * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * busy/idle flag (and what you are doing — waiting for a response vs running code)
    * into the same record on its own. `shortStatus` completes the sentence
    * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
    * while the agent works — update it as your work moves through phases.
@@ -420,8 +428,8 @@ export interface Agent {
    * Store files AND make them part of this agent's conversation in one call.
    * The bytes land in project file storage under the agent's own path
    * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all
-   * attachments (each with a signed public `url`) is appended to the agent
-   * stream — so the files show up as a single conversation message, and
+   * attachments (each with a signed public `url`) is appended as one context
+   * item — so the files show up as a single conversation message, and
    * images become visible to vision-capable models on following turns. Pass
    * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files
    * WITHOUT starting an LLM turn (the right choice for files the agent
@@ -563,7 +571,7 @@ export interface AgentCollection {
 export interface ProjectEgress {
   __describe(): Promise<Description>;
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response>;
+  fetch(request: Request): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -1410,6 +1418,14 @@ export interface StreamRecovery {
     limit?: number;
     throughOffset?: number;
   }): Promise<StreamRecoveryExportPage>;
+  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
+  exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    maxPages?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary>;
   restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
     restoredEventCount: number;
     lastImportedOffset: number;
@@ -2063,18 +2079,37 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
-/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;
- * otherwise one document (or an array) plus optional conversion options
- * converts to markdown. */
-export type CfMarkdownConversionArgs =
-  | []
-  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
-
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
 export type CfMarkdownSupportedFormat = {
   extension: string;
   mimeType: string;
+};
+
+/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
+ * a filename plus the raw bytes as a Blob. */
+export type CfMarkdownDocument = {
+  /** Filename including the extension; Cloudflare uses it to choose the converter. */
+  name: string;
+  blob: Blob;
+};
+
+/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+ * hostname for relative links), image description language, PDF metadata
+ * exclusion. */
+export type CfMarkdownConversionOptions = {
+  conversionOptions?: {
+    html?: {
+      cssSelector?: string;
+      hostname?: string;
+    };
+    image?: {
+      descriptionLanguage?: string;
+    };
+    pdf?: {
+      excludeMetadata?: boolean;
+    };
+  };
 };
 
 /** One converted document from `ai.toMarkdown`: `format` is "markdown" with
@@ -2115,19 +2150,264 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
  * `stateSchema`.
  */
 export type AgentProcessorState = {
-  systemPrompt: string;
-  history: {
-    role: "assistant" | "user";
-    content: string;
-    files?:
-      | { contentType: string; filename: string; path: string; size: number; url: string }[]
-      | undefined;
-  }[];
+  context: {
+    system: (
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "system";
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "developer";
+          actor?:
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "user";
+          actor: { type: "user"; origin: "mcp" | "web" };
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "assistant";
+          llmRequestOffset?: number | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+    )[];
+    history: (
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "system";
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "developer";
+          actor?:
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "user";
+          actor: { type: "user"; origin: "mcp" | "web" };
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "assistant";
+          llmRequestOffset?: number | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+    )[];
+    publishedThrough: number;
+  };
   llmConfig: { model: string };
   llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }
+    | { phase: "requested"; llmRequestOffset: number; requestedAt: number }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -2216,7 +2496,7 @@ export type AgentDefaultsOverrides = {
   model?: string;
 };
 
-/** A file attached to an agent input: content type, filename, project
+/** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = {
@@ -2238,6 +2518,23 @@ export type ItxExpression = ItxExpressionStep[];
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
+
+/**
+ * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
+ * to `Promise<unknown>` ahead of the ambient signature. Pinned because the
+ * ambient resolution is a compiler-settings artifact — which `lib`/`types` a
+ * consumer compiles with decides whether `await response.json()` is `any`
+ * (DOM lib alone), `unknown` (the current DOM + workers-types merge), or the
+ * useless `Promise<{}>` (older merges, where workers-types'
+ * `json<T>(): Promise<T>` inferred `{}`). The first-position member makes
+ * every consumer see the same honest `unknown`: narrow or cast it to the
+ * shape you expect, or `JSON.parse(await response.text())` in plain-JS
+ * scripts that read the body dynamically.
+ */
+export type EgressResponse = {
+  /** The parsed JSON body — honestly `unknown`; the caller supplies the shape. */
+  json(): Promise<unknown>;
+} & Response;
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
@@ -2280,10 +2577,15 @@ export type SlackConnection = Record<string, any> & {
   processor: WakeableStreamProcessorRpc;
 };
 
-/** The Gmail REST API connection exposed by a connected Google account. */
+/** The Gmail REST API connection exposed by a connected Google account.
+ * `data` is whatever the addressed REST resource returns — the caller
+ * supplies the expected shape via `request<T>` (no invented Gmail schemas
+ * here); it defaults to the honest `unknown` when uninstantiated. */
 export type GmailConnection = {
-  request(input: GmailRequestInput): Promise<{
-    data: unknown;
+  request<T = unknown>(
+    input: GmailRequestInput,
+  ): Promise<{
+    data: T;
     headers: Record<string, string>;
     status: number;
     statusText: string;
@@ -2505,10 +2807,11 @@ export type SandboxInstanceType =
  * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
  * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
- * contract deliberately does not re-declare that surface (same stance as
- * `McpClientRpc`); https://developers.cloudflare.com/sandbox/api/ is
- * the authoritative reference. The image is the stock Cloudflare sandbox
+ * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
+ * contract re-declares only the everyday command door, `exec` (the rest
+ * stays undeclared, same stance as `McpClientRpc`, so new SDK methods need
+ * no forwarding code here); https://developers.cloudflare.com/sandbox/api/
+ * is the authoritative reference. The image is the stock Cloudflare sandbox
  * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
  * you need at runtime.
  *
@@ -2534,6 +2837,34 @@ export type SandboxInstanceType =
  *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object & {
+  /** Run one shell command to completion and return its captured output —
+   * the SDK's `exec`, declared with the data fields that travel over every
+   * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —
+   * exist at runtime but are transport-dependent, so they stay out of this
+   * contract). `env` values override the session's for this one command;
+   * `timeout` is milliseconds. */
+  exec(
+    command: string,
+    options?: {
+      cwd?: string;
+      encoding?: string;
+      env?: Record<string, string | undefined>;
+      timeout?: number;
+    },
+  ): Promise<{
+    /** Whether the command succeeded (`exitCode === 0`). */
+    success: boolean;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    /** The command that was executed. */
+    command: string;
+    /** Execution duration in milliseconds. */
+    duration: number;
+    /** ISO timestamp of when the command started. */
+    timestamp: string;
+    sessionId?: string;
+  }>;
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
 };
@@ -2573,7 +2904,7 @@ export type SchedulerProcessorState = {
       action: { [x: string]: unknown; kind: "itx-script"; script: string };
       definedAtOffset: number;
       metadata?: Record<string, unknown> | undefined;
-      path?: string | undefined;
+      path: string;
       nextTriggerAt: number | null;
       recurrence:
         | { [x: string]: unknown; at: string }
@@ -2992,6 +3323,23 @@ export type StreamRecoveryExportPage = {
   complete: boolean;
 };
 
+/** Acknowledged page sink used by one long-running recovery export RPC. */
+export type StreamRecoveryExportSink = {
+  write(page: StreamRecoveryExportPage): Promise<void>;
+};
+
+/** Small result returned after every exported page has been acknowledged. */
+export type StreamRecoveryExportSummary = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  throughOffset: number;
+  exportedEventCount: number;
+  pageCount: number;
+  lastExportedOffset: number;
+  complete: boolean;
+};
+
 /** A complete normalized stream log accepted by storage-level recovery restore. */
 export type StreamRecoveryRestoreInput = {
   format: "iterate-stream-recovery";
@@ -3073,32 +3421,6 @@ export type AgentStatusRecord = {
   note?: string | undefined;
   shortStatus?: string | undefined;
   icon?: string | undefined;
-};
-
-/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
-export type CfMarkdownDocument = {
-  /** Filename including the extension; Cloudflare uses it to choose the converter. */
-  name: string;
-  blob: Blob;
-};
-
-/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
- * hostname for relative links), image description language, PDF metadata
- * exclusion. */
-export type CfMarkdownConversionOptions = {
-  conversionOptions?: {
-    html?: {
-      cssSelector?: string;
-      hostname?: string;
-    };
-    image?: {
-      descriptionLanguage?: string;
-    };
-    pdf?: {
-      excludeMetadata?: boolean;
-    };
-  };
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */

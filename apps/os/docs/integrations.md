@@ -273,7 +273,7 @@ the redirect machinery:
   destination is a pure function of its chat —
   `/agents/telegram/<connection>/chat-<chatId>` (`/topic-<threadId>` appended
   for forum supergroup topics; ids verbatim, sign included). The
-  `telegram-agent` processor transcribes updates into agent input (v1: media
+  `telegram-agent` processor transcribes updates into agent context (v1: media
   as bracketed placeholders like `[photo]`), ignores bot-authored updates, and
   sends the `typing` chat action while the agent works; the agent replies via
   `sendMessage` with the chat id from its own path/inputs.

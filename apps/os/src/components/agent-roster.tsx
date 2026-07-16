@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ChevronDown,
@@ -23,8 +23,10 @@ import {
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "~/itx/itx-react.tsx";
 import { agentPathIcon, agentPathLabel } from "~/lib/agent-roster-labels.ts";
+import { agentBusyPhaseLabel } from "~/lib/feed-format.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 /** Coarse tick for relative "ago" labels in the sidebar (matches stream switcher). */
 const CLOCK_TICK_MS = 15_000;
@@ -70,9 +72,7 @@ function useAgentRoster(projectId: string): RosterRow[] {
         const doing =
           row.status.shortStatus ??
           (state === "busy"
-            ? row.status.phase === "script"
-              ? "running a script"
-              : "making an LLM request"
+            ? agentBusyPhaseLabel(row.status.phase)
             : state === "blocked"
               ? "waiting for input"
               : undefined);
@@ -87,15 +87,6 @@ function useAgentRoster(projectId: string): RosterRow[] {
       })
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   }, [roster.value]);
-}
-
-function useTickingNowMs(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
-    return () => clearInterval(interval);
-  }, []);
-  return now;
 }
 
 /**
@@ -114,7 +105,7 @@ export function SidebarRecentAgents({
   projectSlug: string;
 }) {
   const rows = useAgentRoster(projectId);
-  const nowMs = useTickingNowMs();
+  const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   if (rows.length === 0) return null;
   return (
     <>
@@ -146,7 +137,7 @@ export function AgentRosterList({
   projectSlug: string;
 }) {
   const rows = useAgentRoster(projectId);
-  const nowMs = useTickingNowMs();
+  const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   if (rows.length === 0) return null;
   return (
     <SidebarMenu>

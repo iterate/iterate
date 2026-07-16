@@ -1,3 +1,9 @@
+// Runs against the playground named by WORKER_URL (a deployed env, as in the
+// preview CI lane) or the local `pnpm dev` server when WORKER_URL is unset.
+// Every test runs unconditionally: an unreachable target fails the suite
+// loudly (see ../vitest-global-setup.ts) instead of skipping — a gate that
+// silently skips is the failure mode docs/testing.md#lanes exists to prevent.
+
 import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
 import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
@@ -5,9 +11,6 @@ import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import type { WebSocketFrame } from "../../src/lib/stream-connection.ts";
 import type { StreamEvent, StreamEventInput } from "~/itx-api.generated.ts";
-
-const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
-const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.skip;
 
 class TestSubscriptionCallback extends RpcTarget {
   readonly batches: StreamEvent[][] = [];
@@ -23,7 +26,7 @@ class TestSubscriptionCallback extends RpcTarget {
 }
 
 describe("stream capnweb protocol", () => {
-  e2eIt("browser client appends events by stream URL", async () => {
+  it("browser client appends events by stream URL", async () => {
     const path = e2eStreamPathLabel("stream-browser-client");
     await using stream = await withStreamConnectionFromBrowser({
       url: toStreamWebSocketUrl({ path }),
@@ -45,7 +48,7 @@ describe("stream capnweb protocol", () => {
     });
   });
 
-  e2eIt("appends events after the stream-created event over capnweb @preview", async () => {
+  it("appends events after the stream-created event over capnweb", async () => {
     // Re-dial ONCE on a fresh path after a pause. This test dials a FRESH
     // stream DO per attempt, so it is the fleet's canary for Durable Object
     // weather: during the 2026-07-06/07 Cloudflare "DO increased error rate
@@ -81,7 +84,7 @@ describe("stream capnweb protocol", () => {
     });
   });
 
-  e2eIt("appends, reads, and keeps running after event rows larger than 2 MiB", async () => {
+  it("appends, reads, and keeps running after event rows larger than 2 MiB", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-large-row");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
     // Large enough to exceed the old single-row SQLite target and span multiple
@@ -126,29 +129,26 @@ describe("stream capnweb protocol", () => {
     });
   });
 
-  e2eItFails(
-    "documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends",
-    async () => {
-      const path = e2eStreamPathLabel("stream-capnweb-inbound-frame-limit");
-      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
-      const event: StreamEventInput = {
-        type: "test.stream.capnweb-inbound-frame-limit",
-        payload: { body: "x".repeat(32 * 1024 * 1024) },
-      };
+  it.fails("documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends", async () => {
+    const path = e2eStreamPathLabel("stream-capnweb-inbound-frame-limit");
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
+    const event: StreamEventInput = {
+      type: "test.stream.capnweb-inbound-frame-limit",
+      payload: { body: "x".repeat(32 * 1024 * 1024) },
+    };
 
-      expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(32 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(32 * 1024 * 1024);
 
-      // This is expected to fail before stream storage sees the event: Cloudflare
-      // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
-      // a single append call into one WebSocket message.
-      await stream.stream.append(event);
-    },
-  );
+    // This is expected to fail before stream storage sees the event: Cloudflare
+    // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
+    // a single append call into one WebSocket message.
+    await stream.stream.append(event);
+  });
 
   // Cross-stream appends now go through the public `Stream.at(relativePath)`
   // capability. These prove path resolution lands on the same leading-slash DO
   // coordinates a direct reader connects to.
-  e2eIt('at() resolves relative child paths ("child" and "./child")', async () => {
+  it('at() resolves relative child paths ("child" and "./child")', async () => {
     const base = e2eStreamPathLabel("e2e/resolve-child");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
@@ -174,7 +174,7 @@ describe("stream capnweb protocol", () => {
     expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
   });
 
-  e2eIt("at() resolves an absolute /root/path", async () => {
+  it("at() resolves an absolute /root/path", async () => {
     const unique = crypto.randomUUID();
     const base = e2eStreamPath(`/e2e/resolve-abs-${unique}`);
     const target = e2eStreamPath(`/e2e/resolve-abs-target-${unique}`);
@@ -194,7 +194,7 @@ describe("stream capnweb protocol", () => {
     expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
   });
 
-  e2eIt("at() resolves ..-relative parent, grandparent and mixed paths", async () => {
+  it("at() resolves ..-relative parent, grandparent and mixed paths", async () => {
     const root = e2eStreamPathLabel("e2e/resolve-up");
     using current = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/b/c` }),
@@ -230,7 +230,7 @@ describe("stream capnweb protocol", () => {
     await expect(blaStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toMixed);
   });
 
-  e2eIt("at() rejects a path that escapes the stream root", async () => {
+  it("at() rejects a path that escapes the stream root", async () => {
     // base has depth 2 ([e2e, resolve-escape-...]); three `..` pops past the root.
     const base = e2eStreamPathLabel("e2e/resolve-escape");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
@@ -242,7 +242,7 @@ describe("stream capnweb protocol", () => {
     ).rejects.toThrow();
   });
 
-  e2eIt("append returns events in input order including idempotency hits", async () => {
+  it("append returns events in input order including idempotency hits", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-batch");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -285,7 +285,7 @@ describe("stream capnweb protocol", () => {
     ]);
   });
 
-  e2eIt("deduplicates same-batch idempotency keys before writing", async () => {
+  it("deduplicates same-batch idempotency keys before writing", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-same-batch-idempotency");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -309,12 +309,16 @@ describe("stream capnweb protocol", () => {
         .then((events) => events.map((event) => event.type)),
     ).resolves.toEqual([
       "events.iterate.com/stream/created",
+      // The project-worker feed's subscription-configured — part of the
+      // 3-event birth certificate (documented in the replay test below).
+      // This list rotted while CI filtered the suite to one tagged test.
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/woken",
       "test.stream.capnweb-same-batch-idempotency",
     ]);
   });
 
-  e2eIt("uses exclusive numeric cursors", async () => {
+  it("uses exclusive numeric cursors", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-cursors");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -345,7 +349,7 @@ describe("stream capnweb protocol", () => {
     ]);
   });
 
-  e2eIt("replays history and then delivers live batches to subscribers", async () => {
+  it("replays history and then delivers live batches to subscribers", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-replay");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -415,7 +419,7 @@ describe("stream capnweb protocol", () => {
     await subscription.unsubscribe();
   });
 
-  e2eIt("assigns a subscription key when subscribe omits one", async () => {
+  it("assigns a subscription key when subscribe omits one", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-anon-sub");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -473,7 +477,7 @@ describe("stream capnweb protocol", () => {
   // The pre-itx-v4 hosted circuit-breaker processor is gone; the pause
   // door it drove is core stream behavior on itx, exercised here
   // directly through the public paused/resumed events.
-  e2eIt("pauses and resumes ordinary appends through the core stream gate", async () => {
+  it("pauses and resumes ordinary appends through the core stream gate", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-pause-gate");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -500,7 +504,7 @@ describe("stream capnweb protocol", () => {
     expect(afterResume).toMatchObject({ type: "test.stream.pause-gate.accepted" });
   });
 
-  e2eIt("delivers event batches without subscriber-originated requests", async () => {
+  it("delivers event batches without subscriber-originated requests", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-wire");
     const callback = new TestSubscriptionCallback();
 

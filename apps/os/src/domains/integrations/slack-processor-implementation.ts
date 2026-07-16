@@ -140,7 +140,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
      * The routed stream receives the original Slack webhook unchanged.
      * The downstream `slack-agent` processor owns interpretation: it can
      * turn messages, app mentions, reactions, edits, or future Slack event
-     * shapes into agent input without this router needing to understand
+     * shapes into agent context without this router needing to understand
      * agent semantics.
      */
     // Durable obligation — same reasoning as the route-creation forward above.
