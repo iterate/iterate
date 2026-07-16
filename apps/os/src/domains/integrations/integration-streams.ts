@@ -198,11 +198,28 @@ type RouteIntegrationWebhookResult =
 export async function routeIntegrationWebhook(input: {
   event: { idempotencyKey: string; payload: Record<string, unknown>; type: string };
   externalId: string;
+  /**
+   * Birth certificate that must already exist on the claimed connection
+   * stream. Webhook routers pass this so ingress can never commit work before
+   * the processor has been explicitly created. Providers without an inbound
+   * stream processor (currently GitHub) omit it.
+   */
+  routerCreatedEventType?: string;
   slug: string;
 }): Promise<RouteIntegrationWebhookResult> {
   const claim = await lookupConnectionClaim(input.slug, input.externalId);
   if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
   const streamPath = integrationConnectionStreamPath(input.slug, claim.connection);
+  if (
+    input.routerCreatedEventType !== undefined &&
+    (await latestStreamEventOfTypes(claim.projectId, streamPath, [
+      input.routerCreatedEventType,
+    ])) === null
+  ) {
+    throw new Error(
+      `${input.slug} router ${claim.connection} for project ${claim.projectId} has not been created`,
+    );
+  }
   await integrationStreamStub(claim.projectId, streamPath).append({
     ...input.event,
     // Preserve the trusted routing decision on the durable fact. Downstream

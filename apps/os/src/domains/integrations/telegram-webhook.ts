@@ -55,7 +55,8 @@ export function createTelegramWebhookFetch(deps: TelegramWebhookDeps) {
       keyMaterial: deps.secretEncryptionKey(),
     });
     const provided = input.request.headers.get("x-telegram-bot-api-secret-token");
-    // Trust boundary — the only non-2xx (the webhook handlers' cardinal rule).
+    // Trust boundary — the only authored non-2xx. Durable routing/readiness
+    // failures still throw so Telegram retries instead of our ACKing data loss.
     if (!provided || !timingSafeStringEqual(expected, provided)) {
       return Response.json({ error: "Invalid Telegram secret token." }, { status: 401 });
     }
@@ -76,6 +77,7 @@ export function createTelegramWebhookFetch(deps: TelegramWebhookDeps) {
         type: TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE,
       },
       externalId: botId,
+      routerCreatedEventType: "events.iterate.com/telegram/created",
       slug: "telegram",
     });
     if ("ignored" in result) return Response.json({ ignored: result.ignored, ok: true });

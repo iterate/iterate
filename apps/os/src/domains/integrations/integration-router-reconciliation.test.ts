@@ -28,9 +28,15 @@ const network = vi.hoisted(() => {
               return event;
             });
           },
-          getEvents(input: { afterOffset?: number; limit?: number } = {}) {
-            const { afterOffset = 0, limit = 500 } = input;
-            return stored.filter((event) => event.offset > afterOffset).slice(0, limit);
+          getEvents(input: { afterOffset?: number; eventTypes?: string[]; limit?: number } = {}) {
+            const { afterOffset = 0, eventTypes, limit = 500 } = input;
+            return stored
+              .filter(
+                (event) =>
+                  event.offset > afterOffset &&
+                  (eventTypes === undefined || eventTypes.includes(event.type)),
+              )
+              .slice(0, limit);
           },
         };
       },
@@ -87,6 +93,7 @@ describe("explicit webhook router creation", () => {
         type: "events.iterate.com/slack/webhook-received",
       },
       externalId: "T1",
+      routerCreatedEventType: "events.iterate.com/slack/created",
       slug: "slack",
     });
 
@@ -101,5 +108,40 @@ describe("explicit webhook router creation", () => {
         },
       }),
     ]);
+  });
+
+  test("ingress rejects a claimed router whose birth certificate is missing", async () => {
+    await appendConnectionDirectoryEvent({
+      claimed: true,
+      connection: CONNECTION,
+      externalId: "T1",
+      projectId: PROJECT_ID,
+      slug: "slack",
+    });
+    const path = integrationConnectionStreamPath("slack", CONNECTION);
+    await integrationStreamStub(PROJECT_ID, path).append(
+      buildIntegrationRouterSubscriptionConfiguredEvent({
+        connection: CONNECTION,
+        processorSlug: "slack",
+        projectId: PROJECT_ID,
+        slug: "slack",
+      }),
+    );
+    network.appendBatches.length = 0;
+
+    await expect(
+      routeIntegrationWebhook({
+        event: {
+          idempotencyKey: "slack-webhook:one",
+          payload: { body: { event_id: "one" } },
+          type: "events.iterate.com/slack/webhook-received",
+        },
+        externalId: "T1",
+        routerCreatedEventType: "events.iterate.com/slack/created",
+        slug: "slack",
+      }),
+    ).rejects.toThrow("slack router acme for project prj_test has not been created");
+
+    expect(network.appendBatches).toHaveLength(0);
   });
 });
