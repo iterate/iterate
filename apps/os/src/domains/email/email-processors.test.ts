@@ -4,6 +4,7 @@ import { makeProcessorHarness } from "../streams/test-helpers.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 function receivedPayload(input: {
   from?: string;
@@ -257,13 +258,13 @@ describe("EmailProcessor (thread router)", () => {
       payload: receivedPayload({}),
     });
 
-    await expect(processor.ingest({ events: [received!], streamMaxOffset: 1 })).rejects.toThrow(
-      /StreamsCapability/,
-    );
+    await expect(
+      ingestTestBatch(processor, { events: [received!], streamMaxOffset: 1 }),
+    ).rejects.toThrow(/StreamsCapability/);
     expect(processor.checkpointOffset).toBe(0);
     expect(routed.events).toHaveLength(0);
 
-    await processor.ingest({ events: [received!], streamMaxOffset: 1 });
+    await ingestTestBatch(processor, { events: [received!], streamMaxOffset: 1 });
     expect(processor.checkpointOffset).toBe(1);
     expect(routed.events.map((event) => event.type)).toEqual([
       "events.iterate.com/email/thread-route-configured",

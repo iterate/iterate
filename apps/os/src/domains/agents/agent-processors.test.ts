@@ -1,4 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
+import {
+  CapabilityHostProcessorContract,
+  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+} from "../capability-host/capability-host-processor-contract.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   MemoryStream,
@@ -23,6 +27,7 @@ import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
   deriveAgentBusy,
 } from "./agent-processor-contract.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
   return [
@@ -64,7 +69,10 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: { inbox: ["a", "b"] } },
+      payload: {
+        executionId: "agent-output:7",
+        settlement: { status: "succeeded", result: { inbox: ["a", "b"] } },
+      },
     });
     await deliver();
     await deliver();
@@ -86,7 +94,10 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: 'line one\nline "two"' },
+      payload: {
+        executionId: "agent-output:7",
+        settlement: { status: "succeeded", result: 'line one\nline "two"' },
+      },
     });
     await deliver();
 
@@ -114,7 +125,7 @@ describe("minimal web-chat agent processors", () => {
     const result = { items: "x".repeat(50_000) };
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result },
+      payload: { executionId: "agent-output:7", settlement: { status: "succeeded", result } },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
@@ -155,7 +166,7 @@ describe("minimal web-chat agent processors", () => {
     const result = "x".repeat(9_200_000);
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result },
+      payload: { executionId: "agent-output:7", settlement: { status: "succeeded", result } },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
@@ -174,7 +185,10 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: { items: "x".repeat(50_000) } },
+      payload: {
+        executionId: "agent-output:7",
+        settlement: { status: "succeeded", result: { items: "x".repeat(50_000) } },
+      },
     });
     await deliver();
 
@@ -199,7 +213,10 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: { ok: true } },
+      payload: {
+        executionId: "agent-output:7",
+        settlement: { status: "succeeded", result: { ok: true } },
+      },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
@@ -209,20 +226,31 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
-  test("feeds a thrown script error back as input", async () => {
+  test("feeds a classified script failure back as input", async () => {
     const { stream, deliver } = setup();
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", error: "gmail exploded" },
+      payload: {
+        executionId: "agent-output:7",
+        settlement: {
+          status: "failed",
+          error: "gmail exploded",
+          failureKind: "runtime",
+          phase: "execution",
+          executionMayHaveOccurred: true,
+          cancellation: "external-work-may-continue",
+        },
+      },
     });
     await deliver();
 
     const input = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
     );
-    expect(input?.payload?.content).toContain("Your script threw");
+    expect(input?.payload?.content).toContain("Your script failed during execution (runtime)");
     expect(input?.payload?.content).toContain("gmail exploded");
+    expect(input?.payload?.content).toContain("may have partially executed");
   });
 
   test("ends the loop when a script returns nothing, and ignores foreign executions", async () => {
@@ -233,12 +261,15 @@ describe("minimal web-chat agent processors", () => {
       // carries no `result` key (see CapabilityHostProcessor#executeScript).
       {
         type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: { executionId: "agent-output:7" },
+        payload: { executionId: "agent-output:7", settlement: { status: "succeeded" } },
       },
       // A non-agent execution (e.g. a Slack bang command) on the same stream.
       {
         type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: { executionId: "slack-bang-command-9", result: { noisy: true } },
+        payload: {
+          executionId: "slack-bang-command-9",
+          settlement: { status: "succeeded", result: { noisy: true } },
+        },
       },
     );
     await deliver();
@@ -344,6 +375,15 @@ describe("minimal web-chat agent processors", () => {
         "events.iterate.com/capability-host/script-execution-requested",
       ]),
     );
+    const [scriptRequest] = eventsOfType(
+      stream,
+      "events.iterate.com/capability-host/script-execution-requested",
+    );
+    expect(
+      CapabilityHostProcessorContract.events[
+        "events.iterate.com/capability-host/script-execution-requested"
+      ].payloadSchema.parse(scriptRequest?.payload),
+    ).toMatchObject({ expiresAt: expect.any(Number) });
     expect(aiCalls).toHaveLength(1);
     expect(aiCalls[0]).toMatchObject({
       stream: true,
@@ -548,8 +588,8 @@ describe("minimal web-chat agent processors", () => {
     // head and derives exactly one scheduled event for both inputs. The
     // generation-keyed idempotency remains the second line of defense for
     // batches that raced to the same derivation.
-    await agent.ingest({ events: stream.events.slice(0, 1), streamMaxOffset: 2 });
-    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 2 });
+    await ingestTestBatch(agent, { events: stream.events.slice(0, 1), streamMaxOffset: 2 });
+    await ingestTestBatch(agent, { events: stream.events.slice(1, 2), streamMaxOffset: 2 });
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -1140,7 +1180,7 @@ describe("minimal web-chat agent processors", () => {
     });
     // At-head fold of the dead incarnation's events: obligation is `started`
     // with nobody live → reconciler cancels without re-driving AI.
-    await agent.ingest({
+    await ingestTestBatch(agent, {
       events: stream.events,
       streamMaxOffset: stream.events.length,
     });
@@ -1168,7 +1208,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:gen-2" },
     });
-    await agent.ingest({
+    await ingestTestBatch(agent, {
       events: [second!],
       streamMaxOffset: stream.events.length,
     });
@@ -1337,7 +1377,7 @@ describe("interrupt and stray-request hygiene", () => {
         payload: { model: "m", requestId: "llm-request:stray" },
       },
     );
-    await agent.ingest({ events: stream.events, streamMaxOffset: stray!.offset });
+    await ingestTestBatch(agent, { events: stream.events, streamMaxOffset: stray!.offset });
 
     await vi.waitFor(() => {
       const strayCompletion = stream.events.find(
@@ -1419,7 +1459,7 @@ describe("refold safety", () => {
         },
       },
     });
-    await refolded.ingest({
+    await ingestTestBatch(refolded, {
       events: stream.events,
       streamMaxOffset: stream.events.at(-1)!.offset,
     });
@@ -2259,7 +2299,7 @@ describe("busy/idle status announcements", () => {
         },
       },
     });
-    await revived.ingest({
+    await ingestTestBatch(revived, {
       events: stream.events,
       streamMaxOffset: stream.events.at(-1)!.offset,
     });
@@ -2378,7 +2418,11 @@ describe("busy/idle status announcements", () => {
     // so surfaces switch from "waiting for a response" to "running code".
     const [script] = await stream.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
-      payload: { code: "async () => {}", executionId: "script-1" },
+      payload: {
+        code: "async () => {}",
+        executionId: "script-1",
+        expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+      },
     });
     await deliver();
     await deliver();
@@ -2470,6 +2514,7 @@ describe("busy/idle status announcements", () => {
       at(5, "events.iterate.com/capability-host/script-execution-requested", {
         code: "async () => {}",
         executionId: "script-5",
+        expiresAt: Date.parse("2026-07-09T00:00:00.000Z") + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
       }),
     ];
     expect(deriveAgentBusy(reduceAgentEvents(withScript))).toBe(true);
@@ -2480,7 +2525,7 @@ describe("busy/idle status announcements", () => {
       ...withScript,
       at(6, "events.iterate.com/capability-host/script-execution-completed", {
         executionId: "script-5",
-        result: null,
+        settlement: { status: "succeeded", result: null },
       }),
       at(7, "events.iterate.com/agent/input-added", {
         content: "script result",

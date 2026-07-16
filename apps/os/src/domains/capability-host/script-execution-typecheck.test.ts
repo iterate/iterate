@@ -16,6 +16,10 @@ import {
   CapabilityHostProcessor,
   type ParentCapabilityHost,
 } from "./capability-host-processor-implementation.ts";
+import {
+  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+  type ScriptExecutionSettlement,
+} from "./capability-host-processor-contract.ts";
 
 const T = {
   provided: "events.iterate.com/capability-host/capability-provided",
@@ -26,7 +30,7 @@ const T = {
 
 function makeProcessor(options: {
   stream: MemoryStream;
-  run?: (code: string) => Promise<unknown>;
+  run?: (code: string) => Promise<ScriptExecutionSettlement>;
   parent?: ParentCapabilityHost;
   typecheckScript?: (input: {
     capabilities: CapabilityDescription[];
@@ -53,9 +57,13 @@ function makeProcessor(options: {
 async function requestScript(stream: MemoryStream, processor: CapabilityHostProcessor) {
   const [requested] = await stream.append({
     type: T.requested,
-    payload: { code: "async (itx) => itx.streams.gett('/')", executionId: "exec-1" },
+    payload: {
+      code: "async (itx) => itx.streams.gett('/')",
+      executionId: "exec-1",
+      expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+    },
   });
-  await processor.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+  await ingestTestBatch(processor, { events: stream.events, streamMaxOffset: requested!.offset });
 }
 
 function completion(stream: MemoryStream) {
@@ -78,9 +86,18 @@ describe("script execution typecheck gate", () => {
       const completed = completion(stream);
       expect(completed?.payload).toMatchObject({
         executionId: "exec-1",
-        error: expect.stringContaining("NOT executed"),
+        settlement: {
+          status: "failed",
+          error: expect.stringContaining("NOT executed"),
+          failureKind: "typecheck",
+          phase: "typecheck",
+          executionMayHaveOccurred: false,
+          cancellation: "not-applicable",
+        },
       });
-      expect((completed!.payload as { error: string }).error).toContain("Did you mean 'get'");
+      expect((completed!.payload as { settlement: { error: string } }).settlement.error).toContain(
+        "Did you mean 'get'",
+      );
       // Shared with the run/settle lanes, so a race collapses to one completion.
       expect(completed?.idempotencyKey).toBe("capability-host/script-execution-completed@exec-1");
     });
@@ -94,14 +111,17 @@ describe("script execution typecheck gate", () => {
       stream,
       run: async (code) => {
         ran.push(code);
-        return 42;
+        return { status: "succeeded", result: 42 };
       },
       typecheckScript: async () => ({ verdict: "clean" }),
     });
     await requestScript(stream, processor);
 
     await vi.waitFor(() => {
-      expect(completion(stream)?.payload).toMatchObject({ executionId: "exec-1", result: 42 });
+      expect(completion(stream)?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: 42 },
+      });
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(true);
     expect(ran).toHaveLength(1);
@@ -114,14 +134,14 @@ describe("script execution typecheck gate", () => {
       stream,
       run: async (code) => {
         ran.push(code);
-        return null;
+        return { status: "succeeded", result: null };
       },
       typecheckScript: async () => ({ verdict: "unchecked", reason: "typechecker unavailable" }),
     });
     await requestScript(stream, processor);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
-    expect(completion(stream)?.payload).not.toHaveProperty("error");
+    expect(completion(stream)?.payload).toMatchObject({ settlement: { status: "succeeded" } });
     expect(ran).toHaveLength(1);
   });
 
@@ -132,14 +152,17 @@ describe("script execution typecheck gate", () => {
       stream,
       run: async (code) => {
         ran.push(code);
-        return "ok";
+        return { status: "succeeded", result: "ok" };
       },
       typecheckScript: () => Promise.reject(new Error("sidecar dial failed")),
     });
     await requestScript(stream, processor);
 
     await vi.waitFor(() => {
-      expect(completion(stream)?.payload).toMatchObject({ executionId: "exec-1", result: "ok" });
+      expect(completion(stream)?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: "ok" },
+      });
     });
     expect(ran).toHaveLength(1);
   });
@@ -151,7 +174,7 @@ describe("script execution typecheck gate", () => {
       stream,
       run: async (code) => {
         ran.push(code);
-        return "ok";
+        return { status: "succeeded", result: "ok" };
       },
     });
     await requestScript(stream, processor);
@@ -171,7 +194,7 @@ describe("script execution typecheck gate", () => {
     };
     const processor = makeProcessor({
       stream,
-      run: async () => null,
+      run: async () => ({ status: "succeeded", result: null }),
       parent: {
         invokeCapability: () => Promise.reject(new Error("unused")),
         describeCapabilities: async () => [inherited],
@@ -206,8 +229,9 @@ describe("script execution typecheck gate", () => {
     // Deliver everything again (a later batch after the completion): the fold
     // holds no obligation, so nothing re-runs and no second completion lands.
     const last = stream.events.at(-1)!;
-    await processor.ingest({ events: stream.events, streamMaxOffset: last.offset });
+    await ingestTestBatch(processor, { events: stream.events, streamMaxOffset: last.offset });
     expect(stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
     expect(processor.state.scriptExecutions).toEqual({});
   });
 });
+import { ingestTestBatch } from "~/test/stream-delivery.ts";

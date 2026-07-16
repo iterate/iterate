@@ -348,15 +348,20 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       // and that gate only works if a behind batch can SEE it is behind. The
       // final page reports its own tail (the head as of this read), exactly
       // like a live push batch, so its reconciliation runs.
+      let scannedAfterOffset = offset;
       let events = await pager.next();
       while (events.length > 0) {
         const lookahead = await pager.next();
+        const scannedThroughOffset = events.at(-1)!.offset;
         // Non-consumed event types reduce to no-ops but still advance the
         // checkpoint, mirroring what a filtered delivery's cursor does.
         await entry.processor.ingest({
           events,
+          scannedAfterOffset,
+          scannedThroughOffset,
           streamMaxOffset: (lookahead.at(-1) ?? events.at(-1))!.offset,
         });
+        scannedAfterOffset = scannedThroughOffset;
         events = lookahead;
       }
       // Folded through head as of this read. Ingest already marks itself
@@ -508,7 +513,12 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       // rejection so one failed batch never wedges the batches behind it.
       const sink = (batch: StreamEventBatch) => {
         const attempt = entry.ingestChain.then(() =>
-          entry.processor.ingest({ events: batch.events, streamMaxOffset: batch.streamMaxOffset }),
+          entry.processor.ingest({
+            events: batch.events,
+            scannedAfterOffset: batch.scannedAfterOffset,
+            scannedThroughOffset: batch.scannedThroughOffset,
+            streamMaxOffset: batch.streamMaxOffset,
+          }),
         );
         entry.ingestChain = attempt.catch((error: unknown) => {
           console.error(`stream processor "${name}" failed to ingest batch`, error);
@@ -519,40 +529,6 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         // gets this host redialed — the stream-side retry needs the stream
         // DO awake to notice the corpse.
         keepalive.track(attempt);
-        // Wake-lane batches are consumes-FILTERED but stamped with the RAW
-        // stream head, so a delivered batch can leave the checkpoint behind
-        // streamMaxOffset with nothing ever delivering the difference (a
-        // non-consumed tail event — a presence fact — produces no further
-        // push). The reconcilers' at-head gate rightly defers on such folds,
-        // so every behind batch gets a trailing type-unfiltered catch-up: it
-        // checkpoints through the non-consumed DURABLE tail and its final
-        // page reports its own tail as the head, so its reconciliation runs.
-        // One honest hole: an EPHEMERAL tail (a mid-turn chunk run) is
-        // invisible to this pull too — the checkpoint parks below the raw
-        // head and the deferred reconcile waits for the next durable fact.
-        // Every producer pattern ends with one (chunks → output-added;
-        // revival appends `revived`), so the deferral is bounded by design:
-        // reconciliation is guaranteed relative to the DURABLE head, not the
-        // allocator head. Already-at-head batches pay one snapshot read.
-        keepalive.track(
-          attempt.then(
-            async () => {
-              const { offset } = await entry.processor.snapshot();
-              if (offset < batch.streamMaxOffset) {
-                // Rethrown into the tracked promise: a failed trailing pull
-                // leaves the checkpoint behind a head nothing will re-push,
-                // so it must read as a FAILURE to the keepalive — blocking
-                // the quiet-clean disarm and routing the next alarm fire to
-                // revival, whose unfiltered catch-up is this pull's retry.
-                await catchUpInternal(name, { rethrow: true });
-              }
-            },
-            () => {
-              // A failed ingest is the spine's problem (nack → backoff →
-              // redelivery); the trailing pull only follows success.
-            },
-          ),
-        );
         return attempt;
       };
 

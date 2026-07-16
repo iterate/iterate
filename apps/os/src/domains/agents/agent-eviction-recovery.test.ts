@@ -184,7 +184,7 @@ describe("attempt bookkeeping under stream failures", () => {
       type: T.requested,
       payload: { model: "gpt-test", requestId: "llm-request:gen-1" },
     });
-    await agent.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+    await ingestTestBatch(agent, { events: stream.events, streamMaxOffset: requested!.offset });
     await new Promise((resolve) => setTimeout(resolve, 20));
     // The attempt died before dialing; nothing was settled, nothing leaked.
     expect(dials).toBe(0);
@@ -197,7 +197,7 @@ describe("attempt bookkeeping under stream failures", () => {
     // attempt — a leaked live-set entry would make it skip this id forever.
     failStartedAppends = false;
     const [nudge] = await realAppend({ type: "events.iterate.com/test/nudge", payload: {} });
-    await agent.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
+    await ingestTestBatch(agent, { events: [nudge!], streamMaxOffset: nudge!.offset });
     await vi.waitFor(() => {
       const completion = stream.events.find(
         (event) =>
@@ -232,7 +232,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
         expiresAt: Date.now() - 1, // the host slept past the intent's horizon
       },
     });
-    await agent.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+    await ingestTestBatch(agent, { events: stream.events, streamMaxOffset: requested!.offset });
     await vi.waitFor(() => {
       const completion = stream.events.find((event) => event.type === T.completed);
       expect(completion?.payload).toMatchObject({
@@ -274,7 +274,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
       type: T.userMessage,
       payload: { content: "hello? anyone?", from: { kind: "user", origin: "web" } },
     });
-    await agent.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
+    await ingestTestBatch(agent, { events: [nudge!], streamMaxOffset: nudge!.offset });
 
     const backstop = stream.events.find((event) => event.type === T.completed);
     expect(backstop?.idempotencyKey).toBe("agent/llm-request-completed@2");
@@ -305,7 +305,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
       type: T.requested,
       payload: { model: "m", requestId: "r", expiresAt: now - 1 },
     });
-    await agent.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+    await ingestTestBatch(agent, { events: stream.events, streamMaxOffset: requested!.offset });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const completions = stream.events.filter((event) => event.type === T.completed);
@@ -316,3 +316,4 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     });
   });
 });
+import { ingestTestBatch } from "~/test/stream-delivery.ts";

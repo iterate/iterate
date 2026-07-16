@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
   MemoryStreamNetwork,
   deliverNewEvents,
@@ -18,6 +19,7 @@ import {
   compileBangCommand,
   eyesReactionTargetFromWebhookPayload,
 } from "./slack-agent-processor-implementation.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 const CONNECTION = "nustom";
 
@@ -256,7 +258,7 @@ describe("SlackProcessor (webhook router)", () => {
     };
     // The connected fact folds first (the connection names new thread paths).
     const [connected] = await stream.append(connectedEvent());
-    await processor.ingest({ events: [connected!], streamMaxOffset: 1 });
+    await ingestTestBatch(processor, { events: [connected!], streamMaxOffset: 1 });
     expect(processor.checkpointOffset).toBe(1);
     const [webhook] = await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -265,15 +267,15 @@ describe("SlackProcessor (webhook router)", () => {
 
     // First delivery: the forward throws. ingest MUST reject and the
     // checkpoint MUST hold — otherwise the webhook is gone for good.
-    await expect(processor.ingest({ events: [webhook!], streamMaxOffset: 2 })).rejects.toThrow(
-      /StreamsCapability/,
-    );
+    await expect(
+      ingestTestBatch(processor, { events: [webhook!], streamMaxOffset: 2 }),
+    ).rejects.toThrow(/StreamsCapability/);
     expect(processor.checkpointOffset).toBe(1);
     expect(routed.events).toHaveLength(0);
 
     // The host replays the same webhook from the un-advanced checkpoint; the
     // forward now succeeds and the checkpoint advances.
-    await processor.ingest({ events: [webhook!], streamMaxOffset: 2 });
+    await ingestTestBatch(processor, { events: [webhook!], streamMaxOffset: 2 });
     expect(processor.checkpointOffset).toBe(2);
     expect(routed.events.map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
@@ -546,6 +548,11 @@ describe("SlackAgentProcessor", () => {
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
+    expect(
+      CapabilityHostProcessorContract.events[
+        "events.iterate.com/capability-host/script-execution-requested"
+      ].payloadSchema.parse(scripts[0]?.payload),
+    ).toMatchObject({ expiresAt: expect.any(Number) });
     expect((scripts[0]!.payload as { code: string }).code).toContain("await itx.whoami()");
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
@@ -725,7 +732,7 @@ describe("SlackAgentProcessor", () => {
     await expect(deliver()).rejects.toThrow("slack blew up");
 
     slackCalls.length = 0;
-    await processor.ingest({ events: [patch!], streamMaxOffset: patch!.offset });
+    await ingestTestBatch(processor, { events: [patch!], streamMaxOffset: patch!.offset });
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setTitle",
@@ -886,10 +893,10 @@ describe("SlackAgentProcessor", () => {
         payload: { content: "render" },
       },
     );
-    await processor.ingest({ events: [idle!], streamMaxOffset: render!.offset });
+    await ingestTestBatch(processor, { events: [idle!], streamMaxOffset: render!.offset });
     expect(slackCalls).toEqual([]); // behind the head: deferred, not painted
 
-    await processor.ingest({ events: [render!], streamMaxOffset: render!.offset });
+    await ingestTestBatch(processor, { events: [render!], streamMaxOffset: render!.offset });
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",

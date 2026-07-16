@@ -6,6 +6,9 @@ import type {
   CapabilityRecord as CapabilityRecordType,
   RevokeCapabilityInput,
 } from "./types.ts";
+import { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
+
+export { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 
 const CapabilityMetadata = {
   instructions: z.string().optional(),
@@ -55,16 +58,16 @@ const CapabilityRevokedPayload = z.strictObject({
 }) satisfies z.ZodType<RevokeCapabilityInput, unknown>;
 
 /**
- * How stale a script-execution-requested's intent may be before the
- * reconciler settles it as expired instead of running it. Recovery can
- * deliver the request arbitrarily late; a host revived days later must not
- * run days-old scripts (only-settle-past-expiry).
+ * Absolute lifetime of a script-execution-requested obligation. Recovery can
+ * deliver the request arbitrarily late, and an already-started worker RPC can
+ * hang indefinitely; both are settled at this deadline rather than running
+ * or remaining busy without bound.
  */
 export const DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS = 15 * 60_000;
 
 export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
-  version: "0.1.0",
+  version: "0.2.0",
   description: "A tiny dynamic capability table and script execution journal.",
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
@@ -82,7 +85,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         z.object({
           status: z.enum(["requested", "started"]),
           code: z.string(),
-          /** Epoch ms past which no attempt may START (only-settle-past-expiry). */
+          /** Absolute epoch-ms deadline for typecheck, start, and execution. */
           expiresAt: z.number().int().positive(),
         }),
       )
@@ -133,12 +136,11 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested": {
       description:
         "A script should run in this capability scope. Before any attempt starts, the code is typechecked against the scope's capability types: a script with a PROVABLE error — a syntax error, or a near-miss typo where the compiler names the fix (\"Did you mean 'get'?\") — settles straight to an error completion carrying the compiler errors, without ever running (no started event). Everything less certain runs: capabilities are provided dynamically and declared types can lag the runtime, so bare property/argument mismatches, unknown/untyped capabilities, non-async block shapes, and checker failures all let the script run unchecked.",
-      payloadSchema: z.looseObject({
+      payloadSchema: z.strictObject({
         code: z.string(),
         executionId: z.string(),
-        /** Epoch ms past which the reconciler settles instead of running.
-         * Absent (raw appends), defaults to createdAt + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS. */
-        expiresAt: z.number().int().positive().optional(),
+        /** Absolute epoch-ms deadline for typecheck, start, and execution. */
+        expiresAt: z.number().int().positive(),
       }),
       examples: [
         {
@@ -163,25 +165,32 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/capability-host/script-execution-completed": {
-      description: "A script finished running in this capability scope.",
-      payloadSchema: z.looseObject({
-        error: z.string().optional(),
+      description:
+        "The one durable settlement for a script obligation. Failures classify where execution stopped, whether script code may have run, and whether cancellation can prove external work ended.",
+      payloadSchema: z.strictObject({
         executionId: z.string(),
-        result: z.unknown().optional(),
+        settlement: ScriptExecutionSettlement,
       }),
       examples: [
         {
           description: "The script finished and returned a value.",
           payload: {
             executionId: "d0f7f2a4-9c1b-4e0e-8f3a-2b7c6d5e4a31",
-            result: { unreadCount: 3 },
+            settlement: { status: "succeeded", result: { unreadCount: 3 } },
           },
         },
         {
           description: "The script threw; the error message is journaled.",
           payload: {
-            error: "TypeError: itx.integrations.gmail.get(...).listMessages is not a function",
             executionId: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+            settlement: {
+              status: "failed",
+              error: "TypeError: itx.integrations.gmail.get(...).listMessages is not a function",
+              failureKind: "runtime",
+              phase: "execution",
+              executionMayHaveOccurred: true,
+              cancellation: "external-work-may-continue",
+            },
           },
         },
       ],

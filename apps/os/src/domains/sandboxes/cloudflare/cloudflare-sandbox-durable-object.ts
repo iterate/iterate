@@ -72,6 +72,15 @@ type SandboxRecord = {
 
 const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as const;
 
+// `@cloudflare/sandbox` 0.12.3's default-session `exec` timeout only stops
+// waiting for the command. The command remains alive in the container. Its
+// sessionless execution path instead starts a detached Linux process group and
+// terminates that whole group on timeout (TERM, then KILL with verification).
+// This is the SDK's own reserved token used by getSandbox({
+// enableDefaultSession: false }); direct Durable Object stubs do not pass
+// through getSandbox, so select that execution policy explicitly here.
+const SANDBOX_SESSIONLESS_EXECUTION_TOKEN = "__DISABLE_SESSION__";
+
 /**
  * The durable sandbox env-var map, as stored. The SDK's `setEnvVars` input
  * shape (`Record<string, string | undefined>`, undefined unsets) is the write
@@ -942,7 +951,10 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   override async exec(...args: Parameters<Sandbox<Env>["exec"]>) {
     await this.#ensureReady();
-    return this.#redialOnInterruptedSessionSetup(() => super.exec(...args));
+    const [command, options] = args;
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.execWithSessionToken(command, SANDBOX_SESSIONLESS_EXECUTION_TOKEN, options),
+    );
   }
 
   override async execStream(...args: Parameters<Sandbox<Env>["execStream"]>) {

@@ -6,6 +6,7 @@
 import { describe, expect, test } from "vitest";
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
+  AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
   initialAgentUiState,
   reduceAgentUi,
   type AgentUiItem,
@@ -15,6 +16,8 @@ import {
   slackHumanMessageWebhookPayload,
   telegramMessageWebhookPayload,
 } from "../domains/integrations/webhook-fixtures.ts";
+
+const SCRIPT_EXPIRES_AT = Date.parse("2026-06-11T00:15:00.000Z");
 
 function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unknown }>) {
   let offset = 0;
@@ -105,11 +108,15 @@ describe("agent-ui reducer", () => {
       },
       {
         type: "events.iterate.com/capability-host/script-execution-requested",
-        payload: { executionId: "x1", code: "await stream.read()" },
+        payload: {
+          executionId: "x1",
+          code: "await stream.read()",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
       },
       {
         type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: { executionId: "x1", ok: true, result: 12, durationMs: 400, logs: [] },
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 12 } },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
@@ -145,7 +152,7 @@ describe("agent-ui reducer", () => {
       code: "await stream.read()",
       result: 12,
       success: true,
-      durationMs: 400,
+      durationMs: 1000,
     });
   });
 
@@ -153,7 +160,11 @@ describe("agent-ui reducer", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/capability-host/script-execution-requested",
-        payload: { executionId: "x1", code: "await itx.repo.readFile({ path: 'README.md' })" },
+        payload: {
+          executionId: "x1",
+          code: "await itx.repo.readFile({ path: 'README.md' })",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
       },
     ]);
 
@@ -166,6 +177,64 @@ describe("agent-ui reducer", () => {
       code: "await itx.repo.readFile({ path: 'README.md' })",
       startedAtMs: Date.parse("2026-06-11T00:00:01.000Z"),
     });
+  });
+
+  test("does not guess which script a malformed completion belongs to", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: {
+          executionId: "exact-id-required",
+          code: "async () => mutate()",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-completed",
+        payload: { settlement: { status: "succeeded", result: "wrong target" } },
+      },
+    ]);
+
+    expect(state.live?.steps).toMatchObject([
+      { kind: "code", executionId: "exact-id-required", status: "running" },
+    ]);
+  });
+
+  test("does not derive agent state or durations from a malformed event timestamp", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: {
+          executionId: "valid-start",
+          code: "async () => mutate()",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-completed",
+        createdAt: "not-a-timestamp",
+        payload: {
+          executionId: "valid-start",
+          settlement: { status: "succeeded", result: "must be ignored" },
+        },
+      },
+    ]);
+
+    expect(state.live?.steps).toMatchObject([
+      { kind: "code", executionId: "valid-start", status: "running" },
+    ]);
+  });
+
+  test("rejects script requests that do not satisfy the current deadline contract", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: { executionId: "missing-deadline", code: "return 1" },
+      },
+    ]);
+
+    expect(state.items).toEqual([]);
+    expect(state.live).toBeNull();
   });
 
   test("keeps the live indicator while a running script emits chat messages", () => {
@@ -188,6 +257,7 @@ describe("agent-ui reducer", () => {
         payload: {
           executionId: "agent-output:11",
           code: "async (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
+          expiresAt: SCRIPT_EXPIRES_AT,
         },
       },
       {
@@ -201,7 +271,9 @@ describe("agent-ui reducer", () => {
     ];
     const running = reduceAll(countdownEvents);
 
-    expect(running.items).toMatchObject([{ kind: "assistant", text: "20" }]);
+    expect(running.items).toEqual([]);
+    expect(running.deferredAssistantMessages).toMatchObject([{ kind: "assistant", text: "20" }]);
+    expect(running.queuedUserMessages).toEqual([]);
     expect(running.live?.steps.at(-1)).toMatchObject({
       kind: "code",
       executionId: "agent-output:11",
@@ -212,67 +284,23 @@ describe("agent-ui reducer", () => {
       ...countdownEvents,
       {
         type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: { executionId: "agent-output:11", ok: true, logs: [] },
+        payload: { executionId: "agent-output:11", settlement: { status: "succeeded" } },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 20 },
       },
     ]);
 
     expect(completed.live).toBeNull();
-    expect(completed.items.map((item) => item.kind)).toEqual(["assistant", "activity"]);
-    expect(completed.items[1]).toMatchObject({
+    expect(completed.items.map((item) => item.kind)).toEqual(["activity", "assistant"]);
+    expect(completed.items[0]).toMatchObject({
       kind: "activity",
       status: "done",
       steps: [
         { kind: "llm", status: "done" },
         { kind: "code", executionId: "agent-output:11", status: "done" },
       ],
-    });
-  });
-
-  test("streams legacy openai-ws llm-response-chunk frames into the live llm step", () => {
-    // itx journals every raw Responses-WS frame as llm-response-chunk
-    // ({llmRequestId, sequence, chunk}). Regression guard: the feed once
-    // showed only a bare spinner because the reducer ignored these frames.
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        offset: 10,
-        payload: { model: "gpt-test" },
-      },
-      {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
-        payload: {
-          llmRequestId: 10,
-          sequence: 0,
-          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
-        },
-      },
-      {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
-        payload: {
-          llmRequestId: 10,
-          sequence: 1,
-          chunk: { type: "response.output_text.delta", delta: "const n = await " },
-        },
-      },
-      {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
-        payload: {
-          llmRequestId: 10,
-          sequence: 2,
-          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
-        },
-      },
-    ]);
-
-    expect(state.live?.steps.at(-1)).toMatchObject({
-      kind: "llm",
-      status: "running",
-      thinkingText: "Reading the stream",
-      responseText: "const n = await stream.count();",
     });
   });
 
@@ -428,7 +456,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  test("settles a completed LLM request even without an assistant message", () => {
+  test("settles a completed LLM request at run-level idle even without an assistant message", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -443,6 +471,10 @@ describe("agent-ui reducer", () => {
           result: { status: "success" },
         },
       },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 8 },
+      },
     ]);
 
     expect(state.live).toBeNull();
@@ -454,7 +486,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  test("does not clear running work from idle status alone", () => {
+  test("makes missing durable completions explicit when run-level idle closes work", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -462,14 +494,172 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agent/status-updated",
-        payload: { status: "idle", reason: "request complete" },
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: {
+          executionId: "script-without-completion",
+          code: "async () => mutateExternalState()",
+          expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
+        },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 8 },
       },
     ]);
 
-    expect(state.items).toHaveLength(0);
-    expect(state.live).toMatchObject({ kind: "activity", status: "running" });
-    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
+    const activity = state.items[0];
+    if (activity?.kind !== "activity") throw new Error("expected activity item");
+    expect(activity.steps).toMatchObject([
+      {
+        kind: "llm",
+        status: "done",
+        outcome: "failed",
+        errorMessage: expect.stringMatching(/without a durable LLM completion/i),
+      },
+      {
+        kind: "code",
+        status: "done",
+        success: false,
+        errorMessage: expect.stringMatching(/outcome is unknown.*safe to re-run/i),
+      },
+    ]);
+  });
+
+  test("emits a same-id correction when a durable script settlement arrives after idle", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        offset: 10,
+        payload: {
+          executionId: "late-script",
+          code: "async () => mutate()",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 10 },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-completed",
+        payload: {
+          executionId: "late-script",
+          settlement: { status: "succeeded", result: { committed: true } },
+        },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(2);
+    const [provisional, corrected] = state.items;
+    expect(provisional).toMatchObject({
+      kind: "activity",
+      steps: [{ kind: "code", outcomeSource: "inferred", success: false }],
+    });
+    expect(corrected).toMatchObject({
+      kind: "activity",
+      id: provisional?.id,
+      steps: [
+        {
+          kind: "code",
+          outcomeSource: "durable",
+          success: true,
+          result: { committed: true },
+        },
+      ],
+    });
+    if (corrected?.kind !== "activity" || corrected.steps[0]?.kind !== "code") {
+      throw new Error("expected corrected code activity");
+    }
+    expect(corrected.steps[0]).not.toHaveProperty("errorMessage");
+    expect(state.provisionalActivities).toEqual({});
+  });
+
+  test("stores one provisional activity for a group with several unsettled scripts", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        offset: 10,
+        payload: {
+          executionId: "late-a",
+          code: "async () => mutateA()",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        offset: 11,
+        payload: {
+          executionId: "late-b",
+          code: "async () => mutateB()",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 11 },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-completed",
+        payload: { executionId: "late-a", settlement: { status: "succeeded", result: "a" } },
+      },
+    ]);
+
+    expect(Object.values(state.provisionalActivities)).toHaveLength(1);
+    expect(Object.keys(state.provisionalActivities)).toEqual(["activity-10"]);
+    expect(state.items.at(-1)).toMatchObject({
+      id: "activity-10",
+      steps: [
+        { kind: "code", executionId: "late-a", outcomeSource: "durable" },
+        { kind: "code", executionId: "late-b", outcomeSource: "inferred" },
+      ],
+    });
+  });
+
+  test("bounds provisional activity corrections when completions never arrive", () => {
+    const baseMs = Date.parse("2026-06-11T00:00:00.000Z");
+    const eventCount = AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT + 8;
+    const events = Array.from({ length: eventCount }, (_, index) => {
+      const requestedOffset = index * 2 + 1;
+      return [
+        {
+          type: "events.iterate.com/capability-host/script-execution-requested",
+          offset: requestedOffset,
+          createdAt: new Date(baseMs + requestedOffset * 1_000).toISOString(),
+          payload: {
+            executionId: `missing-${index}`,
+            code: "async () => mutate()",
+            expiresAt: baseMs + 15 * 60_000,
+          },
+        },
+        {
+          type: "events.iterate.com/agent/status-changed",
+          offset: requestedOffset + 1,
+          createdAt: new Date(baseMs + (requestedOffset + 1) * 1_000).toISOString(),
+          payload: { busy: false, sinceOffset: requestedOffset },
+        },
+      ];
+    }).flat();
+
+    const state = reduceAll(events);
+
+    expect(Object.keys(state.provisionalActivities)).toHaveLength(
+      AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
+    );
+    expect(state.provisionalActivities["activity-1"]).toBeUndefined();
+    expect(state.provisionalActivities[`activity-${(eventCount - 1) * 2 + 1}`]).toBeDefined();
+  });
+
+  test("does not guess a phase from a malformed busy status event", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/status-changed",
+        offset: 7,
+        payload: { busy: true, sinceOffset: 6 },
+      },
+    ]);
+
+    expect(state.live).toBeNull();
+    expect(state.statusSinceOffset).toBeNull();
   });
 
   test("queues a user message that arrives mid-turn", () => {
@@ -540,12 +730,11 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 7,
+          llmRequestOffset: 7,
           sequence: 0,
-          chunk: { type: "response.output_text.delta", delta: "old partial" },
+          chunk: { choices: [{ delta: { content: "old partial" } }] },
         },
       },
       {
@@ -561,12 +750,11 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        type: "events.iterate.com/agent/llm-response-chunk",
         payload: {
-          connectionId: "c1",
-          llmRequestId: 7,
+          llmRequestOffset: 7,
           sequence: 1,
-          chunk: { type: "response.output_text.delta", delta: " stale chunk" },
+          chunk: { choices: [{ delta: { content: " stale chunk" } }] },
         },
       },
       {
@@ -839,27 +1027,6 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  test("still blanks pre-unification slack yaml inputs from old journals", () => {
-    const file = {
-      contentType: "image/png",
-      filename: "screenshot.png",
-      path: "files/screenshot.png",
-      size: 123,
-      url: "https://files.example/screenshot.png",
-    };
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: "slack-agent:webhook-to-agent-input:41",
-        payload: { content: "```yaml\nbody: ...\n```", files: [file] },
-      },
-    ]);
-
-    expect(state.items).toMatchObject([
-      { kind: "user", text: "", files: [file], via: { service: "slack" } },
-    ]);
-  });
-
   test("renders inter-agent mail as a labeled user bubble", () => {
     const state = reduceAll([
       {
@@ -894,6 +1061,10 @@ describe("agent-ui reducer", () => {
           llmRequestOffset: 7,
           reason: "interrupted-by-user-input",
         },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 8 },
       },
     ]);
 

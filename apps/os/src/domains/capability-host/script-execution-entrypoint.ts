@@ -3,6 +3,42 @@ import type { Env } from "../../env.ts";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { settleByDeadline } from "./execution-deadline.ts";
+import type { ScriptExecutionSettlement } from "./capability-host-processor-contract.ts";
+
+const DEADLINE_EXCEEDED_ERROR =
+  "Script execution exceeded its absolute deadline after it started. Its worker execution context ended, but arbitrary external work cannot be proven terminated. It may have partially executed; it was NOT re-run.";
+
+// Sessionless sandbox exec uses up to six seconds after its timeout to TERM,
+// KILL, and verify the Linux process group. Keep a larger margin for Workers
+// RPC propagation and the durable completion append.
+export const SCRIPT_EXTERNAL_CLEANUP_GRACE_MS = 15_000;
+
+/**
+ * Compute the timeout forwarded to one sandbox command inside a script. This
+ * exact function is embedded into the generated worker below (via
+ * Function#toString), so the executable unit tests and the deployed script
+ * cannot drift into two subtly different deadline calculations.
+ */
+export function sandboxExecTimeout(input: {
+  executionDeadline: number;
+  externalCleanupGraceMs: number;
+  nowMs: number;
+  requestedTimeout: unknown;
+}): number {
+  const remainingMs = input.executionDeadline - input.nowMs - input.externalCleanupGraceMs;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    throw new Error("Script deadline left no time to start a sandbox command");
+  }
+  const requestedTimeout = input.requestedTimeout;
+  const boundedRequestedTimeout =
+    typeof requestedTimeout === "number" &&
+    Number.isFinite(requestedTimeout) &&
+    requestedTimeout > 0
+      ? requestedTimeout
+      : remainingMs;
+  return Math.max(1, Math.min(remainingMs, boundedRequestedTimeout));
+}
 
 /**
  * Stateless loopback executor for capability-host runScript.
@@ -17,7 +53,7 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
 > {
   async run(
     code: string,
-    options?: {
+    options: {
       /**
        * The typecheck gate's emitted JavaScript for this script (its default
        * export is the script function) — check and emit are one compile, so
@@ -28,8 +64,10 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
        * error into the corrective-retry lane.
        */
       emittedJs?: string;
+      /** Absolute epoch-ms deadline for the complete dynamic-worker call. */
+      expiresAt: number;
     },
-  ): Promise<JsonValue | undefined> {
+  ): Promise<ScriptExecutionSettlement> {
     const projectId = this.ctx.props.projectId;
     const scopePath = normalizePath(this.ctx.props.scopePath);
     const dynamicWorkers = new DynamicWorkerRunner({
@@ -41,18 +79,64 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
 
     // Scripts execute inside THIS scope: the loaded worker's env.ITX resolves
     // to the same path the capability host owns.
-    const result = await dynamicWorkers.invokeCapability({
+    const invocation = dynamicWorkers.invokeCapability({
       path: ["run"],
-      ref: scriptWorkerRef({ code, emittedJs: options?.emittedJs, scopePath }),
+      ref: scriptWorkerRef({
+        code,
+        emittedJs: options.emittedJs,
+        expiresAt: options.expiresAt,
+        scopePath,
+      }),
       traceRole: "run_script",
     });
-    return result === undefined ? undefined : (JSON.parse(JSON.stringify(result)) as JsonValue);
+    const outcome = await settleByDeadline(invocation, options.expiresAt, Date.now);
+    if (outcome.status === "deadline") {
+      // This timer lives in the RPC entrypoint that owns the dynamic-worker
+      // call. Returning ends this handler after a bounded wait, but it is not
+      // a cancellation acknowledgement for arbitrary RPC work the script may
+      // already have started. Sandbox exec has its own earlier, process-tree
+      // terminating deadline; every other external effect remains explicitly
+      // classified as possibly continuing.
+      return {
+        status: "failed",
+        error: DEADLINE_EXCEEDED_ERROR,
+        failureKind: "deadline",
+        phase: "execution",
+        executionMayHaveOccurred: true,
+        cancellation: "external-work-may-continue",
+      };
+    }
+    if (outcome.status === "rejected") {
+      return {
+        status: "failed",
+        error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+        failureKind: "runtime",
+        phase: "execution",
+        executionMayHaveOccurred: true,
+        // A rejected worker call proves this handler stopped waiting, not
+        // that arbitrary fire-and-forget capability work has terminated.
+        cancellation: "external-work-may-continue",
+      };
+    }
+    const result = outcome.value;
+    // This is an RPC/event JSON boundary, not a deep-clone operation. Preserve
+    // JSON's deliberate normalization and rejection semantics (Dates become
+    // strings; unsupported/cyclic values fail) instead of structuredClone's
+    // broader value model.
+    const serializedResult = result === undefined ? undefined : JSON.stringify(result);
+    return {
+      status: "succeeded",
+      ...(serializedResult === undefined
+        ? {}
+        : { result: JSON.parse(serializedResult) as JsonValue }),
+    };
   }
 }
 
-function scriptWorkerRef(input: {
+export function scriptWorkerRef(input: {
   code: string;
   emittedJs?: string;
+  expiresAt: number;
   scopePath: string;
 }): StatelessDynamicWorkerRef {
   // Preferred shape: the gate's emitted module (default export = the script
@@ -62,10 +146,49 @@ function scriptWorkerRef(input: {
   const scriptModule = input.emittedJs;
   const fnSource = scriptModule === undefined ? input.code : `scriptModule`;
   const importLine = scriptModule === undefined ? "" : `import scriptModule from "./script.js";`;
+  const sandboxExecTimeoutSource = sandboxExecTimeout.toString();
   const source = `
     import { WorkerEntrypoint } from "cloudflare:workers";
     ${importLine}
     const fn = ${fnSource};
+    const executionDeadline = ${input.expiresAt};
+    const externalCleanupGraceMs = ${SCRIPT_EXTERNAL_CLEANUP_GRACE_MS};
+    const sandboxExecTimeout = ${sandboxExecTimeoutSource};
+
+    function sandboxWithExecutionDeadline(sandbox) {
+      return new Proxy(sandbox, {
+        get(target, property) {
+          if (property !== "exec") return Reflect.get(target, property, target);
+          return (command, options = {}) => {
+            const timeout = sandboxExecTimeout({
+              executionDeadline,
+              externalCleanupGraceMs,
+              nowMs: Date.now(),
+              requestedTimeout: options.timeout,
+            });
+            return target.exec(command, { ...options, timeout });
+          };
+        },
+      });
+    }
+
+    function itxWithExecutionDeadline(itx) {
+      const sandboxes = itx.sandboxes;
+      const guardedSandboxes = new Proxy(sandboxes, {
+        get(target, property) {
+          if (property !== "get") return Reflect.get(target, property, target);
+          return async (...args) => sandboxWithExecutionDeadline(await target.get(...args));
+        },
+      });
+      return new Proxy(itx, {
+        get(target, property) {
+          return property === "sandboxes"
+            ? guardedSandboxes
+            : Reflect.get(target, property, target);
+        },
+      });
+    }
+
     export class ScriptEntrypoint extends WorkerEntrypoint {
       async run() {
         // \`using\`: the itx root is an RPC stub this isolate owns for the
@@ -74,7 +197,7 @@ function scriptWorkerRef(input: {
         // the logs. Values the script obtained THROUGH it (returned stubs,
         // appended events) hold their own references and are unaffected.
         using itx = await this.env.ITX.get();
-        return await fn(itx);
+        return await fn(itxWithExecutionDeadline(itx));
       }
     }
   `;

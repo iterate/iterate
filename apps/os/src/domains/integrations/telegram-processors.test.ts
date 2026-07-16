@@ -5,6 +5,7 @@
 import { describe, expect, test } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import { telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { MemoryStreamNetwork, makeProcessorHarness } from "../streams/test-helpers.ts";
 import { TelegramProcessor } from "./telegram-processor-implementation.ts";
 import {
@@ -122,20 +123,20 @@ describe("TelegramProcessor (webhook router)", () => {
 
     // First delivery: the forward throws. ingest MUST reject and the
     // checkpoint MUST hold — otherwise the message is gone for good.
-    await expect(processor.ingest({ events: [webhook!], streamMaxOffset: 1 })).rejects.toThrow(
-      /StreamsCapability/,
-    );
+    await expect(
+      ingestTestBatch(processor, { events: [webhook!], streamMaxOffset: 1 }),
+    ).rejects.toThrow(/StreamsCapability/);
     expect(processor.checkpointOffset).toBe(0);
     expect(routed.events).toHaveLength(0);
 
     // The host replays the same webhook from the un-advanced checkpoint; the
     // forward now succeeds and the checkpoint advances.
-    await processor.ingest({ events: [webhook!], streamMaxOffset: 1 });
+    await ingestTestBatch(processor, { events: [webhook!], streamMaxOffset: 1 });
     expect(processor.checkpointOffset).toBe(1);
     expect(routed.events).toHaveLength(1);
 
     // A second replay dedupes on the forward's idempotency key.
-    await processor.ingest({ events: [webhook!], streamMaxOffset: 1 });
+    await ingestTestBatch(processor, { events: [webhook!], streamMaxOffset: 1 });
     expect(routed.events).toHaveLength(1);
   });
 
@@ -549,7 +550,7 @@ describe("TelegramAgentProcessor", () => {
     });
     // Deliver the lifecycle fact while the batch is BEHIND head (a lagging
     // fold): no repaint yet, the fact is remembered.
-    await processor.ingest({ events: [llm!], streamMaxOffset: stream.events.length + 5 });
+    await ingestTestBatch(processor, { events: [llm!], streamMaxOffset: stream.events.length + 5 });
     expect(telegramCalls).toHaveLength(0);
 
     // The fold catches up: the next batch reaches head (its own event is an
@@ -558,7 +559,7 @@ describe("TelegramAgentProcessor", () => {
       type: "events.iterate.com/stream/woken",
       payload: { reason: "catch-up" },
     });
-    await processor.ingest({ events: [woken!], streamMaxOffset: stream.events.length });
+    await ingestTestBatch(processor, { events: [woken!], streamMaxOffset: stream.events.length });
     expect(telegramCalls).toEqual([
       { method: "sendChatAction", body: { action: "typing", chat_id: CHAT_ID } },
     ]);
@@ -613,7 +614,7 @@ describe("TelegramAgentProcessor", () => {
     ).toHaveLength(0);
 
     // Replay: the send goes through this time — one send, one marker.
-    await processor.ingest({ events: [request!], streamMaxOffset: stream.events.length });
+    await ingestTestBatch(processor, { events: [request!], streamMaxOffset: stream.events.length });
     expect(sentMessages).toHaveLength(1);
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/telegram/message-sent"),
@@ -655,7 +656,7 @@ describe("TelegramAgentProcessor", () => {
     // Simulate a crash after the marker landed but before the checkpoint
     // advanced: the host replays the request. The journal shows the marker,
     // so the send must NOT fire again (the marker is what "satisfied" means).
-    await processor.ingest({ events: [request!], streamMaxOffset: stream.events.length });
+    await ingestTestBatch(processor, { events: [request!], streamMaxOffset: stream.events.length });
     expect(sentMessages).toHaveLength(1);
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/telegram/message-sent"),
@@ -779,6 +780,11 @@ describe("TelegramAgentProcessor", () => {
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
+    expect(
+      CapabilityHostProcessorContract.events[
+        "events.iterate.com/capability-host/script-execution-requested"
+      ].payloadSchema.parse(scripts[0]?.payload),
+    ).toMatchObject({ expiresAt: expect.any(Number) });
     expect(scripts[0]).toMatchObject({
       idempotencyKey: "telegram-agent:debug-command:1",
       payload: { executionId: "telegram-debug-command-1" },
@@ -954,3 +960,4 @@ function setup(input: { agentPath?: string; now?: () => number } = {}) {
   });
   return { ...harness, calls, sendFailures, sentMessages, telegramCalls };
 }
+import { ingestTestBatch } from "~/test/stream-delivery.ts";

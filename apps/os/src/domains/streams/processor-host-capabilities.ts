@@ -21,6 +21,9 @@ export type AnyHostedProcessor = {
   ingest(args: {
     events: readonly StreamEventBatch["events"][number][];
     streamMaxOffset: number;
+    /** Raw-log interval the transport scanned, including empty filtered ranges. */
+    scannedAfterOffset: number;
+    scannedThroughOffset: number;
   }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;

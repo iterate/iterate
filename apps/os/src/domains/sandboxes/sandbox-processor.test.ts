@@ -4,6 +4,7 @@ import type { StreamEvent } from "../streams/schemas.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { SandboxProcessor } from "./sandbox-processor-implementation.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 const neverStream = new Proxy({} as Stream, {
   get(_target, property) {
@@ -31,7 +32,7 @@ function sandboxProcessor() {
 describe("SandboxProcessor", () => {
   it("folds a pet's whole life: created → running → stopped → running → destroyed", async () => {
     const processor = sandboxProcessor();
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         // create-requested lands on the /sandboxes catalogue stream, not here —
         // the pet's own stream starts with the completion.
@@ -43,7 +44,7 @@ describe("SandboxProcessor", () => {
       state: { status: "created", instanceType: "basic", lastBackupId: null },
     });
 
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         event("events.iterate.com/sandbox/started"),
         event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
@@ -55,7 +56,7 @@ describe("SandboxProcessor", () => {
       state: { status: "stopped", instanceType: "basic", lastBackupId: "bkp-1" },
     });
 
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         // An implicit wake: started without a start-requested.
         event("events.iterate.com/sandbox/started"),
@@ -72,7 +73,7 @@ describe("SandboxProcessor", () => {
 
   it("destroyed is terminal — a late-delivered stopped cannot resurrect the status", async () => {
     const processor = sandboxProcessor();
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         event("events.iterate.com/sandbox/created", { instanceType: "lite" }),
         event("events.iterate.com/sandbox/destroyed"),
@@ -89,7 +90,7 @@ describe("SandboxProcessor", () => {
 
   it("folds the configured env map (later configs merge over earlier)", async () => {
     const processor = sandboxProcessor();
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         event("events.iterate.com/sandbox/configured", {
           env: { GH_TOKEN: 'getSecret({ path: "/secrets/gh" })', FOO: "bar" },
@@ -111,7 +112,7 @@ describe("SandboxProcessor", () => {
 
   it("ignores events outside its catalog", async () => {
     const processor = sandboxProcessor();
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [event("events.iterate.com/agent/turn-started")],
       streamMaxOffset: nextOffset,
     });

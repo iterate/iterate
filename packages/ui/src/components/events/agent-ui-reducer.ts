@@ -45,10 +45,13 @@ export type AgentUiCodeStep = {
   code: string;
   result?: unknown;
   errorMessage?: string;
-  logs?: string[];
   durationMs?: number;
   success?: boolean;
+  /** Whether the outcome came from the durable settlement or a UI boundary inference. */
+  outcomeSource?: "durable" | "inferred";
   startedAtMs: number;
+  /** Absolute server-side execution deadline from the strict request contract. */
+  expiresAtMs: number;
 };
 
 export type AgentUiStep = AgentUiLlmStep | AgentUiCodeStep;
@@ -60,6 +63,10 @@ export type AgentUiActivity = {
   steps: AgentUiStep[];
   startedAtMs: number;
   endedAtMs?: number;
+  /** Authoritative phase from the platform-authored busy status event. */
+  phase?: "llm" | "script";
+  /** When the current authoritative phase began, for the live elapsed clock. */
+  phaseStartedAtMs?: number;
 };
 
 /** A file attachment shown alongside a user message in the agent UI. */
@@ -167,6 +174,8 @@ export function initialAgentUiTokenUsage(): AgentUiTokenUsage {
 export type AgentUiState = {
   /** The running activity (streaming thinking/code), or null when no work is active. */
   live: AgentUiActivity | null;
+  /** Assistant bubbles held until the grouped activity closes. */
+  deferredAssistantMessages: AgentUiMessageItem[];
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
   eventCount: number;
@@ -174,15 +183,34 @@ export type AgentUiState = {
   presence: AgentUiPresenceEntry[];
   /** Lifetime token totals + the latest report (context fullness). */
   tokenUsage: AgentUiTokenUsage;
+  /** Generation guard for platform-authored busy/idle status patches. */
+  statusSinceOffset: number | null;
+  /**
+   * Settled activities whose script outcome was inferred at a boundary rather
+   * than supplied by a durable completion. A late completion replaces the
+   * same feed item instead of leaving the inferred failure as permanent truth.
+   */
+  provisionalActivities: Record<string, AgentUiActivity>;
 };
+
+/**
+ * A durable completion normally follows its idle boundary immediately. Keep a
+ * small correction window, but never let malformed streams with permanently
+ * missing completions grow the browser's persisted reducer state without
+ * bound.
+ */
+export const AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT = 32;
 
 export function initialAgentUiState(): AgentUiState {
   return {
     live: null,
+    deferredAssistantMessages: [],
     queuedUserMessages: [],
     eventCount: 0,
     presence: [],
     tokenUsage: initialAgentUiTokenUsage(),
+    statusSinceOffset: null,
+    provisionalActivities: {},
   };
 }
 
@@ -216,25 +244,13 @@ const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-comple
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
 const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
 const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
-const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
+const AGENT_STATUS_CHANGED = "events.iterate.com/agent/status-changed";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
 const AGENT_HISTORY_RESET = "events.iterate.com/agent/history-reset";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
-// Historical journals (pre single-agent-processor) still stream under these
-// types; keep reading them so old chats render correctly. This is data
-// compat, not code compat: delete these lanes once no journals predate the
-// PR #1808 cutover (e.g. after the next prd reset).
-const LEGACY_OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
-const LEGACY_OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
-const LEGACY_CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
-const LEGACY_CLOUDFLARE_AI_RESPONSE_CHUNK = "events.iterate.com/cloudflare-ai/llm-response-chunk";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-execution-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-execution-completed";
-const CODEMODE_SCRIPT_EXECUTION_REQUESTED =
-  "events.iterate.com/codemode/script-execution-requested";
-const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
-  "events.iterate.com/codemode/script-execution-completed";
 const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
 const TELEGRAM_WEBHOOK_RECEIVED = "events.iterate.com/telegram/webhook-received";
 const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
@@ -257,11 +273,14 @@ function reduceAgentUiEvent(
 ): AgentUiState {
   const state: AgentUiState = {
     ...previous,
-    queuedUserMessages: previous.queuedUserMessages ?? [],
-    tokenUsage: previous.tokenUsage ?? initialAgentUiTokenUsage(),
     eventCount: previous.eventCount + 1,
   };
   const timestampMs = Date.parse(event.createdAt);
+  // Committed events are expected to carry an ISO timestamp. A malformed
+  // timestamp must not manufacture NaN durations or accidentally trip a
+  // script deadline comparison; keep the raw event visible, but do not fold
+  // it into the typed agent projection.
+  if (!Number.isFinite(timestampMs)) return state;
 
   switch (event.type) {
     // THE inbound message event, every source: `from.kind` picks the
@@ -329,20 +348,12 @@ function reduceAgentUiEvent(
       // web-message-sent event already rendered as an assistant bubble —
       // they exist for the model's eyes, not the user's.
       if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
-      // Pre-unification journals: the slack transcriber used to append its
-      // model-facing YAML dump as input-added under this key (today it emits
-      // agents/message-received). The raw webhook already rendered the
-      // bubble; surface only the stored attachments, exactly as before.
-      const isLegacySlackInput = event.idempotencyKey?.startsWith(
-        "slack-agent:webhook-to-agent-input:",
-      );
       return emitUserMessageItem(state, items, {
         kind: "user",
         id: `user-file-${event.offset}`,
-        text: isLegacySlackInput ? "" : text,
+        text,
         files,
         timestampMs,
-        ...(isLegacySlackInput ? { via: { service: "slack" as const } } : {}),
       });
     }
 
@@ -358,15 +369,18 @@ function reduceAgentUiEvent(
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
-      return emitItem(state, items, item);
+      return emitAssistantMessageItem(state, items, item);
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
       const base =
-        state.queuedUserMessages.length === 0
-          ? state
-          : flushQueuedUserMessages(settleLiveIfIdle(state, timestampMs, items), items);
-      const live = ensureLive(base, event.offset, timestampMs);
+        state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
+      const ready =
+        base.live === null &&
+        (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
+          ? flushDeferredMessages(base, items)
+          : base;
+      const live = ensureLive(ready, event.offset, timestampMs);
       const model = readString(event, "model");
       const step: AgentUiLlmStep = {
         kind: "llm",
@@ -378,55 +392,17 @@ function reduceAgentUiEvent(
         responseText: "",
         startedAtMs: timestampMs,
       };
-      return { ...base, live: { ...live, steps: [...live.steps, step] } };
+      return { ...ready, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case AGENT_LLM_REQUEST_STARTED:
-    case LEGACY_OPENAI_WS_REQUEST_STARTED:
-    case LEGACY_CLOUDFLARE_AI_REQUEST_STARTED: {
+    case AGENT_LLM_REQUEST_STARTED: {
       const llmRequestOffset = readLlmRequestOffset(event);
       const model = readString(event, "model");
       if (llmRequestOffset == null || model == null) return state;
       return updateLlmStep(state, llmRequestOffset, (step) => ({ ...step, model }));
     }
 
-    case LEGACY_OPENAI_WS_RESPONSE_CHUNK: {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      const message = readRecord(event, "chunk");
-      if (llmRequestOffset == null || message == null) return state;
-      const frameType = typeof message.type === "string" ? message.type : "";
-      const delta = typeof message.delta === "string" ? message.delta : "";
-
-      if (frameType === "response.output_text.delta" && delta !== "") {
-        return updateLlmStep(state, llmRequestOffset, (step) => ({
-          ...step,
-          responseText: step.status === "running" ? step.responseText + delta : step.responseText,
-        }));
-      }
-      if (
-        (frameType === "response.reasoning_summary_text.delta" ||
-          frameType === "response.reasoning_text.delta") &&
-        delta !== ""
-      ) {
-        return updateLlmStep(state, llmRequestOffset, (step) => ({
-          ...step,
-          thinkingText: step.status === "running" ? step.thinkingText + delta : step.thinkingText,
-        }));
-      }
-      if (frameType === "response.reasoning_summary_part.added") {
-        return updateLlmStep(state, llmRequestOffset, (step) => ({
-          ...step,
-          thinkingText:
-            step.status !== "running" || step.thinkingText === ""
-              ? step.thinkingText
-              : `${step.thinkingText}\n\n`,
-        }));
-      }
-      return state;
-    }
-
-    case AGENT_LLM_RESPONSE_CHUNK:
-    case LEGACY_CLOUDFLARE_AI_RESPONSE_CHUNK: {
+    case AGENT_LLM_RESPONSE_CHUNK: {
       const llmRequestOffset = readLlmRequestOffset(event);
       const chunk = readPayloadRecord(event)?.chunk;
       if (llmRequestOffset == null) return state;
@@ -463,79 +439,114 @@ function reduceAgentUiEvent(
         isRecord(result?.error) && typeof result.error.message === "string"
           ? result.error.message
           : undefined;
-      return settleLiveIfIdle(
-        updateLlmStep(state, llmRequestOffset, (step) =>
-          step.outcome === "cancelled"
-            ? step
-            : {
-                ...step,
-                status: "done",
-                outcome: status === "success" ? "completed" : "failed",
-                ...(typeof payload?.durationMs === "number"
-                  ? { durationMs: payload.durationMs }
-                  : {}),
-                ...(usage.input == null ? {} : { inputTokens: usage.input }),
-                ...(usage.output == null ? {} : { outputTokens: usage.output }),
-                ...(errorMessage == null ? {} : { errorMessage }),
-              },
-        ),
-        timestampMs,
-        items,
+      const updated = updateLlmStep(state, llmRequestOffset, (step) =>
+        step.outcome === "cancelled"
+          ? step
+          : {
+              ...step,
+              status: "done",
+              outcome: status === "success" ? "completed" : "failed",
+              ...(typeof payload?.durationMs === "number"
+                ? { durationMs: payload.durationMs }
+                : {}),
+              ...(usage.input == null ? {} : { inputTokens: usage.input }),
+              ...(usage.output == null ? {} : { outputTokens: usage.output }),
+              ...(errorMessage == null ? {} : { errorMessage }),
+            },
       );
+      return clearSettledPhase(updated, "llm");
     }
 
     case AGENT_LLM_REQUEST_CANCELLED: {
       const llmRequestOffset = readLlmRequestOffset(event);
       if (llmRequestOffset == null) return state;
-      return settleLiveIfIdle(
-        updateLlmStep(state, llmRequestOffset, (step) => ({
-          ...step,
-          status: "done",
-          outcome: "cancelled",
-        })),
-        timestampMs,
-        items,
-      );
+      const updated = updateLlmStep(state, llmRequestOffset, (step) => ({
+        ...step,
+        status: "done",
+        outcome: "cancelled",
+      }));
+      return clearSettledPhase(updated, "llm");
     }
 
-    case SCRIPT_EXECUTION_REQUESTED:
-    case CODEMODE_SCRIPT_EXECUTION_REQUESTED: {
+    case SCRIPT_EXECUTION_REQUESTED: {
       const payload = readPayloadRecord(event);
-      const executionId =
-        typeof payload?.executionId === "string" ? payload.executionId : `exec-${event.offset}`;
+      const executionId = typeof payload?.executionId === "string" ? payload.executionId : null;
+      const code = typeof payload?.code === "string" ? payload.code : null;
+      const expiresAtMs = payload?.expiresAt;
+      if (
+        executionId == null ||
+        code == null ||
+        typeof expiresAtMs !== "number" ||
+        !Number.isSafeInteger(expiresAtMs) ||
+        expiresAtMs <= 0
+      ) {
+        return state;
+      }
       const live = ensureLive(state, event.offset, timestampMs);
       const step: AgentUiCodeStep = {
         kind: "code",
         id: `code-${executionId}`,
         executionId,
         status: "running",
-        code: typeof payload?.code === "string" ? payload.code : "",
+        code,
         startedAtMs: timestampMs,
+        expiresAtMs,
       };
       return { ...state, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case SCRIPT_EXECUTION_COMPLETED:
-    case CODEMODE_SCRIPT_EXECUTION_COMPLETED: {
+    case SCRIPT_EXECUTION_COMPLETED: {
       const payload = readPayloadRecord(event);
-      if (payload == null || state.live == null) return state;
+      if (payload == null) return state;
       const executionId = typeof payload.executionId === "string" ? payload.executionId : null;
+      // Completion identity is mandatory in the current contract. Guessing
+      // the last running step can stamp one script's result onto another.
+      if (executionId == null) return state;
       const outcome = readCodeOutcome(payload);
+      if (state.live == null) {
+        return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
+      }
       const steps = [...state.live.steps];
-      const index =
-        executionId == null
-          ? steps.findLastIndex((step) => step.kind === "code" && step.status === "running")
-          : steps.findIndex((step) => step.kind === "code" && step.executionId === executionId);
+      const index = steps.findIndex(
+        (step) => step.kind === "code" && step.executionId === executionId,
+      );
       const step = steps[index];
-      if (step == null || step.kind !== "code") return state;
-      steps[index] = { ...step, status: "done", ...outcome };
-      const next = { ...state, live: { ...state.live, steps } };
-      return settleLiveIfIdle(next, timestampMs, items);
+      if (step == null || step.kind !== "code") {
+        return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
+      }
+      steps[index] = applyDurableCodeOutcome(step, outcome, timestampMs);
+      return clearSettledPhase({ ...state, live: { ...state.live, steps } }, "script");
     }
 
-    case AGENT_STATUS_UPDATED: {
-      if (readString(event, "status") !== "idle") return state;
-      return settleLiveIfIdle(state, timestampMs, items);
+    case AGENT_STATUS_CHANGED: {
+      const payload = readPayloadRecord(event);
+      if (
+        typeof payload?.busy !== "boolean" ||
+        typeof payload.sinceOffset !== "number" ||
+        !Number.isSafeInteger(payload.sinceOffset) ||
+        payload.sinceOffset < 0
+      ) {
+        // Agent-authored title/note/shortStatus patches do not delimit work.
+        return state;
+      }
+      if (state.statusSinceOffset !== null && payload.sinceOffset < state.statusSinceOffset) {
+        // An idle debounce append can lose its race with a newer busy flip.
+        return state;
+      }
+      const next = { ...state, statusSinceOffset: payload.sinceOffset };
+      if (payload.busy) {
+        if (payload.phase !== "llm" && payload.phase !== "script") return state;
+        const live = ensureLive(next, event.offset, timestampMs);
+        return {
+          ...next,
+          live: { ...live, phase: payload.phase, phaseStartedAtMs: timestampMs },
+        };
+      }
+      // Idle is the authoritative run boundary. Request completion facts are
+      // durable, so a still-running step here is an explicit failed/unknown
+      // lifecycle rather than a successful-looking silent close.
+      const expired = expireOverdueCodeSteps(next, timestampMs);
+      return flushDeferredMessages(settleLive(expired, timestampMs, items), items);
     }
 
     case AGENT_TOKEN_USAGE_REPORTED: {
@@ -585,7 +596,7 @@ function reduceAgentUiEvent(
       // they emit directly like web-message-sent; humans and third-party bots
       // queue while steps are running, like web user messages.
       return message.kind === "assistant"
-        ? emitItem(state, items, item)
+        ? emitAssistantMessageItem(state, items, item)
         : emitUserMessageItem(state, items, item);
     }
 
@@ -609,11 +620,10 @@ function reduceAgentUiEvent(
     case TELEGRAM_SEND_REQUESTED: {
       // The journaled send IS the bot's outbound message (the telegram-agent
       // processor is obliged to deliver it and Telegram won't echo it back),
-      // so it renders as the assistant bubble. Emitted directly: sends happen
-      // mid-turn, from inside a code step or the processor's /new ack.
+      // so it renders as the assistant bubble.
       const text = readString(event, "text");
       if (text == null || text === "") return state;
-      return emitItem(state, items, {
+      return emitAssistantMessageItem(state, items, {
         kind: "assistant",
         id: `telegram-send-${event.offset}`,
         text,
@@ -736,8 +746,8 @@ function isInitialStreamWake(event: Event): boolean {
   return event.offset <= 2;
 }
 
-function liveHasRunningStep(live: AgentUiActivity | null): boolean {
-  return live?.steps.some((step) => step.status === "running") ?? false;
+function liveIsWorking(live: AgentUiActivity | null): boolean {
+  return live?.phase != null || live?.steps.some((step) => step.status === "running") === true;
 }
 
 function settleLiveIfIdle(
@@ -745,8 +755,58 @@ function settleLiveIfIdle(
   endedAtMs: number,
   items: AgentUiItem[],
 ): AgentUiState {
-  if (liveHasRunningStep(state.live)) return state;
+  if (liveIsWorking(state.live)) return state;
   return settleLive(state, endedAtMs, items);
+}
+
+const SCRIPT_DEADLINE_WITHOUT_COMPLETION_ERROR =
+  "Script execution exceeded its deadline without a completion event. It may have partially executed and was NOT re-run.";
+const LLM_IDLE_WITHOUT_COMPLETION_ERROR =
+  "The agent became idle without a durable LLM completion or cancellation event.";
+const SCRIPT_IDLE_WITHOUT_COMPLETION_ERROR =
+  "The agent became idle without a durable script completion event. Its execution outcome is unknown; do not assume it is safe to re-run.";
+
+/**
+ * A requested code step whose server-side deadline passed without a durable
+ * completion cannot remain live forever. At a visible run boundary, preserve
+ * the uncertain side-effect outcome and close the UI step explicitly.
+ */
+function expireOverdueCodeSteps(state: AgentUiState, boundaryAtMs: number): AgentUiState {
+  if (state.live == null) return state;
+  let changed = false;
+  const steps = state.live.steps.map((step): AgentUiStep => {
+    if (step.kind !== "code" || step.status !== "running" || boundaryAtMs < step.expiresAtMs) {
+      return step;
+    }
+    changed = true;
+    return {
+      ...step,
+      status: "done",
+      success: false,
+      outcomeSource: "inferred",
+      durationMs: Math.max(0, step.expiresAtMs - step.startedAtMs),
+      errorMessage: SCRIPT_DEADLINE_WITHOUT_COMPLETION_ERROR,
+    };
+  });
+  if (!changed) return state;
+
+  const hasRunningStep = steps.some((step) => step.status === "running");
+  return {
+    ...state,
+    live: {
+      ...state.live,
+      steps,
+      ...(hasRunningStep ? {} : { phase: undefined, phaseStartedAtMs: undefined }),
+    },
+  };
+}
+
+function settleActivityAtBoundary(
+  state: AgentUiState,
+  boundaryAtMs: number,
+  items: AgentUiItem[],
+): AgentUiState {
+  return settleLiveIfIdle(expireOverdueCodeSteps(state, boundaryAtMs), boundaryAtMs, items);
 }
 
 /** Closes the live activity (if any) and emits it as a settled item. */
@@ -757,11 +817,39 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
     ...state.live,
     status: "done",
     endedAtMs,
-    steps: state.live.steps.map((step) =>
-      step.status === "running" ? ({ ...step, status: "done" } as AgentUiStep) : step,
-    ),
+    phase: undefined,
+    phaseStartedAtMs: undefined,
+    steps: state.live.steps.map((step): AgentUiStep => {
+      if (step.status !== "running") return step;
+      const durationMs = Math.max(0, endedAtMs - step.startedAtMs);
+      return step.kind === "llm"
+        ? {
+            ...step,
+            status: "done",
+            outcome: "failed",
+            durationMs,
+            errorMessage: LLM_IDLE_WITHOUT_COMPLETION_ERROR,
+          }
+        : {
+            ...step,
+            status: "done",
+            success: false,
+            outcomeSource: "inferred",
+            durationMs,
+            errorMessage: SCRIPT_IDLE_WITHOUT_COMPLETION_ERROR,
+          };
+    }),
   };
-  return emitItem({ ...state, live: null }, items, settled);
+  const provisionalActivities = { ...state.provisionalActivities };
+  if (settled.steps.some((step) => step.kind === "code" && step.outcomeSource === "inferred")) {
+    provisionalActivities[settled.id] = settled;
+    while (Object.keys(provisionalActivities).length > AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT) {
+      const oldestId = Object.keys(provisionalActivities)[0];
+      if (oldestId === undefined) break;
+      delete provisionalActivities[oldestId];
+    }
+  }
+  return emitItem({ ...state, live: null, provisionalActivities }, items, settled);
 }
 
 function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
@@ -770,6 +858,19 @@ function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): Age
     next = emitItem(next, items, item);
   }
   return next;
+}
+
+/**
+ * Emit the current turn's assistant output before user messages queued for the
+ * next turn. Keeping the two queues separate also prevents assistant bubbles
+ * from appearing in the composer's "queued messages" affordance.
+ */
+function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
+  let next: AgentUiState = { ...state, deferredAssistantMessages: [] };
+  for (const item of state.deferredAssistantMessages) {
+    next = emitItem(next, items, item);
+  }
+  return flushQueuedUserMessages(next, items);
 }
 
 // A user message while steps are still running must not archive those steps
@@ -781,10 +882,98 @@ function emitUserMessageItem(
   items: AgentUiItem[],
   item: AgentUiMessageItem,
 ): AgentUiState {
-  if (liveHasRunningStep(state.live)) {
-    return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
+  const settled = settleActivityAtBoundary(state, item.timestampMs, items);
+  if (liveIsWorking(settled.live)) {
+    return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
-  return emitItem(state, items, item);
+  const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+  return emitItem(flushed, items, item);
+}
+
+/**
+ * Assistant output belongs after the activity that produced it. Transport
+ * adapters all use this path so a Slack/Telegram echo cannot split a running
+ * script group while web output remains deferred.
+ */
+function emitAssistantMessageItem(
+  state: AgentUiState,
+  items: AgentUiItem[],
+  item: AgentUiMessageItem,
+): AgentUiState {
+  const settled = settleActivityAtBoundary(state, item.timestampMs, items);
+  if (liveIsWorking(settled.live)) {
+    return {
+      ...settled,
+      deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
+    };
+  }
+  const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
+  return emitItem(flushed, items, item);
+}
+
+function clearSettledPhase(state: AgentUiState, phase: "llm" | "script"): AgentUiState {
+  if (state.live?.phase !== phase) return state;
+  const hasRunningPhaseStep = state.live.steps.some(
+    (step) =>
+      step.status === "running" && (phase === "llm" ? step.kind === "llm" : step.kind === "code"),
+  );
+  if (hasRunningPhaseStep) return state;
+  return {
+    ...state,
+    live: { ...state.live, phase: undefined, phaseStartedAtMs: undefined },
+  };
+}
+
+function correctProvisionalCodeStep(
+  state: AgentUiState,
+  executionId: string,
+  outcome: Partial<AgentUiCodeStep>,
+  completedAtMs: number,
+  items: AgentUiItem[],
+): AgentUiState {
+  const activity = Object.values(state.provisionalActivities).find((candidate) =>
+    candidate.steps.some(
+      (step) =>
+        step.kind === "code" &&
+        step.executionId === executionId &&
+        step.outcomeSource === "inferred",
+    ),
+  );
+  if (activity == null) return state;
+  const steps = activity.steps.map((step): AgentUiStep => {
+    if (step.kind !== "code" || step.executionId !== executionId) return step;
+    return applyDurableCodeOutcome(step, outcome, completedAtMs);
+  });
+  const corrected: AgentUiActivity = { ...activity, steps };
+  const provisionalActivities = { ...state.provisionalActivities };
+  if (corrected.steps.some((step) => step.kind === "code" && step.outcomeSource === "inferred")) {
+    provisionalActivities[corrected.id] = corrected;
+  } else {
+    delete provisionalActivities[corrected.id];
+  }
+  return emitItem({ ...state, provisionalActivities }, items, corrected);
+}
+
+function applyDurableCodeOutcome(
+  step: AgentUiCodeStep,
+  outcome: Partial<AgentUiCodeStep>,
+  completedAtMs: number,
+): AgentUiCodeStep {
+  // A provisional boundary writes a failure. A later durable success must
+  // replace that outcome, not produce the impossible combination
+  // `success: true` plus the stale inferred error (or stale result fields in
+  // the opposite direction).
+  const base = { ...step };
+  delete base.errorMessage;
+  delete base.result;
+  delete base.success;
+  return {
+    ...base,
+    status: "done",
+    durationMs: outcome.durationMs ?? Math.max(0, completedAtMs - step.startedAtMs),
+    outcomeSource: "durable",
+    ...outcome,
+  };
 }
 
 function updateLlmStep(
@@ -840,25 +1029,62 @@ export function extractCloudflareChunkDeltas(chunk: unknown): {
 }
 
 function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeStep> {
-  const outcome = isRecord(payload.outcome) ? payload.outcome : undefined;
-  const success = payload.ok !== false && payload.error == null && outcome?.status !== "threw";
-  const result = "result" in payload ? payload.result : outcome?.value;
-  const error =
-    typeof payload.error === "string"
-      ? payload.error
-      : outcome?.status === "threw"
-        ? stringifyUnknown(outcome.error)
-        : undefined;
-  const logs = Array.isArray(payload.logs)
-    ? payload.logs.filter((line): line is string => typeof line === "string")
-    : undefined;
+  const settlement = isRecord(payload.settlement) ? payload.settlement : undefined;
+  if (
+    settlement?.status === "succeeded" &&
+    hasOnlyKeys(settlement, SCRIPT_SUCCESS_SETTLEMENT_KEYS)
+  ) {
+    return {
+      success: true,
+      ...(Object.hasOwn(settlement, "result") ? { result: settlement.result } : {}),
+    };
+  }
+  if (
+    settlement?.status === "failed" &&
+    typeof settlement.error === "string" &&
+    SCRIPT_FAILURE_KINDS.has(settlement.failureKind) &&
+    SCRIPT_FAILURE_PHASES.has(settlement.phase) &&
+    typeof settlement.executionMayHaveOccurred === "boolean" &&
+    SCRIPT_CANCELLATION_OUTCOMES.has(settlement.cancellation) &&
+    hasOnlyKeys(settlement, SCRIPT_FAILURE_SETTLEMENT_KEYS)
+  ) {
+    return { success: false, errorMessage: settlement.error };
+  }
   return {
-    success,
-    ...(result === undefined ? {} : { result }),
-    ...(error == null ? {} : { errorMessage: error }),
-    ...(logs == null ? {} : { logs }),
-    ...(typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {}),
+    success: false,
+    errorMessage: "The durable script completion contained no valid settlement.",
   };
+}
+
+const SCRIPT_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
+  "typecheck",
+  "runtime",
+  "deadline",
+  "expired",
+  "orphaned",
+]);
+const SCRIPT_FAILURE_PHASES: ReadonlySet<unknown> = new Set([
+  "typecheck",
+  "before-execution",
+  "execution",
+  "recovery",
+]);
+const SCRIPT_CANCELLATION_OUTCOMES: ReadonlySet<unknown> = new Set([
+  "not-applicable",
+  "external-work-may-continue",
+]);
+const SCRIPT_SUCCESS_SETTLEMENT_KEYS: ReadonlySet<string> = new Set(["status", "result"]);
+const SCRIPT_FAILURE_SETTLEMENT_KEYS: ReadonlySet<string> = new Set([
+  "status",
+  "error",
+  "failureKind",
+  "phase",
+  "executionMayHaveOccurred",
+  "cancellation",
+]);
+
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowedKeys.has(key));
 }
 
 function readUsageTokens(usage: unknown): { input?: number; output?: number } {
@@ -1066,12 +1292,9 @@ function readNumber(event: Event, key: string): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** The llm-request-requested offset an LLM lifecycle event references.
- * Current events carry `llmRequestOffset`; journals written before the
- * agent-contract 0.5.0 rename (and the legacy provider events) carry
- * `llmRequestId`. */
+/** The llm-request-requested offset an LLM lifecycle event references. */
 function readLlmRequestOffset(event: Event): number | null {
-  return readNumber(event, "llmRequestOffset") ?? readNumber(event, "llmRequestId");
+  return readNumber(event, "llmRequestOffset");
 }
 
 function readRecord(event: Event, key: string): Record<string, unknown> | null {
@@ -1085,13 +1308,4 @@ function readPayloadRecord(event: Event): Record<string, unknown> | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
-}
-
-function stringifyUnknown(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
 }

@@ -4,6 +4,7 @@ import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 import { StreamProcessor } from "./stream-processor.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 const CounterContract = defineProcessorContract({
   slug: "test-counter",
@@ -73,8 +74,8 @@ describe("StreamProcessor.observeStateChanges", () => {
     const snapshots: { offset: number; state: { count: number } }[] = [];
     processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
-    await processor.ingest({ events: [incrementedEvent(2)], streamMaxOffset: 1 });
-    await processor.ingest({
+    await ingestTestBatch(processor, { events: [incrementedEvent(2)], streamMaxOffset: 1 });
+    await ingestTestBatch(processor, {
       events: [incrementedEvent(3), incrementedEvent(5)],
       streamMaxOffset: 3,
     });
@@ -90,7 +91,7 @@ describe("StreamProcessor.observeStateChanges", () => {
     const snapshots: unknown[] = [];
     processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
-    await processor.ingest({ events: [unrelatedEvent()], streamMaxOffset: 1 });
+    await ingestTestBatch(processor, { events: [unrelatedEvent()], streamMaxOffset: 1 });
 
     expect(snapshots).toHaveLength(0);
     await expect(processor.snapshot()).resolves.toEqual({ offset: 1, state: { count: 0 } });
@@ -101,13 +102,127 @@ describe("StreamProcessor.observeStateChanges", () => {
     const snapshots: unknown[] = [];
     const unsubscribe = processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
-    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
+    await ingestTestBatch(processor, { events: [incrementedEvent(1)], streamMaxOffset: 1 });
     expect(snapshots).toHaveLength(1);
     expect(processor.currentState).toEqual({ count: 1 });
 
     unsubscribe();
-    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 2 });
+    await ingestTestBatch(processor, { events: [incrementedEvent(1)], streamMaxOffset: 2 });
     expect(snapshots).toHaveLength(1);
+  });
+});
+
+describe("StreamProcessor scan envelopes", () => {
+  it("durably advances through an empty filtered interval", async () => {
+    const processor = counter();
+    await ingestTestBatch(processor, {
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 7,
+      streamMaxOffset: 7,
+    });
+
+    await expect(processor.snapshot()).resolves.toEqual({ offset: 7, state: { count: 0 } });
+    expect(processor.subscriberMetrics.report()).toMatchObject({
+      batchesIngested: 1,
+      eventsIngested: 0,
+    });
+  });
+
+  it("resolves an offset waiter from an empty filtered scan watermark", async () => {
+    const processor = counter();
+    const reached = processor.waitUntilEvent({ offset: 7, timeoutMs: 1_000 });
+
+    await ingestTestBatch(processor, {
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 7,
+      streamMaxOffset: 7,
+    });
+
+    await expect(reached).resolves.toBeUndefined();
+  });
+
+  it("aborts a pending waiter without leaving its timeout alive", async () => {
+    vi.useFakeTimers();
+    try {
+      const processor = counter();
+      const abort = new AbortController();
+      const waiting = processor.waitUntilEvent({
+        offset: 7,
+        timeoutMs: 60_000,
+        signal: abort.signal,
+      });
+      const rejected = expect(waiting).rejects.toThrow("request append failed");
+
+      // Let the lazy checkpoint load finish so this exercises removal of an
+      // already-registered waiter, not the pre-registration abort fast path.
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+
+      abort.abort(new Error("request append failed"));
+
+      await rejected;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts omitted offsets only when the server scan proves the interval", async () => {
+    const processor = counter();
+    await ingestTestBatch(processor, {
+      events: [incrementedEvent(2, 2), incrementedEvent(3, 5)],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 5,
+      streamMaxOffset: 5,
+    });
+
+    await expect(processor.snapshot()).resolves.toEqual({ offset: 5, state: { count: 5 } });
+  });
+
+  it("rejects a missing scan interval without advancing the checkpoint", async () => {
+    const processor = counter();
+    await ingestTestBatch(processor, {
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+
+    await expect(
+      ingestTestBatch(processor, {
+        events: [incrementedEvent(1, 4)],
+        scannedAfterOffset: 3,
+        scannedThroughOffset: 4,
+        streamMaxOffset: 4,
+      }),
+    ).rejects.toThrow(/delivery gap.*checkpointed through 2.*starts after 3/);
+    await expect(processor.snapshot()).resolves.toEqual({ offset: 2, state: { count: 0 } });
+  });
+
+  it("rejects events outside the server-declared scan interval", async () => {
+    const processor = counter();
+    await expect(
+      ingestTestBatch(processor, {
+        events: [incrementedEvent(1, 3)],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 3,
+      }),
+    ).rejects.toThrow(/event offset 3 falls outside delivered scan \(0, 2\]/);
+  });
+
+  it("rejects duplicate or out-of-order events inside a valid scan interval", async () => {
+    const processor = counter();
+    await expect(
+      ingestTestBatch(processor, {
+        events: [incrementedEvent(1, 2), incrementedEvent(1, 1)],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 2,
+      }),
+    ).rejects.toThrow(/not strictly offset-ordered: 1 followed 2/);
+    await expect(processor.snapshot()).resolves.toEqual({ offset: 0, state: { count: 0 } });
   });
 });
 
@@ -157,7 +272,7 @@ describe("StreamProcessor parse-failure skipping", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const { processor } = recordingCounter();
-      await processor.ingest({
+      await ingestTestBatch(processor, {
         events: [incrementedEvent(2), unparseableEvent(), incrementedEvent(3)],
         streamMaxOffset: 3,
       });
@@ -171,7 +286,7 @@ describe("StreamProcessor parse-failure skipping", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const { processor } = recordingCounter();
-      await processor.ingest({ events: [unparseableEvent()], streamMaxOffset: 1 });
+      await ingestTestBatch(processor, { events: [unparseableEvent()], streamMaxOffset: 1 });
       await expect(processor.snapshot()).resolves.toEqual({ offset: 1, state: { count: 0 } });
     } finally {
       consoleError.mockRestore();
@@ -182,7 +297,7 @@ describe("StreamProcessor parse-failure skipping", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const { appends, processor } = recordingCounter();
-      await processor.ingest({
+      await ingestTestBatch(processor, {
         events: [incrementedEvent(1), unparseableEvent()],
         streamMaxOffset: 2,
       });
@@ -211,10 +326,10 @@ describe("StreamProcessor parse-failure skipping", () => {
     try {
       const { appends, processor } = recordingCounter();
       const batch = [incrementedEvent(2), unparseableEvent()];
-      await processor.ingest({ events: batch, streamMaxOffset: 2 });
+      await ingestTestBatch(processor, { events: batch, streamMaxOffset: 2 });
       await vi.waitFor(() => expect(appends).toHaveLength(1));
 
-      await processor.ingest({ events: batch, streamMaxOffset: 2 });
+      await ingestTestBatch(processor, { events: batch, streamMaxOffset: 2 });
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       await expect(processor.snapshot()).resolves.toEqual({ offset: 2, state: { count: 2 } });
@@ -236,7 +351,7 @@ describe("StreamProcessor parse-failure skipping", () => {
         } as unknown as Stream,
       });
 
-      await processor.ingest({ events: [unparseableEvent()], streamMaxOffset: 1 });
+      await ingestTestBatch(processor, { events: [unparseableEvent()], streamMaxOffset: 1 });
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       // The skip committed even though recording it failed.
@@ -264,7 +379,7 @@ describe("StreamProcessor.reconcile", () => {
       path: "/tests/counter",
       projectId: null,
     });
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [incrementedEvent(2), incrementedEvent(3)],
       streamMaxOffset: 2,
     });
@@ -279,13 +394,13 @@ describe("StreamProcessor.reconcile", () => {
       projectId: null,
     });
     // A refold in progress: the head sits at offset 10, this page ends at 2.
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [incrementedEvent(2), incrementedEvent(3)],
       streamMaxOffset: 10,
     });
     expect(processor.reconciledStates).toEqual([]);
     // The final catch-up page reaches the head; reconciliation gets its pass.
-    await processor.ingest({ events: [incrementedEvent(5, 10)], streamMaxOffset: 10 });
+    await ingestTestBatch(processor, { events: [incrementedEvent(5, 10)], streamMaxOffset: 10 });
     expect(processor.reconciledStates).toEqual([{ count: 10 }]);
   });
 });
@@ -393,7 +508,7 @@ describe("StreamProcessor provenance stamping", () => {
     const { appends, stream } = recordingNetwork();
     const processor = new EchoProcessor({ stream, ...HOME });
 
-    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+    await ingestTestBatch(processor, { events: [triggeredEvent(7)], streamMaxOffset: 7 });
 
     const home = appends.filter(({ path }) => path === HOME.path);
     expect(home).toHaveLength(1);
@@ -415,7 +530,7 @@ describe("StreamProcessor provenance stamping", () => {
     // The trigger makes the processor append its echo (home commits at offset
     // 1001 in the recording network) plus a sibling copy — only the HOME
     // append is timed: the sibling never loops back through this subscription.
-    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+    await ingestTestBatch(processor, { events: [triggeredEvent(7)], streamMaxOffset: 7 });
     let report = processor.subscriberMetrics.report();
     expect(report.appendRoundTripMs).toMatchObject({ samples: 1 });
     expect(report.consumeOwnAppendMs).toBeNull(); // echo not delivered back yet
@@ -425,7 +540,7 @@ describe("StreamProcessor provenance stamping", () => {
 
     // A later (non-consumed) event past the committed echo offset advances the
     // checkpoint through it — the loop closes on real delivery, not on append.
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         {
           type: "events.iterate.com/test/unrelated",
@@ -446,7 +561,7 @@ describe("StreamProcessor provenance stamping", () => {
     const { appends, stream } = recordingNetwork();
     const processor = new EchoProcessor({ stream, ...HOME });
 
-    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+    await ingestTestBatch(processor, { events: [triggeredEvent(7)], streamMaxOffset: 7 });
 
     const sibling = appends.filter(({ path }) => path === "/tests/echo-sibling");
     expect(sibling).toHaveLength(1);
@@ -460,7 +575,7 @@ describe("StreamProcessor provenance stamping", () => {
     const { appends, stream } = recordingNetwork();
     const processor = new BatchEchoProcessor({ stream, ...HOME });
 
-    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+    await ingestTestBatch(processor, { events: [triggeredEvent(7)], streamMaxOffset: 7 });
 
     const summary = appends.find(({ event }) => event.idempotencyKey?.includes("batch-summary"));
     expect(summary?.event.idempotencyKey).toBe("test-echo/batch-summary:7");
@@ -509,7 +624,7 @@ describe("StreamProcessor checkpoint loading", () => {
     });
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await processor.ingest({
+      await ingestTestBatch(processor, {
         events: [incrementedEvent(2, 1), incrementedEvent(3, 2)],
         streamMaxOffset: 2,
       });

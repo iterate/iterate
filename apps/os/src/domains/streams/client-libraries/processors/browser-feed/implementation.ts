@@ -1,16 +1,25 @@
+import {
+  initialAgentUiState,
+  reduceAgentUi,
+  type AgentUiActivity,
+  type AgentUiState,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamProcessor } from "../../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
-import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserFeedContract } from "./contract.ts";
-import { planBrowserFeedOps, type BrowserFeedState, type FeedOp } from "./projector.ts";
+import {
+  AGENT_KIND_PREFIX,
+  isAgentActivity,
+  planBrowserFeedOps,
+  type BrowserFeedState,
+  type FeedOp,
+} from "./projector.ts";
 export { BrowserFeedContract } from "./contract.ts";
+export { BROWSER_FEED_SCHEMA_VERSION } from "./projector.ts";
 
 /** The table this processor owns — the ONLY rendered-feed table in the mirror. */
 export const BROWSER_FEED_TABLE = "feed_items";
-
-/** Bumped into the writer-lock name (and mirror meta) so a schema/projection change rebuilds the mirror. */
-export const BROWSER_FEED_SCHEMA_VERSION = 1;
 
 export type { BrowserFeedState };
 
@@ -24,6 +33,46 @@ export type { BrowserFeedState };
  */
 export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, { sql: SqlClient }> {
   readonly contract = BrowserFeedContract;
+  #volatileAgentState: AgentUiState | null = null;
+
+  /**
+   * Fold a genuinely live delivery into the transient agent tail while
+   * persisting only durable events. Ephemeral chunks never enter the SQLite
+   * projection or reduced state; the scan checkpoint may advance across their
+   * consumed offsets so reconnects cannot replay them. Reconnecting
+   * intentionally drops this memory.
+   */
+  async ingestLive(
+    args: Parameters<StreamProcessor<BrowserFeedContract>["ingest"]>[0],
+  ): Promise<void> {
+    // A fresh browser processor can already have a complete SQLite checkpoint.
+    // Load it before seeding the volatile tail, and ignore replay overlap from
+    // a sibling processor whose (smaller) checkpoint selected the composite
+    // subscription cursor. StreamProcessor.ingest applies the same overlap
+    // rule to the durable projection below.
+    const snapshot = await this.snapshot();
+    let agent = this.#volatileAgentState ?? snapshot.state.agent;
+    for (const event of args.events) {
+      if (event.offset <= snapshot.offset) continue;
+      agent = reduceAgentUi(
+        agent,
+        event as unknown as Parameters<typeof reduceAgentUi>[1],
+      ).endState;
+    }
+    await super.ingest({
+      ...args,
+      events: args.events.filter((event) => event.ephemeral !== true),
+    });
+    this.#volatileAgentState = agent;
+  }
+
+  get agentUiState(): AgentUiState {
+    return this.#volatileAgentState ?? this.state.agent;
+  }
+
+  clearVolatileState(): void {
+    this.#volatileAgentState = null;
+  }
 
   protected override async prepare(): Promise<void> {
     await ensureBrowserFeedSchema(this.deps.sql);
@@ -39,6 +88,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     args: Parameters<StreamProcessor<BrowserFeedContract>["processEventBatch"]>[0],
   ): Promise<void> {
     const { ops } = planBrowserFeedOps(args.previousState, args.events);
+    await appendPrunedActivityCorrections(this.deps.sql, ops, args.events);
 
     if (ops.length > 0) {
       await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
@@ -46,6 +96,128 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
 
     await super.processEventBatch(args);
   }
+}
+
+/**
+ * The reducer keeps only a bounded hot window of inferred script outcomes.
+ * A completion that arrives after that window must still replace the
+ * previously rendered row. Recover the current activity from SQLite (or from
+ * an insert earlier in this same batch), run it through the canonical reducer,
+ * and append a normal replace op. This keeps reducer memory bounded without
+ * silently discarding late durable truth.
+ */
+async function appendPrunedActivityCorrections(
+  sql: SqlClient,
+  ops: FeedOp[],
+  events: Parameters<StreamProcessor<BrowserFeedContract>["processEventBatch"]>[0]["events"],
+): Promise<void> {
+  const rows = new Map<number, AgentUiActivity>();
+  const alreadyCorrected = new Set<string>();
+  for (const op of ops) {
+    if ((op.kind === "insert" || op.kind === "replace") && isAgentActivity(op.data)) {
+      rows.set(op.localIndex, op.data);
+      if (op.kind === "replace") {
+        for (const step of op.data.steps) {
+          if (step.kind === "code" && step.outcomeSource === "durable") {
+            alreadyCorrected.add(step.executionId);
+          }
+        }
+      }
+    }
+  }
+
+  for (const event of events) {
+    if (event.type !== "events.iterate.com/capability-host/script-execution-completed") continue;
+    const executionId = readExecutionId(event.payload);
+    if (executionId == null || alreadyCorrected.has(executionId)) continue;
+
+    let matched = findInferredActivityRow(rows, executionId);
+    // oxlint-disable-next-line react-doctor/async-await-in-loop -- corrections mutate the same ordered op list; serial lookup preserves event order and lets later completions observe earlier replacements.
+    if (matched == null) matched = await readInferredActivityRow(sql, executionId);
+    if (matched == null) continue;
+    const { activity, localIndex } = matched;
+
+    const start = initialAgentUiState();
+    const reduced = reduceAgentUi(
+      {
+        ...start,
+        provisionalActivities: { [activity.id]: activity },
+      },
+      event as unknown as Parameters<typeof reduceAgentUi>[1],
+    );
+    const corrected = reduced.items.find(
+      (item): item is AgentUiActivity => item.kind === "activity" && item.id === activity.id,
+    );
+    if (corrected == null) continue;
+
+    rows.set(localIndex, corrected);
+    alreadyCorrected.add(executionId);
+    ops.push({
+      kind: "replace",
+      localIndex,
+      itemKind: `${AGENT_KIND_PREFIX}${corrected.kind}`,
+      lastOffset: event.offset,
+      data: corrected,
+    });
+  }
+}
+
+function findInferredActivityRow(
+  rows: ReadonlyMap<number, AgentUiActivity>,
+  executionId: string,
+): { localIndex: number; activity: AgentUiActivity } | null {
+  for (const [localIndex, activity] of rows) {
+    if (
+      activity.steps.some(
+        (step) =>
+          step.kind === "code" &&
+          step.executionId === executionId &&
+          step.outcomeSource === "inferred",
+      )
+    ) {
+      return { localIndex, activity };
+    }
+  }
+  return null;
+}
+
+async function readInferredActivityRow(
+  sql: SqlClient,
+  executionId: string,
+): Promise<{ localIndex: number; activity: AgentUiActivity } | null> {
+  const [row] = await sql.exec(
+    `SELECT local_index, json(data) AS data
+     FROM feed_items
+     WHERE kind = 'agent.activity'
+       AND EXISTS (
+         SELECT 1
+         FROM json_each(json_extract(data, '$.steps')) AS step
+         WHERE json_extract(step.value, '$.kind') = 'code'
+           AND json_extract(step.value, '$.executionId') = ?
+           AND json_extract(step.value, '$.outcomeSource') = 'inferred'
+       )
+     ORDER BY local_index DESC
+     LIMIT 1`,
+    [executionId],
+  );
+  const localIndex = row?.local_index;
+  const raw = row?.data;
+  if (!Number.isSafeInteger(localIndex) || typeof raw !== "string") return null;
+  try {
+    const activity: unknown = JSON.parse(raw);
+    return isAgentActivity(activity) ? { localIndex: localIndex as number, activity } : null;
+  } catch {
+    return null;
+  }
+}
+
+function readExecutionId(payload: unknown): string | null {
+  return payload !== null &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    typeof (payload as Record<string, unknown>).executionId === "string"
+    ? ((payload as Record<string, unknown>).executionId as string)
+    : null;
 }
 
 function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
@@ -69,6 +241,12 @@ function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
       ],
     };
   }
+  if (op.kind === "replace") {
+    return {
+      sql: `UPDATE feed_items SET kind = ?, last_offset = ?, data = jsonb(?) WHERE local_index = ?`,
+      params: [op.itemKind, op.lastOffset, JSON.stringify(op.data), op.localIndex],
+    };
+  }
   return {
     sql: `UPDATE feed_items SET last_offset = ?, event_count = ?, data = jsonb(?) WHERE local_index = ?`,
     params: [op.lastOffset, op.eventCount, JSON.stringify(op.data), op.localIndex],
@@ -81,20 +259,8 @@ const ensureBrowserFeedSchema = createSchemaEnsurer({
     // database with the raw-events `events` table, which owns user_version.
     // Version resets ride the store's resetOnSchemaVersionChange lane
     // (mirror meta keyed by slug) instead.
-    //
-    // Pre-unification cleanup: mirrors built before browser-feed carry the
-    // retired agent-ui processor's agent_feed_items table and a feed_items
-    // with a `component` column. Both are disposable projections — drop them
-    // (the old-shape feed_items is detected by its missing `kind` column) and
-    // clear the retired processors' checkpoints so the mirror is exactly
-    // events + feed_items plus the shared processor_state bookkeeping.
-    const columns = await sql.exec(`SELECT name FROM pragma_table_info('feed_items')`);
-    const isLegacyFeedItems =
-      columns.length > 0 && !columns.some((column) => column.name === "kind");
     await sql.batch(
       [
-        { sql: `DROP TABLE IF EXISTS agent_feed_items` },
-        ...(isLegacyFeedItems ? [{ sql: `DROP TABLE IF EXISTS feed_items` }] : []),
         {
           sql: `
             -- One row per rendered Feed Item, pretty and raw interleaved in ONE
@@ -121,7 +287,5 @@ const ensureBrowserFeedSchema = createSchemaEnsurer({
       ],
       { transaction: true },
     );
-    await deleteBrowserProcessorState({ sql, processorSlug: "agent-ui" });
-    await deleteBrowserProcessorState({ sql, processorSlug: "browser-event-feed" });
   },
 });

@@ -15,6 +15,7 @@ import type {
   SchedulerProcessorState,
 } from "./scheduler-processor-contract.ts";
 import { SCHEDULER_HEARTBEAT_MS } from "./recurrence.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 const T0 = Date.parse("2026-01-15T12:00:00Z");
 
@@ -58,7 +59,7 @@ function makeHarness(options?: {
       const events = stream.events.slice(cursor);
       if (events.length === 0) return;
       cursor = stream.events.length;
-      await processor.ingest({ events, streamMaxOffset: stream.events.length });
+      await ingestTestBatch(processor, { events, streamMaxOffset: stream.events.length });
     }
   };
   return { clock, deliver, invokeCapability, processor, repointAlarm, snapshotStore, stream };
@@ -547,7 +548,7 @@ describe("recovery and alarm derivation", () => {
     replay.stream.events = [...before.stream.events];
     const completedOffset = replay.stream.events.find((e) => e.type === COMPLETED_TYPE)!.offset;
     const firstPage = replay.stream.events.filter((e) => e.offset < completedOffset);
-    await replay.processor.ingest({
+    await ingestTestBatch(replay.processor, {
       events: firstPage,
       streamMaxOffset: replay.stream.events.length,
     });
@@ -571,13 +572,13 @@ describe("recovery and alarm derivation", () => {
     const { processor, repointAlarm, stream } = harness;
     await stream.append(setEvent("report"));
     const events = stream.events.slice();
-    await expect(processor.ingest({ events, streamMaxOffset: 1 })).rejects.toThrow(
+    await expect(ingestTestBatch(processor, { events, streamMaxOffset: 1 })).rejects.toThrow(
       "setAlarm outage",
     );
     expect(processor.state.schedules).toEqual({});
 
     // The checkpoint did not advance, so redelivering the same batch heals.
-    await processor.ingest({ events, streamMaxOffset: 1 });
+    await ingestTestBatch(processor, { events, streamMaxOffset: 1 });
     expect(processor.state.schedules["report"]).toBeDefined();
     expect(repointAlarm).toHaveBeenLastCalledWith(T0 + 60_000);
   });

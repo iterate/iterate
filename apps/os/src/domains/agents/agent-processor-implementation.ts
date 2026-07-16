@@ -1612,22 +1612,27 @@ async function scriptResultAgentInput(
 ): Promise<string | null> {
   const payload = event.payload;
   if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
-  if (payload.error !== undefined) {
+  const settlement = payload.settlement;
+  if (settlement.status === "failed") {
     // Advertise the recovery tools at the moment of failure — a wrong call
     // is exactly when docs.typecheck's did-you-mean and docs.search's
     // working examples pay off, and nothing else tells the model they exist.
+    const executionNote = settlement.executionMayHaveOccurred
+      ? "The script may have partially executed; inspect state before retrying."
+      : "The script did not execute.";
     return (
-      `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\`\n` +
+      `Your script failed during ${settlement.phase} (${settlement.failureKind}):\n` +
+      `\`\`\`\n${truncateScriptResult(settlement.error)}\n\`\`\`\n${executionNote}\n` +
       `Before retrying: \`await itx.docs.typecheck({ code })\` compiles a script against this ` +
       `scope's real types (typos come back as "did you mean …"), and ` +
       `\`await itx.docs.search({ q: "several related words" })\` finds working examples.`
     );
   }
-  if (payload.result === undefined) return null;
-  const text = stringifyScriptResult(payload.result);
+  if (settlement.result === undefined) return null;
+  const text = stringifyScriptResult(settlement.result);
   // String results are raw text, not JSON — the fence label, the spill
   // file's extension, and the read-it-back recipe all say so honestly.
-  const isRawText = typeof payload.result === "string";
+  const isRawText = typeof settlement.result === "string";
   const fence = isRawText ? "```" : "```json";
   if (text.length > SCRIPT_RESULT_HISTORY_LIMIT && writeWorkspaceFile !== undefined) {
     try {

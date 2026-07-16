@@ -8,9 +8,18 @@ import { CompositeBrowserProcessor } from "./composite-browser-processor.ts";
 function makeChild(
   slug: string,
   offset: number,
-  opts: { order?: string[]; throwOnIngest?: boolean; isLoaded?: boolean } = {},
+  opts: {
+    order?: string[];
+    throwOnIngest?: boolean;
+    isLoaded?: boolean;
+    liveAgent?: boolean;
+  } = {},
 ) {
-  const ingestArgs: { events: readonly { offset: number }[]; streamMaxOffset: number }[] = [];
+  const ingestArgs: {
+    events: readonly { offset: number; ephemeral?: boolean }[];
+    streamMaxOffset: number;
+  }[] = [];
+  const liveIngestArgs: typeof ingestArgs = [];
   let markedLoaded = false;
   const metrics = { tag: slug };
   const processor = {
@@ -32,11 +41,27 @@ function makeChild(
     get isLoaded() {
       return opts.isLoaded ?? true;
     },
-    async ingest(args: { events: readonly { offset: number }[]; streamMaxOffset: number }) {
+    async ingest(args: {
+      events: readonly { offset: number; ephemeral?: boolean }[];
+      streamMaxOffset: number;
+    }) {
       opts.order?.push(slug);
       ingestArgs.push(args);
       if (opts.throwOnIngest) throw new Error(`${slug} ingest failed`);
     },
+    ...(opts.liveAgent
+      ? {
+          async ingestLive(args: {
+            events: readonly { offset: number; ephemeral?: boolean }[];
+            streamMaxOffset: number;
+          }) {
+            opts.order?.push(`${slug}:live`);
+            liveIngestArgs.push(args);
+          },
+          agentUiState: { live: null },
+          clearVolatileState() {},
+        }
+      : {}),
     async snapshot() {
       return { offset, state: null };
     },
@@ -53,6 +78,7 @@ function makeChild(
   return {
     child: { slug, processor },
     ingestArgs,
+    liveIngestArgs,
     metrics,
     wasMarkedLoaded: () => markedLoaded,
   };
@@ -85,6 +111,35 @@ describe("CompositeBrowserProcessor", () => {
     expect(order).toEqual(["browser-raw-events", "browser-feed"]);
     expect(raw.ingestArgs).toHaveLength(1);
     expect(feed.ingestArgs).toHaveLength(1);
+  });
+
+  it("uses the same scan-envelope ingest lane for historical pages", async () => {
+    const order: string[] = [];
+    const raw = makeChild("browser-raw-events", 0, { order });
+    const feed = makeChild("browser-feed", 0, { order });
+    const composite = new CompositeBrowserProcessor([raw.child, feed.child]);
+
+    await composite.ingestHistorical(BATCH);
+
+    expect(order).toEqual(["browser-raw-events", "browser-feed"]);
+    expect(raw.ingestArgs).toHaveLength(1);
+    expect(feed.ingestArgs).toHaveLength(1);
+  });
+
+  it("keeps live ephemerals in the agent child and out of persistent children", async () => {
+    const raw = makeChild("browser-raw-events", 0);
+    const feed = makeChild("browser-feed", 0, { liveAgent: true });
+    const composite = new CompositeBrowserProcessor([raw.child, feed.child]);
+    await composite.ingest({
+      events: [{ offset: 1 }, { offset: 2, ephemeral: true }],
+      streamMaxOffset: 2,
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+    } as unknown as Parameters<AnyHostedProcessor["ingest"]>[0]);
+
+    expect(raw.ingestArgs[0]?.events).toEqual([{ offset: 1 }]);
+    expect(feed.ingestArgs).toHaveLength(0);
+    expect(feed.liveIngestArgs[0]?.events).toEqual([{ offset: 1 }, { offset: 2, ephemeral: true }]);
   });
 
   it("propagates a later child's ingest failure after the earlier child applied", async () => {

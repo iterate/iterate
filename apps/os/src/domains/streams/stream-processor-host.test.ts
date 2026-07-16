@@ -191,14 +191,7 @@ describe("lost-alarm self-healing", () => {
 });
 
 describe("filtered wake-lane delivery", () => {
-  it("a consumes-filtered batch left behind the head gets a trailing unfiltered catch-up", async () => {
-    // Production's wake lane filters delivered events through the contract's
-    // consumes list but stamps batches with the RAW head. A non-consumed tail
-    // event (a presence fact, another processor's chunk) therefore leaves the
-    // checkpoint legitimately behind streamMaxOffset with no further delivery
-    // coming — and the reconcilers' at-head gate defers on such folds. The
-    // host must converge it: a trailing unfiltered catch-up after the behind
-    // batch. Without it, this is the review-round-2 forever-wedge.
+  it("advances through a consumes-filtered tail using the raw scan watermark", async () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
     });
@@ -215,25 +208,22 @@ describe("filtered wake-lane delivery", () => {
       projectId: "prj_test",
       path: h.stream.path,
       events: [ping!],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      state: {},
       streamMaxOffset: 2,
     } as Parameters<typeof wake.sink>[0]);
 
-    // The trailing catch-up pulls the non-consumed tail; the checkpoint
-    // reaches the true head, so the deferred reconciliation ran at-head.
+    // The filtered event list never invents the omitted fact, while the
+    // transport-proven scan coordinate still checkpoints through it.
     await vi.waitFor(async () => {
       expect((await h.processors.a.snapshot()).offset).toBe(2);
     });
     const lastBatch = h.processors.a.batches.at(-1)!;
-    expect(lastBatch).toContain("events.iterate.com/other/presence-fact");
+    expect(lastBatch).toEqual([PING]);
   });
 
-  it("a failed trailing pull reads as a FAILURE; the next fire revives and converges", async () => {
-    // The trailing pull is the ONLY delivery owed for a non-consumed tail. If
-    // its failure settled clean, the keepalive would disarm with the
-    // checkpoint stranded behind the at-head gate and no future dial owed —
-    // the zero-lag wedge reborn one layer up. It must poison the quiet-clean
-    // window instead, so the alarm's next fire takes the revival lane, whose
-    // unfiltered catch-up is the pull's retry.
+  it("rejects a scan gap and converges only after the stream redelivers it", async () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
     });
@@ -245,35 +235,32 @@ describe("filtered wake-lane delivery", () => {
       processorSlug: "recorder-a",
     });
 
-    // One transient stream-read failure, timed to hit exactly the trailing pull.
-    const readEvents = h.stream.readEvents.bind(h.stream);
-    let readFailures = 0;
-    h.stream.readEvents = (input) => {
-      if (readFailures === 0) {
-        readFailures += 1;
-        throw new Error("transient stream read failure");
-      }
-      return readEvents(input);
-    };
+    await expect(
+      wake.sink({
+        projectId: "prj_test",
+        path: h.stream.path,
+        events: [],
+        scannedAfterOffset: 1,
+        scannedThroughOffset: 2,
+        state: {},
+        streamMaxOffset: 2,
+      } as Parameters<typeof wake.sink>[0]),
+    ).rejects.toThrow(/delivery gap/);
+    expect((await h.processors.a.snapshot()).offset).toBe(0);
+    expect(h.store.alarm.at).not.toBeNull();
+
     await wake.sink({
       projectId: "prj_test",
       path: h.stream.path,
       events: [ping!],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      state: {},
       streamMaxOffset: 2,
     } as Parameters<typeof wake.sink>[0]);
-    await vi.waitFor(() => expect(readFailures).toBe(1));
-    expect((await h.processors.a.snapshot()).offset).toBe(1); // stranded behind head
-    expect(h.store.alarm.at).not.toBeNull();
-
-    await h.advance(60_000);
-    // Not a quiet-clean disarm: the fire revived, and the revival's catch-up
-    // (stream healed) pulled the tail plus its own fact through to head…
-    expect(h.stream.events.some((event) => event.type === PROCESSOR_HOST_REVIVED_EVENT_TYPE)).toBe(
-      true,
-    );
-    expect((await h.processors.a.snapshot()).offset).toBe(3);
-    // …and the confirmation fire then stood the alarm down for good.
-    expect(h.store.alarm.at).toBeNull();
+    await vi.waitFor(async () => {
+      expect((await h.processors.a.snapshot()).offset).toBe(2);
+    });
   });
 });
 
@@ -461,6 +448,9 @@ describe("subscriber metrics", () => {
       projectId: "prj_test",
       path: h.stream.path,
       events: [ping!],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 1,
+      state: {},
       streamMaxOffset: 1,
     } as Parameters<typeof wake.sink>[0]);
     await vi.waitFor(async () => {

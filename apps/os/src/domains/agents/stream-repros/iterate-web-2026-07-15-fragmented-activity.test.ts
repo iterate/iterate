@@ -4,7 +4,6 @@ import {
   reduceAgentUi,
   type AgentUiItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { Event } from "@iterate-com/ui/components/events/types";
 import fixture from "./iterate-web-2026-07-15-fragmented-activity.json";
 
 it("groups the production autonomous loop into one activity at run-level idle", () => {
@@ -22,7 +21,10 @@ it("groups the production autonomous loop into one activity at run-level idle", 
   let state = initialAgentUiState();
   const items: AgentUiItem[] = [];
 
-  for (const event of [...fixture.events, terminalStatus] as Event[]) {
+  for (const event of [...fixture.events, terminalStatus].map((entry) => ({
+    ...entry,
+    streamPath: fixture.agentPath,
+  }))) {
     const reduced = reduceAgentUi(state, event);
     state = reduced.endState;
     items.push(...reduced.items);
@@ -41,4 +43,37 @@ it("groups the production autonomous loop into one activity at run-level idle", 
     ],
   });
   expect(state.live).toBeNull();
+});
+
+it("settles the production script that had passed its deadline before the next user message", () => {
+  let state = initialAgentUiState();
+  const items: AgentUiItem[] = [];
+
+  for (const event of fixture.overdueExecutionEvents.map((entry) => ({
+    ...entry,
+    streamPath: fixture.agentPath,
+  }))) {
+    const reduced = reduceAgentUi(state, event);
+    state = reduced.endState;
+    items.push(...reduced.items);
+  }
+
+  expect(items).toMatchObject([
+    {
+      kind: "activity",
+      status: "done",
+      steps: [
+        {
+          kind: "code",
+          executionId: "agent-output:13980",
+          status: "done",
+          success: false,
+          errorMessage: expect.stringContaining("deadline"),
+        },
+      ],
+    },
+    { kind: "user", text: "hello?" },
+  ]);
+  expect(state.live).toBeNull();
+  expect(state.queuedUserMessages).toEqual([]);
 });

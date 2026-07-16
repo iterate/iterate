@@ -5,7 +5,7 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 6;
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
 
 /**
  * Tables this processor owns. Views pass this to the runtime so a mirror
@@ -40,23 +40,6 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
   ): Promise<void> {
-    // Gaps are legal only once server-side ephemeral eviction exists; until
-    // then every delivered stream is dense (the subscription lane and the
-    // pull-pager both include ephemeral rows), so an observed gap is a real
-    // lost delivery. THROW before inserting: failing the batch here (while
-    // the hole is still open) routes into the store's self-heal — resubscribe
-    // from the checkpoint and replay the missing rows. Inserting past the
-    // hole would seal it forever: the checkpoint advances and the
-    // gap-tolerant trigger accepts everything after. When the eviction sweep
-    // ships, demote this to a warning keyed on the swept horizon.
-    const [head] = await this.deps.sql.exec(`SELECT MAX(offset) AS max_offset FROM events`);
-    const localHead = Number(head?.max_offset ?? 0);
-    const firstOffset = args.events[0]?.offset;
-    if (firstOffset !== undefined && localHead > 0 && firstOffset > localHead + 1) {
-      throw new Error(
-        `stream browser mirror offset gap: local head ${localHead}, batch starts at ${firstOffset} — lost delivery; failing the batch so the self-heal replays it`,
-      );
-    }
     await this.deps.sql.batch(
       args.events.map((event) => ({
         sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,

@@ -330,9 +330,9 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
       payload: GITHUB_LINK,
     });
 
-    await processor.ingest({ events: [requested!], streamMaxOffset: 2 });
+    await ingestTestBatch(processor, { events: [requested!], streamMaxOffset: 2 });
     expect(createCalls).toHaveLength(0);
-    await processor.ingest({ events: [linked!], streamMaxOffset: 2 });
+    await ingestTestBatch(processor, { events: [linked!], streamMaxOffset: 2 });
     expect(createCalls).toHaveLength(1);
   });
 
@@ -370,3 +370,4 @@ function routerSetup() {
     build: ({ stream }) => newRepoProcessor(stream),
   });
 }
+import { ingestTestBatch } from "~/test/stream-delivery.ts";

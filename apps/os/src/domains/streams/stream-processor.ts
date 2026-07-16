@@ -173,14 +173,18 @@ export type StreamProcessorRuntimeState<State> = ProcessorRuntimeState<State> & 
   snapshot: StreamProcessorSnapshot<State>;
 };
 
-/** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
- *  when a delivered event matches, and an optional timeout handle to clear on
- *  resolution (so a satisfied waiter never later rejects). */
-type EventWaiter = {
-  predicate: (event: StreamEvent) => boolean;
+/** A pending `waitUntilEvent` waiter. Predicate waiters inspect delivered
+ * events; offset waiters inspect the transport-proven scan watermark, so a
+ * consumes-filtered interval can still satisfy a read-your-writes barrier. */
+type EventWaiter = (
+  | { kind: "predicate"; predicate: (event: StreamEvent) => boolean }
+  | { kind: "offset"; offset: number }
+) & {
   reject: (error: unknown) => void;
   resolve: () => void;
   timer?: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  abortListener?: () => void;
 };
 
 /**
@@ -321,7 +325,12 @@ export abstract class StreamProcessor<
    * starts until the previous one completed or failed. Do not override this —
    * extend `processEventBatch` instead.
    */
-  async ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
+  async ingest(args: {
+    events: readonly StreamEvent[];
+    streamMaxOffset: number;
+    scannedAfterOffset: number;
+    scannedThroughOffset: number;
+  }): Promise<void> {
     const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
@@ -339,12 +348,13 @@ export abstract class StreamProcessor<
    * read is guaranteed to see your write.
    *
    * `{ offset }` short-circuits when the checkpoint is already at/past the
-   * offset, otherwise waits for the first delivered event at or beyond it. The
-   * predicate form only observes FUTURE deliveries (it does not scan history).
-   * Keying on the delivered event — not on a state change — matters: the
-   * checkpoint advances for every event including ones `reduce` ignores, so
-   * this resolves even when the matched event produced no state change (where
-   * waiting on `onStateChange` would hang).
+   * offset, otherwise waits for a delivered scan envelope whose watermark
+   * proves the processor crossed it. That envelope may contain no events when
+   * every event in the interval is filtered out. The predicate form only
+   * observes FUTURE delivered events (it does not scan history). Keying the
+   * offset form on the durable checkpoint — not on a state change — matters:
+   * the checkpoint advances across every scanned event including ones the
+   * processor does not consume, so the barrier cannot hang on a sparse batch.
    *
    * `predicate` runs on every newly delivered event (consumed or not). If it
    * throws, only that waiter rejects. `timeoutMs` bounds the wait: on timeout
@@ -353,30 +363,64 @@ export abstract class StreamProcessor<
   waitUntilEvent(args: {
     predicate: (event: StreamEvent) => boolean;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<void>;
-  waitUntilEvent(args: { offset: number; timeoutMs?: number }): Promise<void>;
+  waitUntilEvent(args: { offset: number; timeoutMs?: number; signal?: AbortSignal }): Promise<void>;
   async waitUntilEvent(
     args:
-      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number }
-      | { offset: number; timeoutMs?: number },
+      | {
+          predicate: (event: StreamEvent) => boolean;
+          timeoutMs?: number;
+          signal?: AbortSignal;
+        }
+      | { offset: number; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<void> {
     if ("offset" in args) {
       await this.#loadState();
       if (this.#checkpointOffset >= args.offset) return;
-      const { offset, timeoutMs } = args;
       // No await between the check above and registering the waiter below, so a
       // batch cannot advance the checkpoint past `offset` in the gap and be missed.
-      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset, timeoutMs });
+      return await this.#waitForEvent({
+        kind: "offset",
+        offset: args.offset,
+        ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
+        ...(args.signal === undefined ? {} : { signal: args.signal }),
+      });
     }
-    const { predicate, timeoutMs } = args;
+    return await this.#waitForEvent({
+      kind: "predicate",
+      predicate: args.predicate,
+      ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
+      ...(args.signal === undefined ? {} : { signal: args.signal }),
+    });
+  }
+
+  async #waitForEvent(
+    args: (
+      | { kind: "predicate"; predicate: (event: StreamEvent) => boolean }
+      | { kind: "offset"; offset: number }
+    ) & { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<void> {
+    if (args.signal?.aborted === true) throw args.signal.reason;
     await new Promise<void>((resolve, reject) => {
-      const waiter: EventWaiter = { predicate, reject, resolve };
+      const waiter: EventWaiter =
+        args.kind === "offset"
+          ? { kind: "offset", offset: args.offset, reject, resolve }
+          : { kind: "predicate", predicate: args.predicate, reject, resolve };
       this.#eventWaiters.add(waiter);
-      if (timeoutMs !== undefined) {
+      if (args.timeoutMs !== undefined) {
         waiter.timer = setTimeout(() => {
-          this.#eventWaiters.delete(waiter);
-          reject(new Error(`waitUntilEvent timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
+          this.#removeEventWaiter(waiter);
+          reject(new Error(`waitUntilEvent timed out after ${args.timeoutMs}ms`));
+        }, args.timeoutMs);
+      }
+      if (args.signal !== undefined) {
+        waiter.signal = args.signal;
+        waiter.abortListener = () => {
+          this.#removeEventWaiter(waiter);
+          reject(args.signal?.reason ?? new Error("waitUntilEvent aborted"));
+        };
+        args.signal.addEventListener("abort", waiter.abortListener, { once: true });
       }
     });
   }
@@ -503,13 +547,52 @@ export abstract class StreamProcessor<
     });
   }
 
-  async #ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
+  async #ingest(args: {
+    events: readonly StreamEvent[];
+    streamMaxOffset: number;
+    scannedAfterOffset: number;
+    scannedThroughOffset: number;
+  }): Promise<void> {
     const ingestStartedAtMs = Date.now();
     await this.#loadState();
 
+    if (
+      !Number.isSafeInteger(args.streamMaxOffset) ||
+      args.streamMaxOffset < 0 ||
+      !Number.isSafeInteger(args.scannedAfterOffset) ||
+      !Number.isSafeInteger(args.scannedThroughOffset) ||
+      args.scannedAfterOffset < 0 ||
+      args.scannedThroughOffset < args.scannedAfterOffset ||
+      args.scannedThroughOffset > args.streamMaxOffset
+    ) {
+      throw new Error(
+        `invalid stream delivery coordinates: scanned (${String(args.scannedAfterOffset)}, ${String(args.scannedThroughOffset)}], stream head ${args.streamMaxOffset}`,
+      );
+    }
+    if (args.scannedAfterOffset > this.#checkpointOffset) {
+      throw new Error(
+        `stream delivery gap: processor "${this.contract.slug}" is checkpointed through ${this.#checkpointOffset}, but the next delivered scan starts after ${args.scannedAfterOffset}`,
+      );
+    }
+    let previousOffset = args.scannedAfterOffset;
+    for (const event of args.events) {
+      if (event.offset <= args.scannedAfterOffset || event.offset > args.scannedThroughOffset) {
+        throw new Error(
+          `event offset ${event.offset} falls outside delivered scan (${args.scannedAfterOffset}, ${args.scannedThroughOffset}]`,
+        );
+      }
+      if (event.offset <= previousOffset) {
+        throw new Error(
+          `stream delivery is not strictly offset-ordered: ${event.offset} followed ${previousOffset}`,
+        );
+      }
+      previousOffset = event.offset;
+    }
+
     const previousState = this.#getState();
     let state = previousState;
-    let checkpointOffset = this.#checkpointOffset;
+    const previousCheckpointOffset = this.#checkpointOffset;
+    let checkpointOffset = previousCheckpointOffset;
     const events: StreamEvent[] = [];
     const reducedEvents: ReducedEvent<Contract>[] = [];
     const parseFailures: { event: StreamEvent; error: z.ZodError }[] = [];
@@ -529,7 +612,9 @@ export abstract class StreamProcessor<
       state = reduction.state;
     }
 
-    if (events.length === 0) return;
+    checkpointOffset = Math.max(checkpointOffset, args.scannedThroughOffset);
+
+    if (events.length === 0 && checkpointOffset === previousCheckpointOffset) return;
 
     const blockingWork: Promise<unknown>[] = [];
     try {
@@ -576,7 +661,9 @@ export abstract class StreamProcessor<
     this.#hasLoaded = true;
     // The checkpoint is durable and the state advanced — the batch is
     // genuinely CONSUMED, which is the moment self-measured metrics report.
-    const newestEventCreatedAtMs = Date.parse(events.at(-1)!.createdAt);
+    const newestCreatedAt = events.at(-1)?.createdAt;
+    const newestEventCreatedAtMs =
+      newestCreatedAt === undefined ? Number.NaN : Date.parse(newestCreatedAt);
     this.subscriberMetrics.noteBatchIngested({
       ingestedThroughOffset: checkpointOffset,
       ...(Number.isFinite(newestEventCreatedAtMs) ? { newestEventCreatedAtMs } : {}),
@@ -587,7 +674,7 @@ export abstract class StreamProcessor<
     if (!Object.is(previousState, state)) {
       this.#notifyStateChange({ offset: checkpointOffset, state });
     }
-    this.#resolveEventWaiters(events);
+    this.#resolveEventWaiters(events, checkpointOffset);
 
     // Record skipped unparseable events AFTER the checkpoint commits, in the
     // background: the raw event in the log is the authoritative record and the
@@ -694,22 +781,31 @@ export abstract class StreamProcessor<
   // Settle `waitUntilEvent` waiters whose predicate matches a just-delivered
   // event. Runs after the durable write + checkpoint advance, so `this.state` is
   // current when a waiter's promise resolves (the read-your-writes guarantee).
-  #resolveEventWaiters(events: readonly StreamEvent[]): void {
+  #resolveEventWaiters(events: readonly StreamEvent[], checkpointOffset: number): void {
     for (const waiter of this.#eventWaiters) {
       let matched = false;
       try {
-        matched = events.some(waiter.predicate);
+        matched =
+          waiter.kind === "offset"
+            ? checkpointOffset >= waiter.offset
+            : events.some(waiter.predicate);
       } catch (error) {
-        this.#eventWaiters.delete(waiter);
-        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+        this.#removeEventWaiter(waiter);
         waiter.reject(error);
         continue;
       }
       if (matched) {
-        this.#eventWaiters.delete(waiter);
-        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+        this.#removeEventWaiter(waiter);
         waiter.resolve();
       }
+    }
+  }
+
+  #removeEventWaiter(waiter: EventWaiter): void {
+    this.#eventWaiters.delete(waiter);
+    if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+    if (waiter.signal !== undefined && waiter.abortListener !== undefined) {
+      waiter.signal.removeEventListener("abort", waiter.abortListener);
     }
   }
 

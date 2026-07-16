@@ -22,6 +22,7 @@ import {
   deleteBrowserProcessorState,
 } from "./processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "./stream-browser-db.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 // node:sqlite rejects the number[] member of SqlValue; these tests never use it.
 type ScalarSqlValue = Exclude<SqlValue, number[]>;
@@ -130,7 +131,12 @@ describe("browser raw events schema version reset", () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     const processor = createRawEventsProcessor(sql);
 
-    await processor.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+    await ingestTestBatch(processor, {
+      events: [rawEvent(1), rawEvent(2)],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
 
     expect(await processor.snapshot()).toMatchObject({ offset: 2 });
     const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
@@ -142,7 +148,7 @@ describe("browser raw events schema version reset", () => {
 
     // First "page load": mirror two events at the current schema version.
     const firstLoad = createRawEventsProcessor(wrap(db));
-    await firstLoad.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+    await ingestTestBatch(firstLoad, { events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
     expect(await firstLoad.snapshot()).toMatchObject({ offset: 2 });
 
     // Simulate the deployed BROWSER_RAW_EVENTS_SCHEMA_VERSION moving past what
@@ -158,7 +164,7 @@ describe("browser raw events schema version reset", () => {
     expect(await secondLoad.snapshot()).toMatchObject({ offset: 0 });
 
     // Full replay from the server rebuilds the mirror from offset 1.
-    await secondLoad.ingest({
+    await ingestTestBatch(secondLoad, {
       events: [rawEvent(1), rawEvent(2), rawEvent(3)],
       streamMaxOffset: 3,
     });
@@ -173,7 +179,7 @@ describe("browser raw events schema version reset", () => {
     const db = new DatabaseSync(":memory:");
 
     const firstLoad = createRawEventsProcessor(wrap(db));
-    await firstLoad.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+    await ingestTestBatch(firstLoad, { events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
 
     db.exec(`PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION - 1}`);
 
@@ -182,7 +188,7 @@ describe("browser raw events schema version reset", () => {
     // offsets 1-2 are filtered out against the stale cursor and the mirror
     // keeps a permanent silent hole below offset 3.
     const secondLoad = createRawEventsProcessor(wrap(db));
-    await secondLoad.ingest({
+    await ingestTestBatch(secondLoad, {
       events: [rawEvent(1), rawEvent(2), rawEvent(3)],
       streamMaxOffset: 3,
     });
@@ -195,13 +201,13 @@ describe("browser raw events schema version reset", () => {
     const db = new DatabaseSync(":memory:");
 
     const firstLoad = createRawEventsProcessor(wrap(db));
-    await firstLoad.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+    await ingestTestBatch(firstLoad, { events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
 
     const secondLoad = createRawEventsProcessor(wrap(db));
     expect(await secondLoad.snapshot()).toMatchObject({ offset: 2 });
 
     // Resume after the checkpoint: replayed offsets dedupe, new offsets append.
-    await secondLoad.ingest({
+    await ingestTestBatch(secondLoad, {
       events: [rawEvent(2), rawEvent(3)],
       streamMaxOffset: 3,
     });
@@ -230,20 +236,95 @@ describe("browser raw events schema version reset", () => {
     await expect(insert(2)).rejects.toThrow(/offsets must increase/);
   });
 
-  it("the processor fails a gapped batch BEFORE inserting, so the self-heal can replay the hole", async () => {
-    // Until server-side eviction exists, every delivered stream is dense —
-    // a batch starting past localHead+1 means rows were lost in flight.
-    // Throwing pre-insert keeps the checkpoint at the hole's edge; inserting
-    // would seal it forever (the gap-tolerant trigger accepts everything
-    // after, and the checkpoint advances past the missing rows).
+  it("the processor accepts gaps left by historical ephemeral rows", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     const processor = createRawEventsProcessor(sql);
-    await processor.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+    await ingestTestBatch(processor, {
+      events: [rawEvent(1), rawEvent(2)],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+
+    // Offset 3 was an ephemeral row deliberately omitted from historical
+    // catch-up. Durable survivors still append and advance the checkpoint.
+    await ingestTestBatch(processor, {
+      events: [rawEvent(4), rawEvent(5)],
+      scannedAfterOffset: 2,
+      scannedThroughOffset: 5,
+      streamMaxOffset: 5,
+    });
+    await ingestTestBatch(processor, {
+      events: [rawEvent(6)],
+      scannedAfterOffset: 5,
+      scannedThroughOffset: 6,
+      streamMaxOffset: 6,
+    });
+    const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
+    expect(rows.map((row) => Number(row.offset))).toEqual([1, 2, 4, 5, 6]);
+    expect(await processor.snapshot()).toMatchObject({ offset: 6 });
+  });
+
+  it("accepts the first live event after an all-ephemeral historical suffix", async () => {
+    const sql = wrap(new DatabaseSync(":memory:"));
+    const processor = createRawEventsProcessor(sql);
+
+    // The captured history through offset 5 had no durable survivors.
+    await ingestTestBatch(processor, {
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 5,
+      streamMaxOffset: 5,
+    });
+    await ingestTestBatch(processor, {
+      events: [rawEvent(6)],
+      scannedAfterOffset: 5,
+      scannedThroughOffset: 6,
+      streamMaxOffset: 6,
+    });
+
+    expect(await sql.exec(`SELECT offset FROM events`)).toMatchObject([{ offset: 6 }]);
+  });
+
+  it("rejects a live gap beyond the completed historical scan boundary", async () => {
+    const sql = wrap(new DatabaseSync(":memory:"));
+    const processor = createRawEventsProcessor(sql);
+    await ingestTestBatch(processor, {
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 5,
+      streamMaxOffset: 5,
+    });
 
     await expect(
-      processor.ingest({ events: [rawEvent(4), rawEvent(5)], streamMaxOffset: 5 }),
-    ).rejects.toThrow(/offset gap/);
-    // Nothing inserted, checkpoint unmoved: the replay can still fill 3-5.
+      ingestTestBatch(processor, {
+        events: [rawEvent(7)],
+        scannedAfterOffset: 6,
+        scannedThroughOffset: 7,
+        streamMaxOffset: 7,
+      }),
+    ).rejects.toThrow(/delivery gap.*checkpointed through 5.*starts after 6/);
+    expect(await sql.exec(`SELECT offset FROM events`)).toEqual([]);
+  });
+
+  it("rejects an unexplained live gap before it can seal the mirror hole", async () => {
+    const sql = wrap(new DatabaseSync(":memory:"));
+    const processor = createRawEventsProcessor(sql);
+    await ingestTestBatch(processor, {
+      events: [rawEvent(1), rawEvent(2)],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+
+    await expect(
+      ingestTestBatch(processor, {
+        events: [rawEvent(4), rawEvent(5)],
+        scannedAfterOffset: 3,
+        scannedThroughOffset: 5,
+        streamMaxOffset: 5,
+      }),
+    ).rejects.toThrow(/delivery gap.*checkpointed through 2.*starts after 3/);
     const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
     expect(rows.map((row) => Number(row.offset))).toEqual([1, 2]);
     expect(await processor.snapshot()).toMatchObject({ offset: 2 });
@@ -271,11 +352,11 @@ describe("browser raw events incremental type counts", () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     const processor = createRawEventsProcessor(sql);
 
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [typedEvent(1, "a"), typedEvent(2, "b"), typedEvent(3, "a")],
       streamMaxOffset: 3,
     });
-    await processor.ingest({ events: [typedEvent(4, "a")], streamMaxOffset: 4 });
+    await ingestTestBatch(processor, { events: [typedEvent(4, "a")], streamMaxOffset: 4 });
 
     expect(await countsByType(sql)).toEqual({ a: 3, b: 1 });
     const scanned = await sql.exec(`SELECT type, COUNT(*) AS n FROM events GROUP BY type`);
@@ -287,7 +368,7 @@ describe("browser raw events incremental type counts", () => {
   it("does not double-count a replayed duplicate (RAISE IGNORE skips the count trigger)", async () => {
     const db = new DatabaseSync(":memory:");
     const firstLoad = createRawEventsProcessor(wrap(db));
-    await firstLoad.ingest({
+    await ingestTestBatch(firstLoad, {
       events: [typedEvent(1, "a"), typedEvent(2, "a")],
       streamMaxOffset: 2,
     });
@@ -296,7 +377,7 @@ describe("browser raw events incremental type counts", () => {
     // offset: the before-insert trigger swallows it, so the count trigger
     // must never fire for it.
     const secondLoad = createRawEventsProcessor(wrap(db));
-    await secondLoad.ingest({
+    await ingestTestBatch(secondLoad, {
       events: [typedEvent(2, "a"), typedEvent(3, "a")],
       streamMaxOffset: 3,
     });
@@ -307,12 +388,12 @@ describe("browser raw events incremental type counts", () => {
   it("a schema version reset drops the counts with the mirror", async () => {
     const db = new DatabaseSync(":memory:");
     const firstLoad = createRawEventsProcessor(wrap(db));
-    await firstLoad.ingest({ events: [typedEvent(1, "a")], streamMaxOffset: 1 });
+    await ingestTestBatch(firstLoad, { events: [typedEvent(1, "a")], streamMaxOffset: 1 });
     expect(await countsByType(wrap(db))).toEqual({ a: 1 });
 
     db.exec(`PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION - 1}`);
     const secondLoad = createRawEventsProcessor(wrap(db));
-    await secondLoad.ingest({
+    await ingestTestBatch(secondLoad, {
       events: [typedEvent(1, "b"), typedEvent(2, "b")],
       streamMaxOffset: 2,
     });

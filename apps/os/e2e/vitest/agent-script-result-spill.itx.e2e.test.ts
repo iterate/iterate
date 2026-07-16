@@ -44,7 +44,10 @@ test(
     const result = { blob: "x".repeat(10_000_000), marker };
     await agent.stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:1", result },
+      payload: {
+        executionId: "agent-output:1",
+        settlement: { status: "succeeded", result },
+      },
     });
 
     // The agent processor wakes on the append and renders the tool-result

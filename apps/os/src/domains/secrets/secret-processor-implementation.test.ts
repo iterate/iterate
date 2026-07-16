@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 const neverStream = new Proxy({} as Stream, {
   get(_target, property) {
@@ -36,7 +37,7 @@ const encryptedMaterial = {
 describe("SecretProcessor material decisions", () => {
   test("records the committed offset with material", async () => {
     const subject = processor();
-    await subject.ingest({
+    await ingestTestBatch(subject, {
       events: [
         updated(7, {
           egress: { urls: ["https://api.example.com"] },

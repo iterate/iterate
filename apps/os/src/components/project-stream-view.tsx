@@ -16,10 +16,15 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
 import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
+import {
+  BROWSER_FEED_SCHEMA_VERSION,
+  isCurrentBrowserFeedState,
+} from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
+import { ScriptExecutionInspectorPanel } from "~/components/script-execution-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
   StreamStatePanel,
@@ -191,7 +196,7 @@ export function ProjectStreamView({
     `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const agentUiState = useAgentUiReducedState(store.streamDatabase);
+  const agentUiState = useAgentUiReducedState(store.streamDatabase, store, snapshot.liveRevision);
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
   const metrics = useBrowserStreamMetrics(store);
@@ -236,7 +241,10 @@ export function ProjectStreamView({
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy = agentUiState?.live?.steps.some((step) => step.status === "running") ?? false;
+  const agentBusy =
+    agentUiState?.live != null &&
+    (agentUiState.live.phase != null ||
+      agentUiState.live.steps.some((step) => step.status === "running"));
   const presence = agentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,
@@ -277,6 +285,7 @@ export function ProjectStreamView({
       liveState={caps.agentFeed ? agentUiState : null}
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
+      {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
       isPending={agentUiState == null && snapshot.connectionStatus !== "subscribed"}
@@ -292,7 +301,12 @@ export function ProjectStreamView({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {modeBody}
-        <StreamInspectorOverlay caps={caps} panels={panels} database={store.streamDatabase} />
+        <StreamInspectorOverlay
+          agentUiState={agentUiState}
+          caps={caps}
+          panels={panels}
+          database={store.streamDatabase}
+        />
       </div>
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
@@ -401,16 +415,18 @@ export function ProjectStreamView({
  * The feed's right-edge inspector, or nothing. At most one inspector holds
  * the edge (useStreamViewPanels keeps their URL keys mutually exclusive):
  * the raw-event inspector when the mode offers it and `?event=` is set,
- * else the LLM request inspector when `?llmRequest=` is set — the latter in
- * EVERY mode, so a shared link works regardless of the viewer's tab. Both
- * read the RAW events mirror (not feed_items): the fold reads the journal,
+ * else an LLM or script inspector when its deep-link parameter is set — in
+ * EVERY mode, so a shared link works regardless of the viewer's tab. All
+ * inspectors read the RAW events mirror (not feed_items): the fold reads the journal,
  * the same source the processor read.
  */
 function StreamInspectorOverlay({
+  agentUiState,
   caps,
   panels,
   database,
 }: {
+  agentUiState: AgentUiState | null;
   caps: ReturnType<typeof modeCapabilities>;
   panels: ReturnType<typeof useStreamViewPanels>;
   database: StreamBrowserDatabase;
@@ -426,11 +442,27 @@ function StreamInspectorOverlay({
     );
   }
   if (panels.inspectedLlmRequestOffset != null) {
+    const liveStep = agentUiState?.live?.steps.find(
+      (step): step is AgentUiLlmStep =>
+        step.kind === "llm" &&
+        step.llmRequestOffset === panels.inspectedLlmRequestOffset &&
+        step.status === "running",
+    );
     return (
       <LlmRequestInspectorPanel
         database={database}
+        {...(liveStep == null ? {} : { liveStep })}
         llmRequestOffset={panels.inspectedLlmRequestOffset}
         onClose={panels.closeLlmRequestInspector}
+      />
+    );
+  }
+  if (panels.inspectedScriptExecutionId != null) {
+    return (
+      <ScriptExecutionInspectorPanel
+        database={database}
+        executionId={panels.inspectedScriptExecutionId}
+        onClose={panels.closeScriptExecutionInspector}
       />
     );
   }
@@ -452,7 +484,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
     >
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
+        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
         showCloseButton={false}
       >
         <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
@@ -466,20 +498,22 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
               variant="ghost"
               size="icon"
               title="Search & filter"
+              aria-label="Search and filter stream events"
               aria-expanded={search.filter === true}
               onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
               className="rounded-full text-muted-foreground"
             >
-              <FilterIcon className="size-3.5" />
+              <FilterIcon aria-hidden="true" className="size-3.5" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               title="Close events"
+              aria-label="Close stream events"
               onClick={closeEventsSheet}
               className="rounded-full text-muted-foreground"
             >
-              <XIcon className="size-3.5" />
+              <XIcon aria-hidden="true" className="size-3.5" />
             </Button>
           </div>
         </div>
@@ -654,30 +688,42 @@ function useAgentInterrupt(args: {
 }
 
 /**
- * The browser-feed projector persists its reduced state — whose `agent` slice
- * holds the live activity with streaming text and the presence roster — to
- * `processor_state` on every checkpoint; reading it reactively is how the
- * live tail re-renders per delta batch. Null until the projector's first
- * checkpoint lands.
+ * The browser-feed projector persists the durable `agent` slice to
+ * `processor_state`. Genuinely live ephemeral chunks stay in the store's
+ * in-memory tail; `liveRevision` makes those batches reactive without ever
+ * writing or replaying them. Null until either source has produced state.
  */
-function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState | null {
+function useAgentUiReducedState(
+  database: StreamBrowserDatabase,
+  store: StreamBrowserStore,
+  liveRevision: number,
+): AgentUiState | null {
   const result = useStreamQuery(
     database,
-    // subscription_key is part of the primary key, so multiple rows can exist
-    // for the slug (e.g. after a key-format change); read the most advanced one.
-    `SELECT reduced_state FROM processor_state WHERE processor_slug = ?
+    // subscription_key is part of the primary key, so concurrent browser
+    // profiles can leave several rows. Only the exact current-state contract
+    // is eligible; every other projection cache is disposable and rebuilt.
+    `SELECT reduced_state FROM processor_state
+     WHERE processor_slug = ?
+       AND json_extract(reduced_state, '$.schemaVersion') = ?
      ORDER BY max_offset DESC LIMIT 1`,
-    [BrowserFeedContract.slug],
+    [BrowserFeedContract.slug, BROWSER_FEED_SCHEMA_VERSION],
   );
   return useMemo(() => {
+    // Volatile live batches do not write SQLite; the revision is the reactive
+    // signal that makes this snapshot read run again.
+    void liveRevision;
+    const live = store.agentUiState();
+    if (live !== null) return live;
     const raw = result.data[0]?.reduced_state;
     if (typeof raw !== "string") return null;
     try {
-      return (JSON.parse(raw) as { agent?: AgentUiState }).agent ?? null;
+      const parsed: unknown = JSON.parse(raw);
+      return isCurrentBrowserFeedState(parsed) ? parsed.agent : null;
     } catch {
       return null;
     }
-  }, [result.data]);
+  }, [liveRevision, result.data, store]);
 }
 
 function useStreamPauseState(database: StreamBrowserDatabase): {

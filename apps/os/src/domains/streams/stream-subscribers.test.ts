@@ -12,6 +12,7 @@ import type {
   SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
+import { compileEventSelector } from "./event-selector.ts";
 import type {
   StreamEventBatch,
   StreamPushEventBatch,
@@ -146,6 +147,7 @@ type ConfiguredEntry = {
 
 function makeHarness() {
   let now = 0;
+  let assignedMaxOffset = 0;
   const log: StreamEvent[] = [];
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
@@ -211,7 +213,7 @@ function makeHarness() {
         CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
           path: "/t",
-          maxOffset: log.at(-1)?.offset ?? 0,
+          maxOffset: assignedMaxOffset,
           configuredSubscribersByKey: configured,
         }),
       store,
@@ -258,7 +260,16 @@ function makeHarness() {
     configured,
     log,
     settle,
-    append: (...events: StreamEvent[]) => log.push(...events),
+    append: (...events: StreamEvent[]) => {
+      assignedMaxOffset = Math.max(assignedMaxOffset, ...events.map((event) => event.offset));
+      return log.push(...events);
+    },
+    evict: (...offsets: number[]) => {
+      const evicted = new Set(offsets);
+      for (let index = log.length - 1; index >= 0; index -= 1) {
+        if (evicted.has(log[index]!.offset)) log.splice(index, 1);
+      }
+    },
     storageReads: () => storageReads,
     now: () => now,
     advanceTo: (ms: number) => {
@@ -851,7 +862,7 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toBeUndefined();
   });
 
-  it("n. ephemeral: immediate replay batch, presence facts, and fire-and-forget sink results", async () => {
+  it("n. ephemeral: immediate durable replay, presence facts, and fire-and-forget sink results", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
 
@@ -1287,13 +1298,13 @@ describe("StreamSubscribers", () => {
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
   });
 
-  it("z. ephemeral events: dropped from push delivery (cursor still advances), delivered to ephemeral subscriptions", async () => {
+  it("z. ephemeral events: never replayed, delivered only after an ephemeral subscription opens", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const }, evt(3, "b"));
 
-    // A replaying ephemeral subscription sees everything, flagged, in order —
-    // the spine's storage read is raw.
+    // Historical durable rows replay, but the pre-existing chunk at offset 2
+    // is behind the connection's atomic live boundary and never appears.
     const batches: StreamEventBatch[] = [];
     h.subscribers.openEphemeral({
       subscriptionKey: "watcher",
@@ -1306,9 +1317,9 @@ describe("StreamSubscribers", () => {
     const seen = batches.flatMap((batch) => batch.events);
     expect(seen.map((event) => [event.offset, event.ephemeral === true])).toEqual([
       [1, false],
-      [2, true],
       [3, false],
     ]);
+    expect(batches[0]).toMatchObject({ scannedAfterOffset: 0, scannedThroughOffset: 3 });
 
     // The push drain delivered only the durable events and acked THROUGH the
     // ephemeral offset (skip-not-defer, same shape as selector skips).
@@ -1323,11 +1334,57 @@ describe("StreamSubscribers", () => {
     h.append({ ...evt(4, "chunk"), ephemeral: true as const });
     h.subscribers.wake();
     await h.settle();
+    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([
+      1, 3, 4,
+    ]);
+    expect(batches.at(-1)).toMatchObject({
+      scannedAfterOffset: 3,
+      scannedThroughOffset: 4,
+    });
     expect(h.pushes).toHaveLength(1);
     expect(h.row("k")?.ackedOffset).toBe(4);
     h.subscribers.wake();
     await h.settle();
     expect(h.pushes).toHaveLength(1);
+  });
+
+  it("z1. atomically rejects an unbounded replay before replacing a live connection", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
+    const first = makeSink();
+    h.subscribers.openEphemeral({ subscriptionKey: "watcher", sink: first.sink });
+    await h.settle();
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink: makeSink().sink,
+        replayAfterOffset: 0,
+        maxReplayOffsetGap: 2,
+      }),
+    ).toThrow(/replay gap 3 exceeds maxReplayOffsetGap 2/);
+    expect(h.subscribers.hasConnection("watcher")).toBe(true);
+  });
+
+  it("z1b. rejects invalid replay coordinates before opening a connection", () => {
+    const h = makeHarness();
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "negative-cursor",
+        sink: makeSink().sink,
+        replayAfterOffset: -1,
+      }),
+    ).toThrow(/replayAfterOffset must be a non-negative safe integer/);
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "invalid-gap",
+        sink: makeSink().sink,
+        maxReplayOffsetGap: Number.NaN,
+      }),
+    ).toThrow(/maxReplayOffsetGap must be a non-negative safe integer/);
+    expect(h.subscribers.hasConnection("negative-cursor")).toBe(false);
+    expect(h.subscribers.hasConnection("invalid-gap")).toBe(false);
   });
 
   it("z2. configured wake connections never receive ephemeral events; the pump advances over them", async () => {
@@ -1349,6 +1406,70 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
     await h.settle();
     expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
+    expect(batches.at(-1)).toMatchObject({
+      events: [],
+      scannedAfterOffset: 3,
+      scannedThroughOffset: 4,
+      streamMaxOffset: 4,
+    });
+  });
+
+  it("z2b. a session selector receives an empty scan envelope across non-matches", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"));
+    const { sink, batches } = makeSink();
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "filtered-session",
+      sink,
+      replayAfterOffset: 0,
+      selector: compileEventSelector({ eventTypes: ["never"] }),
+    });
+    await h.settle();
+
+    expect(batches).toEqual([
+      expect.objectContaining({
+        events: [],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 2,
+      }),
+    ]);
+  });
+
+  it("z3. advances session and push cursors through an evicted ephemeral suffix", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const });
+    h.evict(2);
+
+    const { sink, batches } = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink,
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+
+    expect(batches).toHaveLength(2);
+    expect(batches[0]).toMatchObject({
+      events: [expect.objectContaining({ offset: 1 })],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 2,
+    });
+    expect(batches[1]).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1]);
+    expect(h.row("k")?.ackedOffset).toBe(2);
   });
 });
 

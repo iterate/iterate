@@ -140,5 +140,39 @@
       "createdAt": "2026-07-15T20:30:05.800Z",
       "path": "/agents/web/2026-07-15t20-15-45-940z"
     }
+  ],
+  "overdueExecutionEvents": [
+    {
+      "type": "events.iterate.com/capability-host/script-execution-requested",
+      "payload": {
+        "code": "async (itx) => {\n  const sandbox = await itx.sandboxes.get(\"/sandboxes/iterate-live-clocks\");\n  const result = await sandbox.exec(\"cd /workspace/iterate && pnpm --dir packages/iterate typecheck && pnpm --dir apps/os typecheck\", { timeout: 1200000 });\n  return { stdout: result.stdout.slice(-16000), stderr: result.stderr.slice(-16000), exitCode: result.exitCode };\n}",
+        "executionId": "agent-output:13980",
+        "expiresAt": 1784148312146
+      },
+      "offset": 13983,
+      "createdAt": "2026-07-15T20:30:12.077Z",
+      "path": "/agents/web/2026-07-15t20-15-45-940z"
+    },
+    {
+      "type": "events.iterate.com/agent/status-changed",
+      "payload": { "busy": true, "phase": "script", "sinceOffset": 13983 },
+      "offset": 13984,
+      "createdAt": "2026-07-15T20:30:12.111Z",
+      "path": "/agents/web/2026-07-15t20-15-45-940z"
+    },
+    {
+      "type": "events.iterate.com/capability-host/script-execution-started",
+      "payload": { "executionId": "agent-output:13980" },
+      "offset": 13985,
+      "createdAt": "2026-07-15T20:30:12.305Z",
+      "path": "/agents/web/2026-07-15t20-15-45-940z"
+    },
+    {
+      "type": "events.iterate.com/agents/message-received",
+      "payload": { "content": "hello?", "from": { "kind": "user", "origin": "web" } },
+      "offset": 14007,
+      "createdAt": "2026-07-15T21:13:41.494Z",
+      "path": "/agents/web/2026-07-15t20-15-45-940z"
+    }
   ]
 }

@@ -10,6 +10,7 @@ import type { Project } from "../../itx-api.generated.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 const PROVIDED = "events.iterate.com/capability-host/capability-provided";
 
@@ -28,7 +29,8 @@ async function provideDelivered(
   pending.finally(() => (settled = true)).catch(() => {});
   await vi.waitFor(async () => {
     const last = stream.events.at(-1);
-    if (last) await processor.ingest({ events: stream.events, streamMaxOffset: last.offset });
+    if (last)
+      await ingestTestBatch(processor, { events: stream.events, streamMaxOffset: last.offset });
     expect(settled).toBe(true);
   });
   return await pending;

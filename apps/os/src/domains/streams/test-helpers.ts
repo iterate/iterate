@@ -202,7 +202,12 @@ export class MemoryStreamNetwork {
 }
 
 type ProcessorLike = {
-  ingest(input: { events: StreamEvent[]; streamMaxOffset: number }): Promise<void>;
+  ingest(input: {
+    events: readonly StreamEvent[];
+    streamMaxOffset: number;
+    scannedAfterOffset: number;
+    scannedThroughOffset: number;
+  }): Promise<void>;
 };
 
 /** Cursor-based pull delivery mirroring production subscription semantics. */
@@ -216,7 +221,12 @@ export async function deliverNewEvents(input: {
   input.cursors.set(input.processor, input.stream.events.length);
   if (events.length === 0) return;
   const streamMaxOffset = input.stream.events.at(-1)?.offset ?? 0;
-  await input.processor.ingest({ events, streamMaxOffset });
+  await input.processor.ingest({
+    events,
+    scannedAfterOffset: input.stream.events[cursor - 1]?.offset ?? 0,
+    scannedThroughOffset: events.at(-1)!.offset,
+    streamMaxOffset,
+  });
 }
 
 /**

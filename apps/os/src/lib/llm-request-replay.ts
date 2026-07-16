@@ -22,10 +22,8 @@ import { StreamEvent } from "~/domains/streams/schemas.ts";
 export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.consumes;
 
 /**
- * The streamed-chunk event type, for the trace panel's second mirror query.
- * Chunks are emitted-only (the processor's fold never consumes them), so they
- * ride outside LLM_REPLAY_EVENT_TYPES and are fetched per-request instead —
- * one request's chunks, not every request's.
+ * The streamed-chunk event type for pure replay callers that already hold a
+ * live batch. Browser mirrors never persist or replay these ephemeral rows.
  */
 export const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
 

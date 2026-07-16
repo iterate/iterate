@@ -29,9 +29,10 @@ import type { BrowserProcessorConfig } from "./stream-browser-store.ts";
 
 /**
  * The fixed canonical set the browser mirror hosts. Each member keeps its own
- * checkpoint row (keyed by its real slug) so its local cache survives across
- * this unification — the composite only changes the SERVER subscription
- * identity, never a member's storage key.
+ * checkpoint row (keyed by the composite subscription plus its schema-versioned
+ * processor slug) so incompatible projection state is never reopened. The
+ * composite changes the server subscription identity and supplies that same
+ * versioned key to every member's storage lane.
  */
 export const CANONICAL_MIRROR_PROCESSORS: readonly BrowserProcessorConfig[] = [
   {

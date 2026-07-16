@@ -1,22 +1,20 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   BanIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   CircleQuestionMarkIcon,
   CodeIcon,
   GitBranchIcon,
   PaperclipIcon,
   PauseIcon,
   PlayIcon,
-  ScrollTextIcon,
 } from "lucide-react";
 import type {
   AgentUiActivity,
-  AgentUiCodeStep,
   AgentUiFileAttachment,
   AgentUiItem,
-  AgentUiLlmStep,
   AgentUiMessageItem,
   AgentUiMessageVia,
   AgentUiStep,
@@ -27,7 +25,6 @@ import {
   MessageResponse,
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Button } from "@iterate-com/ui/components/button";
-import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -60,6 +57,7 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   toggledIds,
   onToggle,
   onInspectLlmRequest,
+  onInspectScriptExecution,
   projectSlug,
 }: {
   item: AgentUiItem;
@@ -67,6 +65,8 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   onToggle: (id: string) => void;
   /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
+  /** Opens the script execution inspector at this execution id (code steps only). */
+  onInspectScriptExecution?: (executionId: string) => void;
   projectSlug?: string;
 }) {
   if (item.kind === "stream-woken") {
@@ -134,9 +134,9 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
       <AgentActivityRow
         activity={item}
         expanded={toggledIds.has(item.id)}
-        toggledIds={toggledIds}
         onToggle={onToggle}
         onInspectLlmRequest={onInspectLlmRequest}
+        onInspectScriptExecution={onInspectScriptExecution}
       />
     );
   }
@@ -265,17 +265,20 @@ function StreamPauseRow({
 function AgentActivityRow({
   activity,
   expanded,
-  toggledIds,
   onToggle,
   onInspectLlmRequest,
+  onInspectScriptExecution,
 }: {
   activity: AgentUiActivity;
   expanded: boolean;
-  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
+  onInspectScriptExecution?: (executionId: string) => void;
 }) {
-  const interrupted = activityWasInterrupted(activity);
+  const interrupted = activity.steps.some(
+    (step) => step.kind === "llm" && step.outcome === "cancelled",
+  );
+  const failed = activity.steps.some(stepHasFailure);
 
   return (
     <div className="flex flex-col py-0.5">
@@ -285,9 +288,14 @@ function AgentActivityRow({
         aria-expanded={expanded}
         title="Agent activity — click to see what it did"
         onClick={() => onToggle(activity.id)}
-        className="-ml-2.5 self-start font-medium text-muted-foreground"
+        className={cn(
+          "-ml-2.5 self-start font-medium text-muted-foreground",
+          failed && "text-destructive hover:text-destructive",
+        )}
       >
-        {interrupted ? (
+        {failed ? (
+          <CircleAlertIcon className="size-3 text-destructive" />
+        ) : interrupted ? (
           <BanIcon className="size-3 text-red-600 dark:text-red-400" />
         ) : (
           <CodeIcon className="size-3 text-muted-foreground/60" />
@@ -302,32 +310,14 @@ function AgentActivityRow({
       </Button>
       {expanded ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {activity.steps.map((step) => {
-            // Expanding the activity shows what happened directly — code and
-            // results are the point of expanding, not a second disclosure.
-            // The activity header already says "Ran code 1×", so a lone code
-            // step renders its detail bare instead of repeating a "Ran code"
-            // header row underneath (multiple code steps keep their headers:
-            // the start times tell the runs apart). Steps whose detail would
-            // show nothing stay collapsed behind their slim header row.
-            if (step.kind === "code" && codeStepCount(activity) === 1) {
-              return (
-                <div key={step.id} className="flex flex-col gap-2 pb-1 pt-0.5">
-                  <CodeStepDetail step={step} />
-                </div>
-              );
-            }
-            const defaultExpanded = stepDetailHasContent(step);
-            return (
-              <AgentActivityStep
-                key={step.id}
-                step={step}
-                expanded={toggledIds.has(step.id) !== defaultExpanded}
-                onToggle={onToggle}
-                onInspectLlmRequest={onInspectLlmRequest}
-              />
-            );
-          })}
+          {activity.steps.map((step) => (
+            <AgentActivityStep
+              key={step.id}
+              step={step}
+              onInspectLlmRequest={onInspectLlmRequest}
+              onInspectScriptExecution={onInspectScriptExecution}
+            />
+          ))}
         </div>
       ) : null}
     </div>
@@ -489,17 +479,18 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   );
 }
 
-function codeStepCount(activity: AgentUiActivity): number {
-  return activity.steps.filter((step) => step.kind === "code").length;
+function codeStepCount(steps: readonly AgentUiStep[]): number {
+  return steps.filter((step) => step.kind === "code").length;
 }
 
-function activitySummary(activity: AgentUiActivity): string {
-  const codeCount = codeStepCount(activity);
-  const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
-  const interrupted = activity.steps.some(
-    (step) => step.kind === "llm" && step.outcome === "cancelled",
-  );
-  const interruptedWithPartialResponse = activity.steps.some(
+function activitySummary(
+  activity: AgentUiActivity,
+  steps: readonly AgentUiStep[] = activity.steps,
+): string {
+  const codeCount = codeStepCount(steps);
+  const requestCount = steps.filter((step) => step.kind === "llm").length;
+  const interrupted = steps.some((step) => step.kind === "llm" && step.outcome === "cancelled");
+  const interruptedWithPartialResponse = steps.some(
     (step) =>
       step.kind === "llm" &&
       step.outcome === "cancelled" &&
@@ -515,6 +506,7 @@ function activitySummary(activity: AgentUiActivity): string {
         : "interrupted",
     );
   }
+  if (steps.some(stepHasFailure)) parts.push("failed");
   const totalMs =
     activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
   if (totalMs != null && totalMs > 0) parts.push(formatSeconds(totalMs));
@@ -522,110 +514,69 @@ function activitySummary(activity: AgentUiActivity): string {
 }
 
 // ---------------------------------------------------------------------------
-// Steps: condensed LLM request and code-run rows with expandable detail
+// Steps: condensed LLM request and code-run rows that open their inspectors
 // ---------------------------------------------------------------------------
 
 function AgentActivityStep({
   step,
-  expanded,
-  onToggle,
   onInspectLlmRequest,
+  onInspectScriptExecution,
 }: {
   step: AgentUiStep;
-  expanded: boolean;
-  onToggle: (id: string) => void;
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
+  onInspectScriptExecution?: (executionId: string) => void;
 }) {
-  return (
-    <div className="flex flex-col">
-      <div className="-ml-2 flex items-center gap-0.5 self-start">
-        <Button
-          variant="ghost"
-          size="xs"
-          aria-expanded={expanded}
-          onClick={() => onToggle(step.id)}
-          className="font-normal"
-        >
-          {step.kind === "llm" ? (
-            <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
-          ) : (
-            <CodeIcon className="size-3 text-muted-foreground" />
-          )}
-          <span className="font-mono text-xs text-foreground/70">{stepLabel(step)}</span>
-          <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
-          <ChevronRightIcon
-            className={cn(
-              "size-2 text-muted-foreground/50 transition-transform",
-              expanded && "rotate-90",
-            )}
-          />
-        </Button>
-        {step.kind === "llm" && onInspectLlmRequest != null ? (
-          <InspectLlmRequestButton
-            llmRequestOffset={step.llmRequestOffset}
-            onInspectLlmRequest={onInspectLlmRequest}
-          />
-        ) : null}
-      </div>
-      {expanded ? (
-        <div className="flex flex-col gap-2 pb-2.5 pl-5 pt-0.5">
-          {step.kind === "llm" ? <LlmStepDetail step={step} /> : <CodeStepDetail step={step} />}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** Opens the LLM trace panel: the exact context this request sent to the
- * model and the response it made, replayed from the local event mirror
- * (llm-request-inspector-panel). */
-function InspectLlmRequestButton({
-  llmRequestOffset,
-  onInspectLlmRequest,
-}: {
-  llmRequestOffset: number;
-  onInspectLlmRequest: (llmRequestOffset: number) => void;
-}) {
+  const failed = stepHasFailure(step);
+  const inspect =
+    step.kind === "llm"
+      ? onInspectLlmRequest == null
+        ? undefined
+        : () => onInspectLlmRequest(step.llmRequestOffset)
+      : onInspectScriptExecution == null
+        ? undefined
+        : () => onInspectScriptExecution(step.executionId);
   return (
     <Button
       variant="ghost"
       size="xs"
-      title="Show the exact request sent to the model and its response"
-      data-testid="agent-feed-inspect-llm-request"
-      onClick={() => onInspectLlmRequest(llmRequestOffset)}
-      className="font-normal text-muted-foreground/70 hover:text-foreground"
+      title={
+        step.kind === "llm" ? "Open this LLM request trace" : "Open this script's code and result"
+      }
+      data-testid={
+        step.kind === "llm"
+          ? "agent-feed-inspect-llm-request"
+          : "agent-feed-inspect-script-execution"
+      }
+      onClick={inspect}
+      className={cn(
+        "-ml-2 self-start font-normal",
+        failed && "text-destructive hover:text-destructive",
+      )}
     >
-      <ScrollTextIcon className="size-3" />
-      <span className="font-mono text-xs">View trace</span>
+      {step.kind === "llm" ? (
+        <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
+      ) : (
+        <CodeIcon className="size-3 text-muted-foreground" />
+      )}
+      <span className={cn("font-mono text-xs text-foreground/70", failed && "text-destructive")}>
+        {stepLabel(step)}
+      </span>
+      <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
+      <ChevronRightIcon className="size-2 text-muted-foreground/50" aria-hidden="true" />
     </Button>
   );
 }
 
-/**
- * Whether an expanded step detail would actually show something. Steps with
- * empty details default to collapsed so an expanded activity reads as code →
- * results without blank sections (their headers still carry timing/tokens).
- */
-function stepDetailHasContent(step: AgentUiStep): boolean {
-  if (step.kind === "code") return true;
-  return step.thinkingText !== "" || step.errorMessage != null || llmResponseVisible(step);
-}
-
-// In code-mode the LLM's response *is* the script that a code step executes
-// and renders with its results — showing the fenced-code variant here too
-// just duplicates it (the raw event view has it for anyone who wants it).
-// It only appears when the request was cancelled or failed, i.e. the code
-// likely never ran and this partial response is the only copy (the activity
-// summary promises "click to see partial response"). Prose always renders.
-function llmResponseVisible(step: AgentUiLlmStep): boolean {
-  if (step.responseText === "") return false;
-  if (!looksLikeCode(step.responseText)) return true;
-  return step.outcome === "cancelled" || step.outcome === "failed";
-}
-
 function stepLabel(step: AgentUiStep): string {
-  if (step.kind === "code") return step.status === "running" ? "Running code" : "Ran code";
+  if (step.kind === "code") {
+    if (step.status === "running") return "Running code";
+    return step.success === false ? "Code failed" : "Ran code";
+  }
   return step.model ?? "LLM request";
+}
+
+function stepHasFailure(step: AgentUiStep): boolean {
+  return step.kind === "code" ? step.success === false : step.outcome === "failed";
 }
 
 function stepMeta(step: AgentUiStep): string {
@@ -643,100 +594,8 @@ function stepMeta(step: AgentUiStep): string {
   return parts.join(" · ");
 }
 
-function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
-  const showResponse = llmResponseVisible(step);
-  const hasContent = step.thinkingText !== "" || showResponse || step.errorMessage != null;
-  return (
-    <>
-      {step.thinkingText === "" ? null : <ThinkingBlock>{step.thinkingText}</ThinkingBlock>}
-      {!showResponse ? null : looksLikeCode(step.responseText) ? (
-        <SourceCodeBlock
-          code={step.responseText}
-          language="typescript"
-          className="max-h-80"
-          showCopyButton
-          showLineNumbers={false}
-          plainChrome
-        />
-      ) : (
-        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
-          {step.responseText}
-        </div>
-      )}
-      {step.errorMessage == null ? null : (
-        <pre className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
-          {step.errorMessage}
-        </pre>
-      )}
-      {/* Token/timing metadata lives in the step's header row; the raw
-          summary only fills in when the step has nothing else to show. */}
-      {hasContent ? null : (
-        <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
-          {JSON.stringify(llmStepRawSummary(step), null, 2)}
-        </pre>
-      )}
-    </>
-  );
-}
-
-function llmStepRawSummary(step: AgentUiLlmStep) {
-  return {
-    ...(step.model == null ? {} : { model: step.model }),
-    usage: { input_tokens: step.inputTokens ?? null, output_tokens: step.outputTokens ?? null },
-    ...(step.durationMs == null ? {} : { duration_ms: step.durationMs }),
-    status: step.outcome ?? step.status,
-    ...(step.errorMessage == null ? {} : { error: step.errorMessage }),
-  };
-}
-
-function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
-  // No timestamp heading here: the step's header row already says when it
-  // started — the detail is the code and what it returned.
-  return (
-    <>
-      {step.code === "" ? null : (
-        <SourceCodeBlock
-          code={step.code}
-          language="typescript"
-          className="max-h-80"
-          showCopyButton
-          showLineNumbers={false}
-          plainChrome
-        />
-      )}
-      {step.result === undefined && step.errorMessage == null ? null : (
-        <div className="flex items-start gap-2.5">
-          <span
-            className={cn(
-              "shrink-0 pt-2.5 font-mono text-xs",
-              step.errorMessage == null ? "text-emerald-600" : "text-destructive",
-            )}
-          >
-            →
-          </span>
-          <pre
-            className={cn(
-              "min-w-0 flex-1 overflow-x-auto rounded-xl px-4 py-2.5 font-mono text-xs leading-relaxed",
-              step.errorMessage == null
-                ? "bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-200"
-                : "bg-destructive/5 text-destructive",
-            )}
-          >
-            {step.errorMessage ?? stringifyResult(step.result)}
-          </pre>
-        </div>
-      )}
-      {step.logs == null || step.logs.length === 0 ? null : (
-        <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-2.5 font-mono text-xs leading-relaxed text-muted-foreground">
-          {step.logs.join("\n")}
-        </pre>
-      )}
-    </>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// The live element: active requests and running code with expandable detail
+// The live element: accumulated activity followed by the current timed phase.
 // ---------------------------------------------------------------------------
 
 /**
@@ -749,77 +608,107 @@ export function AgentLiveActivity({
   toggledIds,
   onToggle,
   onInspectLlmRequest,
+  onInspectScriptExecution,
 }: {
   live: AgentUiActivity;
   toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
+  onInspectScriptExecution?: (executionId: string) => void;
 }) {
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
-  const working = runningSteps.length > 0;
-  const toggleLive = useCallback((id: string) => onToggle(`live:${id}`), [onToggle]);
+  const working = live.phase != null || runningSteps.length > 0;
+  const activityToggleId = `live-activity:${live.id}`;
+  const activityExpanded = toggledIds.has(activityToggleId);
+  const toggleActivity = useCallback(
+    () => onToggle(activityToggleId),
+    [activityToggleId, onToggle],
+  );
   const showStepRail =
-    doneSteps.length > 0 ||
-    runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step));
+    activityExpanded &&
+    (doneSteps.length > 0 ||
+      runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step)));
 
-  // The in-flight request's context is already committed history (the fold
-  // reads offsets ≤ llmRequestOffset), so "what is it chewing on right now"
-  // is inspectable mid-turn from the live label row.
-  const runningLlmStep = runningSteps
-    .filter((step): step is AgentUiLlmStep => step.kind === "llm")
-    .at(-1);
-  const runningCodeStartedAtMs =
-    runningSteps.find((step) => step.kind === "code")?.startedAtMs ?? null;
-  const codeElapsed = useElapsedLabel(runningCodeStartedAtMs);
-  const statusWithElapsed = `${liveActivityLabel(runningSteps)}${
-    codeElapsed == null ? "" : ` ${codeElapsed}`
-  }`;
+  const phaseKind = live.phase === "script" ? "code" : live.phase === "llm" ? "llm" : null;
+  const phaseStep =
+    phaseKind == null ? liveStep : runningSteps.findLast((step) => step.kind === phaseKind);
+  const basePhaseLabel =
+    live.phase === "script"
+      ? "Running code"
+      : live.phase === "llm"
+        ? phaseStep?.kind === "llm"
+          ? liveActivityLabel([phaseStep])
+          : "Waiting for a response"
+        : liveActivityLabel(phaseStep == null ? [] : [phaseStep]);
+  const phaseStartedAtMs = live.phaseStartedAtMs ?? phaseStep?.startedAtMs ?? live.startedAtMs;
+  const phaseClock = useLivePhaseClock(
+    phaseStartedAtMs,
+    phaseStep?.kind === "code" ? phaseStep.expiresAtMs : null,
+    working,
+  );
+  const phaseLabel = phaseClock.deadlineExceeded ? "Code deadline exceeded" : basePhaseLabel;
+  const phaseElapsed = phaseClock.elapsedLabel;
+  const statusWithElapsed = `${phaseLabel}${phaseElapsed == null ? "" : ` ${phaseElapsed}`}`;
+  const inspectCurrentPhase =
+    phaseStep?.kind === "llm"
+      ? onInspectLlmRequest == null
+        ? undefined
+        : () => onInspectLlmRequest(phaseStep.llmRequestOffset)
+      : phaseStep?.kind === "code"
+        ? onInspectScriptExecution == null
+          ? undefined
+          : () => onInspectScriptExecution(phaseStep.executionId)
+        : undefined;
 
-  if (!working && activityWasInterrupted(live)) {
+  if (!working) {
     return (
       <AgentActivityRow
         activity={live}
         expanded={toggledIds.has(live.id)}
-        toggledIds={toggledIds}
         onToggle={onToggle}
         onInspectLlmRequest={onInspectLlmRequest}
+        onInspectScriptExecution={onInspectScriptExecution}
       />
     );
   }
 
   return (
     <div className="flex flex-col py-0.5">
-      {working ? (
-        <div className="flex h-7 items-center gap-2 self-start px-0.5">
-          <Spinner className="size-3 shrink-0 text-amber-600" />
-          <span className="text-sm font-medium tabular-nums text-amber-700 dark:text-amber-500">
-            {statusWithElapsed}
-          </span>
-          {runningLlmStep != null && onInspectLlmRequest != null ? (
-            <InspectLlmRequestButton
-              llmRequestOffset={runningLlmStep.llmRequestOffset}
-              onInspectLlmRequest={onInspectLlmRequest}
-            />
-          ) : null}
-        </div>
+      {doneSteps.length > 0 ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={activityExpanded}
+          title="Agent activity so far — click to see details"
+          onClick={toggleActivity}
+          className="-ml-2.5 self-start font-mono text-xs font-normal text-muted-foreground"
+          data-testid="agent-live-summary"
+        >
+          {codeStepCount(doneSteps) > 0 ? (
+            <CodeIcon className="size-3 shrink-0 text-muted-foreground/60" aria-hidden="true" />
+          ) : (
+            <span className="shrink-0 text-[11px] leading-none text-muted-foreground/60">✦</span>
+          )}
+          <span>{activitySummary(live, doneSteps)}</span>
+          <ChevronRightIcon
+            className={cn(
+              "size-2.5 text-muted-foreground/50 transition-transform",
+              activityExpanded && "rotate-90",
+            )}
+            aria-hidden="true"
+          />
+        </Button>
       ) : null}
       {showStepRail ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {/* Steps in the live rail default to collapsed quiet rows — the
-              streaming tail below is the focus while work is in flight. Toggle
-              keys are namespaced with "live:" so they don't leak into the
-              settled activity, where membership means the opposite (collapse
-              a default-expanded step); a step expanded while streaming stays
-              expanded after settling via the settled default. */}
           {doneSteps.map((step) => (
             <AgentActivityStep
               key={step.id}
               step={step}
-              expanded={toggledIds.has(`live:${step.id}`)}
-              onToggle={toggleLive}
               onInspectLlmRequest={onInspectLlmRequest}
+              onInspectScriptExecution={onInspectScriptExecution}
             />
           ))}
           {runningSteps.map((step) =>
@@ -827,8 +716,7 @@ export function AgentLiveActivity({
               <AgentActivityStep
                 key={step.id}
                 step={step}
-                expanded={toggledIds.has(`live:${step.id}`)}
-                onToggle={toggleLive}
+                onInspectScriptExecution={onInspectScriptExecution}
               />
             ) : step === liveStep && liveStepHasVisibleContent(step) ? (
               <LiveStepStream key={step.id} step={step} />
@@ -836,12 +724,51 @@ export function AgentLiveActivity({
           )}
         </div>
       ) : null}
+      {working ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={inspectCurrentPhase == null}
+          onClick={inspectCurrentPhase}
+          title={
+            phaseClock.deadlineExceeded
+              ? "The script has no durable settlement after its absolute deadline"
+              : inspectCurrentPhase == null
+                ? undefined
+                : "Open the current operation's trace"
+          }
+          className={cn(
+            "-ml-2.5 h-7 self-start px-2.5 text-primary disabled:opacity-100",
+            phaseClock.deadlineExceeded && "text-destructive",
+          )}
+          data-testid="agent-live-status"
+        >
+          {phaseClock.deadlineExceeded ? (
+            <CircleAlertIcon className="size-3 shrink-0 text-destructive" />
+          ) : (
+            <Spinner className="size-3 shrink-0 text-primary" />
+          )}
+          <span
+            className={cn(
+              "text-sm font-medium tabular-nums text-primary",
+              phaseClock.deadlineExceeded && "text-destructive",
+            )}
+          >
+            {statusWithElapsed}
+          </span>
+          {inspectCurrentPhase == null ? null : (
+            <ChevronRightIcon
+              className={cn(
+                "size-2.5 text-primary/60",
+                phaseClock.deadlineExceeded && "text-destructive/60",
+              )}
+              aria-hidden="true"
+            />
+          )}
+        </Button>
+      ) : null}
     </div>
   );
-}
-
-function activityWasInterrupted(activity: AgentUiActivity): boolean {
-  return activity.steps.some((step) => step.kind === "llm" && step.outcome === "cancelled");
 }
 
 function liveStepHasVisibleContent(step: AgentUiStep) {
@@ -850,15 +777,27 @@ function liveStepHasVisibleContent(step: AgentUiStep) {
 }
 
 /**
- * Live CLI-style elapsed counter (`0.9s`) while code is running. Ticks every
- * 100ms so the tenths place moves; idle when `startedAtMs` is null.
+ * Live CLI-style elapsed counter (`0.9s`) for the current agent phase. Ticks
+ * every 100ms so reasoning, response waits, and code runs all count upward.
+ * A script clock stops at its authoritative absolute deadline and flips to an
+ * explicit failure state even if the durable completion is delayed.
  * Clock is a useSyncExternalStore subscription (react-doctor happy path),
  * not a useState+setInterval effect loop.
  */
-function useElapsedLabel(startedAtMs: number | null): string | null {
-  const nowMs = useTickingNowMs(100, startedAtMs != null);
-  if (startedAtMs == null) return null;
-  return formatElapsedSeconds(nowMs - startedAtMs);
+function useLivePhaseClock(
+  startedAtMs: number | null,
+  deadlineMs: number | null,
+  enabled: boolean,
+): { deadlineExceeded: boolean; elapsedLabel: string | null } {
+  const nowMs = useTickingNowMs(100, enabled && startedAtMs != null, deadlineMs);
+  if (startedAtMs == null) return { deadlineExceeded: false, elapsedLabel: null };
+  const deadlineExceeded = deadlineMs != null && nowMs >= deadlineMs;
+  return {
+    deadlineExceeded,
+    elapsedLabel: formatElapsedSeconds(
+      (deadlineExceeded && deadlineMs != null ? deadlineMs : nowMs) - startedAtMs,
+    ),
+  };
 }
 
 function LiveStepStream({ step }: { step: AgentUiStep }) {
@@ -929,29 +868,8 @@ function StreamingCursor({ className }: { className?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Thinking block (shared by settled steps)
-// ---------------------------------------------------------------------------
-
-function ThinkingBlock({ children }: { children: ReactNode }) {
-  return (
-    <div className="max-w-2xl whitespace-pre-wrap rounded-xl bg-muted/50 px-4 py-3 text-sm italic leading-relaxed text-muted-foreground">
-      {children}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Formatting (number/time formatters live in ~/lib/feed-format.ts)
 // ---------------------------------------------------------------------------
-
-function stringifyResult(result: unknown): string {
-  if (typeof result === "string") return result;
-  try {
-    return JSON.stringify(result, null, 2) ?? String(result);
-  } catch {
-    return String(result);
-  }
-}
 
 function compactStreamPath(path: string): string {
   if (path.length <= 64) return path;

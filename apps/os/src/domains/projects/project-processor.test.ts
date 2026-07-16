@@ -3,6 +3,7 @@ import type { StreamEvent } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
+import { ingestTestBatch } from "~/test/stream-delivery.ts";
 
 function event(type: string, payload: Record<string, unknown>, offset = 1): StreamEvent {
   return {
@@ -39,7 +40,7 @@ describe("ProjectProcessor bootstrap", () => {
   it("arms the config repo on its own stream: processor subscription, cross-post to /, create request", async () => {
     const { network, processor } = makeHarness();
 
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         event("events.iterate.com/project/create-requested", {
           projectId: "prj_test",
@@ -75,7 +76,7 @@ describe("ProjectProcessor bootstrap", () => {
   it("completes the saga from the (cross-posted) repo/created fact for the config repo", async () => {
     const { network, processor } = makeHarness();
 
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         event("events.iterate.com/project/create-requested", {
           projectId: "prj_test",
@@ -84,7 +85,7 @@ describe("ProjectProcessor bootstrap", () => {
       ],
       streamMaxOffset: 1,
     });
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         {
           ...event(
@@ -125,7 +126,7 @@ describe("ProjectProcessor agent birth", () => {
   it("appends only processor subscriptions at birth — policy comes from the project worker", async () => {
     const { network, processor } = makeHarness();
 
-    await processor.ingest({
+    await ingestTestBatch(processor, {
       events: [
         event("events.iterate.com/stream/child-stream-created", {
           childPath: "/agents/demo",

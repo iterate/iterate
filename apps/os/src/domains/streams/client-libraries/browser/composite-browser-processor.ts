@@ -12,6 +12,7 @@
 // replay cursor cheaply no-ops on the events it has seen, and the runtime can
 // drive all children from the SAME batch stream.
 
+import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { AnyHostedProcessor } from "../../processor-host-capabilities.ts";
 import type {
   StreamProcessorRuntimeState,
@@ -91,8 +92,44 @@ export class CompositeBrowserProcessor implements AnyHostedProcessor {
     // resubscribes from the (new minimum) checkpoint and replays for every
     // child — each child's own idempotency (raw-events' RAISE(IGNORE), feed's
     // ON CONFLICT) makes that replay safe.
+    const durableArgs = {
+      ...args,
+      events: args.events.filter((event) => event.ephemeral !== true),
+    };
     for (const { processor } of this.#children) {
+      if (isLiveAgentProcessor(processor)) {
+        // oxlint-disable-next-line react-doctor/async-await-in-loop -- children share one SQLite connection and must commit in canonical order; see the contract above.
+        await processor.ingestLive(args);
+      } else {
+        // oxlint-disable-next-line react-doctor/async-await-in-loop -- children share one SQLite connection and must commit in canonical order; see the contract above.
+        await processor.ingest(durableArgs);
+      }
+    }
+  }
+
+  /**
+   * Fan out a server range-read page. Raw-event mirrors get an explicit sparse
+   * lane because omitted historical ephemerals leave legitimate offset gaps;
+   * all other projections ingest the same durable page normally.
+   */
+  async ingestHistorical(args: Parameters<AnyHostedProcessor["ingest"]>[0]): Promise<void> {
+    for (const { processor } of this.#children) {
+      // oxlint-disable-next-line react-doctor/async-await-in-loop -- children share one SQLite connection and must commit in canonical order; see ingest() above.
       await processor.ingest(args);
+    }
+  }
+
+  /** Current in-memory live agent tail, when the feed child exposes one. */
+  get agentUiState(): AgentUiState | null {
+    for (const { processor } of this.#children) {
+      if (isLiveAgentProcessor(processor)) return processor.agentUiState;
+    }
+    return null;
+  }
+
+  clearVolatileState(): void {
+    for (const { processor } of this.#children) {
+      if (isLiveAgentProcessor(processor)) processor.clearVolatileState();
     }
   }
 
@@ -128,4 +165,20 @@ export class CompositeBrowserProcessor implements AnyHostedProcessor {
       for (const unsubscribe of unsubscribes) unsubscribe();
     };
   }
+}
+
+type LiveAgentProcessor = AnyHostedProcessor & {
+  ingestLive: (args: Parameters<AnyHostedProcessor["ingest"]>[0]) => Promise<void>;
+  readonly agentUiState: AgentUiState;
+  clearVolatileState: () => void;
+};
+
+function isLiveAgentProcessor(processor: AnyHostedProcessor): processor is LiveAgentProcessor {
+  return (
+    "ingestLive" in processor &&
+    typeof processor.ingestLive === "function" &&
+    "agentUiState" in processor &&
+    "clearVolatileState" in processor &&
+    typeof processor.clearVolatileState === "function"
+  );
 }

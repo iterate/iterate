@@ -10,6 +10,14 @@ export class RpcStub {}
 export class RpcPromise {}
 export class RpcProperty {}
 export class ServiceStub {}
+export class WorkerEntrypoint<Env = unknown, Props = unknown> {
+  env!: Env;
+  ctx!: {
+    props: Props;
+    exports: Record<string, unknown>;
+    waitUntil(promise: Promise<unknown>): void;
+  };
+}
 export const env = {};
 
 export type RecordedSpan = {
