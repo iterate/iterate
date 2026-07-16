@@ -278,6 +278,14 @@ test("ephemeral events are raw-readable and delivered live, but never replayed t
     payload: { marker },
   });
   expect(deduped).toMatchObject({ offset: chunk!.offset });
+  await expect(
+    stream.append({
+      type: ephemeralType,
+      ephemeral: true,
+      idempotencyKey: `chunk-${marker}`,
+      payload: { marker, different: true },
+    }),
+  ).rejects.toThrow(/idempotency key .* already names a different event/);
 
   // Default reads skip it; includeEphemeral opts in.
   const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };

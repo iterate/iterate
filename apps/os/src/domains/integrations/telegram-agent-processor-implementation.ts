@@ -33,9 +33,6 @@ import {
   integrationConnectionStreamPath,
   readRecord,
   readString,
-  telegramChatIdFromAgentPath,
-  telegramConnectionFromAgentPath,
-  telegramTopicIdFromAgentPath,
   webhookAckIsFresh,
 } from "./utils.ts";
 import { telegramNewCommand } from "./telegram-processor-implementation.ts";
@@ -49,17 +46,20 @@ import {
 export const TELEGRAM_NEW_SESSION_ACK_TEXT = "Started a fresh thread.";
 
 type TelegramAgentProcessorDeps = {
-  /** The host stream's own path
-   * (`/agents/telegram/<connection>/chat-<chatId>[...]`) — the chat id, forum
-   * topic, and connection the send effect needs all derive from it. */
-  agentPath: string;
   /** Best-effort UX side effects only (the typing chat action) — failures are
    * swallowed by the host dep and must never wedge the checkpoint. */
-  callTelegramApi?(method: string, body: Record<string, unknown>): Promise<void>;
+  callTelegramApi?(input: {
+    body: Record<string, unknown>;
+    connection: string;
+    method: string;
+  }): Promise<void>;
   /** The journaled send effect: deliver one sendMessage body and return
    * Telegram's message_id. MUST throw on failure — the send obligation relies
    * on the thrown error holding the checkpoint for retry. */
-  sendTelegramMessage?(body: Record<string, unknown>): Promise<{ messageId: number }>;
+  sendTelegramMessage?(input: {
+    body: Record<string, unknown>;
+    connection: string;
+  }): Promise<{ messageId: number }>;
   /** Injectable clock for the ack freshness gate (defaults to Date.now). */
   now?: () => number;
 };
@@ -81,6 +81,20 @@ export class TelegramAgentProcessor extends StreamProcessor<
     StreamProcessor<TelegramAgentProcessorContract>["reduce"]
   >[0]): TelegramAgentProcessorState {
     switch (event.type) {
+      case "events.iterate.com/telegram-agent/created":
+        if (state.birthCertificate !== null) {
+          throw new Error(
+            "Telegram agent processor received more than one telegram-agent/created event",
+          );
+        }
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          chatId: event.payload.config.chatId,
+          ...(event.payload.config.messageThreadId === undefined
+            ? {}
+            : { messageThreadId: event.payload.config.messageThreadId }),
+        };
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);
         if (target == null) return state;
@@ -111,6 +125,8 @@ export class TelegramAgentProcessor extends StreamProcessor<
   protected override processEvent(
     args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0],
   ): undefined {
+    if (args.event.type === "events.iterate.com/telegram-agent/created") return;
+    if (args.state.birthCertificate === null) return;
     this.#perEventSideEffects(args);
     // The at-head typing repaint (was `onCaughtUp`): fires only for the last
     // consumed event of a batch that reached head (`delivery.caughtUp`), and
@@ -156,7 +172,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
               type: "events.iterate.com/capability-host/script-run-requested",
               idempotencyKey: `telegram-agent:debug-command:${event.offset}`,
               payload: {
-                code: compileTelegramDebugScript(this.deps.agentPath),
+                code: compileTelegramDebugScript(this.path),
                 executionId: `telegram-debug-command-${event.offset}`,
                 expiresAt: (this.deps.now ?? Date.now)() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
               },
@@ -233,7 +249,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
             target != null &&
             webhookAckIsFresh(event, (this.deps.now ?? Date.now)())
           ) {
-            await this.#sendTyping(target);
+            await this.#sendTyping(state.birthCertificate!.config.connection, target);
           }
         });
         return;
@@ -243,13 +259,8 @@ export class TelegramAgentProcessor extends StreamProcessor<
         // blockProcessorWhile so any failure holds the checkpoint and the
         // host replays this request until a marker exists.
         blockProcessorWhile(async () => {
-          const sessionPath = this.deps.agentPath;
-          const chatId = state.chatId ?? telegramChatIdFromAgentPath(sessionPath);
-          if (chatId === null) {
-            throw new Error(
-              `telegram-agent send-requested on a stream whose path carries no chat id: ${sessionPath}`,
-            );
-          }
+          const sessionPath = this.path;
+          const chatId = state.birthCertificate!.config.chatId;
 
           // Replay safety: a marker for this request means the send already
           // happened — never re-send a satisfied obligation. (A crash BEFORE
@@ -267,19 +278,17 @@ export class TelegramAgentProcessor extends StreamProcessor<
           // message_id → sessionPath from it, making reply hints exact for
           // bot messages. Idempotency-keyed, so a crash between marker and
           // claim replays into a single claim.
-          const connection = telegramConnectionFromAgentPath(sessionPath);
-          if (connection !== null) {
-            await appendTo(integrationConnectionStreamPath("telegram", connection), {
-              type: "events.iterate.com/telegram/message-sent",
-              idempotencyKey: `telegram:sent-claim:${sessionPath}:${event.offset}`,
-              payload: {
-                chatId,
-                messageId,
-                request: { offset: event.offset, stream: sessionPath },
-                sessionPath,
-              },
-            });
-          }
+          const connection = state.birthCertificate!.config.connection;
+          await appendTo(integrationConnectionStreamPath("telegram", connection), {
+            type: "events.iterate.com/telegram/message-sent",
+            idempotencyKey: `telegram:sent-claim:${sessionPath}:${event.offset}`,
+            payload: {
+              chatId,
+              messageId,
+              request: { offset: event.offset, stream: sessionPath },
+              sessionPath,
+            },
+          });
         });
         return;
       }
@@ -313,9 +322,13 @@ export class TelegramAgentProcessor extends StreamProcessor<
     const latest = this.#unpaintedTypingFact;
     this.#unpaintedTypingFact = undefined;
     if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
+    if (args.state.birthCertificate === null) return;
     const { chatId, messageThreadId } = args.state;
     if (chatId == null) return;
-    await this.#sendTyping({ chatId, messageThreadId });
+    await this.#sendTyping(args.state.birthCertificate.config.connection, {
+      chatId,
+      messageThreadId,
+    });
   }
 
   /** Deliver one send-requested to the Bot API; returns Telegram's message_id. */
@@ -331,7 +344,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
         "telegram-agent has no sendTelegramMessage dep; cannot satisfy send-requested",
       );
     }
-    const topicId = telegramTopicIdFromAgentPath(this.deps.agentPath);
+    const topicId = input.state.birthCertificate?.config.messageThreadId;
     // The deterministic reply_to_message_id rule (unless the request already
     // chose one): quote the message this turn is answering ONLY when newer
     // messages have arrived since — quoting the latest message is noise,
@@ -357,10 +370,13 @@ export class TelegramAgentProcessor extends StreamProcessor<
       ...payloadRest
     } = input.event.payload;
     const { messageId } = await this.deps.sendTelegramMessage({
-      ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
-      ...payloadRest,
-      chat_id: coerceTelegramId(input.chatId),
-      ...(topicId === null ? {} : { message_thread_id: coerceTelegramId(topicId) }),
+      body: {
+        ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
+        ...payloadRest,
+        chat_id: coerceTelegramId(input.chatId),
+        ...(topicId === undefined ? {} : { message_thread_id: coerceTelegramId(topicId) }),
+      },
+      connection: input.state.birthCertificate!.config.connection,
     });
     return messageId;
   }
@@ -387,14 +403,18 @@ export class TelegramAgentProcessor extends StreamProcessor<
     }
   }
 
-  async #sendTyping(target: { chatId: string; messageThreadId?: string }) {
+  async #sendTyping(connection: string, target: { chatId: string; messageThreadId?: string }) {
     if (this.deps.callTelegramApi == null) return;
-    await this.deps.callTelegramApi("sendChatAction", {
-      action: "typing",
-      chat_id: coerceTelegramId(target.chatId),
-      ...(target.messageThreadId === undefined
-        ? {}
-        : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
+    await this.deps.callTelegramApi({
+      body: {
+        action: "typing",
+        chat_id: coerceTelegramId(target.chatId),
+        ...(target.messageThreadId === undefined
+          ? {}
+          : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
+      },
+      connection,
+      method: "sendChatAction",
     });
   }
 }

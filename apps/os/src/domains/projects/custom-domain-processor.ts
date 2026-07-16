@@ -169,10 +169,10 @@ function assertCustomDomainProvisioner(
 }
 
 function projectRecordFromState(
-  state: { createRequest: { projectId: string; slug: string } | null },
+  state: { birthCertificate: { config: { slug: string } } | null },
   projectId: string,
 ): ProjectDirectoryRecord {
-  const slug = state.createRequest?.slug ?? projectId;
+  const slug = state.birthCertificate?.config.slug ?? projectId;
   return { id: projectId, slug, organizationId: null, name: slug };
 }
 

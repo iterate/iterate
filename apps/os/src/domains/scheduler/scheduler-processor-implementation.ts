@@ -94,6 +94,11 @@ export class SchedulerProcessor extends StreamProcessor<
     state: SchedulerProcessorState;
   }): SchedulerProcessorState {
     switch (event.type) {
+      case "events.iterate.com/scheduler/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("scheduler received more than one created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/scheduler/schedule-set": {
         const payload = event.payload;
         return {
@@ -164,6 +169,7 @@ export class SchedulerProcessor extends StreamProcessor<
   protected override processEvent(
     args: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0],
   ): undefined {
+    if (args.state.birthCertificate === null) return;
     const { event } = args;
     // AT-HEAD alarm derivation (was `onCaughtUp`): fires only when this event
     // was the observed stream head at delivery, so `args.state` is the whole
@@ -210,6 +216,7 @@ export class SchedulerProcessor extends StreamProcessor<
     // delivery, and the due/sweep decisions below must see the durable
     // committed fold (the runner's load performs any pending refold too).
     const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
     const now = this.deps.now();
     const due = dueSchedules(state.schedules, now);
     if (due.length > 0) {
@@ -280,6 +287,7 @@ export class SchedulerProcessor extends StreamProcessor<
    */
   async buildManualTriggerEvent(key: string) {
     const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
     const entry = state.schedules[key];
     if (entry === undefined) throw new Error(`no schedule under key "${key}"`);
     const nowIso = new Date(this.deps.now()).toISOString();
@@ -300,6 +308,7 @@ export class SchedulerProcessor extends StreamProcessor<
   /** One key's Schedule as the public view shape, or undefined. */
   async getScheduleView(key: string): Promise<ScheduleView | undefined> {
     const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
     return scheduleViewFromState(state, key);
   }
 
@@ -307,9 +316,15 @@ export class SchedulerProcessor extends StreamProcessor<
    * snapshot read serves the whole list, so it is internally consistent. */
   async listScheduleViews(): Promise<ScheduleView[]> {
     const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
     return Object.keys(state.schedules)
       .sort()
       .map((key) => scheduleViewFromState(state, key)!);
+  }
+
+  async assertCreated(): Promise<void> {
+    const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
   }
 
   #launchExecution(executionId: string, barrierOffset = 0): void {
@@ -410,6 +425,12 @@ export class SchedulerProcessor extends StreamProcessor<
       idempotencyKey: completionIdempotencyKey,
       payload: { ...outcome, executionId, key: pending.key },
     });
+  }
+}
+
+function assertSchedulerCreated(state: SchedulerProcessorState): void {
+  if (state.birthCertificate === null) {
+    throw new Error("scheduler has not been created");
   }
 }
 

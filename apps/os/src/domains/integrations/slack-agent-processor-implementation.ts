@@ -34,12 +34,7 @@ import {
   mergeAgentStatusPatch,
   type AgentFileAttachment,
 } from "../agents/agent-processor-contract.ts";
-import {
-  readRecord,
-  readString,
-  slackConnectionFromAgentPath,
-  webhookAckIsFresh,
-} from "./utils.ts";
+import { readRecord, readString, webhookAckIsFresh } from "./utils.ts";
 import {
   SlackAgentProcessorContract,
   type SlackAgentProcessorState,
@@ -51,16 +46,21 @@ type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
 export class SlackAgentProcessor extends StreamProcessor<
   SlackAgentProcessorContract,
   {
-    callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+    callSlackApi?(input: {
+      body: Record<string, unknown>;
+      connection: string;
+      method: string;
+    }): Promise<void>;
     /** Resolves a channel id to its display name (conversations.info) for the
      * birth identity patch; null on any failure — the id then stands in. */
-    fetchSlackChannelName?(channel: string): Promise<string | null>;
+    fetchSlackChannelName?(input: { channel: string; connection: string }): Promise<string | null>;
     /** Injectable clock for the acknowledgement freshness gates. */
     now?: () => number;
     /** Downloads Slack-shared files into project file storage (see
      * storeSlackFilesForAgent in slack-api.ts). `storageKey` is stable per
      * webhook event so replays overwrite instead of duplicating. */
     storeSlackFiles?(input: {
+      connection: string;
       files: SlackSharedFile[];
       storageKey: string;
     }): Promise<AgentFileAttachment[]>;
@@ -75,6 +75,16 @@ export class SlackAgentProcessor extends StreamProcessor<
     StreamProcessor<SlackAgentProcessorContract>["reduce"]
   >[0]): SlackAgentProcessorState {
     switch (event.type) {
+      case "events.iterate.com/slack-agent/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("Slack agent processor received more than one slack-agent/created event");
+        }
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          channel: event.payload.config.channel,
+          threadTs: event.payload.config.threadTs,
+        };
       case "events.iterate.com/agent/status-changed": {
         // The contract's shared merge fold: busy patches carry their
         // sinceOffset guard, authored title/note/shortStatus patches are
@@ -115,6 +125,9 @@ export class SlackAgentProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
   ): undefined {
     const { append, blockProcessorWhile, event, state } = args;
+    if (event.type === "events.iterate.com/slack-agent/created") return;
+    if (state.birthCertificate === null) return;
+    const { birthCertificate } = state;
     // Status announcements drive the assistant status, which is repainted
     // once per at-head pass — nothing per event beyond remembering the
     // LATEST announcement (later events overwrite earlier ones, and the memo
@@ -142,8 +155,11 @@ export class SlackAgentProcessor extends StreamProcessor<
         // identity ONCE: the slack icon and a "#channel" title/note (the
         // agent's own setStatus patches win later by journal order).
         const channel = event.payload.channel;
+        const connection = birthCertificate.config.connection;
         blockProcessorWhile(async () => {
-          const name = (await this.deps.fetchSlackChannelName?.(channel).catch(() => null)) ?? null;
+          const name =
+            (await this.deps.fetchSlackChannelName?.({ channel, connection }).catch(() => null)) ??
+            null;
           const label = name === null ? channel : `#${name}`;
           await append({
             type: "events.iterate.com/agent/status-changed",
@@ -243,8 +259,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         const messageText = readStringField(slackEvent, "text")?.trim();
         const bangCommand = compileBangCommand({
           channel,
-          connection:
-            state.streamPath == null ? null : slackConnectionFromAgentPath(state.streamPath),
+          connection: birthCertificate.config.connection,
           message: messageText,
           threadTs,
         });
@@ -262,7 +277,11 @@ export class SlackAgentProcessor extends StreamProcessor<
                 expiresAt: (this.deps.now ?? Date.now)() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
               },
             });
-            await this.#addEyesReactionForMessageTarget(target, event);
+            await this.#addEyesReactionForMessageTarget(
+              birthCertificate.config.connection,
+              target,
+              event,
+            );
           });
           return;
         }
@@ -292,6 +311,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           if (sharedFiles.length > 0 && this.deps.storeSlackFiles != null) {
             try {
               files = await this.deps.storeSlackFiles({
+                connection: birthCertificate.config.connection,
                 files: sharedFiles,
                 storageKey: `slack-${event.offset}`,
               });
@@ -313,7 +333,11 @@ export class SlackAgentProcessor extends StreamProcessor<
               : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
           });
           if (mentioned) {
-            await this.#addEyesReactionForMessageTarget(target, event);
+            await this.#addEyesReactionForMessageTarget(
+              birthCertificate.config.connection,
+              target,
+              event,
+            );
           }
         });
         return;
@@ -357,6 +381,8 @@ export class SlackAgentProcessor extends StreamProcessor<
     const latest = this.#unpaintedStatusFact;
     this.#unpaintedStatusFact = undefined;
     if (latest == null) return;
+    if (args.state.birthCertificate === null) return;
+    const connection = args.state.birthCertificate.config.connection;
     const { channel, latestMessageTs, status, threadTs } = args.state;
     if (channel == null || threadTs == null) return;
     const fresh = webhookAckIsFresh(latest, (this.deps.now ?? Date.now)());
@@ -369,7 +395,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // seeing it as already painted.
     const title = args.state.status?.title;
     if (fresh && title !== undefined && title !== this.#paintedTitle) {
-      await this.#callSlackApi("assistant.threads.setTitle", {
+      await this.#callSlackApi(connection, "assistant.threads.setTitle", {
         channel_id: channel,
         thread_ts: threadTs,
         title,
@@ -384,7 +410,7 @@ export class SlackAgentProcessor extends StreamProcessor<
       const text =
         status.shortStatus ??
         (status.phase === "script" ? "running a script" : "making an LLM request");
-      await this.#callSlackApi("assistant.threads.setStatus", {
+      await this.#callSlackApi(connection, "assistant.threads.setStatus", {
         channel_id: channel,
         thread_ts: threadTs,
         status: `is ${text}...`,
@@ -404,14 +430,14 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (status.blocked === true) {
       if (!fresh && !this.#paintedBusyStatus) return;
       const text = status.shortStatus ?? "waiting for input";
-      await this.#callSlackApi("assistant.threads.setStatus", {
+      await this.#callSlackApi(connection, "assistant.threads.setStatus", {
         channel_id: channel,
         thread_ts: threadTs,
         status: `is ${text}...`,
         loading_messages: [`${text}...`],
       });
       if (latestMessageTs != null) {
-        await this.#callSlackApi("reactions.remove", {
+        await this.#callSlackApi(connection, "reactions.remove", {
           channel,
           name: "eyes",
           timestamp: latestMessageTs,
@@ -423,20 +449,26 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (!fresh && !this.#paintedBusyStatus) return;
     await this.#clearStatus({
       channel,
+      connection,
       ...(latestMessageTs == null ? {} : { latestMessageTs }),
       threadTs,
     });
     this.#paintedBusyStatus = false;
   }
 
-  async #clearStatus(target: { channel: string; latestMessageTs?: string; threadTs: string }) {
-    await this.#callSlackApi("assistant.threads.setStatus", {
+  async #clearStatus(target: {
+    channel: string;
+    connection: string;
+    latestMessageTs?: string;
+    threadTs: string;
+  }) {
+    await this.#callSlackApi(target.connection, "assistant.threads.setStatus", {
       channel_id: target.channel,
       thread_ts: target.threadTs,
       status: "",
     });
     if (target.latestMessageTs != null) {
-      await this.#callSlackApi("reactions.remove", {
+      await this.#callSlackApi(target.connection, "reactions.remove", {
         channel: target.channel,
         name: "eyes",
         timestamp: target.latestMessageTs,
@@ -447,26 +479,27 @@ export class SlackAgentProcessor extends StreamProcessor<
   /** The 👀 ack means "your message was just picked up" — only fresh webhooks
    * qualify (see WEBHOOK_ACK_FRESHNESS_MS for why stale ones must not). */
   async #addEyesReactionForMessageTarget(
+    connection: string,
     target: SlackAgentTarget | null,
     event: { createdAt: string },
   ) {
     if (target == null || target.isBotMessage || target.isReactionEvent) return;
     if (!webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) return;
-    await this.#callSlackApi("reactions.add", {
+    await this.#callSlackApi(connection, "reactions.add", {
       channel: target.channel,
       name: "eyes",
       timestamp: target.messageTs,
     });
   }
 
-  async #callSlackApi(method: string, body: Record<string, unknown>) {
+  async #callSlackApi(connection: string, method: string, body: Record<string, unknown>) {
     if (body.timestamp == null && (method === "reactions.add" || method === "reactions.remove")) {
       return;
     }
     if (this.deps.callSlackApi == null) return;
 
     try {
-      await this.deps.callSlackApi(method, body);
+      await this.deps.callSlackApi({ body, connection, method });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (

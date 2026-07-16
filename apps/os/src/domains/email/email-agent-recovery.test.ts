@@ -73,6 +73,11 @@ function makeHarness() {
   const clock = { now: Date.parse("2026-07-15T12:00:00Z") };
   const stream = new MemoryStream(HOME);
   stream.now = () => clock.now;
+  void stream.append({
+    type: "events.iterate.com/email-agent/created",
+    idempotencyKey: "test:email-agent-created",
+    payload: { config: { threadId: "1" } },
+  });
 
   const kv = new Map<string, unknown>();
   const alarm: { at: number | null } = { at: null };

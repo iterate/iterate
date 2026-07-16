@@ -929,7 +929,7 @@ context while the provider remains connected.
 - "`itx.workspaces.get`" made Workspace look like a repo-style collection
   lookup. Resolved: use singular `itx.workspace` for the Workspace surface.
 - "root tool" could imply a special non-provider mechanism. Resolved: subagent
-  creation is the namespaced **RPC Capability** `itx.agents.create()`.
+  creation is the namespaced **RPC Capability** `itx.agents.get(path).create()`.
 - "path" was doing two jobs: identifying the full itx call and identifying the
   function relative to the provider. Resolved: use **Capability Path** for the
   registered mount path and **Function Path** for the capability-relative call

@@ -145,12 +145,6 @@ export function isEmailAgentPath(agentPath: string): boolean {
   return normalized === "/agents/email" || normalized.startsWith("/agents/email/");
 }
 
-/** The `t<threadId>` segment of an email agent path, or null off-shape. */
-export function emailThreadIdFromAgentPath(agentPath: string): string | null {
-  const match = /^\/agents\/email\/t([a-z0-9-]+)$/i.exec(agentPath);
-  return match?.[1] ?? null;
-}
-
 /**
  * A parsed inbound recipient address on a project hostname base:
  * `<slug>@<domain>` (project inbox) or `<slug>+t<threadId>@<domain>` (thread

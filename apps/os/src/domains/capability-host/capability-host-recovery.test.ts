@@ -27,15 +27,29 @@ const HOME = "/agents/test";
 const SLUG = CapabilityHostProcessorContract.slug;
 
 const T = {
+  created: "events.iterate.com/capability-host/created",
   requested: "events.iterate.com/capability-host/script-run-requested",
   started: "events.iterate.com/capability-host/script-run-started",
   completed: "events.iterate.com/capability-host/script-run-settled",
   revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
+function capabilityHostStream(path = "/"): MemoryStream {
+  const stream = new MemoryStream(path);
+  stream.events.push({
+    type: T.created,
+    idempotencyKey: `capability-host/created:test:${stream.path}`,
+    payload: { config: {} },
+    createdAt: new Date().toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+  return stream;
+}
+
 function makeHarness() {
   const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
-  const stream = new MemoryStream(HOME);
+  const stream = capabilityHostStream(HOME);
   stream.now = () => clock.now;
 
   const kv = new Map<string, unknown>();

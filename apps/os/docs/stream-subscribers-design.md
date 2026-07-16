@@ -339,7 +339,8 @@ A parallel session landed **#1761 (MERGED 2026-07-08): "Project worker becomes a
 subscriber: every stream pumps checkpointed events into processEventBatch"** — the worker-feed
 slice of this design, live on main — plus **#1756 (MERGED): `event.path` stamped on every
 committed event**, with **#1778 (OPEN): agent birth policy → the worker via
-`itx.agents.defaults`** on top. The single PR here **builds on #1761**, generalizing its pump
+path-triggered agent defaults** on top. That policy was later superseded by explicit
+`agents.get(path).create(...)` birth batches. The single PR here **builds on #1761**, generalizing its pump
 into the spine rather than adding a second mechanism.
 
 **Adopt verbatim from #1761/#1756 (already on main):**

@@ -218,6 +218,11 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     state,
   }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/capability-host/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("capability host received more than one created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
@@ -307,6 +312,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   protected override processEvent(
     args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
   ): undefined {
+    if (args.state.birthCertificate === null) return;
     if (args.event.type === "events.iterate.com/capability-host/script-run-settled") {
       this.#pendingSettlements.delete(args.event.payload.executionId);
     }
@@ -389,6 +395,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async provideCapability(input: ProvideCapabilityInput) {
+    await this.#assertCreated();
     const { path } = input;
     assertCapabilityPath(path);
     const key = liveKey(path);
@@ -527,6 +534,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
+    await this.#assertCreated();
     assertCapabilityPath(path);
     const { state } = await this.#reads.snapshot();
     const current = state.capabilities.find((record) => samePath(record.path, path));
@@ -554,6 +562,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // here with "invalid capability path segment".
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
     const { state } = await this.#reads.snapshot();
+    if (state.birthCertificate === null) {
+      // A physical path segment need not itself be a capability scope. Reads
+      // pass straight through an unborn container (`/agents`, `/agents/slack`,
+      // and so on) until they reach a real enclosing host. Writes and script
+      // execution still require an explicit birth at the addressed scope.
+      if (this.#parent) return await this.#parent.invokeCapability({ args, path });
+      throw new Error(`capability host at ${this.#path} has not been created`);
+    }
     const hit = resolveLongestPrefix(state.capabilities, path);
     if (!hit) {
       // Not declared at THIS scope. Capability reads chain up the scope hierarchy,
@@ -648,6 +664,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
+    await this.#assertCreated();
     const executionId = crypto.randomUUID();
     const now = this.#now ?? Date.now;
     const expiresAt = now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
@@ -693,6 +710,13 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       executionId,
       result: settlement.result ?? null,
     };
+  }
+
+  async #assertCreated(): Promise<void> {
+    const { state } = await this.#reads.snapshot();
+    if (state.birthCertificate === null) {
+      throw new Error(`capability host at ${this.#path} has not been created`);
+    }
   }
 
   async #waitForScriptCompletion(executionId: string, timeoutMs: number, signal: AbortSignal) {

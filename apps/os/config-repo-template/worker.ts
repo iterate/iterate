@@ -94,38 +94,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // keyed on event.path + event.type; anything a reaction appends should
   // carry an idempotency key.
   async processEvent(event: StreamEvent): Promise<void> {
-    // THIS WORKER configures new agents. When any stream under /agents/ is
-    // born (a web chat, the onboarding agent, a chat or email thread), the
-    // platform announces it on the project root stream and this
-    // reaction appends the agent's policy: system prompt, model,
-    // capability mounts, boot context. `itx.agents.defaults.forPath` returns
-    // the platform's defaults as data — edit the result (or pass prompt/model
-    // overrides) to change how YOUR agents behave. GitHub review automation
-    // is a separate userspace reaction to routed webhook events; see the
-    // platform's GitHub-agent guide for the small copyable pattern.
-    if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
-      const childPath = event.payload?.childPath;
-      if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
-        // env.ITX.get() hands this isolate an RPC stub; releasing it when the
-        // reaction ends keeps the runtime's "stub was not disposed" warning
-        // out of the logs (one agent birth = one reaction). try/finally, not
-        // a `using` declaration: this repo builds through the platform
-        // bundler at target es2022, which cannot transform `using` yet.
-        const itx = await this.env.ITX.get();
-        try {
-          const defaults = await itx.agents.defaults.forPath(childPath);
-          await itx.streams.get(childPath).append(...defaults.events);
-        } finally {
-          // Guarded: stub disposal is contractually non-throwing, but a throw
-          // HERE would reject processEvent AFTER the append side effect —
-          // redelivery would then apply the defaults twice.
-          try {
-            itx[Symbol.dispose]?.();
-          } catch {}
-        }
-      }
-    }
-
     if (event.type === "events.iterate.com/github/webhook-received") {
       const itx = await this.env.ITX.get();
       try {

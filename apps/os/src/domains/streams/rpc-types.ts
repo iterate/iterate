@@ -57,13 +57,13 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
 /**
  * The read-side RPC surface every stream processor node exposes: inspect
  * runtime state (snapshot plus a processor-specific runtime bag), take an
- * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to
- * block until the processor has folded a given offset.
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
+ * block until the processor has durably folded through a given offset.
  */
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /**

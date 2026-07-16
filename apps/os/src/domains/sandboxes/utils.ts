@@ -103,9 +103,9 @@ export type SandboxCreateInput = {
 // projectId — it just has to be a legal projectId so stringify/parse run.
 const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
-// Every sandbox lives under this prefix — the domain-prefix convention every
-// other domain already follows (`/secrets/...`, `/repos/...`, `/agents/...`),
-// so a project path names exactly one kind of object.
+// Every sandbox lives under this collection prefix, matching the addressing
+// convention used by `/secrets/...`, `/repos/...`, and `/agents/...`. The
+// prefix does not itself declare or create a stream processor.
 const SANDBOX_PATH_PREFIX = "/sandboxes";
 
 /** The path a `create({ name })` mints: the prefix then the caller's name —

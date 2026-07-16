@@ -126,10 +126,10 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
   const config = await resolveOsPlaywrightAuthConfig();
   // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
   // token})`) and then poll `project.processor.onStateChange` until the
-  // project reached phase "ready". The itx create resolves only
-  // after the bootstrap saga committed project/created (repo seeded, project
-  // worker probed, onboarding agent born), so the readiness wait is gone and
-  // auth is an explicit admin-secret credential on connect.
+  // project reached phase "ready". The itx create resolves only after the
+  // bootstrap saga commits project/ready (sibling processors born, config repo
+  // seeded, project worker probed), so the readiness wait is gone and auth is
+  // an explicit admin-secret credential on connect.
   using session = connectItx({
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl: input.baseUrl,

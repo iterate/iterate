@@ -20,6 +20,7 @@ test(
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-tools" });
     using agent = handle.agent("/agents/e2e-tools");
+    await agent.create({});
 
     const marker = crypto.randomUUID().slice(0, 8);
     // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
@@ -66,29 +67,15 @@ test(
 );
 
 test(
-  "agent answers after llm model is selected",
+  "agent answers after explicit creation selects its model",
   // See above — heavy-test ceiling.
   { timeout: 240_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-model" });
     using agent = handle.agent("/agents/e2e-model");
-
-    // Force an explicitly-selected model for the assertion — the model the
-    // DEPLOYMENT defaults to (itx.agents.defaults), not a hardcoded one.
-    // What this test proves is the explicit-selection MECHANISM
-    // (llm-provider-selected wins over defaults), not any particular vendor;
-    // asking the deployment keeps it green even if account model
-    // availability shifts again (the 2026-07-10 lesson: a hardcoded
-    // an explicit OpenAI model pin was unrunnable on the preview account until
-    // unified billing was enabled, and watchdogged the whole lane).
-    using defaultsItx = handle.itx();
-    const policy = await defaultsItx.agents.defaults.forPath("/agents/e2e-model");
-    await agent.stream.append({
-      type: "events.iterate.com/agent/llm-provider-selected",
-      // The contract requires a model; a model-less append is schema-invalid
-      // and wedges the agent processor's ingest.
-      payload: { model: policy.model },
-    });
+    await agent.create({});
+    const state = (await agent.processor.snapshot()).state;
+    expect(state.birthCertificate?.config.llm.model).toBeTruthy();
 
     const response = await agent.ask({
       message: "Reply with a short greeting.",

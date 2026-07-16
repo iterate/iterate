@@ -72,7 +72,7 @@ test.skipIf(shouldSkipPetshopE2e())(
       // Connection secret: tokens + client credential in material, refreshed by
       // the shared strategy. Configuring `refresh` is the trust event.
       using connectionSecret = project.secrets.get(connectionPath);
-      await connectionSecret.update({
+      await connectionSecret.create({
         egress: { urls: [petshop] },
         material: {
           accessToken: tokens.access_token,
@@ -143,7 +143,7 @@ test.skipIf(shouldSkipPetshopE2e())(
     });
 
     using connectionSecret = project.secrets.get(connectionPath);
-    await connectionSecret.update({
+    await connectionSecret.create({
       egress: { urls: [petshop] },
       material: { accessToken: tokens.access_token, refreshToken: tokens.refresh_token },
       refresh: {

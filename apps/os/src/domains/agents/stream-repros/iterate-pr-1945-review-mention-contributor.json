@@ -2,15 +2,16 @@
   "projectId": "prj_d08f4599397a4e37b6467ce1e2b07bae",
   "agentPath": "/agents/repos/g~e8fa7f072e4aa206b600dd33a5eed6c49199f677f3826282a56515a8bef2aeb8/pull-requests/1945",
   "route": {
-    "type": "events.iterate.com/github-agent/route-configured",
+    "type": "events.iterate.com/github-agent/created",
     "payload": {
-      "connection": "install-115079265",
-      "installationId": "115079265",
-      "number": 1945,
-      "owner": "iterate",
-      "repo": "iterate",
-      "repoPath": "/repos/iterate",
-      "streamPath": "/agents/repos/g~e8fa7f072e4aa206b600dd33a5eed6c49199f677f3826282a56515a8bef2aeb8/pull-requests/1945"
+      "config": {
+        "connection": "install-115079265",
+        "installationId": "115079265",
+        "number": 1945,
+        "owner": "iterate",
+        "repo": "iterate",
+        "repoPath": "/repos/iterate"
+      }
     },
     "source": {
       "processor": {
@@ -26,7 +27,7 @@
         }
       }
     },
-    "idempotencyKey": "repo/github-agent-route:115079265:install-115079265:iterate/iterate:1945",
+    "idempotencyKey": "github-agent/created:prj_d08f4599397a4e37b6467ce1e2b07bae:/agents/repos/g~e8fa7f072e4aa206b600dd33a5eed6c49199f677f3826282a56515a8bef2aeb8/pull-requests/1945",
     "offset": 4,
     "createdAt": "2026-07-13T23:26:21.174Z",
     "path": "/agents/repos/g~e8fa7f072e4aa206b600dd33a5eed6c49199f677f3826282a56515a8bef2aeb8/pull-requests/1945"
