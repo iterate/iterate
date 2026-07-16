@@ -20,7 +20,6 @@ import {
 } from "./projector.ts";
 export { BrowserFeedContract } from "./contract.ts";
 export { BROWSER_FEED_SCHEMA_VERSION } from "./projector.ts";
-export type { BrowserFeedState };
 
 /** The table this processor owns — the ONLY rendered-feed table in the mirror. */
 export const BROWSER_FEED_TABLE = "feed_items";

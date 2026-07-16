@@ -25,17 +25,6 @@ export async function readCatchUpPage<T>(
   }
 }
 
-export type DurableCatchUpReadInput = {
-  afterOffset: number;
-  beforeOffset: number;
-  limit: number;
-};
-
-export type BrowserCatchUpHead = {
-  createdAt?: string;
-  maxOffset: number;
-};
-
 /**
  * Repeatedly catch a browser mirror up to a captured head until the remaining
  * atomic live replay fits the server's admitted gap. The head is re-read after
@@ -54,7 +43,7 @@ export async function catchUpToLiveReplayBoundary(args: {
     throughOffset: number;
     pageLimit: number;
   }) => Promise<{ pageLimit: number; replayAfterOffset: number } | undefined>;
-  readHead: () => Promise<BrowserCatchUpHead>;
+  readHead: () => Promise<{ createdAt?: string; maxOffset: number }>;
   shouldContinue?: () => boolean;
 }): Promise<{ pageLimit: number; replayAfterOffset: number } | undefined> {
   const shouldContinue = args.shouldContinue ?? (() => true);
@@ -100,7 +89,7 @@ export async function catchUpDurableHistory<T extends { offset: number }>(args: 
   afterOffset: number;
   throughOffset: number;
   pageLimit: number;
-  read: (input: DurableCatchUpReadInput) => Promise<T[]>;
+  read: (input: { afterOffset: number; beforeOffset: number; limit: number }) => Promise<T[]>;
   ingest: (input: {
     events: readonly T[];
     scannedAfterOffset: number;

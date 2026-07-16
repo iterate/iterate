@@ -6,8 +6,7 @@ import {
 
 export const SCRIPT_EXECUTION_REQUESTED_EVENT_TYPE =
   "events.iterate.com/capability-host/script-run-requested";
-export const SCRIPT_EXECUTION_STARTED_EVENT_TYPE =
-  "events.iterate.com/capability-host/script-run-started";
+const SCRIPT_EXECUTION_STARTED_EVENT_TYPE = "events.iterate.com/capability-host/script-run-started";
 export const SCRIPT_EXECUTION_COMPLETED_EVENT_TYPE =
   "events.iterate.com/capability-host/script-run-settled";
 

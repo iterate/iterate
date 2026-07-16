@@ -25,7 +25,7 @@ export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.
  * The streamed-chunk event type for pure replay callers that already hold a
  * live batch. Browser mirrors never persist or replay these ephemeral rows.
  */
-export const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
+const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
 
 export type LlmRequestReplayMessage = {
   /** Stable identity: a message IS its position in the replayed request (the
