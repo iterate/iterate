@@ -41,7 +41,10 @@ const PROOF_TYPE = "events.iterate.test/handle-pipelining-proof";
  * static surface (that is the point of the test), so the scripts type it
  * explicitly — `proofAppend` resolves via the prototype-chain fallback on
  * the agent handle, its capabilityHost, and the capabilityHosts.get() hop. */
-type ProofAppend = (event: { type: string; payload: { marker: string } }) => Promise<StreamEvent[]>;
+type ProofAppend = (
+  options: { return: "events" },
+  event: { type: string; payload: { marker: string } },
+) => Promise<StreamEvent[]>;
 
 test(
   "itx.agents.get(...) pipelines: .message(), .<dynamic capability>(), and .capabilityHost.<dynamic capability>()",
@@ -95,30 +98,37 @@ test(
           //    is an unknown member, resolved by the prototype-chain fallback
           //    and dispatched through the agent scope's capability host —
           //    all one un-awaited chain.
-          const [appended] = await itx.agents.get(vars.agentPath).proofAppend({
-            type: vars.proofType,
-            payload: { marker: vars.marker },
-          });
+          const [appended] = await itx.agents.get(vars.agentPath).proofAppend(
+            { return: "events" },
+            {
+              type: vars.proofType,
+              payload: { marker: vars.marker },
+            },
+          );
 
           // 3. The same capability through the explicit capabilityHost door —
           //    equivalent spelling, also pipelined (capabilityHost is a
           //    property hop, proofAppend the dynamic name).
-          const [appendedViaHost] = await itx.agents
-            .get(vars.agentPath)
-            .capabilityHost.proofAppend({
+          const [appendedViaHost] = await itx.agents.get(vars.agentPath).capabilityHost.proofAppend(
+            { return: "events" },
+            {
               type: vars.proofType,
               payload: { marker: vars.marker + "-via-host" },
-            });
+            },
+          );
 
           // 4. Another method-returned surface entirely: capabilityHosts.get()
           //    used to hand back a Proxy too — a declared CLASS method must
           //    pipeline (__describe), and so must a DYNAMIC capability name
           //    resolved by the same hop (proofAppend, mounted above).
           const hostDescription = await itx.capabilityHosts.get(vars.agentPath).__describe();
-          const [appendedViaHostsGet] = await itx.capabilityHosts.get(vars.agentPath).proofAppend({
-            type: vars.proofType,
-            payload: { marker: vars.marker + "-via-hosts-get" },
-          });
+          const [appendedViaHostsGet] = await itx.capabilityHosts.get(vars.agentPath).proofAppend(
+            { return: "events" },
+            {
+              type: vars.proofType,
+              payload: { marker: vars.marker + "-via-hosts-get" },
+            },
+          );
 
           return {
             messageActor: sent.payload?.actor,
