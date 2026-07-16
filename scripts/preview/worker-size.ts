@@ -10,6 +10,7 @@
  *     .depot/workflows/deploy-*.yml), which preview deploys read back as the
  *     "vs main" baseline for the size column.
  */
+import { primaryWorkerDeployOutput } from "../lib/deploy-output.ts";
 
 /** Wrangler-reported bundle size of one deployed worker, in KiB as printed. */
 export interface WorkerSizeInfo {
@@ -22,12 +23,12 @@ export interface WorkerSizeInfo {
 const totalUploadPattern = /Total Upload:\s*([\d,.]+)\s*KiB\s*\/\s*gzip:\s*([\d,.]+)\s*KiB/g;
 
 /**
- * Extract the deployed worker's size from wrangler deploy output. The LAST
- * "Total Upload" line wins: a single app deploy can upload several workers
- * (os deploys its builder sidecar first, the real worker last), one line each.
+ * Extract the primary Worker's size from deploy output. The deploy must
+ * identify that upload explicitly; sidecar ordering is not an identity.
  */
 export function parseWorkerSizeFromDeployOutput(output: string): WorkerSizeInfo | null {
-  const match = [...output.matchAll(totalUploadPattern)].at(-1);
+  const primaryOutput = primaryWorkerDeployOutput(output);
+  const match = primaryOutput ? [...primaryOutput.matchAll(totalUploadPattern)].at(0) : undefined;
   if (!match) {
     return null;
   }

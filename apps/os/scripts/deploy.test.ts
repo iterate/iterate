@@ -9,7 +9,11 @@ import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
 } from "../../../scripts/lib/deploy-helpers.ts";
-import { assertPreviewPetshopIntegrationConfigured, isExactOsProjectMiss } from "./deploy.ts";
+import {
+  assertPreviewPetshopIntegrationConfigured,
+  isExactOsProjectMiss,
+  scriptExecutorDeploymentPlan,
+} from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
@@ -91,5 +95,42 @@ describe("auth Workers RPC deployment proof", () => {
     await expect(
       isExactOsProjectMiss(Response.json({ error: "not found" }, { status: 200 })),
     ).resolves.toBe(false);
+  });
+});
+
+describe("script executor deployment ordering", () => {
+  const authorities = ["CapabilityHostDurableObject", "ProjectDurableObject"];
+
+  it("deploys the full executor before a primary worker whose authority classes are live", () => {
+    expect(
+      scriptExecutorDeploymentPlan({ authorityClassNames: authorities, executorExists: true }),
+    ).toEqual({
+      afterPrimary: "none",
+      beforePrimary: "full",
+      missingAuthorityClasses: [],
+    });
+  });
+
+  it("keeps an existing executor until a parked primary restores its authority classes", () => {
+    expect(
+      scriptExecutorDeploymentPlan({
+        authorityClassNames: ["SandboxBasicDurableObject"],
+        executorExists: true,
+      }),
+    ).toEqual({
+      afterPrimary: "full",
+      beforePrimary: "none",
+      missingAuthorityClasses: authorities,
+    });
+  });
+
+  it("creates a bootstrap identity when neither the authority classes nor executor exist", () => {
+    expect(
+      scriptExecutorDeploymentPlan({ authorityClassNames: [], executorExists: false }),
+    ).toEqual({
+      afterPrimary: "full",
+      beforePrimary: "bootstrap",
+      missingAuthorityClasses: authorities,
+    });
   });
 });

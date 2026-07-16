@@ -4,6 +4,10 @@ import { describe, expect, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {
+  primaryWorkerDeployEndMarker,
+  primaryWorkerDeployStartMarker,
+} from "../lib/deploy-output.ts";
+import {
   CloudflarePreviewAppEntry,
   CloudflarePreviewSlotDisplay,
   cloudflarePreviewApps,
@@ -39,7 +43,7 @@ const {
   resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
-  parseLastDeployedWorkerVersionId,
+  parsePrimaryDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPreviewAppConfig,
@@ -454,22 +458,49 @@ describe("preview readiness URLs", () => {
     ).toEqual(["https://os.iterate-preview-2.com/api/health"]);
   });
 
-  test("takes the final worker version when one deploy uploads sidecars before the app", () => {
+  test("takes the explicitly marked worker version when sidecars deploy first", () => {
     expect(
-      parseLastDeployedWorkerVersionId(
+      parsePrimaryDeployedWorkerVersionId(
         [
           "Current Version ID: 11111111-1111-4111-8111-111111111111",
           "Uploaded typechecker",
           "Current Version ID: 22222222-2222-4222-8222-222222222222",
           "Uploaded os",
+          primaryWorkerDeployStartMarker("os-preview-3"),
           "Current Version ID: a9fcbc76-8f52-4086-9b7d-ad5db90503d0",
+          primaryWorkerDeployEndMarker("os-preview-3"),
         ].join("\n"),
       ),
     ).toBe("a9fcbc76-8f52-4086-9b7d-ad5db90503d0");
   });
 
-  test("returns null when wrangler did not report a deployed worker version", () => {
-    expect(parseLastDeployedWorkerVersionId("Uploaded os-preview-8")).toBeNull();
+  test("takes the marked primary version when an executor is finalized afterward", () => {
+    expect(
+      parsePrimaryDeployedWorkerVersionId(
+        [
+          "Current Version ID: 11111111-1111-4111-8111-111111111111",
+          primaryWorkerDeployStartMarker("os-preview-3"),
+          "Current Version ID: a9fcbc76-8f52-4086-9b7d-ad5db90503d0",
+          primaryWorkerDeployEndMarker("os-preview-3"),
+          "Current Version ID: 22222222-2222-4222-8222-222222222222",
+        ].join("\n"),
+      ),
+    ).toBe("a9fcbc76-8f52-4086-9b7d-ad5db90503d0");
+  });
+
+  test("returns null when the primary worker is not identified exactly once", () => {
+    expect(parsePrimaryDeployedWorkerVersionId("Uploaded os-preview-8")).toBeNull();
+    expect(
+      parsePrimaryDeployedWorkerVersionId(
+        [
+          primaryWorkerDeployStartMarker("os-preview-8"),
+          "Current Version ID: 11111111-1111-4111-8111-111111111111",
+          primaryWorkerDeployStartMarker("os-preview-9"),
+          "Current Version ID: 22222222-2222-4222-8222-222222222222",
+          primaryWorkerDeployEndMarker("os-preview-9"),
+        ].join("\n"),
+      ),
+    ).toBeNull();
   });
 
   test("requires the expected worker version to remain stable before declaring readiness", async () => {

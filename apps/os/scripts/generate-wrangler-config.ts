@@ -131,7 +131,7 @@ function typecheckerWorkerName(osWorkerName: string) {
 }
 
 /** The script-executor sidecar's worker name, derived the same way. */
-function scriptExecutorWorkerName(osWorkerName: string) {
+export function scriptExecutorWorkerName(osWorkerName: string) {
   return `${osWorkerName}-script-executor`;
 }
 
@@ -684,6 +684,32 @@ export const scriptExecutorConfig = {
   ),
 };
 
+/**
+ * Same deployed service identity as the real script executor, but without the
+ * cross-script Durable Object bindings that Cloudflare validates at upload
+ * time. A fresh or parked OS worker cannot satisfy those bindings until its
+ * primary version restores the classes; deploy.ts uses this entrypoint only
+ * to break that first-deploy cycle, then replaces it before smoke tests.
+ */
+export const scriptExecutorBootstrapConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: scriptExecutorConfig.name,
+  main: "./src/script-executor-bootstrap.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: scriptExecutorWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        observability: OBSERVABILITY,
+      },
+    ]),
+  ),
+};
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
   writeGeneratedWranglerConfig({
@@ -700,6 +726,11 @@ export const writeWranglerConfig = () => {
     configUrl: new URL("../wrangler.script-executor.jsonc", import.meta.url),
     appLabel: "apps/os (script-executor sidecar)",
     config: scriptExecutorConfig,
+  });
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.script-executor-bootstrap.jsonc", import.meta.url),
+    appLabel: "apps/os (script-executor bootstrap)",
+    config: scriptExecutorBootstrapConfig,
   });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),

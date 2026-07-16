@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  primaryWorkerDeployEndMarker,
+  primaryWorkerDeployStartMarker,
+} from "../lib/deploy-output.ts";
+import {
   formatKib,
   formatWorkerSizeStatusDescription,
   parseWorkerSizeFromDeployOutput,
@@ -13,21 +17,39 @@ describe("parseWorkerSizeFromDeployOutput", () => {
     expect(
       parseWorkerSizeFromDeployOutput(
         [
+          primaryWorkerDeployStartMarker("os-preview-2"),
           "Uploaded os-preview-2 (12.34 sec)",
           "Total Upload: 91234.56 KiB / gzip: 3456.78 KiB",
           "Deployed os-preview-2 triggers (0.5 sec)",
+          primaryWorkerDeployEndMarker("os-preview-2"),
         ].join("\n"),
       ),
     ).toEqual({ totalKib: 91234.56, gzipKib: 3456.78 });
   });
 
-  it("takes the LAST line when one deploy uploads several workers (os builder sidecar first)", () => {
+  it("uses the explicit primary marker when sidecars deploy first", () => {
     expect(
       parseWorkerSizeFromDeployOutput(
         [
           "Total Upload: 100.00 KiB / gzip: 30.00 KiB", // builder sidecar
           "some other output",
+          primaryWorkerDeployStartMarker("os-preview-2"),
           "Total Upload: 91234.56 KiB / gzip: 3456.78 KiB", // the real worker
+          primaryWorkerDeployEndMarker("os-preview-2"),
+        ].join("\n"),
+      ),
+    ).toEqual({ totalKib: 91234.56, gzipKib: 3456.78 });
+  });
+
+  it("uses the marked primary upload when a sidecar is finalized afterward", () => {
+    expect(
+      parseWorkerSizeFromDeployOutput(
+        [
+          "Total Upload: 100.00 KiB / gzip: 30.00 KiB",
+          primaryWorkerDeployStartMarker("os-preview-3"),
+          "Total Upload: 91234.56 KiB / gzip: 3456.78 KiB",
+          primaryWorkerDeployEndMarker("os-preview-3"),
+          "Total Upload: 7.52 KiB / gzip: 2.42 KiB",
         ].join("\n"),
       ),
     ).toEqual({ totalKib: 91234.56, gzipKib: 3456.78 });
@@ -35,12 +57,47 @@ describe("parseWorkerSizeFromDeployOutput", () => {
 
   it("parses thousands separators", () => {
     expect(
-      parseWorkerSizeFromDeployOutput("Total Upload: 1,234.56 KiB / gzip: 456.78 KiB"),
+      parseWorkerSizeFromDeployOutput(
+        [
+          primaryWorkerDeployStartMarker("os-preview-2"),
+          "Total Upload: 1,234.56 KiB / gzip: 456.78 KiB",
+          primaryWorkerDeployEndMarker("os-preview-2"),
+        ].join("\n"),
+      ),
     ).toEqual({ totalKib: 1234.56, gzipKib: 456.78 });
   });
 
-  it("returns null when no size line is present", () => {
+  it("returns null when no explicit primary upload is present", () => {
+    expect(
+      parseWorkerSizeFromDeployOutput("Total Upload: 1,234.56 KiB / gzip: 456.78 KiB"),
+    ).toBeNull();
     expect(parseWorkerSizeFromDeployOutput("wrangler deploy failed before upload")).toBeNull();
+  });
+
+  it("returns null when deploy output contains more than one primary marker", () => {
+    expect(
+      parseWorkerSizeFromDeployOutput(
+        [
+          primaryWorkerDeployStartMarker("os-preview-2"),
+          "Total Upload: 1.00 KiB / gzip: 1.00 KiB",
+          primaryWorkerDeployStartMarker("os-preview-3"),
+          "Total Upload: 2.00 KiB / gzip: 2.00 KiB",
+          primaryWorkerDeployEndMarker("os-preview-3"),
+        ].join("\n"),
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when the primary marker identities do not match", () => {
+    expect(
+      parseWorkerSizeFromDeployOutput(
+        [
+          primaryWorkerDeployStartMarker("os-preview-2"),
+          "Total Upload: 1.00 KiB / gzip: 1.00 KiB",
+          primaryWorkerDeployEndMarker("os-preview-3"),
+        ].join("\n"),
+      ),
+    ).toBeNull();
   });
 });
 

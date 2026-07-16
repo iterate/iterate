@@ -28,9 +28,16 @@ it does not host another copy of either class.
 | `os-<env>-script-executor` | Loads and invokes one `runScript` Dynamic Worker without cold-starting another full product isolate. | Worker Loader plus cross-script CapabilityHost and Project DO namespaces; no routes, storage, secrets, compiler, or bundler. |
 
 The product worker reaches them through `BUILDER`, `TYPECHECKER`, and
-`SCRIPT_EXECUTOR` service bindings. `deploy.ts` deploys all three first (a
-name binding to a missing script fails the product deploy); local dev runs
-them as Vite `auxiliaryWorkers` in the same workerd.
+`SCRIPT_EXECUTOR` service bindings. `deploy.ts` deploys the builder and
+typechecker first because a name binding to a missing script fails the product
+deploy. The executor has a circular deployment dependency: the product binds
+the executor service, while the executor binds product-owned Durable Object
+classes. When those classes are absent on a new or parked slot, deploy creates
+an authority-free executor bootstrap, deploys the product, and immediately
+replaces the bootstrap with the full executor before any smoke probe. An
+incomplete deployment therefore fails executor calls explicitly instead of
+running with partial authority. Local dev runs all three real sidecars as Vite
+`auxiliaryWorkers` in the same workerd.
 
 The script executor is intentionally a separate stateless loader owner per
 call. A CapabilityHost DO can own only four simultaneous fresh Dynamic Worker
@@ -63,8 +70,9 @@ Everything is declared in two places:
 - [`envs.ts`](../../../envs.ts) (repo root) — the typed map of deployed
   environments: hostnames, worker names, Cloudflare account, resource IDs.
 - `wrangler.jsonc` plus `wrangler.builder.jsonc`,
-  `wrangler.typechecker.jsonc`, and `wrangler.script-executor.jsonc` — generated
-  from envs.ts (all gitignored; vite.config.ts regenerates them before every
+  `wrangler.typechecker.jsonc`, `wrangler.script-executor.jsonc`, and the
+  deployment-only `wrangler.script-executor-bootstrap.jsonc` — generated from
+  envs.ts (all gitignored; vite.config.ts regenerates them before every
   dev/build, `pnpm gen:wrangler` by hand). Top level is local dev; each env gets
   a flattened block selected at build time via `CLOUDFLARE_ENV`.
 
@@ -78,7 +86,7 @@ code via `wrangler deploy --secrets-file`.
 | Command                           | What                                                                                                |
 | --------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
-| `pnpm run deploy --env preview_3` | ensure resources → deploy three sidecars → build/deploy product+secrets → smoke probe               |
+| `pnpm run deploy --env preview_3` | ensure resources → deploy prerequisites → build/deploy product+secrets → finalize executor → smoke  |
 | `pnpm ensure-resources --env X`   | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                |
 | `pnpm erase-data --env X`         | wipe auth D1 rows + project-directory KV; DOs become unreachable orphans                            |
 

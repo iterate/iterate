@@ -212,8 +212,11 @@ carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
 binding, Cloudflare Artifacts for repos, and routes for the app base URL,
 the MCP base URL, and each project hostname base. Three generated sidecar
 configs ride along: `wrangler.builder.jsonc`, `wrangler.typechecker.jsonc`, and
-`wrangler.script-executor.jsonc`; deploy.ts deploys them before the product
-worker. Deploys take the env explicitly: `pnpm run deploy --env preview_2` /
+`wrangler.script-executor.jsonc`. Builder and typechecker deploy before the
+product worker. On a new or parked environment, deploy.ts first creates an
+authority-free executor identity, restores the product worker's Durable Object
+classes, then replaces that identity with the full executor before smoke
+tests. Deploys take the env explicitly: `pnpm run deploy --env preview_2` /
 `--env prd`.
 
 ## Smoke Tests

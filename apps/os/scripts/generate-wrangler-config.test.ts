@@ -7,6 +7,7 @@ import {
   localAuthServiceBinding,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
+  scriptExecutorBootstrapConfig,
   scriptExecutorConfig,
 } from "./generate-wrangler-config.ts";
 
@@ -29,6 +30,7 @@ it("names the top-level configs by service so cf:service script tags stay env-le
   expect(config.name).toBe("os");
   expect(builderConfig.name).toBe("os-builder");
   expect(scriptExecutorConfig.name).toBe("os-script-executor");
+  expect(scriptExecutorBootstrapConfig.name).toBe(scriptExecutorConfig.name);
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {
@@ -43,6 +45,21 @@ it("gives every deployed env its own worker name derived from the service name",
   for (const [envName, envBlock] of Object.entries(scriptExecutorConfig.env)) {
     expect(envBlock.name, envName).toMatch(/^os-.*-script-executor$/);
     expect(envBlock.name, envName).not.toBe(scriptExecutorConfig.name);
+  }
+  for (const [envName, envBlock] of Object.entries(scriptExecutorBootstrapConfig.env)) {
+    expect(envBlock.name, envName).toBe(
+      scriptExecutorConfig.env[envName as keyof typeof scriptExecutorConfig.env].name,
+    );
+  }
+});
+
+it("gives the bootstrap executor the same identity without premature authority bindings", () => {
+  expect(scriptExecutorBootstrapConfig).not.toHaveProperty("durable_objects");
+  expect(scriptExecutorBootstrapConfig).not.toHaveProperty("worker_loaders");
+  expect(scriptExecutorBootstrapConfig.main).toBe("./src/script-executor-bootstrap.ts");
+  for (const envBlock of Object.values(scriptExecutorBootstrapConfig.env)) {
+    expect(envBlock).not.toHaveProperty("durable_objects");
+    expect(envBlock).not.toHaveProperty("worker_loaders");
   }
 });
 

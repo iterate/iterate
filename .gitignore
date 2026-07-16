@@ -21,6 +21,7 @@ apps/os/wrangler.jsonc
 apps/os/wrangler.builder.jsonc
 apps/os/wrangler.typechecker.jsonc
 apps/os/wrangler.script-executor.jsonc
+apps/os/wrangler.script-executor-bootstrap.jsonc
 apps/auth/wrangler.jsonc
 apps/semaphore/wrangler.jsonc
 apps/streams-example-app/wrangler.jsonc

@@ -13,6 +13,7 @@ import {
   type DeployableEnv,
   type EnvContext,
 } from "./env-context.ts";
+import { primaryWorkerDeployEndMarker, primaryWorkerDeployStartMarker } from "./deploy-output.ts";
 
 /** One smoke probe against the deployed app. */
 export interface SmokeProbe {
@@ -27,12 +28,14 @@ export interface SmokeProbe {
  *
  *   resolve --env → assert resources provisioned → collect secrets →
  *   app-specific prepare (migrations, seeds, config preflight) →
- *   build → deploy code+secrets in one version → smoke-probe → ✅
+ *   build → deploy code+secrets in one version → app finalization → smoke-probe → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
- * `exports` map and reconciled by the server on every deploy — no migration
- * tags, no bootstrap ordering. A worker fresh, parked by erase-data, or left
- * in any state by another branch deploys the same way.
+ * `exports` map and reconciled by the server on every primary deploy — no
+ * migration tags or separate class bootstrap. A worker fresh, parked by
+ * erase-data, or left in any state by another branch uses the same primary
+ * upload. Cross-script dependants can finalize afterward through the explicit
+ * hook below.
  *
  * This is a parameterized imperative function, not a framework: every input
  * is a plain value or a hook called exactly once at a fixed point you can
@@ -81,6 +84,17 @@ export async function deployApp<E extends DeployableEnv>(input: {
     secretValues: Record<string, string>,
     credentials: Record<string, string>,
   ) => Promise<void> | void;
+  /**
+   * Runs after the primary Worker version is live but before any smoke probe.
+   * This is reserved for resources that cannot be finalized until the new
+   * Worker exists, such as a sidecar with cross-script Durable Object
+   * bindings to classes introduced by that version.
+   */
+  afterCodeDeploy?: (
+    ctx: EnvContext<E>,
+    secretValues: Record<string, string>,
+    credentials: Record<string, string>,
+  ) => Promise<void> | void;
   /** Runs after a healthy deploy (e.g. auth's OAuth client seeding). */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
   smokes: (env: E) => SmokeProbe[];
@@ -119,6 +133,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
     builtConfig = findBuiltWranglerConfig(input.appRoot);
   }
 
+  console.log(primaryWorkerDeployStartMarker(workerName));
   await deployWithSecrets({
     cwd: input.appRoot,
     builtConfig,
@@ -126,6 +141,9 @@ export async function deployApp<E extends DeployableEnv>(input: {
     credentials,
     extraDeployArgs,
   });
+  console.log(primaryWorkerDeployEndMarker(workerName));
+
+  await input.afterCodeDeploy?.(ctx, secretValues, credentials);
 
   for (const probe of input.smokes(ctx.env)) {
     await smoke(probe.url, probe.ok, probe.label);

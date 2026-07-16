@@ -15,6 +15,7 @@ import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annota
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
+import { primaryWorkerDeployOutput } from "../lib/deploy-output.ts";
 import {
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
@@ -3397,7 +3398,7 @@ async function deployPreviewApp(input: {
   }
 
   const deployedWorkerVersion = input.app.previewReadyWorkerVersion
-    ? parseLastDeployedWorkerVersionId(`${deployResult.stdout}\n${deployResult.stderr}`)
+    ? parsePrimaryDeployedWorkerVersionId(`${deployResult.stdout}\n${deployResult.stderr}`)
     : null;
   if (input.app.previewReadyWorkerVersion && !deployedWorkerVersion) {
     return CloudflarePreviewAppEntry.parse({
@@ -4823,12 +4824,15 @@ const deployedWorkerVersionPattern =
   /Current Version ID:\s*([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})/gi;
 
 /**
- * Wrangler prints one version id per uploaded Worker. The OS deploy uploads
- * its sidecars first and the main Worker last, so the final id is the one its
- * public readiness route must report.
+ * Wrangler prints one version id per uploaded Worker. The deploy identifies
+ * the primary upload explicitly; sidecar ordering is not an identity.
  */
-function parseLastDeployedWorkerVersionId(output: string): string | null {
-  return [...stripAnsi(output).matchAll(deployedWorkerVersionPattern)].at(-1)?.[1] ?? null;
+function parsePrimaryDeployedWorkerVersionId(output: string): string | null {
+  const cleanOutput = stripAnsi(output);
+  const primaryOutput = primaryWorkerDeployOutput(cleanOutput);
+  return primaryOutput
+    ? ([...primaryOutput.matchAll(deployedWorkerVersionPattern)].at(0)?.[1] ?? null)
+    : null;
 }
 
 async function waitForHttpReadiness(params: {
@@ -5022,7 +5026,7 @@ export const previewInternals = {
   selectExpiredLeasesForGc,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
-  parseLastDeployedWorkerVersionId,
+  parsePrimaryDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPlaywrightRetryTelemetry,

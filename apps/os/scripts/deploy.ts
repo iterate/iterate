@@ -5,24 +5,21 @@
  *   pnpm run deploy --env prd
  *
  * Runs the shared pipeline (scripts/lib/deploy-app.ts). Steps, all fail-fast:
- *   1. Verify the env's Doppler config carries every required secret, bake
- *      the static auth JWKS (issuer keys + forge public key), and validate
- *      the exact runtime config with the worker's own zod schema — a config
- *      that would throw on every request fails HERE, not after shipping.
- *   2. `vite build` with CLOUDFLARE_ENV=<env>, so the build output's
- *      wrangler.json is flattened for that env (name, routes, bindings).
- *      vite.config.ts regenerates wrangler.jsonc from envs.ts before the
- *      cloudflare plugin reads it — the build always sees a fresh config.
- *   3. `wrangler deploy --config <built config> --secrets-file <doppler>` —
- *      secrets land atomically in the same version as the code, and the
- *      config's declarative Durable Object `exports` are reconciled
- *      server-side in the same upload (a brand-new env, a parked slot and a
- *      steady-state redeploy are all the same single command).
- *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
- *      actually serving.
- *   5. Before touching any deployed resource, assert that the removed auth
- *      service token is absent from both Doppler and the live Worker. After
- *      deploy, force an uncached project-directory lookup through AUTH.
+ *   1. Before touching a deployed resource, assert that the retired auth
+ *      service token is absent. Then verify required secrets, bake the static
+ *      auth JWKS, validate the exact runtime config, and ensure upload-time
+ *      resource prerequisites.
+ *   2. Deploy the builder and typechecker prerequisites. Deploy the full
+ *      script executor when its OS-owned authority classes already exist;
+ *      otherwise preserve or create its authority-free service identity.
+ *   3. `vite build` with CLOUDFLARE_ENV=<env>; the build output's
+ *      wrangler.json is flattened for that env from freshly generated config.
+ *   4. `wrangler deploy --config <built config> --secrets-file <doppler>` —
+ *      secrets land atomically with the product code and its declarative
+ *      Durable Object exports.
+ *   5. Finalize the full script executor now that those exports exist, then
+ *      smoke-probe the deployed base URL and force an uncached project-
+ *      directory lookup through AUTH; exit nonzero unless both are healthy.
  *
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostnames (the old zombie-route/522 class).
@@ -38,7 +35,7 @@ import {
   run,
   smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
-import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
+import { ensureContainerClasses, getWorkerDoNamespaces } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
 import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
@@ -49,6 +46,7 @@ import {
   envShapedVars,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
+  scriptExecutorWorkerName,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
@@ -56,6 +54,32 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 
 const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
+const SCRIPT_EXECUTOR_AUTHORITY_CLASSES = [
+  "CapabilityHostDurableObject",
+  "ProjectDurableObject",
+] as const;
+
+export function scriptExecutorDeploymentPlan(input: {
+  authorityClassNames: Iterable<string>;
+  executorExists: boolean;
+}): {
+  afterPrimary: "full" | "none";
+  beforePrimary: "bootstrap" | "full" | "none";
+  missingAuthorityClasses: string[];
+} {
+  const authorityClassNames = new Set(input.authorityClassNames);
+  const missingAuthorityClasses = SCRIPT_EXECUTOR_AUTHORITY_CLASSES.filter(
+    (className) => !authorityClassNames.has(className),
+  );
+  if (missingAuthorityClasses.length === 0) {
+    return { afterPrimary: "none", beforePrimary: "full", missingAuthorityClasses };
+  }
+  return {
+    afterPrimary: "full",
+    beforePrimary: input.executorExists ? "none" : "bootstrap",
+    missingAuthorityClasses,
+  };
+}
 
 /** Preview OS always runs its first-party integration proof against the
  * sibling dummy Petshop. Keep the formerly optional deployment setting from
@@ -120,8 +144,10 @@ export default async function deploy(
     env?: string;
   } = {},
 ) {
+  const appRoot = fileURLToPath(new URL("..", import.meta.url));
+  let finalizeScriptExecutorAfterPrimary = false;
   await deployApp({
-    appRoot: fileURLToPath(new URL("..", import.meta.url)),
+    appRoot,
     appLabel: "apps/os",
     envs,
     dopplerProject: "os",
@@ -203,28 +229,65 @@ export default async function deploy(
         compatibilityDate: COMPATIBILITY_DATE,
       });
 
-      // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER/
-      // SCRIPT_EXECUTOR
-      // service bindings are by name, and a binding to a not-yet-existing
-      // script fails the deploy. Sidecars have no secrets and no vite build —
-      // wrangler bundles their entries directly (the toolchain wasm rides as
-      // a wasm module). Builder skew window: between this deploy and the os
-      // deploy (or if the os deploy fails), a bundler/schema-version bump
-      // means the os worker hashes the OLD key prefix while the builder
-      // writes the new one — the cache runs cold (correct output via
-      // by-value returns, every request rebuilds) until the os deploy lands.
-      // If "cache never hits" appears mid-rollout, finish the deploy.
+      // Builder and typechecker deploy first because the OS service bindings
+      // require named scripts. The executor has a genuine dependency cycle:
+      // OS binds its service, while the executor binds OS-owned DO classes.
+      // If those classes are already live, deploy the full executor now. A
+      // fresh/parked OS has no such exports; retain an existing executor or
+      // create the authority-free bootstrap identity, restore OS, then deploy
+      // the full executor in afterCodeDeploy before any smoke probe.
       writeWranglerConfig();
-      for (const sidecarConfig of [
-        "wrangler.builder.jsonc",
-        "wrangler.typechecker.jsonc",
-        "wrangler.script-executor.jsonc",
-      ]) {
+      for (const sidecarConfig of ["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"]) {
         run("pnpm", ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name], {
-          cwd: fileURLToPath(new URL("..", import.meta.url)),
+          cwd: appRoot,
           env: credentials,
         });
       }
+
+      const [authorityNamespaces, scripts] = await Promise.all([
+        getWorkerDoNamespaces(ctx, ctx.env.osWorkerName),
+        ctx.cf<{ id: string }[]>("/workers/scripts"),
+      ]);
+      const executorWorkerName = scriptExecutorWorkerName(ctx.env.osWorkerName);
+      const executorPlan = scriptExecutorDeploymentPlan({
+        authorityClassNames: authorityNamespaces.map((namespace) => namespace.className),
+        executorExists: scripts.some((script) => script.id === executorWorkerName),
+      });
+      console.log(
+        `script executor deployment: before primary=${executorPlan.beforePrimary}, ` +
+          `after primary=${executorPlan.afterPrimary}` +
+          (executorPlan.missingAuthorityClasses.length === 0
+            ? ""
+            : ` (primary worker is missing ${executorPlan.missingAuthorityClasses.join(", ")})`),
+      );
+      if (executorPlan.beforePrimary !== "none") {
+        const config =
+          executorPlan.beforePrimary === "full"
+            ? "wrangler.script-executor.jsonc"
+            : "wrangler.script-executor-bootstrap.jsonc";
+        run("pnpm", ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name], {
+          cwd: appRoot,
+          env: credentials,
+        });
+      }
+      finalizeScriptExecutorAfterPrimary = executorPlan.afterPrimary === "full";
+    },
+    afterCodeDeploy: (ctx, _secretValues, credentials) => {
+      if (!finalizeScriptExecutorAfterPrimary) return;
+      run(
+        "pnpm",
+        [
+          "exec",
+          "wrangler",
+          "deploy",
+          "--config",
+          "wrangler.script-executor.jsonc",
+          "--env",
+          ctx.name,
+        ],
+        { cwd: appRoot, env: credentials },
+      );
+      finalizeScriptExecutorAfterPrimary = false;
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {
