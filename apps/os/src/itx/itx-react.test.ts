@@ -4,16 +4,22 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 // Control the mock capnweb session from tests: `hangAuthProbe` makes the
 // liveness/confirm probe (every authenticate() AFTER the first per socket) hang,
 // modelling a half-open transport whose root was already established.
+// `authError` makes the FIRST authenticate reject (a terminal handshake
+// failure); `lastRoot` is the resolved session the latest dial produced.
 const control = vi.hoisted(() => ({
   hangAuthProbe: false,
   authProbeError: undefined as Error | undefined,
+  authError: undefined as Error | undefined,
+  lastRoot: undefined as unknown,
 }));
 
 // Mock the capnweb session so dialing resolves to a disposable sentinel keyed
 // by the socket URL and the authenticate()/projects.get(slug) pipeline — we
 // assert on identity/url, never a real RPC session. The FIRST authenticate()
-// per socket is the pipelined root (always returns synchronously); later calls
-// are the awaited liveness probe, which `hangAuthProbe` can wedge.
+// per socket models the RpcPromise: a THENABLE whose resolution is the real
+// session handle — the code must await it and publish the RESOLVED identity
+// (resolving a native promise with the thenable itself would assimilate).
+// Later calls are the awaited liveness probe, which `hangAuthProbe` can wedge.
 vi.mock("capnweb", () => ({
   newWebSocketRpcSession: (ws: { url: string }) => {
     let calls = 0;
@@ -26,9 +32,14 @@ vi.mock("capnweb", () => ({
           url: suffix ? `${ws.url}/${suffix}` : ws.url,
           [Symbol.dispose]: vi.fn(),
         });
-        return Object.assign(handleFor(""), {
+        if (calls > 1) return handleFor("");
+        if (control.authError) return Promise.reject(control.authError);
+        const root = Object.assign(handleFor(""), {
           projects: { get: (slug: string) => handleFor(slug) },
         });
+        control.lastRoot = root;
+        // The RpcPromise stand-in: thenable, resolves to the root handle.
+        return { then: (onResolve: (value: unknown) => void) => onResolve(root) };
       },
     };
   },
@@ -57,6 +68,8 @@ class FakeWebSocket {
 beforeEach(() => {
   control.hangAuthProbe = false;
   control.authProbeError = undefined;
+  control.authError = undefined;
+  control.lastRoot = undefined;
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.resetModules(); // fresh module-level session state per test
@@ -199,6 +212,99 @@ describe("itx session socket", () => {
     }
   });
 
+  test("isItxTransportError classifies exactly the three transport signatures", async () => {
+    const { isItxTransportError } = await import("./itx-react.tsx");
+    expect(isItxTransportError(new Error("itx WebSocket closed before connecting"))).toBe(true);
+    expect(isItxTransportError(new Error("Peer closed WebSocket: 1006 "))).toBe(true);
+    expect(isItxTransportError(new Error("WebSocket connection failed."))).toBe(true);
+    // An application error that merely MENTIONS WebSocket is not a transport close.
+    expect(isItxTransportError(new Error("WebSocket subscriptions require admin"))).toBe(false);
+    expect(isItxTransportError(new Error("permission denied"))).toBe(false);
+  });
+
+  test("FIRST-LOAD SUSPENSE survives a closed-before-open dial — never the error boundary", async () => {
+    // A suspended (never-committed) component replays against the thenable it
+    // first used, so a rejected per-dial promise would surface in the error
+    // boundary even though a paced re-dial is underway. use() must therefore
+    // suspend on the STABLE first-connect promise. Also locks session identity:
+    // the hook and the imperative path must hand out the SAME resolved stub.
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const [{ useIterateSession, connectIterateSession }, React, { createRoot }] = await Promise.all(
+      [import("./itx-react.tsx"), import("react"), import("react-dom/client")],
+    );
+    const { act, createElement, Component, Suspense } = React;
+
+    let hookSession: unknown;
+    function Probe() {
+      hookSession = useIterateSession();
+      return createElement("output", { "data-state": "ready" });
+    }
+    class Boundary extends Component<{ children?: unknown }, { failed: boolean }> {
+      state = { failed: false };
+      static getDerivedStateFromError() {
+        return { failed: true };
+      }
+      render() {
+        return this.state.failed
+          ? createElement("output", { "data-state": "error" })
+          : (this.props.children as ReturnType<typeof createElement>);
+      }
+    }
+
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    const state = () => container.querySelector("output")?.getAttribute("data-state");
+    await act(async () => {
+      root.render(
+        createElement(
+          Boundary,
+          null,
+          createElement(
+            Suspense,
+            { fallback: createElement("output", { "data-state": "loading" }) },
+            createElement(Probe),
+          ),
+        ),
+      );
+    });
+    expect(state()).toBe("loading"); // suspended on the first dial
+
+    // The dial dies before opening: the per-dial promise rejects (imperative
+    // awaiters fail fast) but the suspended tree must stay suspended.
+    await act(async () => {
+      FakeWebSocket.instances[0]!.fire("close");
+    });
+    expect(state()).toBe("loading");
+    expect(FakeWebSocket.instances).toHaveLength(2); // re-dialed immediately
+
+    // The retry opens: the tree resolves, and both paths share one identity.
+    await act(async () => {
+      FakeWebSocket.instances[1]!.fire("open");
+    });
+    expect(state()).toBe("ready");
+    expect(hookSession).toBe(control.lastRoot);
+    expect(await connectIterateSession()).toBe(control.lastRoot);
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  test("a terminal authenticate rejection surfaces (no infinite spinner) and does not auto-redial", async () => {
+    const { connectIterateSession } = await import("./itx-react.tsx");
+    control.authError = new Error("handshake rejected for this principal");
+    const first = connectIterateSession();
+    FakeWebSocket.instances[0]!.fire("open");
+    await expect(first).rejects.toThrow(/handshake rejected/);
+    // Terminal — a real answer over a working socket must not loop dials.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    // Recovery is explicit: the next connect attempt dials fresh.
+    control.authError = undefined;
+    const second = connectIterateSession();
+    expect(second).not.toBe(first);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    await openLatest();
+    await expect(second).resolves.toBe(control.lastRoot);
+  });
+
   test("a semantic reset clears dial backoff so new claims dial immediately", async () => {
     vi.useFakeTimers();
     try {
@@ -271,11 +377,14 @@ describe("useItxSubscription liveness", () => {
    * vi.resetModules() so the harness's React instance is the one itx-react
    * loaded (a static import would be a different copy — invalid-hook-call).
    */
+  type TestHandle = {
+    ping: () => boolean | Promise<boolean>;
+    unsubscribe: () => void;
+    [Symbol.dispose]?: () => void;
+  };
   async function mountSubscription(
-    makeHandle: () => {
-      ping: () => boolean | Promise<boolean>;
-      unsubscribe: () => void;
-    },
+    makeHandle: () => TestHandle,
+    wrapSubscribe?: (handle: TestHandle) => Promise<TestHandle>,
   ) {
     const [{ useItxSubscription, ProjectScope }, React, { createRoot }] = await Promise.all([
       import("./itx-react.tsx"),
@@ -284,7 +393,10 @@ describe("useItxSubscription liveness", () => {
     ]);
     const { act, createElement } = React;
 
-    const subscribe = vi.fn(async () => makeHandle());
+    const subscribe = vi.fn(async () => {
+      const handle = makeHandle();
+      return wrapSubscribe ? wrapSubscribe(handle) : handle;
+    });
     function Harness() {
       const subscription = useItxSubscription(subscribe as never, []);
       return createElement("output", { "data-status": subscription.status });
@@ -398,6 +510,67 @@ describe("useItxSubscription liveness", () => {
     await harness.advance(0);
     expect(harness.subscribe).toHaveBeenCalledTimes(2);
     await harness.unmount();
+  });
+
+  test("teardown unsubscribes AND disposes the handle (no import-table leak)", async () => {
+    const unsubscribe = vi.fn();
+    const dispose = vi.fn();
+    const harness = await mountSubscription(() => ({
+      ping: () => true,
+      unsubscribe,
+      [Symbol.dispose]: dispose,
+    }));
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+    await vi.advanceTimersByTimeAsync(0); // the dispose chain settles on microtasks
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test("a NON-transport subscribe failure stays in error — never an infinite retry loop", async () => {
+    const harness = await mountSubscription(() => {
+      throw new Error("no such capability: liveState");
+    });
+    expect(harness.status()).toBe("error");
+    expect(harness.subscribe).toHaveBeenCalledTimes(1);
+    // A permanent failure must not silently retry every SUBSCRIBE_RETRY window.
+    await harness.advance(60_000);
+    expect(harness.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  test("a TRANSPORT-failed subscribe retries on the subscribe-retry delay", async () => {
+    let attempts = 0;
+    const harness = await mountSubscription(() => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Peer closed WebSocket: 1006 ");
+      return { ping: () => true, unsubscribe: vi.fn() };
+    });
+    expect(harness.status()).toBe("error");
+    await harness.advance(10_000); // SUBSCRIBE_RETRY_MS
+    expect(harness.subscribe).toHaveBeenCalledTimes(2);
+    expect(harness.status()).toBe("live");
+  });
+
+  test("a run superseded mid-subscribe cannot flip state; its late handle is disposed", async () => {
+    // The subscribe hangs until released; the component unmounts first. The late
+    // resolution must be swallowed (no status write) and its handle released.
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const unsubscribe = vi.fn();
+    const dispose = vi.fn();
+    const harness = await mountSubscription(
+      () => ({ ping: () => true, unsubscribe, [Symbol.dispose]: dispose }),
+      async (handle) => {
+        await gate;
+        return handle;
+      },
+    );
+    expect(harness.status()).toBe("connecting"); // still awaiting subscribe
+    await harness.unmount();
+    release!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   test("regaining connectivity while HIDDEN still checks (a backgrounded tab recovers)", async () => {

@@ -747,7 +747,7 @@ function AccountConnectionsItem() {
   // The connections list is derived from the project processor's live secrets
   // state — the same push-based slice the secrets page reads. Two payoffs over
   // a second useItxQuery: it does not suspend a second time (which would bubble
-  // to the route ItxBoundary and flash the whole panel back to the global
+  // to the route's `<Suspense>` boundary and flash the whole panel back to the
   // "Connecting…" placeholder), and a freshly-created session secret appears
   // here the instant its stream folds, with no manual invalidation to race.
   const secretsList = useLiveState(

@@ -35,22 +35,27 @@
  *
  *  • ONE WebSocket for the whole tab, kept in module state outside React (so it
  *    persists across client-side navigation). A dial attempt is a GENERATION
- *    (`Generation`): its WebSocket, its connecting promise, and the live
- *    `Session` stub (the pipelined `authenticate()` root, settled on WebSocket
- *    `open`). Auth rides the cookie handshake — `_app` has already gated it — so
- *    a bad cookie surfaces on the first read, like any RPC error, not here.
+ *    (`Generation`): its WebSocket and its connecting promise. The session is
+ *    the AWAITED `authenticate()` result — one settled stub identity shared by
+ *    the snapshot, imperative awaiters, and the project-stub cache (resolving
+ *    with the raw pipelined RpcPromise would fork identities: native promises
+ *    assimilate thenables). The dial timeout spans the whole handshake
+ *    (TCP/TLS/upgrade AND authenticate), and a REAL auth rejection over a
+ *    working socket is terminal — it surfaces from the connecting promise
+ *    instead of looping.
  *
  *  • RECONNECT IS INVISIBLE. React reads an immutable {@link Snapshot} via
  *    `useSyncExternalStore`; `snapshot.session` holds the LAST live session and
- *    is kept across a transport gap. So `useIterateSession()` suspends exactly once
- *    (first load, on `snapshot.connecting`) and never again: when the socket
- *    dies we keep showing the last session while a fresh generation dials in the
- *    background, then swap `snapshot.session` when it opens. A dropped socket
- *    always re-dials — with a session in hand invisibly, without one by
- *    re-pointing `use()` to a fresh (backoff-paced) connecting promise, never a
- *    wedge. Reads are stale-while-revalidate (TanStack keeps cached data; only
- *    in-flight reads retry — see useItxQuery). A stray action fired during the
- *    sub-second gap rides the dead stub and rejects — the one accepted edge.
+ *    is kept across a transport gap. So `useIterateSession()` suspends exactly
+ *    once — first load, on the STABLE {@link firstConnect} promise, which
+ *    survives failed dial attempts (paced re-dials happen behind it; a per-dial
+ *    rejection never reaches the suspended tree) — and never again: when the
+ *    socket dies we keep showing the last session while a fresh generation
+ *    dials in the background, then swap `snapshot.session` when it establishes.
+ *    TanStack keeps cached read data through a reconnect (no re-suspend, no
+ *    spinner); only an in-flight read retries, on the transport-only policy —
+ *    see useItxQuery. A stray action fired during the sub-second gap rides the
+ *    dead stub and rejects — the one accepted edge.
  *
  *  • PROJECT STUBS ARE SESSION-OWNED, not React-owned. `session.projects.get`
  *    allocates a capnweb import-table entry, and React may run/discard a
@@ -70,9 +75,9 @@
  *    watchdog REPORT suspicion ({@link reportTransportSuspicion}); they never
  *    close the shared socket themselves. Only two failed probes against the SAME
  *    generation retire it, and {@link reconnectIfCurrent} is a compare-and-swap
- *    on the generation id — a late verdict against a superseded generation can
- *    never close its healthy successor. {@link reconnectIterateSession} is the separate,
- *    deliberate *semantic* reset (new claims after create/unlock).
+ *    on generation OBJECT IDENTITY — a late verdict against a superseded
+ *    generation can never close its healthy successor. {@link reconnectIterateSession}
+ *    is the separate, deliberate *semantic* reset (new claims after create/unlock).
  *
  *  • CONNECTING THROWS ON THE SERVER (never SSRs): a forever-pending `use()`
  *    during streaming SSR would hang the response. Render itx consumers under an
@@ -126,28 +131,29 @@ const DIAL_TIMEOUT_MS = 15_000;
 // lives inside the connecting promise, so `use()` semantics are unchanged.
 const REDIAL_BACKOFF_MIN_MS = 250;
 const REDIAL_BACKOFF_MAX_MS = 10_000;
-/** How often a live generation proves its transport is not half-open. */
-const LIVENESS_PROBE_INTERVAL_MS = 45_000;
+/**
+ * How often a live transport (the socket verifier) and a mounted subscription
+ * (the watchdog) prove they are not silently dead. ONE shared cadence: the two
+ * lanes are deliberately coordinated, so a change here moves both.
+ */
+const LIVENESS_INTERVAL_MS = 45_000;
 /** A probe slower than this counts as a strike (two strikes ⇒ half-open). */
-const LIVENESS_PROBE_TIMEOUT_MS = 10_000;
+const LIVENESS_TIMEOUT_MS = 10_000;
 
 /**
- * One dial attempt = one WebSocket lifetime. `id` is the compare-and-swap token
- * that makes every reconnect verdict identity-safe (only the CURRENT generation
- * may be retired). `session` and `connecting` are settled on WebSocket `open`
- * with the pipelined root stub (auth rides the cookie handshake; a bad cookie
- * surfaces on the first read, like any RPC error).
+ * One dial attempt = one WebSocket lifetime. OBJECT IDENTITY is the
+ * compare-and-swap token that makes every reconnect verdict identity-safe
+ * (`current === generation` — only the CURRENT generation may be retired or
+ * published). `connecting` settles with the session once `authenticate()`
+ * returns over the open socket; `ping` doubles as the "session established"
+ * marker.
  */
 type Generation = {
-  readonly id: number;
   ws: WebSocket | undefined;
   connecting: Promise<SessionStub>;
-  session: SessionStub | undefined;
   /** One cheap authenticated round trip proving the transport is alive. */
   ping: (() => Promise<void>) | undefined;
   liveness: ReturnType<typeof setInterval> | undefined;
-  /** Idempotency latch: resources released once, and a re-fired close is a no-op. */
-  disposed: boolean;
   /** Single-flight latch for {@link verifyTransport}, per generation. */
   verifying: boolean;
 };
@@ -157,7 +163,12 @@ type Generation = {
  * wholesale on every transition, always BEFORE listeners are notified, so a
  * concurrent render can never tear. `session` is the last live session and
  * survives transport gaps — that is what makes reconnect invisible. `generation`
- * is the reconnect dep for {@link useItxEffect}.
+ * is a monotonic number whose only job is being the reconnect dep for
+ * {@link useReconnectableItxEffect} (the CAS is generation object identity, not
+ * this number). `connecting` is what `useIterateSession` suspends on: before the
+ * FIRST session it is the stable {@link firstConnect} promise (survives
+ * closed-before-open retries without rejecting the suspended tree); afterwards
+ * `use()` never runs again, because `session` is always defined.
  */
 type Snapshot = {
   generation: number;
@@ -166,12 +177,21 @@ type Snapshot = {
 };
 
 let current: Generation | undefined;
-/** Last confirmed session; kept across a transport gap for invisible reconnect. */
-let liveSession: SessionStub | undefined;
 let snapshot: Snapshot | undefined;
 let generationCounter = 0;
-/** Consecutive closed-before-open dials — the re-dial backoff input. */
+/** Consecutive dials that died before establishing a session — the backoff input. */
 let consecutiveDialFailures = 0;
+/**
+ * The promise `use()` suspends on until the FIRST session exists. One stable
+ * promise across dial retries: a dial that closes before opening rejects its
+ * own per-dial `connecting` (imperative awaiters fail fast) but must NOT reject
+ * the suspended tree — React replays a suspended (never-committed) component
+ * against the thenable it first used, so a rejected first promise would surface
+ * in the error boundary even though a paced re-dial is already underway. It
+ * rejects only on a TERMINAL failure (authenticate answered with a real
+ * application error over a working socket).
+ */
+let firstConnect: PromiseWithResolvers<SessionStub> | undefined;
 
 const listeners = new Set<() => void>();
 const subscribeSession = (onChange: () => void) => {
@@ -246,19 +266,55 @@ function dial(): Generation {
   // surfaces as an unhandledrejection — real `connectIterateSession()` awaiters still observe it.
   void promise.catch(() => {});
   const generation: Generation = {
-    id,
     ws: undefined,
     connecting: promise,
-    session: undefined,
     ping: undefined,
     liveness: undefined,
-    disposed: false,
     verifying: false,
   };
   current = generation;
   // Keep showing the last session while the new generation dials (invisible
-  // reconnect); `session` is undefined only before the very first connect.
-  setSnapshot({ generation: id, session: liveSession, connecting: promise });
+  // reconnect). Before the FIRST session, `use()` must suspend on the stable
+  // first-connect promise (see {@link firstConnect}) — never a per-dial promise
+  // whose closed-before-open rejection React would replay into an error boundary.
+  const priorSession = snapshot?.session;
+  if (priorSession === undefined && firstConnect === undefined) {
+    firstConnect = Promise.withResolvers<SessionStub>();
+    void firstConnect.promise.catch(() => {});
+  }
+  setSnapshot({
+    generation: id,
+    session: priorSession,
+    connecting: firstConnect?.promise ?? promise,
+  });
+
+  /** The dial established a session: publish it and retire the predecessor. */
+  const publish = (root: SessionStub, ping: () => Promise<void>) => {
+    consecutiveDialFailures = 0;
+    generation.ping = ping;
+    generation.liveness = setInterval(() => {
+      if (current === generation) void verifyTransport(generation);
+    }, LIVENESS_INTERVAL_MS);
+    // Retire the PREVIOUS published session — exactly once, now that its
+    // successor is live. It was kept alive through the reconnect gap so
+    // useIterateSession()/useItx() never handed out a disposed stub; dispose its
+    // project-stub cache + the stub itself only here.
+    //
+    // Safe even though this runs the same turn as setSnapshot (before React
+    // commits the re-render whose subscription cleanups unsubscribe): a
+    // successor only dials after `current` was cleared, and every path clears
+    // it AFTER closing the prior socket (the close handler, reconnectIfCurrent,
+    // reconnectIterateSession). So the prior transport is ALWAYS already closed
+    // here — its subscriptions are already dead (capnweb rejects on close) and
+    // their unsubscribe cleanups are catch-wrapped. This releases already-dead
+    // local refs, never a live subscription.
+    const retiring = snapshot?.session;
+    setSnapshot({ generation: id, session: root, connecting: promise });
+    resolve(root);
+    firstConnect?.resolve(root);
+    firstConnect = undefined;
+    if (retiring !== undefined) disposeSession(retiring);
+  };
 
   const beginDial = () => {
     // Superseded while waiting out the backoff: this attempt no longer owns the
@@ -271,74 +327,96 @@ function dial(): Generation {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     generation.ws = ws;
-    let opened = false;
+    let established = false;
+    // The timeout spans the WHOLE dial — TCP/TLS/upgrade AND the authenticate
+    // round trip — so a server that accepts the socket but never answers
+    // authenticate is a failed dial (close → paced re-dial), not a wedge.
     const timeout = setTimeout(() => ws.close(), DIAL_TIMEOUT_MS);
 
     ws.addEventListener("open", () => {
-      clearTimeout(timeout);
       // Generation CAS: a superseded generation's late `open` (its successor was
       // already dialed) must never publish over the live one. Close and bail.
       if (current !== generation) {
+        clearTimeout(timeout);
         ws.close();
         return;
       }
-      opened = true;
-      consecutiveDialFailures = 0;
-      // The pipelined, real root stub — usable immediately, no extra round trip.
-      // Auth rides the session cookie on the handshake; a bad cookie surfaces on
-      // the first read (like any RPC error), and `_app` middleware has already
-      // gated the page's auth, so a live socket here is effectively authenticated.
+      // ONE awaited authenticate: its result is THE session identity — the same
+      // settled stub for the snapshot, the imperative promise, and the
+      // project-stub cache. (Resolving with the raw pipelined RpcPromise would
+      // fork identities: a native promise ASSIMILATES a thenable, so imperative
+      // awaiters would receive the pulled resolution while the snapshot held the
+      // RpcPromise — two WeakMap keys, doubled project stubs, and a
+      // disposeSession that misses half of them.) Auth rides the session cookie
+      // on the handshake; `_app` middleware has already gated the page.
       const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws);
-      const root = unauthenticated.authenticate({ type: "from-server-cookie" });
-      generation.session = root;
-      generation.ping = async () => {
-        // Any round trip proves the transport; authenticate rides the session
-        // cookie. Dispose the probe stub so probes don't grow the cap table.
-        const probe = await unauthenticated.authenticate({ type: "from-server-cookie" });
-        (probe as Partial<Disposable>)[Symbol.dispose]?.();
-      };
-      generation.liveness = setInterval(() => {
-        if (current === generation) void verifyTransport(generation);
-      }, LIVENESS_PROBE_INTERVAL_MS);
-      // Retire the PREVIOUS published session — exactly once, now that its
-      // successor is live. It was kept alive through the reconnect gap so
-      // useIterateSession()/useItx() never handed out a disposed stub; dispose its
-      // project-stub cache + the stub itself only here.
-      //
-      // Safe even though this runs the same turn as setSnapshot (before React
-      // commits the re-render whose useItxEffect cleanups unsubscribe): a
-      // successor only dials after `current` was cleared, and every path clears
-      // it AFTER closing the prior socket (the close handler, reconnectIfCurrent,
-      // reconnectIterateSession). So the prior transport is ALWAYS already closed
-      // here — its subscriptions are already dead (capnweb rejects on close) and
-      // their unsubscribe cleanups are catch-wrapped. This releases already-dead
-      // local refs, never a live subscription.
-      const priorSession = liveSession;
-      liveSession = root;
-      setSnapshot({ generation: id, session: root, connecting: promise });
-      resolve(root);
-      if (priorSession !== undefined) disposeSession(priorSession);
+      void (async () => {
+        let root: SessionStub;
+        try {
+          // The runtime value IS a session stub (same callable surface); the
+          // cast bridges capnweb's Awaited-type nesting (`Stubify<Session>`
+          // re-wraps every member in promise types) back to the nominal handle.
+          // This is the module's ONE cast, at the identity boundary.
+          root = (await unauthenticated.authenticate({
+            type: "from-server-cookie",
+          })) as unknown as SessionStub;
+        } catch (error) {
+          clearTimeout(timeout);
+          if (current !== generation) return;
+          if (isItxTransportError(error)) {
+            // The socket died mid-handshake; the close handler owns recovery.
+            ws.close();
+            return;
+          }
+          // The server ANSWERED with a real application error (bad principal,
+          // rejected handshake): this dial is terminally failed. Surface it to
+          // imperative awaiters AND the suspended tree — retrying would loop.
+          // Reject BEFORE closing: the close handler's generic dial-close
+          // rejection must never mask the real error.
+          const terminal = error instanceof Error ? error : new Error(String(error));
+          reject(terminal);
+          firstConnect?.reject(terminal);
+          firstConnect = undefined;
+          current = undefined;
+          retireGeneration(generation);
+          return;
+        }
+        clearTimeout(timeout);
+        if (current !== generation) {
+          // Superseded while authenticating: never publish; release the stub.
+          (root as Partial<Disposable>)[Symbol.dispose]?.();
+          ws.close();
+          return;
+        }
+        established = true;
+        publish(root, async () => {
+          // Any round trip proves the transport; authenticate rides the session
+          // cookie. Dispose the probe stub so probes don't grow the cap table.
+          const probe = await unauthenticated.authenticate({ type: "from-server-cookie" });
+          (probe as Partial<Disposable>)[Symbol.dispose]?.();
+        });
+      })();
     });
 
     ws.addEventListener("close", () => {
       clearTimeout(timeout);
       const wasCurrent = current === generation;
       // The socket is already closed — release resources WITHOUT re-closing it
-      // (that would re-enter this handler). `disposed` makes it idempotent.
+      // (that would re-enter this handler); disposeGeneration is idempotent.
       disposeGeneration(generation);
       if (wasCurrent) {
-        // A dial that never opened counts toward backoff; a post-open death is a
-        // transient to recover from immediately.
-        if (!opened) consecutiveDialFailures += 1;
+        // A dial that never established a session counts toward backoff; a
+        // post-establish death is a transient to recover from immediately.
+        if (!established) consecutiveDialFailures += 1;
         current = undefined;
         // Re-dial: with a live session in hand this is the INVISIBLE reconnect
-        // (the snapshot keeps showing it); with none it re-points to a fresh
-        // connecting promise so `use()` keeps suspending — a paced retry, not a
-        // wedge or an error boundary.
+        // (the snapshot keeps showing it); with none it keeps `use()` suspended
+        // on the stable first-connect promise — a paced retry, never a wedge or
+        // an error boundary.
         dial();
       }
       // Once a dial has resolved this is a no-op; a dial that closed BEFORE
-      // opening rejects so imperative `connectIterateSession()` awaiters fail fast.
+      // establishing rejects so imperative `connectIterateSession()` awaiters fail fast.
       reject(new Error("itx WebSocket closed before connecting"));
     });
   };
@@ -365,15 +443,13 @@ function setSnapshot(next: Snapshot): void {
 }
 
 /**
- * Release a generation's TRANSPORT resources — its liveness timer. Idempotent
- * (the `disposed` latch), and it does NOT close the socket or dispose the
- * session stub: the session is retired separately, by its successor's publish
- * (see the open handler), so invisible reconnect never hands out a disposed
- * stub. Safe to call from the `close` handler without re-entering it.
+ * Release a generation's TRANSPORT resources — its liveness timer. Naturally
+ * idempotent, and it does NOT close the socket or dispose the session stub: the
+ * session is retired separately, by its successor's publish (see the open
+ * handler), so invisible reconnect never hands out a disposed stub. Safe to
+ * call from the `close` handler without re-entering it.
  */
 function disposeGeneration(generation: Generation): void {
-  if (generation.disposed) return;
-  generation.disposed = true;
   if (generation.liveness !== undefined) clearInterval(generation.liveness);
   generation.liveness = undefined;
 }
@@ -406,7 +482,7 @@ function retireGeneration(generation: Generation): void {
 export function reportTransportSuspicion(): void {
   const generation = current;
   // A generation still mid-dial owns its own dial timeout; nothing to verify.
-  if (generation?.session === undefined || generation.ping === undefined) return;
+  if (generation?.ping === undefined) return;
   void verifyTransport(generation);
 }
 
@@ -429,7 +505,7 @@ async function verifyTransport(generation: Generation): Promise<void> {
             (isItxTransportError(error) ? "strike" : "alive") as "alive" | "strike",
         ),
         new Promise<"strike">((resolve) =>
-          setTimeout(() => resolve("strike"), LIVENESS_PROBE_TIMEOUT_MS),
+          setTimeout(() => resolve("strike"), LIVENESS_TIMEOUT_MS),
         ),
       ]);
     // Two-strike: one slow answer is a busy server, not a dead socket.
@@ -561,21 +637,33 @@ export function ProjectScope({ slug, children }: { slug: string; children: React
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The two — and only two — transport-close rejections a caller may treat as "the
- * socket died, retry on a fresh one": our own dial-close reject, and capnweb's
- * abort when the WebSocket closes (`Peer closed WebSocket: <code> <reason>`,
- * capnweb `websocket.ts`). Deliberately NARROW: an application/auth/validation
- * error that merely mentions "WebSocket" must never be mistaken for a transport
- * failure and retried. This is the one discriminant shared by the query retry
- * and the liveness verifier.
+ * The three — and only three — transport-close rejections a caller may treat as
+ * "the socket died, retry on a fresh one": our own dial-close reject, and
+ * capnweb's two aborts when the WebSocket dies (`Peer closed WebSocket:
+ * <code> <reason>` after a close frame, `WebSocket connection failed.` on an
+ * error event — both capnweb `websocket.ts`). Deliberately NARROW: an
+ * application/auth/validation error that merely mentions "WebSocket" must never
+ * be mistaken for a transport failure and retried. This is the one discriminant
+ * shared by the query retry, the subscribe retry, and the liveness verifier.
  */
 export function isItxTransportError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     message.includes("itx WebSocket closed before connecting") ||
-    message.includes("Peer closed WebSocket")
+    message.includes("Peer closed WebSocket") ||
+    message.includes("WebSocket connection failed")
   );
 }
+
+/**
+ * The shared TanStack retry policy for itx reads: retry ONLY transport-close
+ * failures (a fresh generation is already re-dialing), briefly — application
+ * errors surface immediately.
+ */
+const itxTransportRetry = {
+  retry: (failureCount: number, error: Error) => isItxTransportError(error) && failureCount < 3,
+  retryDelay: (failureCount: number) => Math.min(250 * 2 ** failureCount, 2_000),
+};
 
 /**
  * Read once through a project itx, suspending until it resolves. A thin adapter
@@ -624,8 +712,7 @@ export function useItxQuery<T>({
         (itx as Partial<Disposable>)[Symbol.dispose]?.();
       }
     },
-    retry: (failureCount, error) => isItxTransportError(error) && failureCount < 3,
-    retryDelay: (failureCount) => Math.min(250 * 2 ** failureCount, 2_000),
+    ...itxTransportRetry,
   }).data;
 }
 
@@ -654,114 +741,115 @@ export function useIterateSessionQuery<T>({
   return useQuery({
     queryKey: ["itx", ...key],
     queryFn: () => connectIterateSession().then(query),
-    retry: (failureCount, error) => isItxTransportError(error) && failureCount < 3,
-    retryDelay: (failureCount) => Math.min(250 * 2 ** failureCount, 2_000),
+    ...itxTransportRetry,
     enabled,
     staleTime,
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. Live subscriptions: useItxEffect() — a reconnect-aware itx effect
+// 3. Live subscriptions: useReconnectableItxEffect() — a reconnect-aware effect
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Set up a live itx subscription (or any mount-scoped itx work) and tear it down
- * on unmount. The itx is awaited INSIDE the effect (never in render), so this
- * hook NEVER suspends — the component paints its last value + status while the
- * connection resolves, and a reconnect silently re-runs the effect (the effect
- * is keyed on the session generation), whose first server push is the recovery.
- * A hand-rolled `useEffect` reaching itx through a closure would omit that dep
- * and not recover on reconnect.
+ * The cancellation contract an async {@link useReconnectableItxEffect} setup
+ * runs under. `disposed` flips the moment THIS run is superseded — unmount,
+ * deps change, or a reconnect re-run — and it flips BEFORE the run's own
+ * cleanup executes. Everything a setup does after an `await` must be gated on
+ * it: without the shared signal, a run cancelled mid-await can't know, and its
+ * late continuation would overwrite the successor's state.
+ */
+type ItxEffectSignal = { readonly disposed: boolean };
+
+/**
+ * Set up a live itx subscription (or any mount-scoped async itx work) and tear
+ * it down on unmount. The itx is awaited INSIDE the effect (never in render),
+ * so this hook NEVER suspends — and a reconnect silently re-runs the effect
+ * (the effect is keyed on the session generation), whose first server push is
+ * the recovery. A hand-rolled `useEffect` reaching itx through a closure would
+ * omit that dep and not recover on reconnect. That generation dep is also the
+ * whole retry story for a failed dial: the failing dial has already published
+ * its (paced) successor, which re-runs the effect — no timer needed here.
  *
- *   useItxEffect((itx) => {
- *     const sub = itx.streams.get("/logs").subscribe({ processEventBatch });
+ *   useReconnectableItxEffect(async (itx, signal) => {
+ *     const sub = await itx.streams.get("/logs").subscribe({ processEventBatch });
+ *     if (signal.disposed) { sub.unsubscribe(); return; }
  *     return () => sub.unsubscribe();
  *   }, []);
  *
- * The callback may be sync OR async; an async setup's late cleanup still runs if
- * you unmounted mid-await. `itx` resolves from `opts.itx` (a handle you hold),
- * else `opts.slug`, else the ambient <ProjectScope>. `enabled: false` renders it
- * fully inert.
+ * A late cleanup (setup resolved after this run was superseded) still executes.
+ * `itx` resolves from `opts.slug`, else the ambient <ProjectScope>.
+ * `enabled: false` renders it fully inert.
  */
-function useItxEffect(
-  setup: (itx: ProjectStub) => void | (() => void) | Promise<void | (() => void)>,
+function useReconnectableItxEffect(
+  setup: (itx: ProjectStub, signal: ItxEffectSignal) => Promise<void | (() => void)>,
   deps: unknown[],
   opts?: {
-    itx?: ProjectStub;
     slug?: string;
     enabled?: boolean;
-    onDialError?: (error: unknown) => void;
+    onConnectionError?: (error: unknown) => void;
   },
 ): void {
   const scopedSlug = useContext(ProjectScopeContext);
   const enabled = opts?.enabled ?? true;
   const slug = opts?.slug ?? scopedSlug;
   // A socket death replaces the generation; that number in the deps re-runs the
-  // effect on it (the reconnect recovery). `{ itx }` opts out — the caller owns
-  // the handle's lifecycle.
+  // effect on it (the reconnect recovery).
   const generation = useSyncExternalStore(
     subscribeSession,
-    () => (enabled && opts?.itx === undefined ? currentSnapshot().generation : 0),
+    () => (enabled ? currentSnapshot().generation : 0),
     () => 0,
   );
   useEffect(() => {
     if (!enabled) return;
-    let disposed = false;
+    const signal = { disposed: false };
     let cleanup: void | (() => void);
-    const apply = (itx: ProjectStub) => {
-      if (disposed) return;
-      const result = setup(itx);
-      if (result instanceof Promise) {
-        // Async: cleanup lands later. If we unmounted meanwhile, run it now.
-        void result.then(
-          (c) => {
-            if (disposed) c?.();
-            else cleanup = c;
-          },
-          (error: unknown) => {
-            if (!disposed) console.error("useItxEffect: async setup failed", error);
-          },
-        );
-      } else {
-        cleanup = result;
-      }
-    };
-    if (opts?.itx !== undefined) {
-      apply(opts.itx);
-    } else if (slug !== undefined) {
+    if (slug !== undefined) {
       // Await the connection INSIDE the effect: mounting never suspends the tree.
-      connectItx(slug).then(apply, (error: unknown) => {
-        if (disposed) return;
-        if (opts?.onDialError) opts.onDialError(error);
-        else console.error("useItxEffect: dial failed", error);
-      });
-    } else {
-      // Neither a handle nor a resolvable project: fail loudly rather than sit
-      // on "connecting" forever (a subscription with no <ProjectScope>).
-      const error = new Error(
-        "useItxEffect needs a project: pass { itx } or { slug }, or render under <ProjectScope slug>.",
+      connectItx(slug).then(
+        (itx) => {
+          if (signal.disposed) return;
+          setup(itx, signal).then(
+            (late) => {
+              // Setup resolved after this run was superseded: run its cleanup now.
+              if (signal.disposed) late?.();
+              else cleanup = late;
+            },
+            (error: unknown) => {
+              if (!signal.disposed) {
+                console.error("useReconnectableItxEffect: setup failed", error);
+              }
+            },
+          );
+        },
+        (error: unknown) => {
+          if (signal.disposed) return;
+          if (opts?.onConnectionError) opts.onConnectionError(error);
+          else console.error("useReconnectableItxEffect: connect failed", error);
+        },
       );
-      if (opts?.onDialError) opts.onDialError(error);
+    } else {
+      // No resolvable project: fail loudly rather than sit on "connecting"
+      // forever (a subscription with no <ProjectScope>).
+      const error = new Error(
+        "useReconnectableItxEffect needs a project: pass { slug } or render under <ProjectScope slug>.",
+      );
+      if (opts?.onConnectionError) opts.onConnectionError(error);
       else console.error(error.message);
     }
     return () => {
-      disposed = true;
+      signal.disposed = true;
       cleanup?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- connection + caller's deps; setup read fresh per run
-  }, [enabled, opts?.itx, slug, generation, ...deps]);
+  }, [enabled, slug, generation, ...deps]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. Live subscriptions: useItxSubscription() — recovery + watchdog; useLiveState()
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** How often a mounted subscription verifies it is still alive server-side. */
-const LIVENESS_INTERVAL_MS = 45_000;
-/** A ping slower than this means the socket is half-open: report + recover. */
-const LIVENESS_PING_TIMEOUT_MS = 10_000;
-/** How long useItxSubscription waits before retrying a failed subscribe. */
+/** How long useItxSubscription waits before retrying a transport-failed subscribe. */
 const SUBSCRIBE_RETRY_MS = 10_000;
 const PING_TIMED_OUT = Symbol("itx-ping-timed-out");
 
@@ -782,21 +870,23 @@ const PING_TIMED_OUT = Symbol("itx-ping-timed-out");
  */
 function watchItxSubscription(
   ping: () => boolean | Promise<boolean>,
-  onDead: (reason: "dead" | "timed-out") => void,
+  onDead: () => void,
 ): () => void {
   let stopped = false;
   let checking = false;
 
+  // The reason stays internal: on "timed-out" the watchdog itself reports the
+  // transport suspicion; either way the caller's only move is a re-subscribe.
   const report = (reason: "dead" | "timed-out") => {
     if (stopped) return;
     stop();
     if (reason === "timed-out") reportTransportSuspicion();
-    onDead(reason);
+    onDead();
   };
 
   const pingOnce = () => {
     const timeout = new Promise<typeof PING_TIMED_OUT>((resolve) =>
-      setTimeout(() => resolve(PING_TIMED_OUT), LIVENESS_PING_TIMEOUT_MS),
+      setTimeout(() => resolve(PING_TIMED_OUT), LIVENESS_TIMEOUT_MS),
     );
     return Promise.race([Promise.resolve(ping()), timeout]);
   };
@@ -844,11 +934,16 @@ function watchItxSubscription(
 
 /**
  * The live handle shape every itx subscription API returns — `Stream.subscribe`
- * and `LiveStateRpc.subscribe` both hand back `ping()` + `unsubscribe()`.
+ * and `LiveStateRpc.subscribe` both hand back `ping()` + `unsubscribe()`. The
+ * real handles are capnweb stubs and therefore Disposable: `unsubscribe()`
+ * closes the SERVER side, `[Symbol.dispose]` releases the caller-owned stub —
+ * on the tab-long shared socket, skipping the dispose leaks one import-table
+ * entry per subscribe cycle, so the hook always does both.
  */
 export type ItxLiveSubscriptionHandle = {
   ping(): boolean | Promise<boolean>;
   unsubscribe(): unknown;
+  [Symbol.dispose]?(): void;
 };
 
 export type ItxSubscriptionStatus = "connecting" | "live" | "error";
@@ -857,36 +952,40 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
  * Hold ONE live server-push subscription for as long as the component is
  * mounted, owning the whole recovery story so consumers never hand-roll it:
  *
- *   - reconnect → re-subscribes on the fresh generation (via {@link useItxEffect}'s
- *     generation dep);
+ *   - reconnect → re-subscribes on the fresh generation (via
+ *     {@link useReconnectableItxEffect}'s generation dep); a failed dial rides
+ *     the same dep — the failing dial has already published a paced successor;
  *   - SILENT death — DO restart, dropped callback, half-open TCP — → the
- *     {@link watchItxSubscription} watchdog re-subscribes (dead) or reports
- *     transport suspicion (timed-out);
- *   - a failed subscribe (incl. a failed lazy dial) → status "error", retried on
- *     a watchdog-shaped delay.
+ *     {@link watchItxSubscription} watchdog re-subscribes (and, on a ping
+ *     timeout, reports transport suspicion);
+ *   - a TRANSPORT-failed subscribe → status "error", retried on a
+ *     watchdog-shaped delay. Any other subscribe failure (auth, validation, a
+ *     programming error) stays in "error" — retrying a permanent failure every
+ *     ten seconds forever is a silent RPC loop, not recovery; `refresh()` or a
+ *     reconnect re-runs it.
  *
  * `subscribe` opens the subscription and returns its handle; pushes go wherever
  * the caller's callbacks put them. A re-subscription's first push is the
  * recovery, so consumers must be replay-tolerant (merge by offset, or let
- * last-write-wins absorb it). `status` is "live" only while actually
- * established; `refresh()` force re-subscribes; `enabled: false` is inert;
- * `deps` re-subscribe on change. `opts.slug` subscribes to a specific project
- * (e.g. ⌘K reaching a project from the app shell) without suspending the tree.
+ * last-write-wins absorb it). On teardown the handle is unsubscribed AND
+ * disposed (see {@link ItxLiveSubscriptionHandle}). `status` reads "live" while
+ * established — through the sub-second gap of an invisible transport reconnect
+ * it may briefly overstate (the re-run flips it to "connecting"); that bias
+ * matches the no-flicker reconnect model. `refresh()` force re-subscribes;
+ * `enabled: false` is inert; `deps` re-subscribe on change. `opts.slug`
+ * subscribes to a specific project (e.g. ⌘K reaching a project from the app
+ * shell) without suspending the tree.
  */
 export function useItxSubscription(
   subscribe: (itx: ProjectStub) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
-  opts?: { enabled?: boolean; itx?: ProjectStub; slug?: string },
+  opts?: { enabled?: boolean; slug?: string },
 ): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
   const enabled = opts?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
   const [state, setState] = useState<{ status: ItxSubscriptionStatus; error?: string }>({
     status: "connecting",
   });
-  // The dial-error retry outlives its effect run (the failure IS the run never
-  // starting), so its timer is cleared on unmount rather than by an effect cleanup.
-  const dialRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(dialRetry.current), []);
 
   // Disabling makes the whole effect inert; reset status so a subscription
   // disabled after a live period doesn't keep reporting "live".
@@ -894,20 +993,22 @@ export function useItxSubscription(
     if (!enabled) setState({ status: "connecting" });
   }, [enabled]);
 
-  useItxEffect(
-    async (effectItx) => {
+  useReconnectableItxEffect(
+    async (effectItx, signal) => {
       setState({ status: "connecting" });
-      let disposed = false;
 
       let subscription: ItxLiveSubscriptionHandle;
       try {
         subscription = await subscribe(effectItx);
       } catch (error) {
-        if (disposed) return;
+        // The ONE cancellation signal: a run superseded mid-await (unmount,
+        // deps, reconnect) must not touch state its successor now owns.
+        if (signal.disposed) return;
         setState({
           status: "error",
           error: error instanceof Error ? error.message : String(error),
         });
+        if (!isItxTransportError(error)) return;
         const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
         return () => clearTimeout(retry);
       }
@@ -916,8 +1017,9 @@ export function useItxSubscription(
           .then(() => subscription.unsubscribe())
           .catch(() => {
             // The server side of a dead subscription is already gone.
-          });
-      if (disposed) {
+          })
+          .finally(() => subscription[Symbol.dispose]?.());
+      if (signal.disposed) {
         dispose();
         return;
       }
@@ -926,39 +1028,34 @@ export function useItxSubscription(
       const stopWatchdog = watchItxSubscription(
         () => subscription.ping(),
         () => {
-          if (disposed) return;
+          if (signal.disposed) return;
           setState({ status: "connecting" });
-          // Re-subscribe unconditionally. On "dead" the socket is fine and this
-          // is the whole recovery; on "timed-out" the transport verifier may be
-          // re-dialing, and the generation dep will also re-run this effect —
-          // the epoch bump covers both, and a doubled re-subscribe is idempotent.
+          // Re-subscribe unconditionally. On a dead subscription the socket is
+          // fine and this is the whole recovery; on a transport timeout the
+          // verifier may be re-dialing, and the generation dep will also re-run
+          // this effect — the epoch bump covers both, and a doubled
+          // re-subscribe is idempotent.
           setEpoch((current) => current + 1);
         },
       );
 
       return () => {
-        disposed = true;
         stopWatchdog();
         dispose();
       };
     },
     [epoch, ...deps],
     {
-      itx: opts?.itx,
       slug: opts?.slug,
       enabled,
-      // A failed lazy dial never reaches setup, so without this the hook would
-      // sit on "connecting" forever: status "error", then an epoch bump retries.
-      onDialError: (error) => {
+      // A failed connect never reaches setup, so without this the hook would sit
+      // on "connecting" forever. No timer: the failed dial has already published
+      // a paced successor generation, and that dep re-runs the effect.
+      onConnectionError: (error) => {
         setState({
           status: "error",
           error: error instanceof Error ? error.message : String(error),
         });
-        clearTimeout(dialRetry.current);
-        dialRetry.current = setTimeout(
-          () => setEpoch((current) => current + 1),
-          SUBSCRIBE_RETRY_MS,
-        );
       },
     },
   );
@@ -988,15 +1085,17 @@ export function useItxSubscription(
  *
  * `value` is `undefined` between mount and the first snapshot (one round trip);
  * render a loading row for that window. It never suspends — a reconnect keeps the
- * last value while the subscription silently re-establishes. `deps` re-point the
- * hook at a different node. To read a DIFFERENT project's live state from OUTSIDE
- * its scope (⌘K in the app shell), pass `opts.slug`.
+ * last value while the subscription silently re-establishes. `deps` (or a changed
+ * `opts.slug`) re-point the hook at a different node, and the held value drops to
+ * `undefined` immediately — the previous node's state is never shown against the
+ * new one. To read a DIFFERENT project's live state from OUTSIDE its scope (⌘K in
+ * the app shell), pass `opts.slug`.
  */
 export function useLiveState<State, Selected = State>(
   live: (itx: ProjectStub) => LiveStateRpc<State>,
   selector: (state: State) => Selected,
   deps: unknown[] = [],
-  opts?: { itx?: ProjectStub; slug?: string; enabled?: boolean },
+  opts?: { slug?: string; enabled?: boolean },
 ): {
   value: Selected | undefined;
   status: ItxSubscriptionStatus;
@@ -1005,9 +1104,13 @@ export function useLiveState<State, Selected = State>(
 } {
   // useState, not useMemo: the store holds the accumulated live value.
   const [store] = useState(() => createLiveStateStore<State>());
-  // deps change = a different node: drop the held state (its slice is meaningless now).
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- caller's deps by design
-  useEffect(() => () => store.reset(), deps);
+  // The node this hook points at — the caller's deps AND the project scope
+  // (opts.slug re-points the subscription without appearing in deps).
+  const nodeKey = [opts?.slug, ...deps];
+  // Node change = a different node: drop the held state (its slice is
+  // meaningless now).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- node identity by design
+  useEffect(() => () => store.reset(), nodeKey);
 
   // The sink needs `refresh` to resync on a gap, but `refresh` comes from the
   // subscription below — a ref bridges the cycle (the sink only fires later).
@@ -1029,10 +1132,13 @@ export function useLiveState<State, Selected = State>(
           stale = true;
           return handle.unsubscribe();
         },
+        // Forward the stub release so the hook's teardown frees the capnweb
+        // import-table entry (the wrapper would otherwise swallow it).
+        [Symbol.dispose]: () => (handle as Partial<Disposable>)[Symbol.dispose]?.(),
       };
     },
     deps,
-    { itx: opts?.itx, slug: opts?.slug, enabled: opts?.enabled },
+    { slug: opts?.slug, enabled: opts?.enabled },
   );
   // In an effect, not during render (a discarded concurrent render must not
   // write refs); `refresh` is stable, so this runs once.
@@ -1041,15 +1147,36 @@ export function useLiveState<State, Selected = State>(
   }, [subscription.refresh]);
 
   // Selector memo cache keyed on STATE identity: same `Selected` ref while state
-  // is unchanged, so useSyncExternalStore bails out (and can never loop).
-  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({
-    state: undefined,
-    value: undefined,
-  });
+  // is unchanged, so useSyncExternalStore bails out (and can never loop). Also
+  // keyed on the NODE: the store resets in a passive effect, so the render that
+  // re-points the hook could otherwise still read the previous node's state. On
+  // a node switch the pre-switch state becomes a BARRIER — selection returns
+  // `undefined` until the store moves past it (the reset, then the new node's
+  // first push) — so the previous node's value can never render under the new.
+  const cache = useRef<{
+    key: unknown[];
+    barrier: State | undefined;
+    state: State | undefined;
+    value: Selected | undefined;
+  }>({ key: nodeKey, barrier: undefined, state: undefined, value: undefined });
   const getSelected = () => {
+    const sameNode =
+      cache.current.key.length === nodeKey.length &&
+      cache.current.key.every((part, index) => part === nodeKey[index]);
+    if (!sameNode) {
+      cache.current = {
+        key: nodeKey,
+        barrier: store.getState(),
+        state: undefined,
+        value: undefined,
+      };
+      return undefined;
+    }
     const state = store.getState();
+    if (state !== undefined && state === cache.current.barrier) return undefined;
     if (state === cache.current.state) return cache.current.value;
-    cache.current = { state, value: state === undefined ? undefined : selector(state) };
+    cache.current.state = state;
+    cache.current.value = state === undefined ? undefined : selector(state);
     return cache.current.value;
   };
   const value = useSyncExternalStore(store.subscribe, getSelected, getSelected);

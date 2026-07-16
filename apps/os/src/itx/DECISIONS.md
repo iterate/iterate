@@ -444,25 +444,39 @@ independent sockets from killing each other. Collapse to one:
   `useIterateSession()` suspends exactly once (first load) and reads are
   stale-while-revalidate (TanStack keeps cached data; only in-flight reads retry,
   on a finite transport-only policy). A dropped socket always re-dials — with a
-  session in hand invisibly, without one by re-pointing `use()` to a fresh
-  backoff-paced promise — so the connection hook is never a re-suspend point and
-  never wedges. (The session is the pipelined `authenticate()` root, settled on
-  `open`; auth rides the cookie handshake that `_app` already gated, so a bad
-  cookie surfaces at read time like any RPC error — codex suggested confirming
-  auth before publish, but that adds a terminal/retryable branch in the hot path
-  for a case `_app` already covers.)
+  session in hand invisibly, without one by keeping `use()` suspended on ONE
+  stable first-connect promise (per-dial rejections never reach the suspended
+  tree — React replays a never-committed component against the thenable it first
+  used, so rejecting it would error-boundary a page whose paced re-dial is
+  already underway) — the connection hook is never a re-suspend point and never
+  wedges. (The session is the AWAITED `authenticate()` result — one settled stub
+  identity for the snapshot, imperative awaiters, and the stub cache; resolving
+  with the raw pipelined RpcPromise would assimilate and fork identities. The
+  dial timeout spans the whole handshake, and a REAL auth rejection over a
+  working socket is terminal — surfaced from the connecting promise — while a
+  transport death mid-handshake re-dials. This supersedes the earlier
+  publish-on-open-without-awaiting design, which codex's thermo review showed
+  forked the session identity.)
 - **Project stubs are session-owned**, cached in a module `WeakMap` keyed by the
   session stub (NOT `useMemo` — React may discard/re-run memo calcs and leak
   undisposed capnweb import entries). The handle stays a REAL capnweb stub (a
   lazy wrapper that awaited the session per call would break pipelining, fork
   v0.8.0); its identity changes once per reconnect, re-running keyed effects.
+  The cache serves the PERSISTENT handle paths (`useItx`/`connectItx`);
+  `useItxQuery` deliberately bypasses it with a per-fetch stub it disposes when
+  the read resolves. Nuance: `await connectItx(...)` hands back the pulled
+  resolution of the cached pipelined stub (thenable assimilation, one level
+  down) — same underlying import, so it shares the cache's lifetime; unifying
+  that identity too needs a capnweb `dup()`-semantics probe and is deferred.
 - **Transport health is socket-owned and generation-guarded.** One verifier per
   generation (periodic + visibility/online, two-strike) is the only thing that
   retires the socket; the mirror and subscription watchdog REPORT suspicion
-  (`reportTransportSuspicion`) rather than evicting. A monotonic generation id is
-  the compare-and-swap that stops a late verdict from closing a healthy
-  successor. `reconnectIterateSession()` remains the deliberate SEMANTIC reset (new claims
-  after create/unlock), distinct from transport recovery.
+  (`reportTransportSuspicion`) rather than evicting. Generation OBJECT IDENTITY
+  (`current === generation`) is the compare-and-swap that stops a late verdict
+  from closing a healthy successor (the monotonic snapshot number exists only as
+  the React effect dep). `reconnectIterateSession()` remains the deliberate
+  SEMANTIC reset (new claims after create/unlock), distinct from transport
+  recovery.
 - **Deleted:** the socket `Map`, `connectionKey`, `ItxAddress`,
   `evictItxSocket`/`evictItxSocketIfCurrent`, the `Session & Project` handle
   intersection, the mirror's dedicated socket, **`<ItxProvider>`** (no provider is
@@ -474,9 +488,12 @@ independent sockets from killing each other. Collapse to one:
 Reviewed before implementation by codex (gpt-5.6-sol, max reasoning) for React
 19 / TanStack Start idiom; its corrections — immutable snapshot, session-owned
 (not `useMemo`) stub cache, generation-guarded reconnect, typed transport-only
-query retry, unconditional scope read — are folded in. Two suggestions were
-deliberately NOT adopted: confirm-auth-before-publish (adds a terminal/retryable
-branch for a case `_app` already gates; the original shipped optimistic), and
-auto-prefixing query keys with the slug (it broke the existing
+query retry, unconditional scope read — are folded in. Its
+confirm-auth-before-publish suggestion was initially rejected (the original
+shipped optimistic, publishing the pipelined root on `open`) and then ADOPTED in
+the second thermo round: the optimistic design turned out to fork the session
+identity via thenable assimilation and to leave a hung authenticate un-timed-out,
+so publish now happens on the awaited authenticate result. One suggestion stays
+NOT adopted: auto-prefixing query keys with the slug (it broke the existing
 `invalidateQueries`/`setQueryData` sites and duplicated the project id the keys
 already carry — the ambient slug drives the connection, not the cache key).

@@ -482,7 +482,7 @@ export function RepoIde({
             ) : gh ? (
               // Own Suspense (like RepoEditorPane's): the panel's first
               // connections read suspends, and without a local boundary that
-              // would bubble to the route's ItxBoundary and blank the whole IDE.
+              // would bubble to the route's `<Suspense>` boundary and blank the whole IDE.
               <Suspense
                 fallback={
                   <div className="p-3 text-xs text-muted-foreground" data-spinner="true">

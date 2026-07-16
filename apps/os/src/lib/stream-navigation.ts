@@ -71,7 +71,12 @@ export function readStreamStateOnce(
         },
       })
       .then((subscription) => {
-        release = () => void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+        release = () =>
+          void Promise.resolve(subscription.unsubscribe())
+            .catch(() => {})
+            // Release the stub too: on the tab-long shared socket, an
+            // undisposed handle leaks one import-table entry per ⌘K node read.
+            .finally(() => (subscription as Partial<Disposable>)[Symbol.dispose]?.());
         if (done) finish();
       })
       .catch((error: unknown) => {

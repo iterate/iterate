@@ -23,7 +23,7 @@ travel over the tab's single `/api` WebSocket and the server answers or pushes.
 
 The backend surface (`itx`) is the project's one API — see
 [`apps/os/src/README.md`](../apps/os/src/README.md) (the "four nouns") and the
-handwritten contract [`apps/os/src/types.ts`](../apps/os/src/types.ts).
+generated contract [`apps/os/src/itx-api.generated.ts`](../apps/os/src/itx-api.generated.ts).
 
 ## The four nouns
 
@@ -39,17 +39,21 @@ handwritten contract [`apps/os/src/types.ts`](../apps/os/src/types.ts).
 
 ## One socket, invisible reconnect
 
-The whole tab shares **one** WebSocket. It's dialed once, `authenticate()`d with
-the signed-in session cookie, and everything — the sidebar catalog, every project
-page, the stream mirror — rides it. The connection layer
+The whole tab shares **one** WebSocket — at most one active socket at a time,
+`authenticate()`d with the signed-in session cookie, and everything — the sidebar
+catalog, every project page, the stream mirror — rides it. The connection layer
 ([`apps/os/src/itx/itx-react.tsx`](../apps/os/src/itx/itx-react.tsx)) keeps it in
 module state (outside React) so it survives client-side navigation, and makes
 **reconnect invisible**: the last session is kept across a transport gap, so a
 dropped socket re-dials in the background without re-suspending the UI or showing
-a spinner. Reads are stale-while-revalidate; only an in-flight read retries. The
-full model (generations, the half-open verifier, the semantic-vs-transport reset)
-is documented in that file's header and in
-[`apps/os/src/itx/DECISIONS.md`](../apps/os/src/itx/DECISIONS.md) D24.
+a spinner. Precisely: committed UI keeps rendering, resolved reads keep their
+cached data (TanStack doesn't drop caches on a socket death), live subscriptions
+silently re-establish, and only an **in-flight** read retries (on a finite,
+transport-error-only policy — reconnect does not itself refetch resolved
+queries). The one accepted edge: an imperative call fired during the sub-second
+gap rides the dead stub and rejects. The full model (generations, the half-open
+verifier, the semantic-vs-transport reset) is documented in that file's header
+and in [`apps/os/src/itx/DECISIONS.md`](../apps/os/src/itx/DECISIONS.md) D24.
 
 Rules of thumb (the LiveView analogy — the server owns durable reduced views,
 React owns local interaction):
@@ -127,6 +131,12 @@ const streams = useLiveState(
 // re-renders only when streamsIndex changes.
 ```
 
+The selector must be a **pure function of the state** — return a stable slice
+(`(s) => s.rows`), never a fresh object, and never close over props/state
+(`(s) => s.rows[props.id]` goes stale invisibly: selection is cached by state
+identity). Select the broader slice and index in render, or route the changing
+input through `deps`.
+
 ### Act (mutations)
 
 No extra primitive — just call the capability on the handle, usually inside a
@@ -161,23 +171,23 @@ The entire browser API, from one file. `Itx` = `RpcStub<Project>`, a project
 capability handle; a "read" is a finite cached fetch, "live" is server-pushed
 state. A `slug` argument also accepts a `prj_…` id.
 
-| Symbol                                   | Kind      | What it gives you                                                                                                                                                                                                                         |
-| ---------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `useIterateSession()`                    | hook      | The **Iterate session** — the catalog `authenticate()` returned (`projects.list/create/get`, admin `streams`). Suspends once, on first connect. (Named to not collide with the _auth_ session from `useAuthClient()`.)                    |
-| `useItx(slug?)`                          | hook      | A **project itx** (`session.projects.get(slug)`). Defaults to the ambient `<ProjectScope>`. The everyday handle: `itx.streams`, `itx.repos`, `itx.chat`, …                                                                                |
-| `connectIterateSession()`                | fn        | Imperative `useIterateSession` — a `Promise`, for event handlers / `mutationFn`s / closures.                                                                                                                                              |
-| `connectItx(slug)`                       | fn        | Imperative `useItx` — a `Promise`.                                                                                                                                                                                                        |
-| `useItxQuery({ key, query })`            | hook      | Read once through a **project** itx; **suspends**. For content-addressed / historical / one-shot reads.                                                                                                                                   |
-| `useIterateSessionQuery({ key, query })` | hook      | Read once through the **session**; **non-suspending** (serves the always-mounted shell — sidebar, ⌘K, admin).                                                                                                                             |
-| `useLiveState(node, selector)`           | hook      | Subscribe to a `.liveState` node; server pushes a snapshot then diffs, the stable-slice `selector` picks what you render. Never suspends. The LiveView primitive.                                                                         |
-| `useItxSubscription(subscribe, deps)`    | hook      | Low-level escape hatch for raw ordered event streams (the activity tail). Most UI wants `useLiveState`.                                                                                                                                   |
-| `<ProjectScope slug>`                    | component | Sets the ambient project + pre-warms the socket. The one mount.                                                                                                                                                                           |
-| `reconnectIterateSession()`              | fn        | The deliberate **semantic reset** — drop + re-dial the socket to pick up new claims (after creating a project / unlocking admin). Distinct from the automatic, invisible transport reconnect.                                             |
-| `isItxTransportError(e)`                 | fn        | Is an error a transport-close (retryable), vs auth/validation/app (not)?                                                                                                                                                                  |
-| `reportTransportSuspicion()`             | fn        | Escape hatch for the **non-React** transport consumer (the browser stream mirror): "this socket looks half-open." Routes to the socket-owned verifier — which two-strike-checks and may re-dial — but **never** closes the socket itself. |
-| `Itx` (type)                             | type      | `RpcStub<Project>` — a project handle, for typing helpers that take one.                                                                                                                                                                  |
-| `ItxLiveSubscriptionHandle` (type)       | type      | What any `subscribe()` returns — `ping()` + `unsubscribe()`. The shape `useItxSubscription` drives.                                                                                                                                       |
-| `ItxSubscriptionStatus` (type)           | type      | `"connecting" \| "live" \| "error"` — the lifecycle a subscription reports.                                                                                                                                                               |
+| Symbol                                   | Kind      | What it gives you                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useIterateSession()`                    | hook      | The **Iterate session** — the catalog `authenticate()` returned (`projects.list/create/get`, admin `streams`). Suspends once, on first connect. (Named to not collide with the _auth_ session from `useAuthClient()`.)                                                                                  |
+| `useItx(slug?)`                          | hook      | A **project itx** (`session.projects.get(slug)`). Defaults to the ambient `<ProjectScope>`. The everyday handle: `itx.streams`, `itx.repos`, `itx.chat`, …                                                                                                                                              |
+| `connectIterateSession()`                | fn        | Imperative `useIterateSession` — a `Promise`, for event handlers / `mutationFn`s / closures.                                                                                                                                                                                                            |
+| `connectItx(slug)`                       | fn        | Imperative `useItx` — a `Promise`.                                                                                                                                                                                                                                                                      |
+| `useItxQuery({ key, query })`            | hook      | Read once through a **project** itx; **suspends**. For content-addressed / historical / one-shot reads.                                                                                                                                                                                                 |
+| `useIterateSessionQuery({ key, query })` | hook      | Read once through the **session**; **non-suspending** (serves the always-mounted shell — sidebar, ⌘K, admin).                                                                                                                                                                                           |
+| `useLiveState(node, selector)`           | hook      | Subscribe to a `.liveState` node; server pushes a snapshot then diffs, the stable-slice `selector` picks what you render. Never suspends. The LiveView primitive.                                                                                                                                       |
+| `useItxSubscription(subscribe, deps)`    | hook      | Low-level escape hatch for raw ordered event streams (the activity tail). Most UI wants `useLiveState`.                                                                                                                                                                                                 |
+| `<ProjectScope slug>`                    | component | Sets the ambient project + pre-warms the socket. The one mount.                                                                                                                                                                                                                                         |
+| `reconnectIterateSession()`              | fn        | The deliberate **semantic reset** — drop + re-dial the socket to pick up new claims (after creating a project / unlocking admin). Distinct from the automatic, invisible transport reconnect. Pair with `invalidateQueries({ queryKey: ["itx"] })` when cached reads must refresh under the new claims. |
+| `isItxTransportError(e)`                 | fn        | Is an error a transport-close (retryable), vs auth/validation/app (not)?                                                                                                                                                                                                                                |
+| `reportTransportSuspicion()`             | fn        | Escape hatch for the **non-React** transport consumer (the browser stream mirror): "this socket looks half-open." Routes to the socket-owned verifier — which two-strike-checks and may re-dial — but **never** closes the socket itself.                                                               |
+| `Itx` (type)                             | type      | `RpcStub<Project>` — a project handle, for typing helpers that take one.                                                                                                                                                                                                                                |
+| `ItxLiveSubscriptionHandle` (type)       | type      | What any `subscribe()` returns — `ping()` + `unsubscribe()`. The shape `useItxSubscription` drives.                                                                                                                                                                                                     |
+| `ItxSubscriptionStatus` (type)           | type      | `"connecting" \| "live" \| "error"` — the lifecycle a subscription reports.                                                                                                                                                                                                                             |
 
 Mutations have no hook — you call the capability on the handle
 (`itx.chat.sendMessage(text)`), usually inside a `useMutation`.
@@ -185,6 +195,23 @@ Mutations have no hook — you call the capability on the handle
 That's the whole surface — 15 exports from one file, no others. The everyday four
 are `useIterateSession` / `useItx` / `useItxQuery` / `useLiveState`; the rest are
 imperative siblings, the mount, the one escape hatch, and types.
+
+## The one exception (for now): the stream feed
+
+The main stream feed view does **not** yet speak this model. It runs the
+**browser stream mirror**: `useStreamMirror()` downloads a stream's whole event
+log once per `(project, path)` and runs two processors client-side into an OPFS
+SQLite database (with cross-tab leader election and durable checkpoints), and
+components query it with `useStreamQuery(db, sql)` — ~4,850 LOC under
+[`apps/os/src/domains/streams/client-libraries/browser/`](../apps/os/src/domains/streams/client-libraries/browser/).
+It rides the same one socket (it _reports_ transport suspicion, never closes
+anything), but it is a second consumption model with its own hooks. The ⌘K
+switcher and stream tree already use plain `useLiveState` — the feed is the
+holdout, because its projection (the rendered feed + live agent activity) is
+folded in the browser today. The plan to collapse it — server-owned feed live
+view + cursor-paged history, then delete the mirror — is designed in
+[`apps/os/docs/stream-mirror-collapse.md`](../apps/os/docs/stream-mirror-collapse.md).
+Don't build new UI on the mirror; use `useLiveState`/`useItxQuery`.
 
 ## Where the boundary is
 

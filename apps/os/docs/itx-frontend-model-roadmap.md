@@ -137,6 +137,8 @@ repos.get(p)/agents.get(id).liveState`. Root `ProjectLiveState` stays a small
   for access changes made by _other_ sessions/operators).
 - **Replace the browser stream mirror** with bounded server live views + cursor-
   paged history, then retire the browser-hosted stream database/processor host.
+  Fully designed (phases, deletions, honest losses) in
+  [stream-mirror-collapse.md](stream-mirror-collapse.md).
 
 ## Ordered roadmap
 
@@ -150,7 +152,7 @@ repos.get(p)/agents.get(id).liveState`. Root `ProjectLiveState` stays a small
    secrets, current repo state. Immutable commit/history reads stay finite reads.
 6. **Remove the project server-function lookup** — slug scope + live identity.
 7. **The stream migration** — server live views + paged history; retire the
-   browser mirror.
+   browser mirror ([design](stream-mirror-collapse.md)).
 8. **Delete the transitional surface** — manual invalidations and historical
    active docs.
 
