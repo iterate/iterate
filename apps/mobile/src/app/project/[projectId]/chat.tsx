@@ -1,0 +1,478 @@
+// Chat thread — one agent stream rendered as a feed. The heart of the app.
+//
+// Data flow: loadAndFollowThread (lib/live-thread.ts) reads the stream's
+// events and keeps a live server-push subscription feeding the same query
+// cache, so this screen is a plain useQuery consumer. Sending appends to the
+// agent stream over itx (the same lane the web dashboard uses); the echo of
+// our own message and everything the agent does arrive through the
+// subscription.
+//
+// Rendering runs the SAME reduction as the web dashboard (packages/ui
+// agent-ui-reducer via lib/feed.ts): user/assistant bubbles plus activity
+// roll-ups whose thinking/code text streams token-by-token while the agent
+// works. A header toggle flips to the raw event feed for debugging.
+//
+// A brand-new chat is just this screen pointed at a fresh /agents/mobile/<ts>
+// path: reading lazily initializes the stream and the first send creates the
+// agent (same lazy-seeding contract as the dashboard's new-chat page).
+
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { router, Stack, useLocalSearchParams } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { RpcStub } from "capnweb";
+import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
+import { SignInRequiredError } from "../../../lib/auth.ts";
+import {
+  reduceFeed,
+  type AgentUiFileAttachment,
+  type AgentUiItem,
+  type AgentUiMessageItem,
+} from "../../../lib/feed.ts";
+import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
+import { loadAndFollowThread, threadQueryKey } from "../../../lib/live-thread.ts";
+import { DEFAULT_SERVER } from "../../../lib/servers.ts";
+import { getServerBaseUrl } from "../../../lib/storage.ts";
+import type { Agent, StreamEvent } from "../../../../../os/src/itx-api.generated.ts";
+import { colors, radius, spacing } from "../../../lib/theme.ts";
+
+export default function ChatScreen() {
+  const { projectId, path } = useLocalSearchParams<{
+    projectId: string;
+    slug?: string;
+    path: string;
+  }>();
+
+  // The thread query is keyed by base URL (live pushes land under the same
+  // key), so resolve it first; it's one keychain read.
+  const server = useQuery({
+    queryKey: ["server"],
+    queryFn: async () => (await getServerBaseUrl()) || DEFAULT_SERVER,
+    staleTime: Infinity,
+  });
+  const baseUrl = server.data;
+
+  const events = useQuery({
+    queryKey: threadQueryKey(baseUrl || "", projectId, path),
+    queryFn: async () => {
+      try {
+        return await loadAndFollowThread(baseUrl!, projectId, path);
+      } catch (error) {
+        resetItxSession();
+        // Redirect from the async failure, not render: render-time
+        // navigation re-fires on every re-render while the error persists.
+        if (error instanceof SignInRequiredError) router.replace("/");
+        throw error;
+      }
+    },
+    enabled: baseUrl !== undefined,
+    // The live subscription owns updates after the initial load.
+    staleTime: Infinity,
+  });
+
+  const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<PickedImage[]>([]);
+  const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
+  const send = useMutation({
+    mutationFn: async (input: { message: string; files: PickedImage[] }) => {
+      const itx = await getItxSession(baseUrl!);
+      const project = await itx.projects.get(projectId);
+      const agent = project.agents.get(path) as RpcStub<Agent>;
+      if (input.files.length === 0) {
+        await agent.message(input.message);
+        return;
+      }
+      // Same shape as the web composer: ONE addFiles call → one input event
+      // carrying every attachment → one feed message + one agent turn.
+      await agent.addFiles({
+        files: input.files.map((file) => ({
+          contentType: file.contentType,
+          data: base64ToUint8Array(file.base64),
+          filename: file.filename,
+        })),
+        ...(input.message ? { message: input.message } : {}),
+      });
+    },
+    onMutate: () => {
+      setDraft("");
+      setAttachments([]);
+    },
+    onError: (_error, input) => {
+      setDraft(input.message);
+      setAttachments(input.files);
+    },
+  });
+
+  const feed = reduceFeed(path, events.data || []);
+  const insets = useSafeAreaInsets();
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={100}
+    >
+      <Stack.Screen
+        options={{
+          title: path.replace(/^\/agents\//, ""),
+          headerRight: () => (
+            <Pressable onPress={() => setViewMode(viewMode === "chat" ? "events" : "chat")}>
+              <Text style={styles.modeToggle}>{viewMode === "chat" ? "raw" : "chat"}</Text>
+            </Pressable>
+          ),
+        }}
+      />
+      {events.isPending ? (
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.textMuted} />
+        </View>
+      ) : events.isError ? (
+        <View style={styles.center}>
+          <Text style={styles.error}>{String(events.error.message)}</Text>
+          <Pressable onPress={() => events.refetch()} style={styles.retry}>
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : viewMode === "chat" ? (
+        <FeedList feed={feed} sendPending={send.isPending} />
+      ) : (
+        <EventList events={events.data || []} />
+      )}
+
+      {attachments.length > 0 ? (
+        <View style={styles.attachmentStrip}>
+          {attachments.map((image) => (
+            <Pressable
+              key={image.previewUri}
+              onPress={() =>
+                setAttachments(attachments.filter((a) => a.previewUri !== image.previewUri))
+              }
+            >
+              <Image source={{ uri: image.previewUri }} style={styles.attachmentThumb} />
+              <Text style={styles.attachmentRemove}>✕</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+        <Pressable
+          onPress={async () => setAttachments([...attachments, ...(await pickImages())])}
+          disabled={send.isPending}
+          style={styles.attach}
+        >
+          <Text style={styles.attachText}>+</Text>
+        </Pressable>
+        <TextInput
+          value={draft}
+          onChangeText={setDraft}
+          multiline
+          placeholder="Message"
+          placeholderTextColor={colors.textFaint}
+          style={styles.input}
+        />
+        <Pressable
+          onPress={() => {
+            const message = draft.trim();
+            const canSend = message !== "" || attachments.length > 0;
+            if (canSend && !send.isPending) send.mutate({ message, files: attachments });
+          }}
+          disabled={(draft.trim() === "" && attachments.length === 0) || send.isPending}
+          style={[
+            styles.send,
+            ((draft.trim() === "" && attachments.length === 0) || send.isPending) && {
+              opacity: 0.4,
+            },
+          ]}
+        >
+          <Text style={styles.sendText}>↑</Text>
+        </Pressable>
+      </View>
+      {send.isError ? (
+        <Text style={styles.sendError}>
+          {send.error instanceof Error ? send.error.message : String(send.error)}
+        </Text>
+      ) : null}
+    </KeyboardAvoidingView>
+  );
+}
+
+function FeedList({
+  feed,
+  sendPending,
+}: {
+  feed: ReturnType<typeof reduceFeed>;
+  sendPending: boolean;
+}) {
+  // Inverted list keeps the newest item at the bottom and pinned on keyboard
+  // open; data is reversed to match. The live activity is part of the feed,
+  // so streaming updates scroll naturally.
+  const rows = [...feed.items].reverse();
+  return (
+    <FlatList
+      inverted
+      data={rows}
+      keyExtractor={(item) => item.id}
+      contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
+      ListHeaderComponent={
+        // Inverted list: the "header" renders at the visual bottom.
+        sendPending || (feed.working && feed.live?.steps.length === 0) ? (
+          <View style={styles.workingRow}>
+            <ActivityIndicator size="small" color={colors.working} />
+            <Text style={styles.workingText}>working…</Text>
+          </View>
+        ) : null
+      }
+      ListEmptyComponent={
+        <View style={styles.emptyFlip}>
+          <Text style={styles.empty}>
+            Say what you want done. You&apos;ll see the agent think, write code, run it, and reply —
+            all live.
+          </Text>
+        </View>
+      }
+      renderItem={({ item }) => <FeedItem item={item} />}
+    />
+  );
+}
+
+function FeedItem({ item }: { item: AgentUiItem }) {
+  switch (item.kind) {
+    case "activity":
+      return <ActivityCard activity={item} />;
+    case "stream-woken":
+      return <Text style={styles.wakeMarker}>— {item.text || "stream woke"} —</Text>;
+    case "child-stream-created":
+      return <Text style={styles.wakeMarker}>— created child stream {item.childPath} —</Text>;
+    case "stream-paused":
+    case "stream-resumed":
+      return (
+        <Text style={styles.wakeMarker}>
+          — {item.reason == null ? item.text : `${item.text}: ${item.reason}`} —
+        </Text>
+      );
+    case "user":
+    case "assistant":
+      return <MessageBubble message={item} />;
+  }
+}
+
+function MessageBubble({ message }: { message: AgentUiMessageItem }) {
+  const isUser = message.kind === "user";
+  return (
+    <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
+      {message.text !== "" ? (
+        <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText} selectable>
+          {message.text}
+        </Text>
+      ) : null}
+      {message.files?.map((file) => (
+        <MessageAttachment key={file.path} file={file} />
+      ))}
+    </View>
+  );
+}
+
+function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
+  // Signed public URL minted when the file was attached — same source the
+  // web's <img> and the LLM use.
+  const open = () => void WebBrowser.openBrowserAsync(file.url);
+  if (file.contentType.startsWith("image/")) {
+    return (
+      <Pressable onPress={open}>
+        <Image source={{ uri: file.url }} style={styles.attachmentImage} resizeMode="contain" />
+      </Pressable>
+    );
+  }
+  return (
+    <Pressable onPress={open} style={styles.fileChip}>
+      <Text style={styles.fileChipText} numberOfLines={1}>
+        📎 {file.filename} · {formatFileSize(file.size)}
+      </Text>
+    </Pressable>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The unreduced stream, newest first — the debugging view. */
+function EventList({ events }: { events: StreamEvent[] }) {
+  const rows = [...events].reverse();
+  return (
+    <FlatList
+      inverted
+      data={rows}
+      keyExtractor={(event) => String(event.offset)}
+      contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
+      renderItem={({ item: event }) => (
+        <View style={styles.eventRow}>
+          <Text style={styles.eventType}>
+            {event.offset} · {event.type.replace("events.iterate.com/", "")}
+          </Text>
+          {event.payload ? <CodeBlock text={previewPayload(event.payload)} muted /> : null}
+        </View>
+      )}
+    />
+  );
+}
+
+function previewPayload(payload: Record<string, unknown>): string {
+  const json = JSON.stringify(payload, null, 1);
+  return json.length > 800 ? `${json.slice(0, 800)}…` : json;
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.md,
+    padding: spacing.lg,
+  },
+  modeToggle: { color: colors.textMuted, fontSize: 14 },
+  emptyFlip: { transform: [{ scaleY: -1 }], padding: spacing.lg },
+  empty: { color: colors.textMuted, fontSize: 14, lineHeight: 20, textAlign: "center" },
+  error: { color: colors.danger, fontSize: 14, textAlign: "center" },
+  retry: {
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  retryText: { color: colors.text, fontSize: 14 },
+  bubble: {
+    maxWidth: "85%",
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
+  bubbleUser: { alignSelf: "flex-end", backgroundColor: colors.text },
+  bubbleAssistant: {
+    alignSelf: "flex-start",
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  bubbleUserText: { color: colors.background, fontSize: 15, lineHeight: 21 },
+  bubbleAssistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  workingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  workingText: { color: colors.working, fontSize: 13 },
+  eventRow: { gap: 4 },
+  eventType: { color: colors.textFaint, fontSize: 11, fontFamily: "Menlo" },
+  wakeMarker: { color: colors.textFaint, fontSize: 11, textAlign: "center" },
+  attachmentImage: {
+    width: 220,
+    height: 160,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    marginTop: 4,
+  },
+  fileChip: {
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    marginTop: 4,
+    alignSelf: "flex-start",
+  },
+  fileChipText: { color: colors.textMuted, fontSize: 12 },
+  attachmentStrip: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  attachmentThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  attachmentRemove: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    color: colors.text,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.full,
+    width: 18,
+    height: 18,
+    textAlign: "center",
+    fontSize: 11,
+    lineHeight: 17,
+    overflow: "hidden",
+  },
+  attach: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.full,
+    borderColor: colors.border,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  attachText: { color: colors.textMuted, fontSize: 20, lineHeight: 22 },
+  composer: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  input: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    color: colors.text,
+    fontSize: 15,
+    maxHeight: 120,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
+  send: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    width: 38,
+    height: 38,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendText: { color: colors.background, fontSize: 18, fontWeight: "700" },
+  sendError: {
+    color: colors.danger,
+    fontSize: 12,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+});
