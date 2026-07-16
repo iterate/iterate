@@ -385,6 +385,34 @@ describe("itx session socket", () => {
     container.remove();
   });
 
+  test("terminal auth on RECONNECT drops the dead session (no zombie stubs) and surfaces the error", async () => {
+    // Authority loss mid-session: the live socket dies, the redial's
+    // authenticate rejects terminally (claims revoked / signed out elsewhere).
+    // Keeping the prior session would be a ZOMBIE — its transport is closed, so
+    // hooks would serve stubs whose every call fails with transport-shaped
+    // errors while the real auth error never surfaces.
+    const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.tsx");
+    const first = connectIterateSession();
+    await openLatest();
+    const session = (await first) as { [Symbol.dispose]: ReturnType<typeof vi.fn> };
+
+    control.authError = new Error("session revoked");
+    FakeWebSocket.instances[0]!.fire("close"); // transport dies → auto-redial
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1]!.fire("open"); // redial authenticates → terminal
+    await expect(connectIterateSession()).rejects.toThrow(/session revoked/);
+
+    // Parked, and the dead session was DROPPED + disposed — not handed out.
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
+
+    // Explicit reset with restored claims recovers to a fresh session.
+    control.authError = undefined;
+    reconnectIterateSession();
+    await openLatest();
+    await expect(connectIterateSession()).resolves.toBe(control.lastRoot);
+  });
+
   test("a semantic reset clears dial backoff so new claims dial immediately", async () => {
     vi.useFakeTimers();
     try {

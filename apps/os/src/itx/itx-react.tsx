@@ -55,7 +55,11 @@
  *    TanStack keeps cached read data through a reconnect (no re-suspend, no
  *    spinner); only an in-flight read retries, on the transport-only policy —
  *    see useItxQuery. A stray action fired during the sub-second gap rides the
- *    dead stub and rejects — the one accepted edge.
+ *    dead stub and rejects — the one accepted edge. Kept-across-the-gap applies
+ *    to TRANSPORT gaps only: a terminal auth rejection on the redial is an
+ *    AUTHORITY loss — the parked snapshot drops the (already dead) session so
+ *    the real error surfaces instead of zombie stubs (see the dial terminal
+ *    path).
  *
  *  • PROJECT STUBS ARE SESSION-OWNED, not React-owned. `session.projects.get`
  *    allocates a capnweb import-table entry, and React may run/discard a
@@ -388,12 +392,24 @@ function dial(): Generation {
           // generation keeps owning the slot (see Generation.failed) so a
           // render can't storm fresh dials; publish the parked snapshot so
           // effects observe one final generation and settle in "error".
+          //
+          // The parked snapshot carries NO session. Keeping the last session is
+          // the invisible-reconnect move for TRANSPORT gaps — but this is an
+          // AUTHORITY loss (claims revoked / signed out elsewhere): the prior
+          // session's socket is already closed and no redial will revive it, so
+          // handing it out would wedge hooks on zombie stubs whose calls fail
+          // with transport-shaped errors while the real auth error never
+          // surfaces. Dropping it makes useIterateSession() re-throw the
+          // terminal error to the boundary; the prior session's refs are
+          // released here (they were dead already).
           const terminal = error instanceof Error ? error : new Error(String(error));
           generation.failed = true;
           reject(terminal);
           firstConnect?.reject(terminal);
           firstConnect = undefined;
-          setSnapshot({ generation: id, session: snapshot?.session, connecting: promise });
+          const zombieSession = snapshot?.session;
+          setSnapshot({ generation: id, session: undefined, connecting: promise });
+          if (zombieSession !== undefined) disposeSession(zombieSession);
           retireGeneration(generation);
           return;
         }
