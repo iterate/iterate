@@ -451,17 +451,14 @@ function StreamInspectorSheet({
     panels.inspectedScriptExecutionId,
   ]);
   const [retainedInspector, setRetainedInspector] = useState(activeInspector);
-  const activeInspectorKey =
-    activeInspector?.kind === "script"
-      ? `script:${activeInspector.executionId}`
-      : activeInspector == null
-        ? null
-        : `${activeInspector.kind}:${activeInspector.offset}`;
   // Base UI reports dismissal before TanStack Router commits the URL search
   // update. Suppress that exact inspector immediately so retained exit content
-  // cannot navigate and write its deep link back during the closing frame.
-  const [dismissedInspectorKey, setDismissedInspectorKey] = useState<string | null>(null);
-  const inspectorOpen = activeInspectorKey != null && activeInspectorKey !== dismissedInspectorKey;
+  // cannot navigate and write its deep link back during the closing frame. The
+  // object identity is intentional: useMemo preserves it until the URL leaves
+  // this selection, while re-selecting the same deep link creates a new object
+  // and can reverse the exit transition immediately.
+  const [dismissedInspector, setDismissedInspector] = useState<typeof activeInspector>(null);
+  const inspectorOpen = activeInspector != null && activeInspector !== dismissedInspector;
 
   // Base UI keeps the popup mounted for its exit transition. Retain the last
   // target while the URL-driven open state closes so that transition never
@@ -511,14 +508,14 @@ function StreamInspectorSheet({
       open={inspectorOpen}
       onOpenChange={(open) => {
         if (!open) {
-          setDismissedInspectorKey(activeInspectorKey);
+          setDismissedInspector(activeInspector);
           panels.closeInspector();
         }
       }}
       onOpenChangeComplete={(open) => {
         if (!open) {
           setRetainedInspector(null);
-          setDismissedInspectorKey(null);
+          setDismissedInspector(null);
         }
       }}
     >
