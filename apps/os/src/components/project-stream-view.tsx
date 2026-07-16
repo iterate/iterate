@@ -3,10 +3,11 @@ import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
-import type {
-  AgentUiLlmStep,
-  AgentUiState,
-  AgentUiStep,
+import {
+  isAgentUiActivityWorking,
+  type AgentUiLlmStep,
+  type AgentUiState,
+  type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { Stream } from "../itx-api.generated.ts";
 import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
@@ -238,10 +239,7 @@ export function ProjectStreamView({
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy =
-    agentUiState?.live != null &&
-    (agentUiState.live.phase != null ||
-      agentUiState.live.steps.some((step) => step.status === "running"));
+  const agentBusy = isAgentUiActivityWorking(agentUiState?.live ?? null);
   const presence = agentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,

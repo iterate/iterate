@@ -1,3 +1,4 @@
+import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
 import { z } from "zod";
 import type { Event } from "./types.ts";
@@ -35,6 +36,8 @@ export type AgentUiLlmStep = {
   outputTokens?: number;
   durationMs?: number;
   outcome?: "completed" | "failed" | "cancelled";
+  /** Why a cancelled request stopped, when the UI recognizes the reason. */
+  cancelReason?: AgentLlmRequestCancelReason;
   errorMessage?: string;
   startedAtMs: number;
 };
@@ -70,6 +73,83 @@ export type AgentUiActivity = {
   /** When the current authoritative phase began, for the live elapsed clock. */
   phaseStartedAtMs?: number;
 };
+
+export type AgentUiActivitySummary = {
+  codeCount: number;
+  requestCount: number;
+  retryCount: number;
+  outcome: "clean" | "recovering" | "recovered" | "interrupted" | "restart-failed" | "failed";
+  interruptedWithPartialResponse: boolean;
+  recoveryStartedAtMs: number | null;
+};
+
+/** One canonical interpretation of activity attempts for every UI surface. */
+export function summarizeAgentUiActivity(
+  activity: AgentUiActivity,
+  steps: readonly AgentUiStep[] = activity.steps,
+): AgentUiActivitySummary {
+  let codeCount = 0;
+  let requestCount = 0;
+  let retryCount = 0;
+  let lastRestartIndex = -1;
+  let lastCompletionIndex = -1;
+  let failed = false;
+  let interrupted = false;
+  let interruptedWithPartialResponse = false;
+  let recoveryStartedAtMs: number | null = null;
+
+  steps.forEach((step, index) => {
+    if (step.kind === "code") {
+      codeCount += 1;
+      failed ||= step.success === false;
+      return;
+    }
+
+    const crashCancel =
+      step.outcome === "cancelled" && step.cancelReason === "durable-object-crashed";
+    if (!crashCancel) requestCount += 1;
+    if (step.outcome === "failed") failed = true;
+    if (step.outcome === "completed") lastCompletionIndex = index;
+    if (crashCancel) {
+      retryCount += 1;
+      lastRestartIndex = index;
+      recoveryStartedAtMs = step.startedAtMs + (step.durationMs ?? 0);
+    }
+    if (step.outcome === "cancelled" && step.cancelReason === "interrupted-by-user-input") {
+      interrupted = true;
+      interruptedWithPartialResponse ||= step.thinkingText !== "" || step.responseText !== "";
+    }
+  });
+
+  const outcome: AgentUiActivitySummary["outcome"] = failed
+    ? "failed"
+    : interrupted
+      ? "interrupted"
+      : lastRestartIndex === -1
+        ? "clean"
+        : lastCompletionIndex > lastRestartIndex
+          ? "recovered"
+          : activity.status === "running"
+            ? "recovering"
+            : "restart-failed";
+  return {
+    codeCount,
+    requestCount,
+    retryCount,
+    outcome,
+    interruptedWithPartialResponse,
+    recoveryStartedAtMs,
+  };
+}
+
+export function isAgentUiActivityWorking(activity: AgentUiActivity | null): boolean {
+  return (
+    activity != null &&
+    (activity.phase != null ||
+      activity.steps.some((step) => step.status === "running") ||
+      summarizeAgentUiActivity(activity).outcome === "recovering")
+  );
+}
 
 /** A file attachment shown alongside a user message in the agent UI. */
 export type AgentUiFileAttachment = {
@@ -195,21 +275,27 @@ export type AgentUiState = {
   provisionalActivities: Record<string, AgentUiActivity>;
 };
 
-const AgentUiLlmStepSchema = z.strictObject({
-  kind: z.literal("llm"),
-  id: z.string(),
-  llmRequestOffset: z.number().int().nonnegative(),
-  status: z.enum(["running", "done"]),
-  model: z.string().optional(),
-  thinkingText: z.string(),
-  responseText: z.string(),
-  inputTokens: z.number().int().nonnegative().optional(),
-  outputTokens: z.number().int().nonnegative().optional(),
-  durationMs: z.number().finite().nonnegative().optional(),
-  outcome: z.enum(["completed", "failed", "cancelled"]).optional(),
-  errorMessage: z.string().optional(),
-  startedAtMs: z.number().finite(),
-}) satisfies z.ZodType<AgentUiLlmStep>;
+const AgentUiLlmStepSchema = z
+  .strictObject({
+    kind: z.literal("llm"),
+    id: z.string(),
+    llmRequestOffset: z.number().int().nonnegative(),
+    status: z.enum(["running", "done"]),
+    model: z.string().optional(),
+    thinkingText: z.string(),
+    responseText: z.string(),
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
+    durationMs: z.number().finite().nonnegative().optional(),
+    outcome: z.enum(["completed", "failed", "cancelled"]).optional(),
+    cancelReason: AgentLlmRequestCancelReason.optional(),
+    errorMessage: z.string().optional(),
+    startedAtMs: z.number().finite(),
+  })
+  .refine((step) => step.cancelReason == null || step.outcome === "cancelled", {
+    message: "cancelReason requires a cancelled outcome",
+    path: ["cancelReason"],
+  }) satisfies z.ZodType<AgentUiLlmStep>;
 
 const AgentUiCodeStepSchema = z.strictObject({
   kind: z.literal("code"),
@@ -500,7 +586,10 @@ function reduceAgentUiEvent(
 
     case AGENT_LLM_REQUEST_REQUESTED: {
       const base =
-        state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
+        state.queuedUserMessages.length === 0 ||
+        (state.live != null && summarizeAgentUiActivity(state.live).outcome === "recovering")
+          ? state
+          : settleLive(state, timestampMs, items);
       const ready =
         base.live === null &&
         (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
@@ -555,7 +644,7 @@ function reduceAgentUiEvent(
           ? result.error.message
           : undefined;
       const updated = updateLlmStep(state, llmRequestOffset, (step) =>
-        step.outcome === "cancelled"
+        step.outcome != null
           ? step
           : {
               ...step,
@@ -574,12 +663,19 @@ function reduceAgentUiEvent(
 
     case AGENT_LLM_REQUEST_CANCELLED: {
       const llmRequestOffset = readLlmRequestOffset(event);
+      const cancelReason = readLlmCancelReason(event);
       if (llmRequestOffset == null) return state;
-      const updated = updateLlmStep(state, llmRequestOffset, (step) => ({
-        ...step,
-        status: "done",
-        outcome: "cancelled",
-      }));
+      const updated = updateLlmStep(state, llmRequestOffset, (step) =>
+        step.outcome != null
+          ? step
+          : {
+              ...step,
+              status: "done",
+              outcome: "cancelled",
+              ...(cancelReason == null ? {} : { cancelReason }),
+              durationMs: Math.max(0, timestampMs - step.startedAtMs),
+            },
+      );
       return clearSettledPhase(updated, "llm");
     }
 
@@ -853,16 +949,12 @@ function isInitialStreamWake(event: Event): boolean {
   return event.offset <= 2;
 }
 
-function liveIsWorking(live: AgentUiActivity | null): boolean {
-  return live?.phase != null || live?.steps.some((step) => step.status === "running") === true;
-}
-
 function settleLiveIfIdle(
   state: AgentUiState,
   endedAtMs: number,
   items: AgentUiItem[],
 ): AgentUiState {
-  if (liveIsWorking(state.live)) return state;
+  if (isAgentUiActivityWorking(state.live)) return state;
   return settleLive(state, endedAtMs, items);
 }
 
@@ -990,7 +1082,7 @@ function emitUserMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (liveIsWorking(settled.live)) {
+  if (isAgentUiActivityWorking(settled.live)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
@@ -1008,7 +1100,7 @@ function emitAssistantMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (liveIsWorking(settled.live)) {
+  if (isAgentUiActivityWorking(settled.live)) {
     return {
       ...settled,
       deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
@@ -1361,6 +1453,11 @@ function readNumber(event: Event, key: string): number | null {
 /** The llm-request-requested offset an LLM lifecycle event references. */
 function readLlmRequestOffset(event: Event): number | null {
   return readNumber(event, "llmRequestOffset");
+}
+
+function readLlmCancelReason(event: Event): AgentLlmRequestCancelReason | null {
+  const parsed = AgentLlmRequestCancelReason.safeParse(readString(event, "reason"));
+  return parsed.success ? parsed.data : null;
 }
 
 function readRecord(event: Event, key: string): Record<string, unknown> | null {

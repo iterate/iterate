@@ -1,12 +1,45 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
-import type { AgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type {
+  AgentUiActivity,
+  AgentUiLlmStep,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentFeedItemRow, AgentLiveActivity } from "./agent-feed.tsx";
 
 afterEach(() => {
   vi.useRealTimers();
 });
+
+function llmStep(
+  offset: number,
+  startedAtMs: number,
+  overrides: Partial<AgentUiLlmStep> = {},
+): AgentUiLlmStep {
+  return {
+    kind: "llm",
+    id: `llm:${offset}`,
+    llmRequestOffset: offset,
+    status: "done",
+    thinkingText: "",
+    responseText: "",
+    outcome: "completed",
+    startedAtMs,
+    ...overrides,
+  };
+}
+
+function renderActivity(activity: AgentUiActivity, expanded = true): HTMLDivElement {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentFeedItemRow
+      item={activity}
+      toggledIds={expanded ? new Set([activity.id]) : new Set()}
+      onToggle={() => {}}
+    />,
+  );
+  return container;
+}
 
 test("the live tail shows accumulated work above a timer for the current LLM phase", () => {
   vi.useFakeTimers();
@@ -100,6 +133,109 @@ test("the accumulated line does not claim that the active operation already fini
     "Running code",
   );
   expect(container.textContent).not.toContain("Ran code");
+});
+
+test("a recovered restart is calm, excludes the dead attempt, and explains the retry", () => {
+  const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
+  const activity: AgentUiActivity = {
+    kind: "activity",
+    id: "activity:recovered",
+    status: "done",
+    startedAtMs,
+    endedAtMs: startedAtMs + 31_000,
+    steps: [
+      llmStep(1, startedAtMs, {
+        model: "openai/gpt-5.6-sol",
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
+        durationMs: 5_000,
+        responseText: "zombie partial",
+      }),
+      llmStep(2, startedAtMs + 6_000),
+      llmStep(3, startedAtMs + 20_000),
+    ],
+  };
+  const container = renderActivity(activity);
+  const summary = container.querySelector('button[title^="Agent activity"]');
+
+  expect(summary?.textContent).toBe("2 requests · 1 retry · recovered · 31 s");
+  expect(summary?.querySelector("svg.lucide-refresh-cw")).not.toBeNull();
+  expect(summary?.querySelector("svg.lucide-ban")).toBeNull();
+  expect(container.textContent).toContain("Agent restartedopenai/gpt-5.6-sol · 5 s");
+  expect(container.textContent).toContain("Platform restarted this agent. Retried automatically.");
+  expect(container.textContent).not.toContain("partial response");
+});
+
+test("user interruption and an unrecovered restart remain distinct failures", () => {
+  const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
+  const interrupted = renderActivity({
+    kind: "activity",
+    id: "activity:interrupted",
+    status: "done",
+    startedAtMs,
+    endedAtMs: startedAtMs + 5_000,
+    steps: [
+      llmStep(1, startedAtMs, {
+        outcome: "cancelled",
+        cancelReason: "interrupted-by-user-input",
+        responseText: "partial",
+      }),
+    ],
+  });
+  const restartFailed = renderActivity({
+    kind: "activity",
+    id: "activity:restart-failed",
+    status: "done",
+    startedAtMs,
+    endedAtMs: startedAtMs + 5_000,
+    steps: [
+      llmStep(2, startedAtMs, {
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
+      }),
+    ],
+  });
+
+  expect(interrupted.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
+    "1 request · interrupted (click to see partial response) · 5 s",
+  );
+  expect(interrupted.querySelector("svg.lucide-ban")).not.toBeNull();
+  expect(interrupted.textContent).toContain("Stopped for your new message");
+  expect(restartFailed.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
+    "0 requests · 1 retry · restart failed · 5 s",
+  );
+  expect(restartFailed.querySelector("svg.lucide-circle-alert")).not.toBeNull();
+});
+
+test("a crash-cancel remains visibly busy while its replacement is pending", () => {
+  vi.useFakeTimers();
+  const now = Date.UTC(2026, 6, 16, 14, 41, 28);
+  vi.setSystemTime(now);
+  const live: AgentUiActivity = {
+    kind: "activity",
+    id: "activity:recovering",
+    status: "running",
+    startedAtMs: now - 5_000,
+    steps: [
+      llmStep(1, now - 5_000, {
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
+        durationMs: 5_000,
+      }),
+    ],
+  };
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
+  );
+
+  expect(container.querySelector('[data-testid="agent-live-summary"]')?.textContent).toContain(
+    "0 requests · 1 retry",
+  );
+  expect(container.querySelector('[data-testid="agent-live-status"]')?.textContent).toContain(
+    "Restarted — continuing… 0.0s",
+  );
+  expect(container.querySelector("svg.lucide-loader-circle")).not.toBeNull();
 });
 
 test("a newly announced phase never links to a previous completed operation", () => {
