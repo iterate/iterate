@@ -924,12 +924,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       try {
         if (input.ancestor === undefined) {
           span.setAttribute("iterate.capability_host.script_outcome", "ancestor_not_declared");
-          await tracing.enterSpan("capability_host.script_completion_append", () =>
-            this.#appendCompletion({
-              executionId: input.executionId,
-              error: `Script was NOT executed: capability-host "${this.#path}" has no ancestor declaration.`,
-            }),
-          );
+          await this.#appendAndFoldCompletion({
+            executionId: input.executionId,
+            error: `Script was NOT executed: capability-host "${this.#path}" has no ancestor declaration.`,
+          });
           durableAttemptEvidenceCommitted = true;
           return;
         }
@@ -943,12 +941,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         );
         if (checked.rejection !== null) {
           span.setAttribute("iterate.capability_host.script_outcome", "typecheck_rejected");
-          await tracing.enterSpan("capability_host.script_completion_append", () =>
-            this.#appendCompletion({
-              executionId: input.executionId,
-              error: checked.rejection!,
-            }),
-          );
+          await this.#appendAndFoldCompletion({
+            executionId: input.executionId,
+            error: checked.rejection!,
+          });
           durableAttemptEvidenceCommitted = true;
           return;
         }
@@ -980,18 +976,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
               });
             },
           );
-          await tracing.enterSpan("capability_host.script_completion_append", () =>
-            this.#appendCompletion({ executionId: input.executionId, result }),
-          );
+          await this.#appendAndFoldCompletion({ executionId: input.executionId, result });
           span.setAttribute("iterate.capability_host.script_outcome", "succeeded");
         } catch (error) {
           span.setAttribute("iterate.capability_host.script_outcome", "failed");
-          await tracing.enterSpan("capability_host.script_completion_append", () =>
-            this.#appendCompletion({
-              executionId: input.executionId,
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          );
+          await this.#appendAndFoldCompletion({
+            executionId: input.executionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       } finally {
         this.#liveExecutions.delete(input.executionId);
@@ -999,6 +991,41 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
           this.#claimedExecutions.delete(input.executionId);
         }
       }
+    });
+  }
+
+  /**
+   * Commit a terminal script fact and fold that exact offset through this
+   * processor before the background attempt is considered settled.
+   *
+   * `runScript` waits on a future-event predicate registered before the
+   * request append. A committed completion must therefore be driven through
+   * the runner directly; relying on the Stream DO's asynchronous subscription
+   * wake can leave a successful call parked indefinitely when that transport
+   * is lost or wedged. The offset form is a serialized self-pull, so concurrent
+   * completions collapse into one catch-up without double-processing.
+   *
+   * This helper is only used by #executeScript, which always runs off the
+   * processor chain. Reconciliation keeps using #appendCompletion directly
+   * because it appends from inside a blocking delivery frame, where waiting
+   * for a self-pull queued behind that same frame would deadlock.
+   */
+  async #appendAndFoldCompletion(input: {
+    executionId: string;
+    error?: string;
+    result?: unknown;
+  }): Promise<void> {
+    const [completed] = await tracing.enterSpan("capability_host.script_completion_append", () =>
+      this.#appendCompletion(input),
+    );
+    if (completed === undefined) {
+      throw new Error(
+        `script execution "${input.executionId}" completion append returned no event`,
+      );
+    }
+    await tracing.enterSpan("capability_host.script_completion_consume", async (span) => {
+      span.setAttribute("iterate.capability_host.completion_offset", completed.offset);
+      await this.#reads.waitUntilEvent({ offset: completed.offset });
     });
   }
 

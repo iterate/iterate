@@ -202,6 +202,7 @@ describe("script execution typecheck gate", () => {
       "capability_host.script_started_append",
       "capability_host.script_loopback",
       "capability_host.script_completion_append",
+      "capability_host.script_completion_consume",
     ]);
     expect(recordedSpans[1]?.attributes).toMatchObject({
       "iterate.capability_host.typecheck_surface": "platform",
@@ -323,11 +324,14 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(run).toHaveBeenCalledTimes(1);
 
-    // Deliver the resulting started/completed facts so the public method's
-    // future-event waiter observes the durable completion, as production's
-    // normal subscription lane does.
-    await harness.runner.catchUp();
+    // MemoryStream also never delivers the completion. The background attempt
+    // must fold its own committed completion offset instead of parking the
+    // public call on the asynchronous subscription lane.
     await expect(result).resolves.toMatchObject({ result: "ok" });
+    expect(
+      recordedSpans.find((span) => span.name === "capability_host.script_completion_consume")
+        ?.attributes,
+    ).toMatchObject({ "iterate.capability_host.completion_offset": 4 });
     expect(
       recordedSpans.find((span) => span.name === "capability_host.script_request_consume")
         ?.attributes,
@@ -350,7 +354,6 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(run).toHaveBeenCalledTimes(1);
     expect((await harness.runner.snapshot()).offset).toBeGreaterThanOrEqual(3);
-    await harness.runner.catchUp();
     await expect(result).resolves.toMatchObject({ result: "ok" });
     expect(
       recordedSpans.find((span) => span.name === "capability_host.script_request_consume")
@@ -389,7 +392,6 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(run).toHaveBeenCalledTimes(1);
 
-    await harness.runner.catchUp();
     await expect(result).resolves.toMatchObject({ result: "ok" });
     expect(run).toHaveBeenCalledTimes(1);
   });
