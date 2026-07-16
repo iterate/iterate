@@ -12,7 +12,6 @@ import type {
   Agent,
   AgentChat,
   CapabilityProvision,
-  CfMarkdownSupportedFormat,
   DynamicWorkerRef,
   FileData,
   FileHandle,
@@ -421,7 +420,7 @@ return await itx.projects.get(pid).__describe();
       return { current: await counter.current() }; // 2, and it persists under the key
     },
   }),
-  projectExample<SandboxExecGap>({
+  projectExample({
     id: "sandbox-exec",
     title: "Create a sandbox and run shell commands in it",
     description:
@@ -685,7 +684,7 @@ return await itx.projects.get(pid).__describe();
       return { status: response.status, bodyStart: body.slice(0, 200) };
     },
   }),
-  projectExample<EgressJsonGap>({
+  projectExample({
     id: "secret-postman-echo",
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
@@ -714,7 +713,9 @@ return await itx.projects.get(pid).__describe();
         throw new Error(`Postman Echo returned ${response.status}: ${await response.text()}`);
       }
 
-      const body = await response.json();
+      // json() resolves the honest `unknown`; parsing the text keeps this
+      // plain-JS body's dynamic reads over the echoed shape typecheckable.
+      const body = JSON.parse(await response.text());
       const after = await secret.__describe();
       const echoedSecret = body?.headers?.["x-itx-secret"];
 
@@ -1317,7 +1318,24 @@ return {
       return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
     },
   }),
-  projectExample<GmailDataGap>({
+  projectExample<{
+    // `data` is caller-typed on the surface (request<T = unknown>); a plain-JS
+    // body cannot instantiate T, so the shapes this body reads (the message
+    // list, then per-message metadata) are declared here instead.
+    integrations: {
+      gmail: {
+        get(connection?: string): {
+          request(input: { path: string; query?: Record<string, unknown> }): Promise<{
+            data: {
+              messages?: Array<{ id: string }>;
+              resultSizeEstimate?: number;
+              payload?: { headers?: Array<{ name: string; value?: string }> };
+            };
+          }>;
+        };
+      };
+    };
+  }>({
     id: "gmail-search-inbox",
     e2eProven: false,
     title: "Search the inbox through the built-in Gmail integration",
@@ -1477,7 +1495,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<ToMarkdownNoArgGap>({
+  projectExample({
     id: "cf-ai-to-markdown",
     e2eProven: false,
     title: "Convert a document to Markdown with Workers AI",
@@ -1491,7 +1509,12 @@ export default class ProjectWorker extends WorkerEntrypoint {
       return { supported: supported.slice(0, 10), converted };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // run's output is caller-typed (run<T = unknown>) and a plain-JS body
+    // cannot instantiate T, so each ai entry declares the shape it reads.
+    // Text-generation models answer in `response`.
+    ai: { run(model: string, body: unknown): Promise<{ response?: string }> };
+  }>({
     id: "ai-generate-text",
     e2eProven: false,
     title: "Generate or summarize text with a hosted LLM",
@@ -1513,7 +1536,11 @@ export default class ProjectWorker extends WorkerEntrypoint {
       return { summary: result.response };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; FLUX answers with a
+    // base64 image in `image`.
+    ai: { run(model: string, body: unknown): Promise<{ image?: string }> };
+  }>({
     id: "ai-generate-image",
     e2eProven: false,
     title: "Generate an image with a Workers AI model",
@@ -1544,7 +1571,11 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; Grok TTS answers with a
+    // hosted MP3 URL in `result.audio`.
+    ai: { run(model: string, body: unknown): Promise<{ result?: { audio?: string } }> };
+  }>({
     id: "ai-generate-audio",
     e2eProven: false,
     title: "Generate speech audio with a Workers AI model",
@@ -1566,7 +1597,18 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; Grok STT answers with the
+    // transcription fields under `result`.
+    ai: {
+      run(
+        model: string,
+        body: unknown,
+      ): Promise<{
+        result?: { text?: string; language?: string; duration?: number; words?: unknown[] };
+      }>;
+    };
+  }>({
     id: "ai-transcribe-audio",
     e2eProven: false,
     title: "Transcribe audio with a Workers AI model",
@@ -1590,7 +1632,11 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; Grok Imagine Video answers
+    // with a hosted MP4 URL in `result.video`.
+    ai: { run(model: string, body: unknown): Promise<{ result?: { video?: string } }> };
+  }>({
     id: "ai-generate-video",
     e2eProven: false,
     title: "Generate video with a Workers AI model",
@@ -1898,60 +1944,3 @@ type Live<Name extends string, Impl, Mounted = Remoted<Impl>> = Record<Name, Mou
     type: "live";
   }): Promise<CapabilityProvision>;
 };
-
-// ── PUBLISHED-TYPE GAPS — each of these is an itx-api.generated.ts weakness;
-// fix upstream, then delete the overlay. Every alias is an `Extra` widening,
-// intersected FIRST at its use site so its signatures win resolution for
-// exactly the calls the entry teaches. ──
-
-/** CloudflareSandbox lags the sandbox SDK: exec() exists at runtime (the
- * sandbox-exec entry is about it) but not yet in the generated declaration. */
-type SandboxExecGap = {
-  sandboxes: {
-    get(path: string): Promise<{
-      exec(command: string): Promise<{ stdout: string; exitCode: number }>;
-    }>;
-  };
-};
-
-/** `egress.fetch` genuinely returns a `Response`, but under the app's merged
- * DOM + workers-types globals `response.json()` resolves to `Promise<{}>` —
- * useless to a body that reads the echoed JSON dynamically. */
-type EgressJsonGap = {
-  egress: {
-    fetch(request: Request): Promise<{
-      ok: boolean;
-      status: number;
-      text(): Promise<string>;
-      json(): Promise<any>;
-    }>;
-  };
-};
-
-/** The generated GmailConnection types response `data` as unknown (it is
- * whatever the REST resource returns); the gmail entry reads it dynamically. */
-type GmailDataGap = {
-  integrations: {
-    gmail: {
-      get(connection?: string): {
-        request(input: { path: string; query?: Record<string, unknown> }): Promise<{
-          data: {
-            messages?: Array<{ id: string }>;
-            resultSizeEstimate?: number;
-            payload?: { headers?: Array<{ name: string; value?: string }> };
-          };
-        }>;
-      };
-    };
-  };
-};
-
-/** `ai.toMarkdown()`'s no-argument call returns the supported-format list;
- * the generated union covers all call shapes at once, so the no-arg arity
- * needs this narrowing. */
-type ToMarkdownNoArgGap = { ai: { toMarkdown(): Promise<CfMarkdownSupportedFormat[]> } };
-
-/** `itx.ai.run` returns `unknown` in the generated surface (outputs are
- * model-shaped); entries that read a specific model's response fields use
- * this per-entry overlay instead of casting inside the body. */
-type LooseAiRun = { ai: { run(model: string, body: unknown): Promise<any> } };

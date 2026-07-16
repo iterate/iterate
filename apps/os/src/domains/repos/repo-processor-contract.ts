@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
@@ -478,6 +481,9 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-import-failed",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/stream/created",
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/repo/created",

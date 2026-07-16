@@ -5,7 +5,9 @@ import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import type { ProjectCustomDomainCloudflareSnapshot } from "./project-processor-contract.ts";
 
 type CustomDomainReduceInput = Parameters<typeof reduceCustomDomainEvent>[0];
-type CustomDomainProcessInput = Parameters<typeof processCustomDomainEvent>[0];
+/** These tests always drive a REAL consumed event, never the event-less
+ * at-head pass (`event: null`), so the harness works with the narrowed type. */
+type CustomDomainEvent = NonNullable<Parameters<typeof processCustomDomainEvent>[0]["event"]>;
 
 const project: ProjectDirectoryRecord = {
   id: "prj_garple",
@@ -52,12 +54,12 @@ function projectState(
 
 function event(
   input: Parameters<typeof ProjectProcessorContract.buildEvent>[0],
-): CustomDomainProcessInput["event"] {
+): CustomDomainEvent {
   return {
     ...ProjectProcessorContract.buildEvent(input),
     createdAt: "2026-01-01T00:00:00.000Z",
     offset: 1,
-  } as CustomDomainProcessInput["event"];
+  } as CustomDomainEvent;
 }
 
 function processEventHarness(state = projectState()) {
@@ -78,7 +80,7 @@ function processEventHarness(state = projectState()) {
   return {
     appended,
     customDomains,
-    process: async (domainEvent: CustomDomainProcessInput["event"]) => {
+    process: async (domainEvent: CustomDomainEvent) => {
       const pending: Array<Promise<unknown>> = [];
       const handled = processCustomDomainEvent({
         append: async (...inputs) => {

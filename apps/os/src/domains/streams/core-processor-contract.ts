@@ -275,6 +275,22 @@ export const StreamSubscriberDescriptor = z.object({
 /** Serializable subscriber identity carried on presence facts and the runtime connection table. */
 export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
 
+/**
+ * The ONE platform revival fact for every recovery-wired stream processor.
+ * Appended by the platform keepalive (`durableObjectRecovery` in
+ * durable-object-processor-durability.ts) when a processor is revived after
+ * its incarnation died owing background work — never emitted by a processor.
+ * Per-processor identity rides the payload's `processorSlug` and the
+ * `processor-revived:<slug>@...` idempotency key, not the type string.
+ * Recovery-wired contracts CONSUME it (the runner's construction check
+ * requires that): its ordinary delivery is the guaranteed turn that lands at
+ * the stream head, where `processEvent`'s at-head reconcile
+ * (`delivery.caughtUp`) re-drives the processor's open obligations. Reduce
+ * ignores it — the at-head reconcile its delivery guarantees is the whole
+ * point.
+ */
+export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
+
 export const StreamSubscriberDisconnectReason = z.enum([
   /** A new connection for the same subscriptionKey replaced this one. */
   "replaced",
@@ -637,6 +653,25 @@ export const CoreProcessorContract = defineProcessorContract({
             subscriptionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
             reason: "idle",
           },
+        },
+      ],
+    },
+    [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
+      description:
+        "A recovery-wired stream processor was revived after its incarnation died owing background work (in-flight obligations lost to an eviction). Appended by the platform's recovery keepalive, never emitted by a processor; the payload's processorSlug names which processor was revived (the type string is shared by every recovery-wired processor). Recovery-wired contracts consume it so its ordinary delivery guarantees an at-head reconcile turn (processEvent under delivery.caughtUp) that re-drives the processor's open obligations.",
+      // Loose ON PURPOSE: the payload is authored by the shared recovery
+      // adapter (durableObjectRecovery.appendRevived), and future fields it
+      // grows must not turn historical revivals into parse failures.
+      payloadSchema: z.looseObject({
+        processorSlug: z.string(),
+        revivals: z.number(),
+        version: z.string(),
+      }),
+      examples: [
+        {
+          description:
+            "The keepalive alarm revived an agent processor after a deploy took an in-flight LLM turn.",
+          payload: { processorSlug: "agent", revivals: 1, version: "2026-07-14.1" },
         },
       ],
     },

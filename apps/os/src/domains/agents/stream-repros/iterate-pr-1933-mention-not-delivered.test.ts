@@ -3,7 +3,8 @@ import { GithubAgentProcessor } from "../../repos/github-agent-processor-impleme
 import { githubAgentPath } from "../../repos/github-agent-utils.ts";
 import { RepoProcessor } from "../../repos/repo-processor-implementation.ts";
 import type { StreamEvent } from "../../streams/schemas.ts";
-import { deliverNewEvents, MemoryStreamNetwork } from "../../streams/test-helpers.ts";
+import { MemoryStreamNetwork } from "../../streams/test-helpers.ts";
+import { StreamProcessorRunner } from "../../streams/stream-processor-runner.ts";
 import fixture from "./iterate-pr-1933-mention-not-delivered.json";
 
 describe("production stream repro: iterate PR 1933 mention was never delivered", () => {
@@ -61,7 +62,7 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
       projectId: fixture.projectId,
       stream: repo,
     });
-    await deliverNewEvents({ processor, stream: repo, cursors: new Map() });
+    await new StreamProcessorRunner({ processor, stream: repo }).catchUp();
 
     const currentBirth = agent.events.find(
       (event) => event.type === "events.iterate.com/github-agent/created",
@@ -97,7 +98,7 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
       projectId: fixture.projectId,
       stream: agent,
     });
-    await deliverNewEvents({ processor: githubAgent, stream: agent, cursors: new Map() });
+    await new StreamProcessorRunner({ processor: githubAgent, stream: agent }).catchUp();
 
     const turn = agent.events.find(
       (event) =>

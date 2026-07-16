@@ -14,10 +14,11 @@ import { z } from "zod";
 import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import { defineProcessorContract } from "~/domains/streams/processor-contracts.ts";
+import { StreamProcessor } from "~/domains/streams/stream-processor.ts";
 import {
-  StreamProcessor,
-  type StreamProcessorSnapshot,
-} from "~/domains/streams/stream-processor.ts";
+  StreamProcessorRunner,
+  type ProcessorProgress,
+} from "~/domains/streams/stream-processor-runner.ts";
 import type { Stream } from "~/itx-api.generated.ts";
 
 const EchoExampleContract = defineProcessorContract({
@@ -61,33 +62,42 @@ class EchoExampleProcessor extends StreamProcessor<EchoExampleContract> {
   }
 }
 
-// In-process host: the node-side equivalent of the Durable-Object processor
-// host, boiled down to what one processor on one connection needs.
+// In-process host: the node-side equivalent of the Durable-Object registry,
+// boiled down to what one processor on one connection needs — a REAL
+// StreamProcessorRunner whose durable progress lives in the caller's storage.
 async function hostEcho(args: {
   stream: Stream;
   path: string;
   subscriptionKey: string;
   storage: {
-    load: () => StreamProcessorSnapshot<EchoExampleState> | undefined;
-    save: (snapshot: StreamProcessorSnapshot<EchoExampleState>) => void;
+    load: () => ProcessorProgress<EchoExampleState> | undefined;
+    save: (progress: ProcessorProgress<EchoExampleState>) => void;
   };
 }) {
   const processor = new EchoExampleProcessor({
     stream: args.stream,
     path: args.path,
     projectId: null,
-    readState: args.storage.load,
-    writeState: args.storage.save,
   });
-  const snapshot = await processor.snapshot();
+  const runner = new StreamProcessorRunner({
+    processor,
+    stream: args.stream,
+    durability: {
+      progress: {
+        read: args.storage.load,
+        commit: (progress) => args.storage.save(progress),
+      },
+    },
+  });
+  const opened = await runner.openDelivery();
   const handle = await args.stream.subscribe({
     subscriptionKey: args.subscriptionKey,
-    replayAfterOffset: snapshot.offset,
+    replayAfterOffset: opened.checkpointOffset,
     // The contract is the delivery filter: only consumed types arrive.
     eventTypes: processor.contract.consumes,
-    processEventBatch: (batch) => processor.ingest(batch),
+    processEventBatch: opened.sink,
   });
-  return { processor, handle };
+  return { processor, runner, handle };
 }
 
 describe("node-hosted stream processor (e2e)", () => {
@@ -98,12 +108,12 @@ describe("node-hosted stream processor (e2e)", () => {
     });
     const stream = connection.stream as unknown as Stream;
 
-    let saved: StreamProcessorSnapshot<EchoExampleState> | undefined;
+    let saved: ProcessorProgress<EchoExampleState> | undefined;
     const { handle } = await hostEcho({
       stream,
       path,
       subscriptionKey: "node-echo",
-      storage: { load: () => saved, save: (snapshot) => void (saved = snapshot) },
+      storage: { load: () => saved, save: (progress) => void (saved = progress) },
     });
     try {
       await stream.append({
@@ -123,7 +133,7 @@ describe("node-hosted stream processor (e2e)", () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(outputs.length).toBeGreaterThan(0);
-      expect(saved?.state.seen).toBe(1);
+      expect(saved?.reduction.state.seen).toBe(1);
     } finally {
       handle.unsubscribe();
     }
@@ -131,10 +141,10 @@ describe("node-hosted stream processor (e2e)", () => {
 
   it("reconnects and resumes from its snapshot without reprocessing", async () => {
     const path = e2eStreamPathLabel("node-resume");
-    let saved: StreamProcessorSnapshot<EchoExampleState> | undefined;
+    let saved: ProcessorProgress<EchoExampleState> | undefined;
     const storage = {
       load: () => saved,
-      save: (snapshot: StreamProcessorSnapshot<EchoExampleState>) => void (saved = snapshot),
+      save: (progress: ProcessorProgress<EchoExampleState>) => void (saved = progress),
     };
 
     // Session 1: process one input, then drop the connection + processor.
@@ -154,13 +164,13 @@ describe("node-hosted stream processor (e2e)", () => {
           type: "events.iterate.com/echo-example/input-received",
           payload: { path },
         });
-        await waitUntil(() => saved?.state.seen === 1, 5_000);
+        await waitUntil(() => saved?.reduction.state.seen === 1, 5_000);
       } finally {
         handle.unsubscribe();
       }
     }
-    const offsetAfterFirst = saved?.offset ?? -1;
-    expect(saved?.state.seen).toBe(1);
+    const offsetAfterFirst = saved?.processing.acknowledgedThroughOffset ?? -1;
+    expect(saved?.reduction.state.seen).toBe(1);
 
     // Session 2: fresh connection + fresh processor, SAME persisted snapshot.
     // It must resume (subscribe afterOffset = stored offset), not reprocess.
@@ -180,13 +190,13 @@ describe("node-hosted stream processor (e2e)", () => {
           type: "events.iterate.com/echo-example/input-received",
           payload: { path },
         });
-        await waitUntil(() => (saved?.state.seen ?? 0) === 2, 5_000);
+        await waitUntil(() => (saved?.reduction.state.seen ?? 0) === 2, 5_000);
       } finally {
         handle.unsubscribe();
       }
     }
-    expect(saved?.state.seen).toBe(2); // resumed from 1; second input counted exactly once
-    expect(saved?.offset ?? -1).toBeGreaterThan(offsetAfterFirst);
+    expect(saved?.reduction.state.seen).toBe(2); // resumed from 1; second input counted exactly once
+    expect(saved?.processing.acknowledgedThroughOffset ?? -1).toBeGreaterThan(offsetAfterFirst);
   });
 });
 

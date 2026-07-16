@@ -132,6 +132,19 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
   });
 
+  test("runs the auth OAuth provider e2e against its deployed preview", () => {
+    // The auth lane runs the full apps/auth/e2e suite (authorize → code →
+    // token exchange), not a discovery curl: a bare metadata probe is what
+    // let the 2026-07-11 streams.iterate.com stale-registration incident
+    // ship silently (docs/testing.md#lanes).
+    expect(cloudflarePreviewApps.auth).toMatchObject({
+      appPath: "apps/auth",
+      previewReadyUrlPath: "/api/auth/ok",
+      previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
+      previewTestCommandArgs: ["pnpm", "test:e2e"],
+    });
+  });
+
   test("runs the dummy-petshop live e2e against its deployed preview", async () => {
     const petshop = cloudflarePreviewApps["dummy-petshop"];
 
