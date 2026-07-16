@@ -745,6 +745,15 @@ updated`.** `wrangler deploy` can return while Cloudflare is still propagating
   separate deterministic problem: E2E fixtures still relying on implicit
   processor births. Those fixtures now create their agents, repos, secrets,
   and integration routers explicitly.
+- **The same barrier now covers `streams-example-app`.** PR #2039 exposed the
+  omission: both post-deploy health probes returned the previous Worker
+  version at 19:59:48 UTC, tests began 2.5 seconds later, and Cloudflare traces
+  showed old and new versions serving `/api/streams` concurrently through
+  20:00:26. One Vitest read then failed twice with `Durable Object reset
+because its code was updated`. The playground now binds
+  `CF_VERSION_METADATA`, reports it from health, and opts into the same exact
+  version + ten-second stability barrier as OS. This is rollout readiness,
+  not another retry layer.
 
 ### Observed, not yet fixed
 

@@ -119,6 +119,30 @@ describe("watchdogs the shell can't import stay in sync", () => {
   });
 });
 
+describe("Durable Object deployment barriers", () => {
+  it("holds the OS and streams lanes on their exact Worker versions", () => {
+    expect(cloudflarePreviewApps.os.previewReadyWorkerVersion).toEqual({ stableForMs: 10_000 });
+    expect(cloudflarePreviewApps["streams-example-app"].previewReadyWorkerVersion).toEqual({
+      stableForMs: 10_000,
+    });
+  });
+
+  it("makes the streams playground health route identify its deployed Worker version", () => {
+    const generatedConfig = readFileSync(
+      resolve(repoRoot, "apps/streams-example-app/scripts/generate-wrangler-config.ts"),
+      "utf8",
+    );
+    const worker = readFileSync(
+      resolve(repoRoot, "apps/streams-example-app/src/worker.ts"),
+      "utf8",
+    );
+
+    expect(generatedConfig).toContain('version_metadata: { binding: "CF_VERSION_METADATA" }');
+    expect(worker).toContain('const workerVersionHeader = "x-iterate-worker-version"');
+    expect(worker).toContain("workerEnv.CF_VERSION_METADATA?.id");
+  });
+});
+
 describe("retry telemetry parsers", () => {
   it("reads the vitest RetryTelemetryReporter file", async () => {
     const file = join(tmpdir(), `e2e-policy-test-vitest-${process.pid}.json`);

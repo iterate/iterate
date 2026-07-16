@@ -15,6 +15,8 @@ import type { Stream } from "~/itx-api.generated.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 
+const workerVersionHeader = "x-iterate-worker-version";
+
 /**
  * The playground's stand-in for the project worker's event-batch sink.
  *
@@ -94,7 +96,14 @@ export default createServerEntry({
     const url = new URL(request.url);
 
     if (url.pathname === "/api/__internal/health") {
-      return new Response("ok", { headers: { "content-type": "text/plain" } });
+      const version = workerEnv.CF_VERSION_METADATA?.id ?? "unversioned";
+      return new Response("ok", {
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/plain",
+          [workerVersionHeader]: version,
+        },
+      });
     }
 
     // Parsed per request, NOT at module scope (matching apps/os): a fresh

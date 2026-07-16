@@ -1683,6 +1683,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
+    // This app hosts Stream Durable Objects, so a healthy response from the
+    // previous Worker version is not readiness: Cloudflare resets those DOs
+    // while the new version rolls out. Require the exact uploaded version to
+    // stay visible before either e2e sub-lane opens a stream connection.
+    previewReadyWorkerVersion: { stableForMs: 10_000 },
     previewTestBaseUrlEnvVar: "WORKER_URL",
     // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
     // a tagged subset: a title-tag filter here once silently reduced CI to 3
