@@ -87,17 +87,21 @@ export function connectAgentFeed(input: {
   };
 
   const scheduleReconnect = (error: unknown) => {
-    if (disposed || terminalFailure || reconnectTimer !== undefined) return;
-    disposeAgent();
+    if (disposed || terminalFailure) return;
     const detail = error instanceof Error ? error.message : String(error);
-    if (detail.includes("missing or invalid auth")) {
+    if (isAuthenticationFailure(error)) {
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
       terminalFailure = true;
+      disposeAgent();
       input.onStatus({
         kind: "failed",
         detail: "authentication expired; restart iterate chat",
       });
       return;
     }
+    if (reconnectTimer !== undefined) return;
+    disposeAgent();
     consecutiveFailures += 1;
     const delay = Math.min(RECONNECT_DELAY_MS * consecutiveFailures, MAX_RECONNECT_DELAY_MS);
     input.onStatus({ kind: "reconnecting", detail });
@@ -141,7 +145,7 @@ export function connectAgentFeed(input: {
       consecutiveFailures = 0;
       input.onStatus({ kind: "live" });
     } catch (error) {
-      if (agent === nextAgent) scheduleReconnect(error);
+      if (agent === nextAgent || isAuthenticationFailure(error)) scheduleReconnect(error);
     }
   }
 
@@ -158,6 +162,12 @@ export function connectAgentFeed(input: {
       disposeAgent();
     },
   };
+}
+
+function isAuthenticationFailure(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)).includes(
+    "missing or invalid auth",
+  );
 }
 
 function readEnv(name: string): string | undefined {

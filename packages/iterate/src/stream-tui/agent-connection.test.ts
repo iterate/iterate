@@ -6,9 +6,12 @@ vi.mock("../../../../apps/os/src/itx-client.ts", () => ({ connectItx }));
 
 import { connectAgentFeed, type AgentConnectionStatus } from "./agent-connection.ts";
 
-function agent(input: { snapshot: () => Promise<unknown> }) {
+function agent(input: {
+  snapshot: () => Promise<unknown>;
+  breakConnection?: (callback: (error: unknown) => void) => void;
+}) {
   return {
-    onRpcBroken: vi.fn(),
+    onRpcBroken: vi.fn((callback: (error: unknown) => void) => input.breakConnection?.(callback)),
     processor: { snapshot: vi.fn(input.snapshot) },
     stream: {
       subscribe: vi.fn(async () => ({ [Symbol.dispose]: vi.fn() })),
@@ -76,6 +79,23 @@ describe("connectAgentFeed", () => {
     await vi.waitFor(() => expect(statuses.at(-1)?.kind).toBe("live"));
 
     expect(connectItx).toHaveBeenCalledTimes(2);
+    connection.dispose();
+  });
+
+  test("lets a terminal auth rejection cancel an already scheduled reconnect", async () => {
+    connectItx.mockReturnValue(
+      agent({
+        breakConnection: (callback) => callback(new Error("edge reset")),
+        snapshot: async () => Promise.reject(new Error("missing or invalid auth")),
+      }),
+    );
+    const statuses: AgentConnectionStatus[] = [];
+
+    const connection = connect(statuses);
+    await vi.waitFor(() => expect(statuses.at(-1)?.kind).toBe("failed"));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(connectItx).toHaveBeenCalledTimes(1);
     connection.dispose();
   });
 });
