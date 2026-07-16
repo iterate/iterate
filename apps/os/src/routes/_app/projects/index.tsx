@@ -20,7 +20,7 @@ import {
   projectsListQueryKey,
   projectsListStaleTime,
 } from "~/lib/projects-query.ts";
-import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
+import { connectSession, reconnectItx } from "~/itx/itx-react.tsx";
 
 type OrganizationSummary = {
   id: string;
@@ -88,8 +88,8 @@ function ProjectsIndexPage() {
   const recoverProject = useMutation({
     mutationFn: async (project: ProjectListEntry) => {
       const organizationSlug = organizationSlugFor(project);
-      const itx = await connectItxBrowser();
-      await itx.projects.create({
+      const session = await connectSession();
+      await session.projects.create({
         projectId: project.id,
         slug: project.slug,
         ...(organizationSlug === undefined ? {} : { organizationSlug }),

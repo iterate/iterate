@@ -7,7 +7,7 @@ import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
-import { connectItxBrowser, evictItxSocket } from "~/itx/itx-react.tsx";
+import { connectSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 
 /**
  * Where stream-tree nodes get their state: path → subscribable stream handle.
@@ -109,25 +109,20 @@ export function streamProjectDisplayLabel(projectId: string): string {
  */
 export function useAdminStreamSource(projectId: string) {
   const streamProjectId = projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
-  // Dial the CURRENT global (admin) socket per call rather than capturing a
-  // render-time handle: the stream runtimes hold this source across socket
-  // deaths, and a captured stub would pin the dead transport forever (the
-  // suspend/resume feed wedge — see project-stream-view.tsx's source for the
-  // full story). resetTransport pairs with it — same context, so the
-  // runtimes' half-open eviction lands on the socket this source dials.
+  // Resolve the CURRENT session per call rather than capturing a render-time
+  // handle: the stream runtimes hold this source across socket deaths, and a
+  // captured stub would pin the dead transport forever (the suspend/resume feed
+  // wedge — see project-stream-view.tsx's source for the full story). Admin
+  // reads the deployment-wide catalog off the session directly; a specific
+  // project via session.projects.get(id).
   const source = useMemo(
     () => async (streamPath: string) => {
-      const itx = await connectItxBrowser();
+      const session = await connectSession();
       return streamProjectId == null
-        ? itx.streams.get(streamPath)
-        : itx.projects.get(streamProjectId).streams.get(streamPath);
+        ? session.streams.get(streamPath)
+        : session.projects.get(streamProjectId).streams.get(streamPath);
     },
     [streamProjectId],
   );
-  return { source, streamProjectId, resetTransport: resetAdminTransport };
-}
-
-/** Stable identity: consumers put this in hook deps. Admin sources ride the global socket. */
-function resetAdminTransport() {
-  evictItxSocket();
+  return { source, streamProjectId, resetTransport: reportTransportSuspicion };
 }

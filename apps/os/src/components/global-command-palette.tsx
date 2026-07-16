@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import { connectItx, connectSession } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
@@ -106,11 +106,11 @@ export function GlobalCommandPalette() {
       return {
         source: (path) => ({
           async subscribe(args) {
-            const itx = await connectItxBrowser();
+            const session = await connectSession();
             const stream =
               adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
-                ? itx.streams.get(path)
-                : itx.projects.get(adminStream.adminProjectId).streams.get(path);
+                ? session.streams.get(path)
+                : session.projects.get(adminStream.adminProjectId).streams.get(path);
             return stream.subscribe(args);
           },
         }),
@@ -128,8 +128,8 @@ export function GlobalCommandPalette() {
     return {
       source: (path) => ({
         async subscribe(args) {
-          // Key by project ID so we share the project provider's pooled socket.
-          const itx = await connectItxBrowser({ projectId: activeStream.projectId });
+          // The one session socket, narrowed to this project by id.
+          const itx = await connectItx(activeStream.projectId);
           return itx.streams.get(path).subscribe(args);
         },
       }),

@@ -22,7 +22,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
-import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
+import { connectSession, reconnectItx } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -45,11 +45,11 @@ export function CreateProjectForm() {
       // Straight through the itx session: create registers the project with
       // the auth worker (org grant -> claims) and runs the engine bootstrap
       // saga, then widens THIS socket's access to the new project.
-      const itx = await connectItxBrowser();
+      const session = await connectSession();
       // Fast path: resolve as soon as the project EXISTS — the bootstrap saga
       // keeps running behind the handle, and the project home page plays its
       // progress live from processor pushes until `state.created` flips.
-      const project = itx.projects.create({
+      const project = session.projects.create({
         slug: input.slug,
         waitUntilReady: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
@@ -77,9 +77,9 @@ export function CreateProjectForm() {
         search: {},
       });
       // Session catch-up runs BEHIND the navigation: refresh the browser auth
-      // session so its claims carry the new project, drop the global itx
-      // socket so it re-dials with them (project sockets are untouched — the
-      // checklist's subscription keeps running), and refresh the project list.
+      // session so its claims carry the new project, reconnect the one itx
+      // socket so it re-dials with them (a semantic reset — see reconnectItx),
+      // and refresh the project list.
       void (async () => {
         await refresh({ force: true });
         reconnectItx();
@@ -88,8 +88,10 @@ export function CreateProjectForm() {
         // Belt and braces: if the auth worker normalized the slug after all,
         // hop to the canonical URL (the checklist state is server-side, so
         // nothing is lost).
-        const itx = await connectItxBrowser();
-        const entry = (await itx.projects.list()).find((candidate) => candidate.id === project.id);
+        const session = await connectSession();
+        const entry = (await session.projects.list()).find(
+          (candidate) => candidate.id === project.id,
+        );
         if (entry != null && entry.slug !== project.slug) {
           void router.navigate({
             to: "/projects/$projectSlug/agents/streams/$",

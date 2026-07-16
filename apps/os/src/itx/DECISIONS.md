@@ -420,3 +420,56 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
 - **The project-host `/__itx` connect door is deleted** (premature). Connect
   is `/api/itx[/:target]` on the OS origin only; `:target` is a project
   id/slug (the root context) or a full URL-encoded ref.
+
+## D22: ONE socket per tab — a Session gate + slug-addressed itx + invisible reconnect (supersedes D21's socket-Map-per-context)
+
+D21 keyed a WebSocket per `{ projectId, connectionKey }` context in a module
+`Map`, so a dashboard held THREE sockets at once: a global one for the sidebar
+catalog, a project one for the page, and an isolated one for the browser stream
+mirror (whose aggressive reconnect loop must not reject the page's reads). The
+map + `connectionKey` + identity-bound eviction existed ONLY to keep those
+independent sockets from killing each other. Collapse to one:
+
+- **`authenticate()` is the top noun.** The provider/hook gives a **Session**
+  (`useSession()` / `connectSession()`); a project itx is derived from it —
+  `useItx(slug)` / `connectItx(slug)` = `session.projects.get(slug)`, and
+  `projects.get` now accepts a **URL slug** (or `prj_` id), so the browser passes
+  `params.projectSlug` straight through with no client-side slug→id hop.
+  `<ItxProvider>` is a pure session gate (auth-suspends once); `<ProjectScope
+slug>` carries the ambient slug — no socket of its own.
+- **Reconnect is invisible.** React reads an immutable `Snapshot`;
+  `snapshot.session` keeps the last live session across a transport gap, so
+  `useSession()` suspends exactly once (first load) and reads are
+  stale-while-revalidate (TanStack keeps cached data; only in-flight reads retry,
+  on a finite transport-only policy). A dropped socket always re-dials — with a
+  session in hand invisibly, without one by re-pointing `use()` to a fresh
+  backoff-paced promise — so the connection hook is never a re-suspend point and
+  never wedges. (The session is the pipelined `authenticate()` root, settled on
+  `open`; auth rides the cookie handshake that `_app` already gated, so a bad
+  cookie surfaces at read time like any RPC error — codex suggested confirming
+  auth before publish, but that adds a terminal/retryable branch in the hot path
+  for a case `_app` already covers.)
+- **Project stubs are session-owned**, cached in a module `WeakMap` keyed by the
+  session stub (NOT `useMemo` — React may discard/re-run memo calcs and leak
+  undisposed capnweb import entries). The handle stays a REAL capnweb stub (a
+  lazy wrapper that awaited the session per call would break pipelining, fork
+  v0.8.0); its identity changes once per reconnect, re-running keyed effects.
+- **Transport health is socket-owned and generation-guarded.** One verifier per
+  generation (periodic + visibility/online, two-strike) is the only thing that
+  retires the socket; the mirror and subscription watchdog REPORT suspicion
+  (`reportTransportSuspicion`) rather than evicting. A monotonic generation id is
+  the compare-and-swap that stops a late verdict from closing a healthy
+  successor. `reconnectItx()` remains the deliberate SEMANTIC reset (new claims
+  after create/unlock), distinct from transport recovery.
+- **Deleted:** the socket `Map`, `connectionKey`, `ItxAddress`,
+  `evictItxSocket`/`evictItxSocketIfCurrent`, the `Session & Project` handle
+  intersection, and the mirror's dedicated socket. The mirror rides the shared
+  session and can no longer blank the page on its own reconnect.
+
+Reviewed before implementation by codex (gpt-5.6-sol, max reasoning) for React
+19 / TanStack Start idiom; its corrections — immutable snapshot, session-owned
+(not `useMemo`) stub cache, generation-guarded reconnect, typed transport-only
+query retry, slug-namespaced query keys, unconditional scope read — are folded
+in. We deliberately did NOT adopt its confirm-auth-before-publish suggestion
+(see above): it adds a terminal/retryable branch for a case `_app` already gates,
+and the original shipped with optimistic resolve.

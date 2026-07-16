@@ -20,7 +20,7 @@ import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { CollectSecretSearch } from "~/lib/collect-secret-link.ts";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
-import { ItxProvider, useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import { ItxProvider, ProjectScope, useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 // The secret-collection deep link target: a chrome-free, one-job page an
 // agent sends a user to when it needs a credential it must never see in
@@ -77,8 +77,10 @@ function CollectSecretPage() {
         <MalformedLinkCard />
       ) : (
         <Suspense fallback={<ItxResourceLoading label="secret" />}>
-          <ItxProvider projectId={project.id}>
-            <CollectSecretCard />
+          <ItxProvider>
+            <ProjectScope slug={project.slug}>
+              <CollectSecretCard />
+            </ProjectScope>
           </ItxProvider>
         </Suspense>
       )}

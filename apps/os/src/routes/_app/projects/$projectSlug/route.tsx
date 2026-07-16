@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { ItxProvider } from "~/itx/itx-react.tsx";
+import { ItxProvider, ProjectScope } from "~/itx/itx-react.tsx";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 
@@ -28,20 +28,20 @@ export const Route = createFileRoute("/_app/projects/$projectSlug")({
 
 function ProjectLayout() {
   const { project } = Route.useRouteContext();
-  // One shared project socket for every route under this layout, keyed by the
-  // project ID: context resolution is client-side on itx
-  // (authenticate() then projects.get(id)), so the address must be the id the
-  // itx knows, not the slug. Routes that need the GLOBAL session instead
-  // call `useItx({})` to force it.
-  //
-  // The pre-warm dials in its own boundary inside the provider, so pages
-  // paint immediately; this outer Suspense is only the safety net for pages
-  // that read through itx above their own <ItxBoundary>. Keep page-level
-  // reads under smaller boundaries so navigation never blanks the whole view.
+  // The whole tab shares ONE itx session socket; <ProjectScope> just carries
+  // this project's slug so `useItx()` / `useItxQuery()` resolve without an
+  // explicit argument (`session.projects.get(slug)` — the browser passes the
+  // URL slug straight through, no client-side slug→id hop). <ItxProvider>
+  // pre-warms the session in its own boundary so pages paint immediately; this
+  // outer Suspense is only the safety net for pages that read through itx above
+  // their own <ItxBoundary>. Keep page-level reads under smaller boundaries so
+  // navigation never blanks the whole view.
   return (
     <Suspense fallback={<ItxResourceLoading label="project" />}>
-      <ItxProvider projectId={project.id}>
-        <Outlet />
+      <ItxProvider>
+        <ProjectScope slug={project.slug}>
+          <Outlet />
+        </ProjectScope>
       </ItxProvider>
     </Suspense>
   );

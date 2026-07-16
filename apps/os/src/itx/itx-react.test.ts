@@ -1,21 +1,33 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+// Control the mock capnweb session from tests: `hangAuthProbe` makes the
+// liveness/confirm probe (every authenticate() AFTER the first per socket) hang,
+// modelling a half-open transport whose root was already established.
+const control = vi.hoisted(() => ({ hangAuthProbe: false }));
+
 // Mock the capnweb session so dialing resolves to a disposable sentinel keyed
-// by the socket URL and (post-cutover) the authenticate()/projects.get(id)
-// pipeline — we assert on identity/url, never a real RPC session.
+// by the socket URL and the authenticate()/projects.get(slug) pipeline — we
+// assert on identity/url, never a real RPC session. The FIRST authenticate()
+// per socket is the pipelined root (always returns synchronously); later calls
+// are the awaited liveness probe, which `hangAuthProbe` can wedge.
 vi.mock("capnweb", () => ({
-  newWebSocketRpcSession: (ws: { url: string }) => ({
-    authenticate: () => {
-      const handleFor = (suffix: string) => ({
-        url: suffix ? `${ws.url}/${suffix}` : ws.url,
-        [Symbol.dispose]: vi.fn(),
-      });
-      return Object.assign(handleFor(""), {
-        projects: { get: (projectId: string) => handleFor(projectId) },
-      });
-    },
-  }),
+  newWebSocketRpcSession: (ws: { url: string }) => {
+    let calls = 0;
+    return {
+      authenticate: () => {
+        calls += 1;
+        if (calls > 1 && control.hangAuthProbe) return new Promise(() => {});
+        const handleFor = (suffix: string) => ({
+          url: suffix ? `${ws.url}/${suffix}` : ws.url,
+          [Symbol.dispose]: vi.fn(),
+        });
+        return Object.assign(handleFor(""), {
+          projects: { get: (slug: string) => handleFor(slug) },
+        });
+      },
+    };
+  },
 }));
 
 /** A WebSocket we can drive: record instances, fire open/close by hand. */
@@ -39,9 +51,10 @@ class FakeWebSocket {
 }
 
 beforeEach(() => {
+  control.hangAuthProbe = false;
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
-  vi.resetModules(); // fresh module-level socket Map per test
+  vi.resetModules(); // fresh module-level session state per test
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -50,151 +63,135 @@ const onlySocket = () => {
   return FakeWebSocket.instances[0]!;
 };
 
-describe("itx socket map", () => {
-  test("connectItxBrowser returns the SAME promise per context — one dial, the stable promise use() needs", async () => {
-    const { connectItxBrowser } = await import("./itx-react.tsx");
-    const a = connectItxBrowser({ projectId: "acme" });
-    expect(connectItxBrowser({ projectId: "acme" })).toBe(a);
+/** Open the newest socket and let its awaited auth-confirm probe settle. */
+async function openLatest() {
+  FakeWebSocket.instances.at(-1)!.fire("open");
+  await vi.waitFor(() => {});
+}
+
+describe("itx session socket", () => {
+  test("ONE socket for the whole tab: connectSession returns the same promise and resolves to the Session", async () => {
+    const { connectSession } = await import("./itx-react.tsx");
+    const a = connectSession();
+    expect(connectSession()).toBe(a); // one dial, the stable promise use() needs
     expect(FakeWebSocket.instances).toHaveLength(1);
-    onlySocket().fire("open");
-    await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
+    expect(onlySocket().url).toContain("/api");
+    await openLatest();
+    await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api") });
   });
 
-  test("contexts are independent; the global context (no projectId) is its own socket", async () => {
-    const { connectItxBrowser } = await import("./itx-react.tsx");
-    const global = connectItxBrowser();
-    expect(connectItxBrowser({ projectId: "acme" })).not.toBe(global);
-    expect(connectItxBrowser()).toBe(global);
-    expect(FakeWebSocket.instances).toHaveLength(2);
-    // One endpoint for every context now — the project narrows client-side.
-    expect(FakeWebSocket.instances[0]!.url).toContain("/api");
-    expect(FakeWebSocket.instances[1]!.url).toContain("/api");
+  test("connectItx narrows the ONE session to a project stub — no second socket", async () => {
+    const { connectSession, connectItx } = await import("./itx-react.tsx");
+    const session = connectSession(); // dials the one socket
+    await openLatest();
+    const acme = await connectItx("acme");
+    const other = await connectItx("prj_123");
+    // Both project handles ride the ONE socket the session dialed.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(acme).toMatchObject({ url: expect.stringContaining("/api/acme") });
+    expect(other).toMatchObject({ url: expect.stringContaining("/api/prj_123") });
+    await expect(session).resolves.toMatchObject({ url: expect.stringContaining("/api") });
   });
 
-  test("an isolated connection lane cannot evict ordinary reads in the same project", async () => {
-    const { connectItxBrowser, evictItxSocketIfCurrent } = await import("./itx-react.tsx");
-    const projectAddress = { projectId: "acme" };
-    const mirrorAddress = { projectId: "acme", connectionKey: "stream-mirror:/repos/iterate" };
-
-    const project = connectItxBrowser(projectAddress);
-    const mirror = connectItxBrowser(mirrorAddress);
-    expect(connectItxBrowser(mirrorAddress)).toBe(mirror);
-    expect(mirror).not.toBe(project);
-    expect(FakeWebSocket.instances).toHaveLength(2);
-
-    FakeWebSocket.instances[0]!.fire("open");
-    FakeWebSocket.instances[1]!.fire("open");
-    await expect(project).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
-    await expect(mirror).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
-
-    evictItxSocketIfCurrent(mirrorAddress, mirror);
-    expect(connectItxBrowser(projectAddress)).toBe(project);
-    expect(connectItxBrowser(mirrorAddress)).not.toBe(mirror);
-    expect(FakeWebSocket.instances).toHaveLength(3);
-  });
-
-  test("a closed socket is dropped; the next connectItxBrowser dials a fresh one", async () => {
-    const { connectItxBrowser } = await import("./itx-react.tsx");
-    const first = connectItxBrowser({ projectId: "acme" });
-    onlySocket().fire("open");
-    await first;
-
-    FakeWebSocket.instances[0]!.fire("close"); // socket dies
-    const second = connectItxBrowser({ projectId: "acme" });
-    expect(second).not.toBe(first);
-    expect(FakeWebSocket.instances).toHaveLength(2);
-  });
-
-  test("a dial that closes before opening rejects awaiters instead of hanging", async () => {
-    // Regression: a failed/timed-out dial used to leave the cached connecting
-    // promise forever-pending, so `await connectItxBrowser()` (event handlers,
-    // mutationFns) hung. It must reject so imperative callers fail fast.
-    const { connectItxBrowser } = await import("./itx-react.tsx");
-    const first = connectItxBrowser({ projectId: "acme" });
+  test("a dial that closes before opening rejects awaiters instead of hanging, then re-dials", async () => {
+    const { connectSession } = await import("./itx-react.tsx");
+    const first = connectSession();
     onlySocket().fire("close"); // closed before it ever opened
     await expect(first).rejects.toThrow(/closed before connecting/);
-
-    // The entry was still dropped, so the next connect dials a fresh socket.
-    const second = connectItxBrowser({ projectId: "acme" });
+    // The entry was dropped, so the next connect dials a fresh socket.
+    const second = connectSession();
     expect(second).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
-  test("a stale socket's death never drops its successor", async () => {
-    const { connectItxBrowser } = await import("./itx-react.tsx");
-    connectItxBrowser({ projectId: "acme" });
-    FakeWebSocket.instances[0]!.fire("close"); // first dies → dropped
-    const second = connectItxBrowser({ projectId: "acme" }); // re-dials
-    FakeWebSocket.instances[0]!.fire("close"); // stale repeat — must NOT drop the second
-    expect(connectItxBrowser({ projectId: "acme" })).toBe(second);
+  test("INVISIBLE RECONNECT: a live session survives a transport gap and auto-redials", async () => {
+    const { connectSession } = await import("./itx-react.tsx");
+    const first = connectSession();
+    await openLatest();
+    const session = await first;
+
+    // Transport dies AFTER being live: the socket is auto-redialed and the last
+    // session stays available (no re-suspend) — connectSession hands out the new
+    // generation's promise, not the corpse.
+    FakeWebSocket.instances[0]!.fire("close");
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const second = connectSession();
+    expect(second).not.toBe(first);
+    // The retired generation's session stub was disposed.
+    expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
+  });
+
+  test("reconnectItx (semantic reset) disposes the live socket and forces a fresh dial", async () => {
+    const { connectSession, reconnectItx } = await import("./itx-react.tsx");
+    const first = connectSession();
+    await openLatest();
+    const session = await first;
+
+    reconnectItx();
+    await vi.waitFor(() => {});
+    expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
+    expect(connectSession()).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   test("repeated closed-before-open dials get backoff from the SECOND consecutive failure", async () => {
     vi.useFakeTimers();
     try {
-      const { connectItxBrowser } = await import("./itx-react.tsx");
-      connectItxBrowser({ projectId: "acme" });
+      const { connectSession } = await import("./itx-react.tsx");
+      connectSession();
       FakeWebSocket.instances[0]!.fire("close"); // failure 1
-      connectItxBrowser({ projectId: "acme" }); // first retry is immediate
+      connectSession(); // first retry is immediate
       expect(FakeWebSocket.instances).toHaveLength(2);
       FakeWebSocket.instances[1]!.fire("close"); // failure 2
-      connectItxBrowser({ projectId: "acme" }); // now paced: no socket yet
+      connectSession(); // now paced: no socket yet
       expect(FakeWebSocket.instances).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(250);
       expect(FakeWebSocket.instances).toHaveLength(3);
-      // A successful open resets the pacing.
-      FakeWebSocket.instances[2]!.fire("open");
-      FakeWebSocket.instances[2]!.fire("close"); // post-open death, not a dial failure
-      connectItxBrowser({ projectId: "acme" });
-      expect(FakeWebSocket.instances).toHaveLength(4);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  test("evictItxSocketIfCurrent only evicts the exact suspect, never a successor", async () => {
-    const { connectItxBrowser, reconnectItx, evictItxSocketIfCurrent } =
-      await import("./itx-react.tsx");
-    const first = connectItxBrowser({ projectId: "acme" });
-    onlySocket().fire("open");
+  test("reportTransportSuspicion leaves a HEALTHY socket alone (no false-positive reconnect)", async () => {
+    const { connectSession, reportTransportSuspicion } = await import("./itx-react.tsx");
+    const first = connectSession();
+    await openLatest();
     await first;
-
-    reconnectItx({ projectId: "acme" }); // replaced by a successor
-    const second = connectItxBrowser({ projectId: "acme" });
-    expect(FakeWebSocket.instances).toHaveLength(2);
-
-    // A LATE verdict against the replaced first socket must not touch the
-    // successor — regardless of the successor's age (no age heuristic here).
-    evictItxSocketIfCurrent({ projectId: "acme" }, first);
-    expect(connectItxBrowser({ projectId: "acme" })).toBe(second);
-    expect(FakeWebSocket.instances).toHaveLength(2);
-
-    // A verdict against the CURRENT socket evicts it, young or not.
-    evictItxSocketIfCurrent({ projectId: "acme" }, second);
-    expect(connectItxBrowser({ projectId: "acme" })).not.toBe(second);
+    // The auth probe answers immediately (alive), so two-strike verification
+    // keeps the socket: a busy-but-alive transport must not be torn down.
+    reportTransportSuspicion();
+    await vi.waitFor(() => {});
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(connectSession()).toBe(first);
   });
 
-  test("reconnectItx disposes the live socket and forces a fresh dial", async () => {
-    const { connectItxBrowser, reconnectItx } = await import("./itx-react.tsx");
-    const first = connectItxBrowser({ projectId: "acme" });
-    onlySocket().fire("open");
-    const session = await first;
+  test("reportTransportSuspicion re-dials a genuinely half-open socket after two strikes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { connectSession, reportTransportSuspicion } = await import("./itx-react.tsx");
+      const first = connectSession();
+      FakeWebSocket.instances[0]!.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      await first;
 
-    reconnectItx({ projectId: "acme" });
-    await Promise.resolve(); // let the dispose .then() run
-    expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
-
-    expect(connectItxBrowser({ projectId: "acme" })).not.toBe(first);
-    expect(FakeWebSocket.instances).toHaveLength(2);
+      // The transport goes half-open: probes now hang. Two 10s strikes retire it.
+      control.hangAuthProbe = true;
+      reportTransportSuspicion();
+      await vi.advanceTimersByTimeAsync(10_000); // strike one
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10_000); // strike two → reconnect
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      expect(connectSession()).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 // The liveness watchdog is module-private; these tests drive it through the
-// public useItxSubscription hook with a real React tree — which also covers
-// the epoch/re-subscribe integration the bare watchdog can't show.
+// public useItxSubscription hook with a real React tree — which also covers the
+// epoch/re-subscribe integration the bare watchdog can't show.
 describe("useItxSubscription liveness", () => {
-  // The watchdog's cadence (see the constants in itx-react.tsx).
   const INTERVAL = 45_000;
   const PING_TIMEOUT = 10_000;
 
@@ -205,10 +202,10 @@ describe("useItxSubscription liveness", () => {
   afterEach(() => vi.useRealTimers());
 
   /**
-   * Mount a component holding one useItxSubscription. Everything is imported
-   * AFTER the file-level vi.resetModules() so the harness's React instance is
-   * the same one itx-react loaded (a static react import here would be a
-   * different copy — instant invalid-hook-call).
+   * Mount a component holding one useItxSubscription, under a <ProjectScope> so
+   * the ambient project resolves. Everything is imported AFTER the file-level
+   * vi.resetModules() so the harness's React instance is the one itx-react
+   * loaded (a static import would be a different copy — invalid-hook-call).
    */
   async function mountSubscription(
     makeHandle: () => {
@@ -216,12 +213,12 @@ describe("useItxSubscription liveness", () => {
       unsubscribe: () => void;
     },
   ) {
-    const [{ useItxSubscription }, React, { createRoot }] = await Promise.all([
+    const [{ useItxSubscription, ProjectScope }, React, { createRoot }] = await Promise.all([
       import("./itx-react.tsx"),
       import("react"),
       import("react-dom/client"),
     ]);
-    const { act, createElement, Suspense } = React;
+    const { act, createElement } = React;
 
     const subscribe = vi.fn(async () => makeHandle());
     function Harness() {
@@ -232,10 +229,10 @@ describe("useItxSubscription liveness", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const root = createRoot(container);
     await act(async () => {
-      root.render(createElement(Suspense, { fallback: null }, createElement(Harness)));
+      root.render(createElement(ProjectScope, { slug: "acme", children: createElement(Harness) }));
     });
-    // The hook suspended on the socket dial; open it and let the effect +
-    // async subscribe settle.
+    // The subscription awaits the connection inside its effect (never suspends);
+    // open the socket and let the effect + async subscribe settle.
     await act(async () => {
       FakeWebSocket.instances.at(-1)!.fire("open");
     });
@@ -274,7 +271,6 @@ describe("useItxSubscription liveness", () => {
     const harness = await mountSubscription(() => {
       handles += 1;
       const mine = handles;
-      // The FIRST handle dies on the first ping; its replacement stays live.
       return { ping: () => mine > 1, unsubscribe: vi.fn() };
     });
 
@@ -304,32 +300,23 @@ describe("useItxSubscription liveness", () => {
     await harness.unmount();
   });
 
-  test("a hanging ping (half-open socket) drops every socket so consumers re-dial", async () => {
-    const { connectItxBrowser } = await import("./itx-react.tsx");
-    const harness = await mountSubscription(() => ({
-      ping: () => new Promise<boolean>(() => {}),
-      unsubscribe: vi.fn(),
-    }));
-    const socketsBefore = FakeWebSocket.instances.length;
-    const globalSocket = connectItxBrowser();
-
-    // TWO ping timeouts: the watchdog holds the same two-strike standard as
-    // the stream runtimes' probes (one slow answer is a busy DO, not a dead
-    // socket — and this lane's recovery drops EVERY socket in the tab). After
-    // the FIRST timeout nothing may drop — a one-strike reversion fails HERE.
-    await harness.advance(INTERVAL + PING_TIMEOUT);
-    expect(connectItxBrowser()).toBe(globalSocket);
-    await harness.advance(PING_TIMEOUT);
-    // reconnectAllItx ran: the cached socket promise was dropped, the hook
-    // re-suspended, and a FRESH dial started.
-    expect(connectItxBrowser()).not.toBe(globalSocket);
-    expect(FakeWebSocket.instances.length).toBeGreaterThan(socketsBefore);
-
-    // The fresh socket opens → the effect re-runs → a fresh subscription.
-    await act(harness, async () => {
-      FakeWebSocket.instances.at(-1)!.fire("open");
+  test("a hanging ping (silent death) re-subscribes and reports transport suspicion", async () => {
+    let handles = 0;
+    const harness = await mountSubscription(() => {
+      handles += 1;
+      const mine = handles;
+      // The FIRST handle's ping hangs; its replacement answers, so recovery is a
+      // re-subscribe on the (healthy, per the mock) transport.
+      return {
+        ping: () => (mine > 1 ? true : new Promise<boolean>(() => {})),
+        unsubscribe: vi.fn(),
+      };
     });
-    await harness.advance(0);
+
+    // TWO ping timeouts (two-strike): after the FIRST nothing recovers yet.
+    await harness.advance(INTERVAL + PING_TIMEOUT);
+    expect(harness.subscribe).toHaveBeenCalledTimes(1);
+    await harness.advance(PING_TIMEOUT);
     expect(harness.subscribe).toHaveBeenCalledTimes(2);
     expect(harness.status()).toBe("live");
     await harness.unmount();
@@ -343,22 +330,9 @@ describe("useItxSubscription liveness", () => {
       return { ping: () => mine > 1, unsubscribe: vi.fn() };
     });
 
-    // No interval has elapsed — visibility alone must trigger the check
-    // (waking from sleep is exactly when the socket is most likely dead).
     document.dispatchEvent(new Event("visibilitychange"));
     await harness.advance(0);
     expect(harness.subscribe).toHaveBeenCalledTimes(2);
     await harness.unmount();
   });
 });
-
-/** act() through the harness's own React copy (post-resetModules instance). */
-async function act(
-  _harness: { advance: (ms: number) => Promise<unknown> },
-  work: () => Promise<void> | void,
-): Promise<void> {
-  const React = await import("react");
-  await React.act(async () => {
-    await work();
-  });
-}

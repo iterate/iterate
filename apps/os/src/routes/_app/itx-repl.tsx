@@ -5,12 +5,12 @@
 // dynamic worker — and the browser can PROVIDE live capabilities too (see the
 // examples).
 //
-// The REPL rides the ONE browser itx primitive — useItx (~/itx/itx-react.tsx).
-// It does NOT open its own socket: the global repl shares the tab's global
-// socket, the project repl shares that project's socket, and neither owns the
-// connection. ConnectedItxRepl is the single connect wrapper both routes use.
-// See the itx-react.tsx header for the single-socket-per-context model and the
-// disposal contract.
+// The REPL rides the ONE browser itx session — useSession (~/itx/itx-react.tsx).
+// It does NOT open its own socket: the tab has a single itx socket, and the
+// global repl uses the Session while a project repl narrows it via
+// session.projects.get(id); neither owns the connection. ConnectedItxRepl is
+// the single connect wrapper both routes use. See the itx-react.tsx header for
+// the one-socket model and the disposal contract.
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
@@ -21,7 +21,7 @@ import {
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
-import { useItx, type ItxReactHandle } from "~/itx/itx-react.tsx";
+import { useSession, type ItxReactHandle } from "~/itx/itx-react.tsx";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
 export const Route = createFileRoute("/_app/itx-repl")({
@@ -41,12 +41,12 @@ function ItxReplConnecting() {
 }
 
 /**
- * The one connect wrapper both repls share. `useItx` never SSRs and suspends
+ * The one connect wrapper both repls share. `useSession` never SSRs and suspends
  * until connected, so this gates it behind ClientOnly (the route still SSRs its
- * shell) + Suspense, then renders the repl against the live pooled handle.
- * `poolContext` is the useItx key — a project id, or undefined for global = the
- * connect endpoint. It also keys the inner component, so switching project
- * remounts the repl with a fresh scope + history.
+ * shell) + Suspense, then renders the repl against the live handle. `poolContext`
+ * is a project id/slug to narrow to, or undefined for the global session. It also
+ * keys the inner component, so switching project remounts the repl with a fresh
+ * scope + history.
  */
 export function ConnectedItxRepl({
   poolContext,
@@ -85,7 +85,13 @@ function ItxReplConnected({
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
-  const itx = useItx({ projectId: poolContext });
+  // One socket either way: the session (global REPL) or a project itx narrowed
+  // from it (`session.projects.get`, poolContext = a project id/slug). The pool
+  // owns the connection; the REPL never disposes this handle.
+  const session = useSession();
+  const itx = (poolContext === undefined
+    ? session
+    : session.projects.get(poolContext)) as unknown as ItxReactHandle;
   return <ItxReplPage itx={itx} context={context} initialCode={initialCode} scope={scope} />;
 }
 

@@ -1,5 +1,5 @@
 import type { ProjectListEntry } from "../project-deployment-status.ts";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import { connectSession } from "~/itx/itx-react.tsx";
 
 /**
  * The ONE client-side cache entry for `session.projects.list()` — the itx
@@ -13,6 +13,6 @@ export const projectsListStaleTime = 30_000;
 
 /** Fetch the session's project list — browser-only (dials the itx socket). */
 export async function fetchProjectsList(): Promise<ProjectListEntry[]> {
-  const itx = await connectItxBrowser();
-  return await itx.projects.list();
+  const session = await connectSession();
+  return await session.projects.list();
 }

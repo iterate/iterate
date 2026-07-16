@@ -10,12 +10,12 @@ export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed
 export type BrowserStreamClient = Disposable &
   Stream & {
     /**
-     * Evict the exact transport THIS client rides, bound at creation (see
-     * evictItxSocketIfCurrent) — so a late suspicion verdict against this
-     * connection can never evict a successor socket, and a genuinely-dead
-     * young socket can be evicted without waiting out an age guard. Absent
-     * on clients whose factory can't bind identity; the runtime then falls
-     * back to the config-level resetTransport (age-guarded).
+     * Report that this client's transport looks half-open (see
+     * reportTransportSuspicion) — NEVER a direct socket teardown: the mirror
+     * shares the one session socket with the page's reads, so only the
+     * socket-owned verifier may retire it, and only after two failed probes
+     * against the same generation. Absent on clients whose factory doesn't wire
+     * it; the runtime then falls back to the config-level resetTransport.
      */
     evictTransport?: () => void;
   };
