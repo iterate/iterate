@@ -67,12 +67,13 @@ another long-lived state machine.
 
 ### 1. Measure the integrated scanned-through runner
 
-The semantic #2002/#2038 merge has implemented the compact private frame:
-selected events, `deliveryThroughOffset`, and `streamMaxOffset`. A successful
-frame durably advances both progress cursors through scanned selector gaps. An
-empty or filtered frame that reaches head runs the event-less reconciliation
-pass required to keep obligations live. Main's acknowledged-cursor fast return
-also remains, so an already-covered readiness barrier makes no Stream RPC.
+The current-main semantic merge has implemented the compact private frame:
+selected events plus `scannedAfterOffset`, `scannedThroughOffset`, and
+`streamMaxOffset`. A successful frame durably advances both progress cursors
+through scanned selector gaps. An empty or filtered frame that reaches head
+runs the event-less reconciliation pass required to keep obligations live.
+Main's acknowledged-cursor fast return also remains, so an already-covered
+readiness barrier makes no Stream RPC.
 
 Do not delete the runner's remaining self-pull indiscriminately. It now serves
 explicit read-your-writes waits and cold registry catch-up when no delivery
@@ -132,9 +133,9 @@ The merge met the semantic gates:
 
 - Main's `StreamProcessorRunner`, registry, two-cursor progress model, and
   deletion of `StreamProcessorHost` remain authoritative.
-- The runner consumes the compact `deliveryThroughOffset` frame and retains
-  event-less at-head reconciliation. Its remaining self-pull is limited to
-  explicit read-your-writes/cold catch-up, not duplicate frame scanning.
+- The runner consumes the compact scan-coordinate frame and retains event-less
+  at-head reconciliation. Its remaining self-pull is limited to explicit
+  read-your-writes/cold catch-up, not duplicate frame scanning.
 - There is one public `append`; explicit births request offsets-only results.
   Default full-event responses and public `appendAck` do not exist.
 - The wire exposes one append union because Cap'n Web proxy projection cannot
@@ -149,8 +150,10 @@ The merge met the semantic gates:
   frames, cursor completion, and segmented exports.
 - OS/package ITX API graphs and examples were regenerated from resolved source.
 
-OS typecheck and 502 focused tests pass at the integration snapshot. Full
-repository checks, the exact-main cumulative run, and deployed birth/Worker
+Root typecheck, lint, formatting, and recursive workspace tests pass at the
+integration snapshot. The focused Stream matrix passes 478 tests, the affected
+cross-domain matrix passes 208, and the full OS suite passes 1,969 tests with
+one intentional skip. The exact-main cumulative run and deployed birth/Worker
 consumer gates are still required before this tree is a shipping candidate.
 
 ## Replacement Architecture
@@ -219,8 +222,8 @@ boundaries.
 
 Before #2002, the implementation had about 5,085 delivery-coordination lines,
 88 private members, and 13 semi-independent state machines. The integrated
-eight-file journal/delivery/runner set now totals 8,239 lines, including 1,087
-journal lines and 1,706 runner/registry lines. That is a reproducible file-set
+eight-file journal/delivery/runner set now totals 8,437 lines, including 1,087
+journal lines and 1,769 runner/registry lines. That is a reproducible file-set
 count, not a claim that every line is coordination. Establish one similarly
 reproducible private-member/state-machine count before approving a replacement;
 do not use the old totals as the post-merge baseline. The feature-complete
@@ -228,7 +231,7 @@ target remains:
 
 | Measure                 | Integrated evidence       |   Replacement gate |
 | ----------------------- | ------------------------- | -----------------: |
-| Eight core files        | 8,239 lines               | materially smaller |
+| Eight core files        | 8,437 lines               | materially smaller |
 | Delivery coordination   | old estimate: about 5,085 |  3,300-3,600 lines |
 | Private members         | old estimate: about 88    |         at most 45 |
 | Explicit state machines | old estimate: about 13    |          at most 8 |
@@ -243,9 +246,10 @@ fallback fails the collapse goal even if benchmarks are green.
 
 1. Completed: merge current main and explicit-birth behavior into the measured
    branch without reviving `StreamProcessorHost`.
-2. In progress: 502 focused tests and OS typecheck pass; finish full repository
-   checks and the complete birth/recovery matrix.
-3. Pending: capture one exact-main cumulative baseline and deployed
+2. Completed: root typecheck, lint, formatting, recursive tests, focused Stream
+   tests, and affected cross-domain tests pass.
+3. Pending: capture one exact-main cumulative baseline, the complete
+   birth/recovery matrix, and a deployed
    birth-to-ready baseline with immutable revisions and raw logs.
 4. Pending: freeze the public API, benchmark corpus, and correctness matrix at
    those revisions.
@@ -320,8 +324,8 @@ Correctness must prove:
 
 ## Decision Order
 
-1. Finish full checks and establish the post-birth exact-main baseline for the
-   already integrated scanned-through runner.
+1. Establish the post-birth exact-main baseline for the already integrated
+   scanned-through runner.
 2. Measure birth plus sparse-delivery latency and verify the expected reduction
    in Stream reads/RPC turns; accept target-bounded folding only with
    reconciliation proof.

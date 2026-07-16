@@ -17,8 +17,8 @@ import type {
   DynamicWorkerRef,
   ItxBinding,
   Stream,
-  StreamEventBatch,
   StreamEvent,
+  StreamPushEventBatch,
 } from "./itx-api.generated";
 
 // Extensionless on purpose: this specifier lands verbatim in the published
@@ -190,7 +190,7 @@ export class IterateWorkerEntrypoint<
   }
 
   /** Private transport entry point for event delivery. */
-  private processEventBatch(batch: StreamEventBatch): void | Promise<void> {
+  private processEventBatch(batch: StreamPushEventBatch): void | Promise<void> {
     for (let index = 0; index < batch.events.length; index += 1) {
       const result = this.processEvent(batch.events[index]!);
       if (result !== undefined) {
@@ -231,7 +231,7 @@ export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends D
   }
 
   /** Private transport entry point for event delivery. */
-  private processEventBatch(batch: StreamEventBatch): void | Promise<void> {
+  private processEventBatch(batch: StreamPushEventBatch): void | Promise<void> {
     for (let index = 0; index < batch.events.length; index += 1) {
       const result = this.processEvent(batch.events[index]!);
       if (result !== undefined) {

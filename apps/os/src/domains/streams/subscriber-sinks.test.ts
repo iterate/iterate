@@ -14,12 +14,13 @@ function disposableResult() {
   };
 }
 
-function processorBatch(deliveryThroughOffset: number, streamMaxOffset: number): StreamEventBatch {
+function processorBatch(scannedThroughOffset: number, streamMaxOffset: number): StreamEventBatch {
   return {
     projectId: "prj_test",
     path: "/processor-test",
     events: [],
-    deliveryThroughOffset,
+    scannedAfterOffset: Math.max(0, scannedThroughOffset - 1),
+    scannedThroughOffset,
     streamMaxOffset,
     state: {},
   };
@@ -133,7 +134,8 @@ describe("retainStreamProcessorEventBatch", () => {
       projectId: "prj_test",
       path: "/agents/test",
       events: [],
-      deliveryThroughOffset: 42,
+      scannedAfterOffset: 41,
+      scannedThroughOffset: 42,
       streamMaxOffset: 42,
       state: { configuredSubscribersByKey: { large: "unused" } },
     };
@@ -143,7 +145,8 @@ describe("retainStreamProcessorEventBatch", () => {
     expect(received).toHaveBeenCalledOnce();
     expect(received).toHaveBeenCalledWith({
       events: [],
-      deliveryThroughOffset: 42,
+      scannedAfterOffset: 41,
+      scannedThroughOffset: 42,
       streamMaxOffset: 42,
     });
   });

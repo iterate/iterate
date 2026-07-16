@@ -69,7 +69,7 @@ export async function waitForStreamEvent(
 
         // Advance synchronously, before an async predicate can yield. A reset
         // then replays only delivery the Worker has already received.
-        replayAfterOffset = Math.max(replayAfterOffset ?? 0, batch.deliveryThroughOffset);
+        replayAfterOffset = Math.max(replayAfterOffset ?? 0, batch.scannedThroughOffset);
         scan = scan.then(async () => {
           for (const event of batch.events) {
             if (settled) return;

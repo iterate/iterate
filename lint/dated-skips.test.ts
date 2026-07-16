@@ -17,9 +17,10 @@ import { expect, test } from "vitest";
 const repoRoot = resolve(import.meta.dirname, "..");
 const SELF = "lint/dated-skips.test.ts";
 
-// Matches marker calls only; `skipIf`/`runIf` (conditional, structural by
+// Match marker calls on the test APIs, not ordinary domain methods such as a
+// cursor store's `skip()`. `skipIf`/`runIf` (conditional, structural by
 // construction) deliberately do not match because of the trailing paren.
-const MARKER = /\.(skip|fixme|todo)\(/;
+const MARKER = /\b(?:test|it|describe|suite|bench)\.(skip|fixme|todo)\(/;
 const REVISIT = /revisit by (\d{4}-\d{2}-\d{2})/i;
 // How many lines on each side of the marker may carry the parked/revisit
 // comment or the tracking-task reference.
@@ -59,6 +60,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "known tail re-pin regression, evidence in the spec comment (PR #2024)",
   },
 ];
+
+test("the marker scanner ignores non-test methods", () => {
+  expect(MARKER.test('test.skip("parked", () => {})')).toBe(true);
+  expect(MARKER.test('store.skip("cursor", 100, epoch)')).toBe(false);
+});
 
 test("parked skip/fixme/todo markers carry an unexpired `revisit by` date", () => {
   // Same universe as CI lints: tracked files, node_modules excluded for free.

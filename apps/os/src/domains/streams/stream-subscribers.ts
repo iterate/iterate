@@ -203,6 +203,10 @@ type OpenConnectionArgs = {
   /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
   sink: RetainedProcessEventBatch;
   replayAfterOffset?: number;
+  /** Stable stream creation identity observed by the caller; null binds to an unborn stream. */
+  expectedIncarnation?: string | null;
+  /** Reject the open if replay would exceed this many raw offsets. */
+  maxReplayOffsetGap?: number;
   selector?: CompiledEventSelector;
   /** `false` = state-only batches. Default `true`. */
   events?: boolean;
@@ -600,6 +604,8 @@ export class StreamSubscribers {
     subscriptionKey: string;
     sink: ProcessEventBatch;
     replayAfterOffset?: number;
+    expectedIncarnation?: string | null;
+    maxReplayOffsetGap?: number;
     selector?: CompiledEventSelector;
     events?: boolean;
     presence?: StreamSubscriberDescriptor;
@@ -615,6 +621,8 @@ export class StreamSubscribers {
       // subscriber's problem: explicit unsubscribe or best-effort onRpcBroken.
       sink: retainProcessEventBatch(args.sink),
       replayAfterOffset: args.replayAfterOffset,
+      expectedIncarnation: args.expectedIncarnation,
+      maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector: args.selector,
       events: args.events,
       presence: args.presence,
@@ -1538,16 +1546,64 @@ export class StreamSubscribers {
   #open(args: OpenConnectionArgs): Connection {
     const { subscriptionKey, subscriptionType, sink } = args;
 
-    // Replacing any existing connection for this key.
-    this.#connections.get(subscriptionKey)?.close("replaced");
-
     const deliverEvents = args.events !== false;
+    // This synchronous committed head is the subscription's atomic live
+    // boundary. Ephemeral rows at/below it existed before the subscription
+    // opened and are never replayed; rows above it are genuinely live.
+    const openedState = this.#hooks.coreState();
+    const openedAtOffset = openedState.maxOffset;
+    if (
+      args.replayAfterOffset !== undefined &&
+      (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error("replayAfterOffset must be a non-negative safe integer");
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      args.expectedIncarnation !== null &&
+      args.expectedIncarnation.trim().length === 0
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error("expectedIncarnation must be null or a non-empty string");
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      (openedState.createdAt ?? null) !== args.expectedIncarnation
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error(
+        `stream incarnation changed (${String(args.expectedIncarnation)} -> ${String(openedState.createdAt ?? null)})`,
+      );
+    }
+    if (
+      args.maxReplayOffsetGap !== undefined &&
+      (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error("maxReplayOffsetGap must be a non-negative safe integer");
+    }
     // State-only subscriptions are implicitly live-from-now: replay without
     // events is meaningless, so replayAfterOffset is ignored in that mode.
-    const openedState = this.#hooks.coreState();
-    let cursor = deliverEvents
-      ? (args.replayAfterOffset ?? openedState.maxOffset)
-      : openedState.maxOffset;
+    let cursor = deliverEvents ? (args.replayAfterOffset ?? openedAtOffset) : openedAtOffset;
+    if (cursor > openedAtOffset) {
+      sink[Symbol.dispose]();
+      throw new Error(`replayAfterOffset ${cursor} is ahead of the stream head ${openedAtOffset}`);
+    }
+    if (
+      deliverEvents &&
+      args.maxReplayOffsetGap !== undefined &&
+      openedAtOffset - cursor > args.maxReplayOffsetGap
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error(
+        `replay gap ${openedAtOffset - cursor} exceeds maxReplayOffsetGap ${args.maxReplayOffsetGap}`,
+      );
+    }
+
+    // Replacing any existing connection for this key only after the proposed
+    // open is valid; a rejected bounded replay must leave the live one intact.
+    this.#connections.get(subscriptionKey)?.close("replaced");
     let initialBatchPending = true;
     let draining = false;
     let open = true;
@@ -1571,6 +1627,7 @@ export class StreamSubscribers {
           pendingState = undefined;
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
+          const scannedAfterOffset = cursor;
           if (deliverEvents) {
             const stateMaxOffset = currentState.maxOffset;
             let emptyReadPages = 0;
@@ -1579,6 +1636,8 @@ export class StreamSubscribers {
               // events in one live frame would blow the RPC frame limit and turn
               // into a delivery failure the subscriber can never get past. The
               // in-memory head avoids an empty SQLite probe once caught up.
+              const filterHistoricalEphemerals =
+                subscriptionType === "ephemeral" && cursor < openedAtOffset;
               const read =
                 cursor < stateMaxOffset
                   ? this.#deliveryFrameReader.read({
@@ -1587,33 +1646,61 @@ export class StreamSubscribers {
                       throughOffset: stateMaxOffset,
                       durableOnly: subscriptionType === "configured",
                       includeEventByteLengths:
-                        args.selector !== undefined && !args.selector.matchesAll,
+                        filterHistoricalEphemerals ||
+                        (args.selector !== undefined && !args.selector.matchesAll),
                     })
                   : undefined;
               if (read?.lastOffset === undefined) {
-                // Caught up; the next append wakes us again. The first drain
-                // still owes the initial state batch.
+                // An evicted ephemeral suffix has no surviving row to carry
+                // its scan coordinate. The allocator head proves the absent
+                // interval, so emit one empty envelope across it. Otherwise
+                // we are caught up and only the first drain still owes an
+                // initial state batch.
+                if (cursor < stateMaxOffset) {
+                  cursor = stateMaxOffset;
+                  break;
+                }
                 if (!initialBatchPending) return;
                 break;
               }
               cursor = read.lastOffset;
               // Configured (wake) connections are a durable lane: ephemeral
               // events are dropped from delivery (the cursor above already
-              // advanced over them), so hosted processors structurally never
-              // see one. Ephemeral subscriptions receive them, live and on
-              // replay.
-              const visible = read.events;
+              // advanced over them), so hosted processors structurally never see
+              // one. Ephemeral subscriptions receive ephemeral events only when
+              // they were committed after this connection's atomic open boundary.
+              let visible = read.events;
+              let visibleByteLengths = read.eventByteLengths;
+              let visibleByteLength = read.byteLength;
+              if (filterHistoricalEphemerals) {
+                if (visibleByteLengths === undefined) {
+                  throw new Error("historical ephemeral filtering requires sized stream events");
+                }
+                const filteredEvents: StreamEvent[] = [];
+                const filteredByteLengths: number[] = [];
+                visibleByteLength = 0;
+                for (let index = 0; index < visible.length; index += 1) {
+                  const event = visible[index]!;
+                  if (event.ephemeral === true && event.offset <= openedAtOffset) continue;
+                  const byteLength = visibleByteLengths[index]!;
+                  filteredEvents.push(event);
+                  filteredByteLengths.push(byteLength);
+                  visibleByteLength += byteLength;
+                }
+                visible = filteredEvents;
+                visibleByteLengths = filteredByteLengths;
+              }
               if (args.selector === undefined || args.selector.matchesAll) {
                 events = visible;
-                deliveredBytes = read.byteLength;
+                deliveredBytes = visibleByteLength;
               } else {
                 const selected = this.#applySelector(
                   undefined,
                   args.selector,
                   visible,
-                  read.eventByteLengths,
-                  read.projection,
-                  read.durableOnly,
+                  visibleByteLengths,
+                  filterHistoricalEphemerals ? undefined : read.projection,
+                  filterHistoricalEphemerals ? false : read.durableOnly,
                 );
                 events = selected.matched;
                 deliveredBytes = selected.matchedByteLength ?? missingFilteredByteLength();
@@ -1663,7 +1750,8 @@ export class StreamSubscribers {
               projectId: currentState.projectId,
               path: currentState.path,
               events,
-              deliveryThroughOffset: cursor,
+              scannedAfterOffset,
+              scannedThroughOffset: cursor,
               streamMaxOffset: currentState.maxOffset,
               // Read in the same synchronous block as streamMaxOffset, so the
               // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).

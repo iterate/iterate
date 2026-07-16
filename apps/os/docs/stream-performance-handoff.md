@@ -1,26 +1,26 @@
 # Stream Performance Handoff
 
-Snapshot captured on 2026-07-15 and updated on 2026-07-16 while integrating
-`origin/main` through `44fd772b8` into draft PR
-[#1902](https://github.com/iterate/iterate/pull/1902). That main revision
-contains the #2002 processor runner/registry redesign, #2038 explicit processor
+Snapshot captured on 2026-07-15 and updated on 2026-07-16 after semantically
+integrating `origin/main` through `c2582c200` into draft PR
+[#1902](https://github.com/iterate/iterate/pull/1902). The integrated history
+includes the #2002 processor runner/registry redesign, #2038 explicit processor
 births, and #2040 native trace roots for Stream retry alarms. The last Stream
 runtime revision covered by the cumulative checkpoint remains `886b5ecf1`;
-the integrated post-#2038 tree has not yet been cumulatively benchmarked.
-Production has not been deployed, erased, or otherwise changed.
+the current merged tree has not yet been cumulatively benchmarked. Production
+has not been deployed, erased, or otherwise changed.
 
 ## 2026-07-16 Integration Update
 
 The semantic merge is now implemented. It keeps main's runtime-neutral
 `StreamProcessorRunner`, registry, two-cursor progress model, and deletion of
 `StreamProcessorHost`; explicit births and target-offset readiness barriers now
-operate on runner-owned progress. The Stream delivery frame is the compact
-triple of selected events, `deliveryThroughOffset`, and `streamMaxOffset`.
-Successful frames durably advance through scanned selector gaps, and an
-event-less at-head pass preserves reconciliation when no consumed event can
-carry the final `caughtUp` signal. The runner still self-pulls for explicit
-read-your-writes waits and cold catch-up; it no longer needs a second pull just
-to rediscover offsets already scanned by a delivered frame.
+operate on runner-owned progress. The compact processor frame contains selected
+events plus `scannedAfterOffset`, `scannedThroughOffset`, and
+`streamMaxOffset`. Successful frames durably advance through scanned selector
+gaps, and an event-less at-head pass preserves reconciliation when no consumed
+event can carry the final `caughtUp` signal. The runner still self-pulls for
+explicit read-your-writes waits and cold catch-up; it no longer needs a second
+pull just to rediscover offsets already scanned by a delivered frame.
 
 The public API remains one `append` method. It defaults to acknowledgement-only
 and accepts an optional leading `{ return: "events" | "offsets" }` projection.
@@ -31,13 +31,13 @@ that option, so the RPC contract intentionally exposes one union result and
 callers narrow an explicitly requested projection with shared helpers. No
 public `appendAck` compatibility verb was reintroduced.
 
-The resolved tree passes OS typecheck. Two focused verification waves pass 502
-tests across 25 Stream, runner, processor, recovery, agent, project, repo,
-integration, scheduler, secret, email, and capability-host test files. Generated
-OS and package ITX APIs/examples were regenerated from source. Full repository
-lint/test gates and the exact post-merge cumulative/deployed benchmark remain
-pending at this snapshot; do not reinterpret the historical checkpoint as a
-measurement against #2038.
+The resolved tree passes root typecheck, lint, formatting, and the recursive
+workspace test matrix. The focused Stream matrix passes 478 tests; the affected
+cross-domain matrix passes 208. The complete OS unit suite passes 1,969 tests
+with one intentional skip across 188 files. Generated OS and package ITX
+APIs/examples were regenerated from source. The exact post-merge cumulative
+and deployed benchmarks remain pending; do not reinterpret the historical
+checkpoint as a measurement of the current merged tree.
 
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
@@ -48,12 +48,13 @@ acceptance gates are in the
 
 ## Executive Summary
 
-The current branch is a large but real performance win. The latest exact-main
-checkpoint used 50 valid fresh Node/Vitest processes and reported an
-equal-workload geometric improvement of 39.619% p50, 32.229% p95, and 37.648%
-mean under the conservative substitution rule. The unmodified full suite
-improved 34.518% p50, 33.336% p95, and 34.818% mean. These are equal-workload
-summaries, not production-traffic weighting and not a sum of isolated wins.
+The measured pre-merge implementation is a large, real performance win. Its
+latest exact-main checkpoint used 50 valid fresh Node/Vitest processes and
+reported an equal-workload geometric improvement of 39.619% p50, 32.229% p95,
+and 37.648% mean under the conservative substitution rule. The unmodified full
+suite improved 34.518% p50, 33.336% p95, and 34.818% mean. These are
+equal-workload summaries, not production-traffic weighting, a sum of isolated
+wins, or a fresh claim for the current merged tree.
 
 The strongest mechanisms are straightforward:
 
@@ -77,10 +78,11 @@ and performance oracle.
 ## Measured Result
 
 The latest cumulative comparison used candidate `c00545e81` against exact
-main `b560198aa`. Stream production code at current head is byte-identical to
-that candidate. Every timer was on the Node host around awaited network/RPC
-work or host-observed delivery; no claim relies on a Worker-local clock
-advancing while Cloudflare has no network I/O in flight.
+main `b560198aa`. The current merged tree is not byte-identical to either arm
+and has not yet been measured against current main; the table below is the
+immutable historical checkpoint. Every timer was on the Node host around
+awaited network/RPC work or host-observed delivery; no claim relies on a
+Worker-local clock advancing while Cloudflare has no network I/O in flight.
 
 | Workload                            |  Main p50 | Candidate p50 |        Change |
 | ----------------------------------- | --------: | ------------: | ------------: |
@@ -224,13 +226,14 @@ StreamDurableObject
   `-- subscriber-sinks                  RPC/webhook transport and ownership
 ```
 
-Against integrated main `44fd772b8`, the working tree differs by 138 files and
-`+22,035/-3,141` lines. That number is dominated by this 4,600-line evidence
-ledger, tests, generated API output, and call-site migration. The Stream domain
-has 25 changed non-test production files at `+4,510/-1,271`, net +3,239 lines.
+Against integrated main `c2582c200`, the working tree differs by 136 files and
+`+22,165/-3,170` lines before this final documentation update. That number is
+dominated by this evidence ledger, tests, generated API output, and call-site
+migration. The Stream domain has 25 changed non-test production files at
+`+4,446/-1,239`, net +3,207 lines.
 
-After #2002/#2038 integration, the eight largest runtime
-coordination/storage/runner files total 8,239 lines. The old pre-runner estimate
+After the current-main integration, the eight largest runtime
+coordination/storage/runner files total 8,437 lines. The old pre-runner estimate
 of 6,343 lines is no longer a valid complexity baseline. An independent Claude
 CLI review of the preceding tree counted about 5,085 delivery-side coordination
 lines, roughly 88 private members, and about 13 semi-independent state

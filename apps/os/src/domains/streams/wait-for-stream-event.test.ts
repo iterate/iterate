@@ -12,14 +12,18 @@ function event(offset: number, type = "test/event"): StreamEvent {
   };
 }
 
-function batch(events: StreamEvent[], deliveryThroughOffset = events.at(-1)?.offset ?? 0) {
+function batch(events: StreamEvent[], scannedThroughOffset = events.at(-1)?.offset ?? 0) {
   return {
-    deliveryThroughOffset,
     events,
     path: "/test",
     projectId: "prj_test",
+    scannedAfterOffset:
+      events[0]?.offset === undefined
+        ? Math.max(0, scannedThroughOffset - 1)
+        : events[0].offset - 1,
+    scannedThroughOffset,
     state: {} as StreamEventBatch["state"],
-    streamMaxOffset: deliveryThroughOffset,
+    streamMaxOffset: scannedThroughOffset,
   } satisfies StreamEventBatch;
 }
 

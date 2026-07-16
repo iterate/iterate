@@ -108,11 +108,13 @@ export function retainProcessEventBatch(
 
 const compactProcessorBatch = ({
   events,
-  deliveryThroughOffset,
+  scannedAfterOffset,
+  scannedThroughOffset,
   streamMaxOffset,
 }: StreamEventBatch): Parameters<ProcessStreamProcessorEventBatch>[0] => ({
   events,
-  deliveryThroughOffset,
+  scannedAfterOffset,
+  scannedThroughOffset,
   streamMaxOffset,
 });
 
@@ -162,7 +164,7 @@ function retainProjectedProcessEventBatch<WireBatch>(
         unfencedDeliveries += 1;
         const pullResult =
           unfencedDeliveries >= settlementWindow ||
-          batch.deliveryThroughOffset >= batch.streamMaxOffset;
+          batch.scannedThroughOffset >= batch.streamMaxOffset;
         if (!pullResult) {
           // The processor host's ordered, failure-sticky sink makes the next
           // pulled result cumulative. Disposal here prevents this individual

@@ -24,9 +24,13 @@
 // member; the ahead members' runners dedupe the replay.
 
 import { z } from "zod";
+import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { StreamEvent } from "../../schemas.ts";
 import type { AnyHostedProcessor } from "../../processor-host-capabilities.ts";
-import type { StreamProcessorRunner } from "../../stream-processor-runner.ts";
+import type {
+  StreamProcessorDeliveryFrame,
+  StreamProcessorRunner,
+} from "../../stream-processor-runner.ts";
 import type { ProcessorSnapshot } from "../../rpc-types.ts";
 
 /** One canonical mirror member: its stable slug, the hosted processor
@@ -39,12 +43,34 @@ type CompositeMirrorMember = {
   runner: StreamProcessorRunner<any>;
 };
 
-/** One delivered transport frame, as the runtime's sink receives it. */
-type MirrorFrame = {
-  events: readonly StreamEvent[];
-  deliveryThroughOffset: number;
-  streamMaxOffset: number;
+/** One delivered transport scan, as the runtime's sink receives it. */
+type MirrorFrame = StreamProcessorDeliveryFrame;
+
+type VolatileAgentProjection = AnyHostedProcessor & {
+  prepareVolatileFrame(args: {
+    events: readonly StreamEvent[];
+    persistedState: unknown;
+    persistedThroughOffset: number;
+    scannedThroughOffset: number;
+  }): unknown | null;
+  commitVolatileFrame(candidate: unknown | null): void;
+  readonly volatileAgentUiState: AgentUiState | null;
+  clearVolatileState(): void;
 };
+
+function isVolatileAgentProjection(
+  processor: AnyHostedProcessor,
+): processor is VolatileAgentProjection {
+  return (
+    "prepareVolatileFrame" in processor &&
+    typeof processor.prepareVolatileFrame === "function" &&
+    "commitVolatileFrame" in processor &&
+    typeof processor.commitVolatileFrame === "function" &&
+    "volatileAgentUiState" in processor &&
+    "clearVolatileState" in processor &&
+    typeof processor.clearVolatileState === "function"
+  );
+}
 
 /**
  * Fans the single mirror download out to an ordered set of member runners.
@@ -125,29 +151,78 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
     checkpointOffset: number;
     sink: (batch: MirrorFrame) => Promise<void>;
   }> {
-    const opened: Awaited<ReturnType<StreamProcessorRunner<any>["openDelivery"]>>[] = [];
+    const opened: Array<{
+      member: CompositeMirrorMember;
+      delivery: Awaited<ReturnType<StreamProcessorRunner<any>["openDelivery"]>>;
+      acknowledgedThroughOffset: number;
+    }> = [];
     for (const member of this.#members) {
-      opened.push(await member.runner.openDelivery());
+      // eslint-disable-next-line react-doctor/async-await-in-loop -- Members share one SQLite connection; schema/progress opens may transact.
+      const delivery = await member.runner.openDelivery();
+      opened.push({
+        member,
+        delivery,
+        acknowledgedThroughOffset: delivery.checkpointOffset,
+      });
     }
     const checkpointOffset = opened.reduce(
-      (min, open) => Math.min(min, open.checkpointOffset),
+      (min, open) => Math.min(min, open.acknowledgedThroughOffset),
       Number.POSITIVE_INFINITY,
     );
     return {
       checkpointOffset: Number.isFinite(checkpointOffset) ? checkpointOffset : 0,
       sink: async (batch: MirrorFrame) => {
-        // ONE download: every member receives the same selected payloads and
-        // raw scan cursor. Each runner checkpoints that cursor in its own
-        // transaction; none independently re-reads a byte-capped remainder.
+        const live = opened.find(({ member }) => isVolatileAgentProjection(member.processor));
+        const volatileCandidate =
+          live === undefined || !isVolatileAgentProjection(live.member.processor)
+            ? null
+            : live.member.processor.prepareVolatileFrame({
+                events: batch.events,
+                persistedState: live.member.runner.currentState,
+                persistedThroughOffset: live.acknowledgedThroughOffset,
+                scannedThroughOffset: batch.scannedThroughOffset,
+              });
+        // Durable projections never receive ephemeral rows. Their progress
+        // still advances through the complete scan envelope, so omitted live
+        // chunks cannot become replayable persistent state on reconnect.
+        const durableEvents = batch.events.filter((event) => event.ephemeral !== true);
+        // ONE download: every member receives the same scan proof. A byte-capped
+        // remainder arrives through the server pump's next frame; members never
+        // issue duplicate type-unfiltered pulls merely because the raw head is
+        // beyond this frame's scanned-through cursor.
         for (const open of opened) {
-          await open.sink({
-            events: batch.events,
-            deliveryThroughOffset: batch.deliveryThroughOffset,
+          // eslint-disable-next-line react-doctor/async-await-in-loop -- Commits must remain ordered on the members' shared SQLite connection.
+          await open.delivery.sink({
+            events: durableEvents,
+            scannedAfterOffset: batch.scannedAfterOffset,
+            scannedThroughOffset: batch.scannedThroughOffset,
             streamMaxOffset: batch.streamMaxOffset,
           });
+          open.acknowledgedThroughOffset = Math.max(
+            open.acknowledgedThroughOffset,
+            batch.scannedThroughOffset,
+          );
+        }
+        if (live !== undefined && isVolatileAgentProjection(live.member.processor)) {
+          live.member.processor.commitVolatileFrame(volatileCandidate);
         }
       },
     };
+  }
+
+  /** Current in-memory agent tail. No ephemeral event is represented in a
+   * runner snapshot or SQLite row; this is the only live overlay surface. */
+  get agentUiState(): AgentUiState | null {
+    for (const { processor } of this.#members) {
+      if (isVolatileAgentProjection(processor)) return processor.volatileAgentUiState;
+    }
+    return null;
+  }
+
+  clearVolatileState(): void {
+    for (const { processor } of this.#members) {
+      if (isVolatileAgentProjection(processor)) processor.clearVolatileState();
+    }
   }
 
   /**
@@ -170,6 +245,7 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
    * election's drive over the shared mirror. In-flight commits are contained
    * durably by each member's progress-store fences either way. */
   dispose(): void {
+    this.clearVolatileState();
     for (const member of this.#members) {
       member.runner.dispose();
     }

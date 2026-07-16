@@ -22,8 +22,24 @@ describe("formatActivitySummary", () => {
       activity({
         endedAtMs: 8400,
         steps: [
-          { kind: "code", id: "c1", executionId: "x", status: "done", code: "", startedAtMs: 0 },
-          { kind: "code", id: "c2", executionId: "y", status: "done", code: "", startedAtMs: 0 },
+          {
+            kind: "code",
+            id: "c1",
+            executionId: "x",
+            status: "done",
+            code: "",
+            startedAtMs: 0,
+            expiresAtMs: 60_000,
+          },
+          {
+            kind: "code",
+            id: "c2",
+            executionId: "y",
+            status: "done",
+            code: "",
+            startedAtMs: 0,
+            expiresAtMs: 60_000,
+          },
           {
             kind: "llm",
             id: "l1",
@@ -68,6 +84,7 @@ describe("formatStepLine", () => {
         status: "running",
         code: "return 1",
         startedAtMs: 0,
+        expiresAtMs: 60_000,
       }),
     ).toBe("Running code");
   });
@@ -147,6 +164,7 @@ describe("formatLiveActivityLabel", () => {
               status: "running",
               code: "return 1",
               startedAtMs: 1000,
+              expiresAtMs: 60_000,
             },
           ],
         }),

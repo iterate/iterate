@@ -236,9 +236,10 @@ type ConfiguredEntry = {
 
 function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
   let now = 0;
-  let maxOffsetFloor = 0;
   let nowCalls = 0;
   let coreStateCalls = 0;
+  let assignedMaxOffset = 0;
+  let streamCreatedAt: string | undefined = "stream-v1";
   const log: StreamEvent[] = [];
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
@@ -370,7 +371,8 @@ function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
         return CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
           path: "/t",
-          maxOffset: Math.max(maxOffsetFloor, log.at(-1)?.offset ?? 0),
+          createdAt: streamCreatedAt,
+          maxOffset: assignedMaxOffset,
           configuredSubscribersByKey: configured,
         });
       },
@@ -426,7 +428,16 @@ function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
     configured,
     log,
     settle,
-    append: (...events: StreamEvent[]) => log.push(...events),
+    append: (...events: StreamEvent[]) => {
+      assignedMaxOffset = Math.max(assignedMaxOffset, ...events.map((event) => event.offset));
+      return log.push(...events);
+    },
+    evict: (...offsets: number[]) => {
+      const evicted = new Set(offsets);
+      for (let index = log.length - 1; index >= 0; index -= 1) {
+        if (evicted.has(log[index]!.offset)) log.splice(index, 1);
+      }
+    },
     storageReads: () => storageReads,
     selectedStorageReads: () => selectedStorageReads,
     eventByteLengthReads: () => eventByteLengthReads,
@@ -444,7 +455,10 @@ function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
       now = ms;
     },
     setMaxOffsetFloor: (offset: number) => {
-      maxOffsetFloor = offset;
+      assignedMaxOffset = Math.max(assignedMaxOffset, offset);
+    },
+    setIncarnation: (createdAt: string | undefined) => {
+      streamCreatedAt = createdAt;
     },
     configure: (payload: SubscriptionConfiguredPayload, offset = 0) => {
       configured[payload.subscriptionKey] = {
@@ -1472,13 +1486,19 @@ describe("StreamSubscribers", () => {
     expect(
       batches.map((batch) => ({
         offsets: batch.events.map((event) => event.offset),
-        deliveryThroughOffset: batch.deliveryThroughOffset,
+        scannedAfterOffset: batch.scannedAfterOffset,
+        scannedThroughOffset: batch.scannedThroughOffset,
       })),
     ).toEqual([
-      { offsets: [], deliveryThroughOffset: DELIVERY_BATCH_LIMIT },
+      {
+        offsets: [],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: DELIVERY_BATCH_LIMIT,
+      },
       {
         offsets: [DELIVERY_BATCH_LIMIT * 2 + 1],
-        deliveryThroughOffset: DELIVERY_BATCH_LIMIT * 2 + 1,
+        scannedAfterOffset: DELIVERY_BATCH_LIMIT,
+        scannedThroughOffset: DELIVERY_BATCH_LIMIT * 2 + 1,
       },
     ]);
     expect(h.storageReads()).toBe(3);
@@ -1502,9 +1522,9 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake();
     await h.settle();
 
-    expect(batches.map((batch) => batch.deliveryThroughOffset)).toEqual([
-      DELIVERY_BATCH_LIMIT,
-      DELIVERY_BATCH_LIMIT * 3 - 1,
+    expect(batches.map((batch) => [batch.scannedAfterOffset, batch.scannedThroughOffset])).toEqual([
+      [0, DELIVERY_BATCH_LIMIT],
+      [DELIVERY_BATCH_LIMIT, DELIVERY_BATCH_LIMIT * 3 - 1],
     ]);
     expect(batches.every((batch) => batch.events.length === 0)).toBe(true);
     expect(h.storageReads()).toBe(3);
@@ -1527,10 +1547,10 @@ describe("StreamSubscribers", () => {
 
     // The first state batch remains immediate. Later batches absorb at most
     // eight complete empty pages before advancing the receiver checkpoint.
-    expect(batches.map((batch) => batch.deliveryThroughOffset)).toEqual([
-      DELIVERY_BATCH_LIMIT,
-      DELIVERY_BATCH_LIMIT * 9,
-      eventCount,
+    expect(batches.map((batch) => [batch.scannedAfterOffset, batch.scannedThroughOffset])).toEqual([
+      [0, DELIVERY_BATCH_LIMIT],
+      [DELIVERY_BATCH_LIMIT, DELIVERY_BATCH_LIMIT * 9],
+      [DELIVERY_BATCH_LIMIT * 9, eventCount],
     ]);
     expect(batches.every((batch) => batch.events.length === 0)).toBe(true);
     expect(h.storageReads()).toBe(17);
@@ -1790,7 +1810,7 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toBeUndefined();
   });
 
-  it("n. ephemeral: immediate replay batch, presence facts, and fire-and-forget sink results", async () => {
+  it("n. ephemeral: immediate durable replay, presence facts, and fire-and-forget sink results", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
 
@@ -2989,13 +3009,13 @@ describe("StreamSubscribers", () => {
     expect(h.pushes).toHaveLength(MAX_DELIVERY_ATTEMPTS);
   });
 
-  it("z. ephemeral events: dropped from push delivery (cursor still advances), delivered to ephemeral subscriptions", async () => {
+  it("z. ephemeral events: never replayed, delivered only after an ephemeral subscription opens", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const }, evt(3, "b"));
 
-    // A replaying ephemeral subscription sees everything, flagged, in order —
-    // the spine's storage read is raw.
+    // Historical durable rows replay, but the pre-existing chunk at offset 2
+    // is behind the connection's atomic live boundary and never appears.
     const batches: StreamEventBatch[] = [];
     h.subscribers.openEphemeral({
       subscriptionKey: "watcher",
@@ -3008,9 +3028,9 @@ describe("StreamSubscribers", () => {
     const seen = batches.flatMap((batch) => batch.events);
     expect(seen.map((event) => [event.offset, event.ephemeral === true])).toEqual([
       [1, false],
-      [2, true],
       [3, false],
     ]);
+    expect(batches[0]).toMatchObject({ scannedAfterOffset: 0, scannedThroughOffset: 3 });
 
     // The push drain delivered only the durable events and acked THROUGH the
     // ephemeral offset (skip-not-defer, same shape as selector skips).
@@ -3025,11 +3045,113 @@ describe("StreamSubscribers", () => {
     h.append({ ...evt(4, "chunk"), ephemeral: true as const });
     h.subscribers.wake();
     await h.settle();
+    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([
+      1, 3, 4,
+    ]);
+    expect(batches.at(-1)).toMatchObject({
+      scannedAfterOffset: 3,
+      scannedThroughOffset: 4,
+    });
     expect(h.pushes).toHaveLength(1);
     expect(h.row("k")?.ackedOffset).toBe(4);
     h.subscribers.wake();
     await h.settle();
     expect(h.pushes).toHaveLength(1);
+  });
+
+  it("z1. atomically rejects an unbounded replay before replacing a live connection", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
+    const first = makeSink();
+    h.subscribers.openEphemeral({ subscriptionKey: "watcher", sink: first.sink });
+    await h.settle();
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink: makeSink().sink,
+        replayAfterOffset: 0,
+        maxReplayOffsetGap: 2,
+      }),
+    ).toThrow(/replay gap 3 exceeds maxReplayOffsetGap 2/);
+    expect(h.subscribers.hasConnection("watcher")).toBe(true);
+  });
+
+  it("z1a. atomically rejects a changed stream incarnation before replacing a live connection", async () => {
+    const h = makeHarness();
+    const first = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: first.sink,
+      expectedIncarnation: "stream-v1",
+    });
+    await h.settle();
+
+    h.setIncarnation("stream-v2");
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink: makeSink().sink,
+        replayAfterOffset: 0,
+        expectedIncarnation: "stream-v1",
+      }),
+    ).toThrow(/stream incarnation changed \(stream-v1 -> stream-v2\)/);
+    expect(h.subscribers.hasConnection("watcher")).toBe(true);
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "new-stream-watcher",
+      sink: makeSink().sink,
+      expectedIncarnation: "stream-v2",
+    });
+    expect(h.subscribers.hasConnection("new-stream-watcher")).toBe(true);
+  });
+
+  it("z1b. distinguishes an uncreated stream from a newly-created incarnation", () => {
+    const h = makeHarness();
+    h.setIncarnation(undefined);
+    h.subscribers.openEphemeral({
+      subscriptionKey: "uncreated-watcher",
+      sink: makeSink().sink,
+      expectedIncarnation: null,
+    });
+
+    h.setIncarnation("stream-v1");
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "replacement",
+        sink: makeSink().sink,
+        expectedIncarnation: null,
+      }),
+    ).toThrow(/stream incarnation changed \(null -> stream-v1\)/);
+  });
+
+  it("z1c. rejects invalid replay coordinates before opening a connection", () => {
+    const h = makeHarness();
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "negative-cursor",
+        sink: makeSink().sink,
+        replayAfterOffset: -1,
+      }),
+    ).toThrow(/replayAfterOffset must be a non-negative safe integer/);
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "invalid-gap",
+        sink: makeSink().sink,
+        maxReplayOffsetGap: Number.NaN,
+      }),
+    ).toThrow(/maxReplayOffsetGap must be a non-negative safe integer/);
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "invalid-incarnation",
+        sink: makeSink().sink,
+        expectedIncarnation: "   ",
+      }),
+    ).toThrow(/expectedIncarnation must be null or a non-empty string/);
+    expect(h.subscribers.hasConnection("negative-cursor")).toBe(false);
+    expect(h.subscribers.hasConnection("invalid-gap")).toBe(false);
+    expect(h.subscribers.hasConnection("invalid-incarnation")).toBe(false);
   });
 
   it("z2. configured wake connections never receive ephemeral events; the pump advances over them", async () => {
@@ -3044,9 +3166,18 @@ describe("StreamSubscribers", () => {
     expect(
       batches.map((batch) => ({
         offsets: batch.events.map((event) => event.offset),
-        deliveryThroughOffset: batch.deliveryThroughOffset,
+        scannedAfterOffset: batch.scannedAfterOffset,
+        scannedThroughOffset: batch.scannedThroughOffset,
+        streamMaxOffset: batch.streamMaxOffset,
       })),
-    ).toEqual([{ offsets: [1, 3], deliveryThroughOffset: 3 }]);
+    ).toEqual([
+      {
+        offsets: [1, 3],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 3,
+        streamMaxOffset: 3,
+      },
+    ]);
 
     // Ephemeral-only append while connected, delivered through the FRESH TAIL
     // fast path (what the DO's commit hands over — raw, flags included): the
@@ -3058,12 +3189,79 @@ describe("StreamSubscribers", () => {
     expect(
       batches.map((batch) => ({
         offsets: batch.events.map((event) => event.offset),
-        deliveryThroughOffset: batch.deliveryThroughOffset,
+        scannedAfterOffset: batch.scannedAfterOffset,
+        scannedThroughOffset: batch.scannedThroughOffset,
+        streamMaxOffset: batch.streamMaxOffset,
       })),
     ).toEqual([
-      { offsets: [1, 3], deliveryThroughOffset: 3 },
-      { offsets: [], deliveryThroughOffset: 4 },
+      {
+        offsets: [1, 3],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 3,
+        streamMaxOffset: 3,
+      },
+      {
+        offsets: [],
+        scannedAfterOffset: 3,
+        scannedThroughOffset: 4,
+        streamMaxOffset: 4,
+      },
     ]);
+  });
+
+  it("z2b. a session selector receives an empty scan envelope across non-matches", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"));
+    const { sink, batches } = makeSink();
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "filtered-session",
+      sink,
+      replayAfterOffset: 0,
+      selector: compileEventSelector({ eventTypes: ["never"] }),
+    });
+    await h.settle();
+
+    expect(batches).toEqual([
+      expect.objectContaining({
+        events: [],
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 2,
+      }),
+    ]);
+  });
+
+  it("z3. advances session and push cursors through an evicted ephemeral suffix", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"), { ...evt(2, "chunk"), ephemeral: true as const });
+    h.evict(2);
+
+    const { sink, batches } = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink,
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+
+    // The bounded read reached storage EOF, so the same envelope can carry
+    // event 1 and prove the evicted suffix through offset 2. Do not spend a
+    // second RPC on an empty scan-progress frame when one read proves both.
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject({
+      events: [expect.objectContaining({ offset: 1 })],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1]);
+    expect(h.row("k")?.ackedOffset).toBe(2);
   });
 });
 

@@ -9,7 +9,10 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 6;
+// v7 clears mirrors that may contain replayed historical ephemeral rows. The
+// durable-only replay contract cannot leave those old rows visible after the
+// live-only ephemeral cutover.
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
 
 /**
  * Tables this processor owns. Views pass this to the runtime so a mirror
@@ -56,27 +59,9 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
   ): undefined {
     const event = args.event;
     if (event === null) return;
-    // Gaps are legal only once server-side ephemeral eviction exists; until
-    // then every delivered stream is dense (the subscription lane, the pull
-    // pager, and the runner's self-pulls all include ephemeral rows), so an
-    // observed gap is a real lost delivery. THROW before buffering: failing
-    // the frame here (while the hole is still open) keeps the cursor at the
-    // hole's edge and routes into the store's self-heal — resubscribe from
-    // the checkpoint and replay the missing rows. Buffering past the hole
-    // would seal it forever: the cursor advances in the same transaction and
-    // the gap-tolerant trigger accepts everything after. The check runs
-    // against the buffer's covered offset — under the transactional commit
-    // the mirror head and the acknowledged cursor move together, so the
-    // cursor IS the mirror head (a legacy mirror running AHEAD of its
-    // checkpoint replays into RAISE(IGNORE) dedupes, exactly as before).
-    // When the eviction sweep ships, demote this to a warning keyed on the
-    // swept horizon.
-    const covered = this.projectionBuffer.coveredOffset;
-    if (covered !== undefined && covered > 0 && event.offset > covered + 1) {
-      throw new Error(
-        `stream browser mirror offset gap: local head ${covered}, delivery continues at ${event.offset} — lost delivery; failing the frame so the self-heal replays it`,
-      );
-    }
+    // Sparse offsets are expected: historical ephemerals are intentionally
+    // absent. The runner validates the enclosing scan envelope before this
+    // hook runs, so accepting a gap here means "proved omitted", not "lost".
     this.projectionBuffer.append(event.offset, [
       {
         build: () => ({

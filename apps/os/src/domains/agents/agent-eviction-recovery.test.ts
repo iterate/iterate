@@ -210,7 +210,8 @@ function makeHarness() {
       if (events.length > 0) {
         await woken.sink({
           events,
-          deliveryThroughOffset: head(),
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
         });
       }

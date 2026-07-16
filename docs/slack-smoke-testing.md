@@ -83,7 +83,7 @@ doppler run --project os --config prd -- sh -c 'echo "$APP_CONFIG_BASE_URL"'
    ```
 
 7. Poll the routed Slack-agent stream until
-   `events.iterate.com/itx/script-execution-completed` appears for the script
+   `events.iterate.com/itx/script-run-settled` appears for the script
    that calls `itx.slack.chat.postMessage`.
 8. Record the wall-clock duration from appending the webhook event to the
    completed itx script execution.
@@ -91,7 +91,7 @@ doppler run --project os --config prd -- sh -c 'echo "$APP_CONFIG_BASE_URL"'
    - `events.iterate.com/slack/webhook-received`
    - `events.iterate.com/agents/context-added`
    - `events.iterate.com/agent/llm-request-started`
-   - `events.iterate.com/itx/script-execution-completed`
+   - `events.iterate.com/itx/script-run-settled`
 
 10. Remove the temporary OS project.
 

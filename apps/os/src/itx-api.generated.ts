@@ -1309,8 +1309,9 @@ export interface Stream {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
-   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`
-   * events too — remember their rows may be evicted if you record the offset.
+   * Durable rows after `afterOffset` are replayed. It can also match an
+   * `ephemeral: true` event appended after this wait opens, but historical
+   * ephemeral rows are never replayed.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -1348,8 +1349,10 @@ export interface Stream {
   /**
    * Session-scoped live event delivery (the "ephemeral" subscription lane —
    * also the only lane that receives `ephemeral: true` events):
-   * `processEventBatch` is called for every committed batch (optionally
-   * replayed from `replayAfterOffset`); returns an unsubscribe handle.
+   * `processEventBatch` first receives durable history after
+   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
+   * when appended after this exact subscription opens and are never replayed.
+   * Returns an unsubscribe handle.
    * Forgotten on disconnect — durable delivery is configured as data instead,
    * by appending a `subscription-configured` event (wake or push mode) to the
    * stream.
@@ -1358,6 +1361,17 @@ export interface Stream {
     subscriptionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /**
+     * Atomically bind this open to the stream identity observed during
+     * catch-up. `null` means the caller observed a stream with no committed
+     * creation fact yet. A mismatch rejects before replacing any connection.
+     */
+    expectedIncarnation?: string | null;
+    /**
+     * Atomically reject instead of opening when the current raw-log head is
+     * more than this many offsets beyond `replayAfterOffset`.
+     */
+    maxReplayOffsetGap?: number;
     /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
     selector?: { eventTypes?: string[]; condition?: string };
@@ -1750,8 +1764,10 @@ export type ProjectDescription = Description & {
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
  * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug` — the inspection half of
- * this node reads the host's main processor.
+ * processor wakes from the request's `processorSlug`. Each public domain
+ * surface selects that same named processor for inspection, so
+ * `agent.processor`, `agent.slack.processor`, and other siblings expose their
+ * own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
@@ -2822,6 +2838,10 @@ export type SandboxInstanceType =
  *   and tears down now instead of waiting for `sleepAfter` (the SDK's
  *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;
  *   `destroy()` is permanent — the name is retired.
+ * - Top-level `exec()` is sessionless: every call gets a fresh shell, and a
+ *   timeout terminates the complete Linux process group before resolving an
+ *   exit-code-124 result. Use the SDK's explicit session APIs when commands
+ *   intentionally need shared shell state.
  * - `__describe()` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
@@ -3253,7 +3273,7 @@ export type StreamSubscriberPing = (
 export type StreamSubscriptionHandle = Disposable & {
   /** Stable identity of this subscription connection. */
   subscriptionKey: SubscriptionKey;
-  /** The stream's max offset at subscribe time (replay starts behind it). */
+  /** The stream's max offset at subscribe time (durable replay starts behind it). */
   streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
@@ -3803,8 +3823,10 @@ export type StreamEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
-  /** Highest contiguous stream offset this delivery scanned through. */
-  deliveryThroughOffset: number;
+  /** Exclusive raw-log cursor from which this delivery scan began. */
+  scannedAfterOffset: number;
+  /** Inclusive raw-log cursor through which this delivery scan completed. */
+  scannedThroughOffset: number;
   streamMaxOffset: number;
   state: unknown;
 };
@@ -3834,7 +3856,8 @@ export type StreamPingReply = { t0: number; t1: number; t2: number };
  */
 export type StreamProcessorEventBatch = {
   events: StreamEvent[];
-  deliveryThroughOffset: number;
+  scannedAfterOffset: number;
+  scannedThroughOffset: number;
   streamMaxOffset: number;
 };
 

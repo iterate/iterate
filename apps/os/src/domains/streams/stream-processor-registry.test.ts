@@ -192,7 +192,8 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
       if (events.length > 0) {
         await woken.sink({
           events,
-          deliveryThroughOffset: head(),
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
         });
       }
@@ -398,7 +399,8 @@ describe("wakeStreamSubscriber", () => {
     // The returned sink IS the runner's: driving it advances durable progress.
     await woken.sink({
       events: h.stream.events.slice(),
-      deliveryThroughOffset: h.head(),
+      scannedAfterOffset: woken.checkpointOffset,
+      scannedThroughOffset: h.head(),
       streamMaxOffset: h.head(),
     });
     const runtime = await woken.getRuntimeState!();

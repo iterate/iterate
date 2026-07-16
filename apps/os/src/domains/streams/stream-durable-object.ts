@@ -1528,8 +1528,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    * callers still observe an async call through their stub.
    *
    * `subscribe({ subscriptionKey: "s", processEventBatch })` live-tails by
-   * default. `replayAfterOffset: 0` replays from the first event; `3` starts at
-   * offset 4. Re-subscribing with the same key replaces the old connection.
+   * default. `replayAfterOffset: 0` replays durable events from the first row;
+   * `3` starts durable replay at offset 4. Ephemeral rows are delivered only
+   * if appended after this exact connection opens and are never replayed.
+   * Re-subscribing with the same key replaces the old connection.
    * Omit `subscriptionKey` for an anonymous subscription (the stream assigns a
    * random key). Call the returned `unsubscribe()` to stop delivery.
    *
@@ -1553,12 +1555,25 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     if (
       args.replayAfterOffset !== undefined &&
-      (!Number.isInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
+      (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       // NaN binds as SQL NULL downstream (`offset > NULL` matches nothing), so
       // an unvalidated cursor produces a live-looking subscription that
       // silently delivers nothing forever.
       throw new Error(`replayAfterOffset must be a non-negative integer`);
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      args.expectedIncarnation !== null &&
+      args.expectedIncarnation.trim().length === 0
+    ) {
+      throw new Error(`expectedIncarnation must be null or a non-empty string`);
+    }
+    if (
+      args.maxReplayOffsetGap !== undefined &&
+      (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
+    ) {
+      throw new Error(`maxReplayOffsetGap must be a non-negative integer`);
     }
 
     // Validate the caller-supplied descriptor at the boundary. The public
@@ -1586,6 +1601,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriptionKey,
       sink: args.processEventBatch,
       replayAfterOffset: args.replayAfterOffset,
+      expectedIncarnation: args.expectedIncarnation,
+      maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector,
       events: args.events,
       presence,
@@ -1601,7 +1618,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** One-shot ephemeral replay/live subscription resolved by the first matching event. */
+  /**
+   * One-shot convenience over `subscribe()`: replay durable events from the
+   * requested cursor, then live-tail until a caller predicate accepts an event.
+   *
+   * Rides an ephemeral subscription, so it CAN match an ephemeral event
+   * appended after this wait opens. It never matches a historical ephemeral
+   * row, regardless of `afterOffset`.
+   *
+   * Intentionally not a durable waiter. If the RPC caller or this DO
+   * incarnation dies, the wait dies too; callers that need retry semantics
+   * should call again with the same `afterOffset`.
+   */
   async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): Promise<StreamEvent> {
     if (args.eventTypes === undefined && args.predicate === undefined) {
       throw new Error("waitForEvent requires eventTypes or predicate.");
@@ -1611,15 +1639,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     if (
       args.afterOffset !== undefined &&
-      (!Number.isInteger(args.afterOffset) || args.afterOffset < 0)
+      (!Number.isSafeInteger(args.afterOffset) || args.afterOffset < 0)
     ) {
-      throw new Error("waitForEvent afterOffset must be a non-negative integer.");
+      throw new Error("waitForEvent afterOffset must be a non-negative safe integer.");
     }
 
     const predicate = args.predicate ?? (() => true);
     const found = Promise.withResolvers<StreamEvent>();
     let seenCount = 0;
     const recentTypes: string[] = [];
+    let settled = false;
+
+    // Scan delivered batches in order. Predicate work is chained instead of run
+    // inline so an async predicate never blocks stream delivery, and a later
+    // batch can never overtake an earlier one. The first match wins; a predicate
+    // that throws rejects the wait.
     let scan: Promise<void> = Promise.resolve();
     const handle = this.subscribe({
       eventTypes: args.eventTypes,
@@ -1628,17 +1662,28 @@ export class StreamDurableObject extends DurableObject<Env> {
       processEventBatch: ({ events }) => {
         scan = scan.then(async () => {
           for (const event of events) {
+            if (settled) break;
             seenCount += 1;
             recentTypes.push(event.type);
             if (recentTypes.length > 20) recentTypes.shift();
-            if (await predicate(event)) found.resolve(event);
+            if (await predicate(event)) {
+              settled = true;
+              found.resolve(event);
+              break;
+            }
           }
         });
-        void scan.catch((error: unknown) => found.reject(error));
+        void scan.catch((error: unknown) => {
+          if (settled) return;
+          settled = true;
+          found.reject(error);
+        });
       },
     });
 
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       found.reject(
         new Error(
           `Timed out waiting for stream event after ${args.timeoutMs}ms ` +

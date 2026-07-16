@@ -107,12 +107,16 @@ a deploy, or days after a crash loop finally met its antidote. **Do not enact
 side effects blindly**: check how old the intent is (and, for cross-checks,
 how far your fold sits from the stream head) before starting anything.
 
-- **`expiresAt` on the requested event.** The requester stamps it; the
-  reconciler refuses to _start_ past it and settles the obligation as expired
-  instead (_only-settle-past-expiry_). This is what makes late wakes safe by
-  construction: an agent revived a week late reports a failure, it does not
-  answer a week-old prompt. Every new obligation type should carry it
-  (defaults derive from `createdAt` when raw appends omit it).
+- **`expiresAt` on the requested event.** The requester stamps it as the
+  deadline for the **whole obligation**, including its terminal settlement;
+  it is not merely a latest-start time. The reconciler refuses to start past
+  it and settles the obligation as expired instead. A started attempt must
+  bound every phase to the remaining budget and reserve a short final window
+  for journaling its terminal outcome. This makes late wakes and wedged RPCs
+  safe by construction: an agent revived a week late reports a failure, it
+  does not answer a week-old prompt, and an attempt cannot run unbounded after
+  the intent expired. Every new obligation type should carry an explicit
+  expiry.
 - **Vendor idempotency for dangerous effects.** For a payment-shaped effect,
   the obligation key must ride to the vendor (e.g. a Stripe idempotency key)
   so at-least-once attempts collapse server-side. Dangerous **and**

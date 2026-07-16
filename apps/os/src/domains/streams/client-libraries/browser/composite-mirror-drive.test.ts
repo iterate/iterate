@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "../../processor-contracts.ts";
+import type { StreamEvent } from "../../schemas.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
 import {
   StreamProcessorRunner,
@@ -19,6 +20,25 @@ import { MemoryStream } from "../../test-helpers.ts";
 import { CompositeMirrorDrive } from "./composite-mirror-drive.ts";
 
 const MEMBER_VERSION = "0.1.0";
+
+function delivery(
+  events: StreamEvent[],
+  args: {
+    scannedAfterOffset?: number;
+    scannedThroughOffset?: number;
+    streamMaxOffset?: number;
+  } = {},
+) {
+  const scannedAfterOffset = args.scannedAfterOffset ?? 0;
+  const scannedThroughOffset =
+    args.scannedThroughOffset ?? events.at(-1)?.offset ?? scannedAfterOffset;
+  return {
+    events,
+    scannedAfterOffset,
+    scannedThroughOffset,
+    streamMaxOffset: args.streamMaxOffset ?? scannedThroughOffset,
+  };
+}
 
 /** A pre-seedable in-memory progress store (the browser store's stand-in). */
 function memoryProgress(initialAck = 0): ProcessorProgressStore<Record<string, never>> {
@@ -113,11 +133,7 @@ describe("CompositeMirrorDrive", () => {
       { type: "example.com/test", payload: {} },
     );
     const opened = await composite.openDelivery();
-    await opened.sink({
-      events: [event!],
-      deliveryThroughOffset: event!.offset,
-      streamMaxOffset: event!.offset,
-    });
+    await opened.sink(delivery([event!]));
     expect(order).toEqual(["browser-raw-events", "browser-feed"]);
     expect(raw.applied).toEqual([1]);
     expect(feed.applied).toEqual([1]);
@@ -133,11 +149,7 @@ describe("CompositeMirrorDrive", () => {
       { return: "events" },
       { type: "example.com/test", payload: {} },
     );
-    const frame = {
-      events: [event!],
-      deliveryThroughOffset: event!.offset,
-      streamMaxOffset: event!.offset,
-    };
+    const frame = delivery([event!]);
 
     feed.behavior.throwAtOffset = event!.offset;
     const opened = await composite.openDelivery();
@@ -171,23 +183,47 @@ describe("CompositeMirrorDrive", () => {
     const opened = await composite.openDelivery();
     // A byte-capped frame: it carries only offset 1 but is stamped with the
     // full raw head (offset 2), exactly like the server pump's capped frames.
-    await opened.sink({
-      events: [first!],
-      deliveryThroughOffset: first!.offset,
-      streamMaxOffset: second!.offset,
-    });
+    await opened.sink(
+      delivery([first!], { scannedThroughOffset: first!.offset, streamMaxOffset: second!.offset }),
+    );
+    // Flush background work to prove no member starts an independent pull.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(readEvents).not.toHaveBeenCalled();
     expect(raw.applied).toEqual([1]);
     expect(feed.applied).toEqual([1]);
 
     // The tail still arrives through the single server subscription.
-    await opened.sink({
-      events: [second!],
-      deliveryThroughOffset: second!.offset,
-      streamMaxOffset: second!.offset,
-    });
+    await opened.sink(
+      delivery([second!], {
+        scannedAfterOffset: first!.offset,
+        scannedThroughOffset: second!.offset,
+      }),
+    );
     expect(raw.applied).toEqual([1, 2]);
     expect(feed.applied).toEqual([1, 2]);
+  });
+
+  it("advances every member through an empty scan proof without self-pulling", async () => {
+    const stream = new MemoryStream();
+    const readEvents = vi.spyOn(stream, "readEvents");
+    const raw = makeMember("browser-raw-events", stream);
+    const feed = makeMember("browser-feed", stream);
+    const composite = new CompositeMirrorDrive([raw.member, feed.member]);
+    await stream.append(
+      { type: "example.com/test", payload: {} },
+      { type: "example.com/test", payload: {} },
+    );
+
+    const opened = await composite.openDelivery();
+    await opened.sink(delivery([], { scannedThroughOffset: 2, streamMaxOffset: 2 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(readEvents).not.toHaveBeenCalled();
+    expect(raw.applied).toEqual([]);
+    expect(feed.applied).toEqual([]);
+    expect((await composite.snapshot()).offset).toBe(2);
   });
 
   it("delegates subscriber metrics to the primary (first) member", () => {

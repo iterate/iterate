@@ -28,9 +28,9 @@ const SLUG = CapabilityHostProcessorContract.slug;
 
 const T = {
   created: "events.iterate.com/capability-host/created",
-  requested: "events.iterate.com/capability-host/script-execution-requested",
-  started: "events.iterate.com/capability-host/script-execution-started",
-  completed: "events.iterate.com/capability-host/script-execution-completed",
+  requested: "events.iterate.com/capability-host/script-run-requested",
+  started: "events.iterate.com/capability-host/script-run-started",
+  completed: "events.iterate.com/capability-host/script-run-settled",
   revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
@@ -153,7 +153,8 @@ function makeHarness() {
       if (events.length > 0) {
         await woken.sink({
           events,
-          deliveryThroughOffset: head(),
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
         });
       }
@@ -177,6 +178,36 @@ function makeHarness() {
 }
 
 describe("script execution reconciliation", () => {
+  it("does not refold retired lifecycle events into current script obligations", async () => {
+    const h = makeHarness();
+    await h.stream.append(
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: {
+          code: "async () => 'retired'",
+          executionId: "retired-exec",
+          expiresAt: h.clock.now + 60_000,
+        },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-started",
+        payload: { executionId: "retired-exec" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-completed",
+        idempotencyKey: "capability-host/script-execution-completed@retired-exec",
+        payload: { executionId: "retired-exec", result: "retired" },
+      },
+    );
+
+    await h.deliverPending();
+
+    expect(h.state().scriptExecutions).toEqual({});
+    expect(
+      h.stream.events.filter((event) => event.type === T.started || event.type === T.completed),
+    ).toEqual([]);
+  });
+
   it("runs a fresh request: started evidence lands before the body, completion after", async () => {
     const h = makeHarness();
     const ran: string[] = [];
@@ -184,7 +215,7 @@ describe("script execution reconciliation", () => {
       // The started fact must already be durable when the body runs.
       expect(h.stream.events.some((event) => event.type === T.started)).toBe(true);
       ran.push(code);
-      return { ok: true };
+      return { status: "succeeded" as const, result: { ok: true } };
     };
     await h.stream.append({
       type: T.requested,
@@ -194,8 +225,11 @@ describe("script execution reconciliation", () => {
 
     await vi.waitFor(() => {
       const completed = h.stream.events.find((event) => event.type === T.completed);
-      expect(completed?.idempotencyKey).toBe("capability-host/script-execution-completed@exec-1");
-      expect(completed?.payload).toMatchObject({ executionId: "exec-1", result: { ok: true } });
+      expect(completed?.idempotencyKey).toBe("capability-host/script-run-settled@exec-1");
+      expect(completed?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: { ok: true } },
+      });
     });
     expect(ran).toEqual(["async () => 1"]);
   });
@@ -216,7 +250,11 @@ describe("script execution reconciliation", () => {
       const completed = h.stream.events.find((event) => event.type === T.completed);
       expect(completed?.payload).toMatchObject({
         executionId: "exec-1",
-        error: expect.stringContaining("orphaned"),
+        settlement: {
+          status: "failed",
+          error: expect.stringContaining("orphaned"),
+          failureKind: "orphaned",
+        },
       });
     });
   });
@@ -231,7 +269,7 @@ describe("script execution reconciliation", () => {
     const ran: string[] = [];
     h.run.impl = async (code) => {
       ran.push(code);
-      return 42;
+      return { status: "succeeded" as const, result: 42 };
     };
     // Recovery reads the head FOLD, not any particular batch: the caught-up
     // pass after this delivery finds the undriven obligation and runs it.
@@ -248,7 +286,7 @@ describe("script execution reconciliation", () => {
     const ran: string[] = [];
     h.run.impl = async (code) => {
       ran.push(code);
-      return "ok";
+      return { status: "succeeded" as const, result: "ok" };
     };
     await h.stream.append({
       type: T.requested,
@@ -279,7 +317,10 @@ describe("script execution reconciliation", () => {
           event.type === T.completed &&
           (event.payload as { executionId: string }).executionId === "exec-5",
       );
-      expect(completed?.payload).toMatchObject({ executionId: "exec-5", result: "ok" });
+      expect(completed?.payload).toMatchObject({
+        executionId: "exec-5",
+        settlement: { status: "succeeded", result: "ok" },
+      });
     });
     expect(ran).toEqual(["async () => 5"]);
   });
@@ -300,14 +341,51 @@ describe("script execution reconciliation", () => {
       const completed = h.stream.events.find((event) => event.type === T.completed);
       expect(completed?.payload).toMatchObject({
         executionId: "exec-3",
-        error: expect.stringContaining("expired"),
+        settlement: {
+          status: "failed",
+          error: expect.stringContaining("expired"),
+          failureKind: "expired",
+        },
       });
     });
   });
 
+  it("settles and cancels a started script when its absolute deadline passes", async () => {
+    const h = makeHarness();
+    const run = new Promise<unknown>(() => {}) as Promise<unknown> & {
+      [Symbol.dispose]: ReturnType<typeof vi.fn>;
+    };
+    run[Symbol.dispose] = vi.fn();
+    h.run.impl = () => run;
+    await h.stream.append({
+      type: T.requested,
+      payload: {
+        code: 'async (itx) => { const sandbox = await itx.sandboxes.get("/sandboxes/iterate-live-clocks"); return sandbox.exec("pnpm typecheck", { timeout: 1200000 }); }',
+        executionId: "agent-output:13980",
+        // The host reserves 15s to persist the settlement, leaving this
+        // worker RPC a deliberately tiny real-time window.
+        expiresAt: h.clock.now + 15_020,
+      },
+    });
+
+    await h.deliverPending();
+    await vi.waitFor(() => {
+      const completed = h.stream.events.find((event) => event.type === T.completed);
+      expect(completed?.payload).toMatchObject({
+        executionId: "agent-output:13980",
+        settlement: {
+          status: "failed",
+          failureKind: "deadline",
+          phase: "execution",
+        },
+      });
+    });
+    expect(run[Symbol.dispose]).toHaveBeenCalledOnce();
+  });
+
   it("a completion settles the obligation for good: replayed batches change nothing", async () => {
     const h = makeHarness();
-    h.run.impl = async () => "done";
+    h.run.impl = async () => ({ status: "succeeded" as const, result: "done" });
     await h.stream.append({
       type: T.requested,
       payload: { code: "async () => 4", executionId: "exec-4", expiresAt: h.clock.now + 60_000 },
@@ -375,7 +453,11 @@ describe("eviction recovery end to end", () => {
       const completed = h.stream.events.find((event) => event.type === T.completed);
       expect(completed?.payload).toMatchObject({
         executionId: "exec-1",
-        error: expect.stringContaining("orphaned"),
+        settlement: {
+          status: "failed",
+          error: expect.stringContaining("orphaned"),
+          failureKind: "orphaned",
+        },
       });
     });
     expect(h.stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);

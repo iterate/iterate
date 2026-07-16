@@ -24,8 +24,9 @@
 // store, processor-state-storage.ts) — the store's commit flushes the member's buffered
 // projection writes and its progress record in ONE SQLite transaction.
 
+import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { appendedEvents } from "../../rpc-types.ts";
-import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
+import type { ProcessorRuntimeState, StreamEventBatch, SubscriptionKey } from "../../rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
 import type { Stream } from "../../../../itx-api.generated.ts";
 import {
@@ -38,6 +39,7 @@ import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
 import {
   StreamProcessorRunner,
   type ProcessorProgressStore,
+  type StreamProcessorDeliveryFrame,
 } from "../../stream-processor-runner.ts";
 import type { StreamProcessor } from "../../stream-processor.ts";
 import { isStreamUnavailableError } from "../../stream-unavailable.ts";
@@ -59,7 +61,8 @@ import {
   type StreamBrowserDatabase,
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
-import { readCatchUpPage } from "./catch-up-page.ts";
+import { catchUpDurableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
+import { LiveAgentStateChannel, liveAgentStateChannelName } from "./live-agent-state-channel.ts";
 import { acquireDatabase } from "./stream-database-registry.ts";
 import {
   type BrowserStreamClient,
@@ -69,6 +72,7 @@ import {
 } from "./stream-transport.ts";
 import {
   errorMessage,
+  isStreamSessionBrokenError,
   isWriteStatement,
   raceWithTimeout,
   StepTimeoutError,
@@ -76,12 +80,6 @@ import {
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 const DEFAULT_STREAM_PROJECT_ID = "default";
-
-type BrowserDeliveryFrame = {
-  events: readonly StreamEvent[];
-  deliveryThroughOffset: number;
-  streamMaxOffset: number;
-};
 
 // --- Catch-up + flow-control tuning ----------------------------------------------------
 // The server's live subscription pump is deliberately one-directional: it never waits for
@@ -91,12 +89,14 @@ type BrowserDeliveryFrame = {
 // ~1-4k events/s applied; a 1M-event replay ballooned a browser tab to >1.3GB of queued
 // batches and redelivered 3.26× through reconnect churn). So the leader PULLS history
 // with paged `getEvents` reads — client-paced, so backpressure is structural — and only
-// subscribes for the tail once it is within CATCHUP_THRESHOLD_EVENTS of the head.
+// subscribes for the tail once the entire atomic replay interval fits inside
+// MAX_LIVE_REPLAY_OFFSET_GAP. Historical reads deliberately exclude ephemeral
+// rows; only the subscription's post-open live interval may contain them.
 
-/** How far behind the server head a checkpoint may be before we page instead of subscribe. */
-const CATCHUP_THRESHOLD_EVENTS = 1_000;
 /** `getEvents` page size (its server-side maximum). */
 const CATCHUP_PAGE_LIMIT = 500;
+/** Maximum interval the server may atomically bridge when opening the live tail. */
+const MAX_LIVE_REPLAY_OFFSET_GAP = 2_000;
 /**
  * Live-tail safety valve: if the un-applied delivery backlog exceeds this many events, the
  * subscription has outrun SQLite. Cut the connection (dropping the queued batches — the
@@ -131,6 +131,8 @@ export type StreamBrowserSnapshot = {
   clearVersion: number;
   connectionError: string | undefined;
   databaseInfo: StreamDatabaseInfo | undefined;
+  /** Changes whenever the live-only, in-memory agent projection changes. */
+  liveRevision: number;
 };
 
 /** What a view tells the runtime about the processor it wants hosted. */
@@ -230,6 +232,8 @@ export type StreamBrowserStore = Disposable & {
   debugRuntimeState(): Promise<StreamServerRuntimeState>;
   /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). Poll-friendly. */
   metrics(): BrowserStreamMetrics;
+  /** Current rendered agent state, including this connection's live-only ephemeral tail. */
+  agentUiState(): AgentUiState | null;
   /**
    * An append THIS browser initiated through a lane the store doesn't carry
    * (e.g. `itx.agents.get(path).message(...)`) committed at
@@ -440,6 +444,7 @@ function createStreamRuntime(
   //     instead of no-oping for up to a full probe interval.
   let reconciledIncarnation: string | undefined;
   let lastDeliveredOffset = -1;
+  let liveAgentUiState: AgentUiState | null = null;
   let deliveryArrivals = 0;
   let lastDeliveryArrivalAt: number | undefined;
   let arrivalBaselineAt = 0;
@@ -535,20 +540,17 @@ function createStreamRuntime(
   const browserSubscriberId =
     localStorage.getItem(browserSubscriberStorageKey) ?? crypto.randomUUID();
   localStorage.setItem(browserSubscriberStorageKey, browserSubscriberId);
-  // ONE server subscription per (browser profile, mirror); projectId keeps it
-  // distinct. Deliberately schema-agnostic (no version) so a new compatible
-  // runtime REPLACES an old unified subscription for this profile on the server.
-  const serverSubscriptionKey = `${args.projectId}:${browserSubscriberId}:browser-stream-mirror`;
-  // Each member's durable checkpoint row is keyed by its OWN slug — the exact
-  // key it used before unification — so existing local caches resume instead of
-  // re-downloading from offset 0.
-  const memberSubscriptionKey = (memberSlug: string) =>
-    `${args.projectId}:${browserSubscriberId}:${memberSlug}`;
+  // The browser mirror contract is intentionally versioned as one clean-cut
+  // identity. A new schema never reads a prior projection/cursor contract.
+  const serverSubscriptionKey = `${args.projectId}:${browserSubscriberId}:browser-stream-mirror:v${mirrorVersionVector}`;
+  const memberSubscriptionKey = (member: BrowserProcessorConfig) =>
+    `${args.projectId}:${browserSubscriberId}:${member.slug}:v${member.schemaVersion}`;
   let snapshot: StreamBrowserSnapshot = {
     clearVersion: 0,
     connectionStatus: "connecting",
     connectionError: undefined,
     databaseInfo: undefined,
+    liveRevision: 0,
     subscriptionStatus: "idle",
   };
 
@@ -560,6 +562,29 @@ function createStreamRuntime(
   function emitSnapshot() {
     for (const listener of listeners) listener();
   }
+
+  function updateLiveAgentUiState(state: AgentUiState | null, options: { publish?: boolean } = {}) {
+    const changed = liveAgentUiState !== state;
+    liveAgentUiState = state;
+    if (options.publish) liveAgentStateChannel.publish(state);
+    if (!changed) return;
+    snapshot = { ...snapshot, liveRevision: snapshot.liveRevision + 1 };
+    emitSnapshot();
+  }
+
+  // The OPFS mirror is shared across tabs, but ephemerals must never enter it.
+  // Relay only the current writer session's in-memory overlay to followers;
+  // the schema-versioned channel and per-leadership claim fence stale tabs.
+  const liveAgentStateChannel = new LiveAgentStateChannel({
+    name: liveAgentStateChannelName({
+      projectId: args.projectId,
+      streamPath: args.streamPath,
+      versionVector: mirrorVersionVector,
+    }),
+    onState: (state) => {
+      if (!disposed) updateLiveAgentUiState(state);
+    },
+  });
 
   function refreshDatabaseInfo() {
     void streamDatabase
@@ -790,11 +815,6 @@ function createStreamRuntime(
   // interpreted — only equality with a call's captured value matters.
   let ledgerGeneration = 0;
 
-  function isSessionBrokenError(error: unknown) {
-    const message = errorMessage(error).toLowerCase();
-    return message.includes("websocket") || message.includes("rpc session");
-  }
-
   async function guardedCall<T>(
     step: string,
     connection: BrowserStreamClient,
@@ -847,7 +867,7 @@ function createStreamRuntime(
           // stall progress either — make sure one follow-up probe is running.
           scheduleStrikeFollowUpProbe(connection);
         }
-      } else if (isSessionBrokenError(error)) {
+      } else if (isStreamSessionBrokenError(error)) {
         reconnectAfterError(step, error, 0, { suspect: connection });
       }
       throw error;
@@ -1215,11 +1235,13 @@ function createStreamRuntime(
   function startSubscriptionElection(election: { connection: BrowserStreamClient; epoch: number }) {
     snapshot = { ...snapshot, subscriptionStatus: "electing" };
     emitSnapshot();
+    liveAgentStateChannel.request();
 
     const followerTimeout = setTimeout(() => {
       if (!disposed && subscriptionHandle === undefined) {
         snapshot = { ...snapshot, subscriptionStatus: "follower" };
         emitSnapshot();
+        liveAgentStateChannel.request();
       }
     }, 250);
 
@@ -1277,12 +1299,12 @@ function createStreamRuntime(
             path: args.streamPath,
             projectId: args.projectId,
             sql,
-            subscriptionKey: memberSubscriptionKey(member.slug),
+            subscriptionKey: memberSubscriptionKey(member),
           });
           const progress = browserProcessorProgressStore({
             sql,
             processorSlug: member.slug,
-            subscriptionKey: memberSubscriptionKey(member.slug),
+            subscriptionKey: memberSubscriptionKey(member),
             ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
             projection: processor.projectionBuffer,
           });
@@ -1308,13 +1330,9 @@ function createStreamRuntime(
               // the runner's own construction (runnerDriver) fails loudly on
               // anything that is not a real StreamProcessor instance.
               processor: memberProcessor as unknown as StreamProcessor<any, any>,
-              // Explicit catch-up and reduce-only refolds read the journal
-              // through this stream. The mirror stores ephemeral rows (the
-              // subscription lane delivers them), so those reads must include
-              // them too — a default read would seal permanent holes where
-              // chunk runs belong and advance the cursor past rows nothing
-              // would ever refetch.
-              stream: streamWithEphemeralRangeReads(election.connection),
+              // Range reads are durable-only. Live ephemeral rows exist only
+              // in the composite's per-connection in-memory overlay.
+              stream: election.connection,
               durability: { progress },
               // No recovery adapter: a browser tab has no keepalive alarm — a
               // closed tab's unfinished frame is simply redelivered to the
@@ -1336,86 +1354,74 @@ function createStreamRuntime(
         const opened = await withDeadline("checkpoint read", processor.openDelivery());
         if (!ownsRuntime()) return undefined;
 
-        // Far behind the head? PULL history with paged reads before opening the
-        // one-directional subscription (see the flow-control block up top). Each
-        // page is fetched, applied, and checkpointed before the next is
-        // requested, so the server can never outrun the mirror here — and a
-        // page failure just reconnects and resumes from the checkpoint.
-        let catchUpOffset = opened.checkpointOffset;
-        let serverHead = serverMaxOffset;
-        let catchUpPageLimit = CATCHUP_PAGE_LIMIT;
-        if (serverHead - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
+        const historicalGap = serverMaxOffset - opened.checkpointOffset;
+        if (historicalGap > MAX_LIVE_REPLAY_OFFSET_GAP) {
           console.info(
-            `[stream ${args.streamPath} ${slug}] mirror is ${serverHead - catchUpOffset} events behind; pull-paging before subscribing`,
+            `[stream ${args.streamPath} ${slug}] pull-paging ${historicalGap} durable historical offsets before opening the live subscription`,
           );
-          for (;;) {
-            if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) {
-              // The head we were chasing was captured before these pages
-              // applied. A stream that kept appending meanwhile could be far
-              // ahead of it — re-read the live head before trusting the exit,
-              // or the subscription would dump the accumulated gap after all.
-              const rawHeadState = await withDeadline(
-                "catch-up head re-read",
-                election.connection.head(),
-              );
-              if (!ownsRuntime()) return undefined;
-              serverHead = parseBrowserCoreProcessorState(rawHeadState).maxOffset;
-              if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) break;
-            }
-            const result = await readCatchUpPage(
-              catchUpPageLimit,
-              async (limit) =>
+        }
+
+        // Pull every pre-open historical offset through a bounded, durable-only
+        // scan. The scan envelope advances across omitted ephemeral rows, so
+        // old chunks neither replay nor leave a permanent cursor hole. Once
+        // the remaining interval fits the server's atomic subscribe guard, the
+        // live lane opens after the captured boundary and only post-open
+        // ephemeral events can enter the in-memory overlay.
+        const caughtUp = await catchUpToLiveReplayBoundary({
+          afterOffset: opened.checkpointOffset,
+          throughOffset: serverMaxOffset,
+          pageLimit: CATCHUP_PAGE_LIMIT,
+          maxReplayOffsetGap: MAX_LIVE_REPLAY_OFFSET_GAP,
+          expectedIncarnation: reconciledIncarnation,
+          shouldContinue: ownsRuntime,
+          catchUp: ({ afterOffset, throughOffset, pageLimit }) =>
+            catchUpDurableHistory({
+              afterOffset,
+              throughOffset,
+              pageLimit,
+              shouldContinue: ownsRuntime,
+              read: async ({ afterOffset: cursor, beforeOffset, limit }) =>
                 (await withDeadline(
                   "catch-up page read",
-                  election.connection.getEvents({
-                    afterOffset: catchUpOffset,
-                    // The mirror stores ephemeral rows too (the subscription lane
-                    // delivers them); a default read here would skip every chunk
-                    // run — losing streamed text the mirror promises to keep and
-                    // false-firing the raw-events gap detector on each one.
-                    includeEphemeral: true,
-                    limit,
-                  }),
+                  election.connection.getEvents({ afterOffset: cursor, beforeOffset, limit }),
                 )) as StreamEvent[],
+              ingest: async ({ events, scannedAfterOffset, scannedThroughOffset }) => {
+                if (!ownsRuntime()) return;
+                deliveryArrivals += 1;
+                lastDeliveryArrivalAt = Date.now();
+                lastBatchEvents = events.length;
+                totalDeliveredEvents += events.length;
+                // Applying a frame is deliberately not abandoned behind a
+                // timeout: the durable cursor fence, not a second concurrent
+                // writer, owns recovery from a failed apply.
+                await opened.sink({
+                  events: [...events],
+                  scannedAfterOffset,
+                  scannedThroughOffset,
+                  streamMaxOffset: scannedThroughOffset,
+                });
+                if (ownsRuntime()) lastDeliveredOffset = scannedThroughOffset;
+              },
+              onPageLimitReduced: (previousLimit, nextLimit) => {
+                console.warn(
+                  `[stream ${args.streamPath} ${slug}] catch-up page exceeded the RPC byte limit; reducing page size from ${previousLimit} to ${nextLimit}`,
+                );
+              },
+            }),
+          readHead: async () => {
+            const { coreProcessorState } = await withDeadline(
+              "catch-up head re-read",
+              election.connection.runtimeState(),
             );
-            if (result.limit < catchUpPageLimit) {
-              console.warn(
-                `[stream ${args.streamPath} ${slug}] catch-up page exceeded the RPC byte limit; reducing page size from ${catchUpPageLimit} to ${result.limit}`,
-              );
-            }
-            catchUpPageLimit = result.limit;
-            const page = result.page;
-            if (!ownsRuntime()) return undefined;
-            if (page.length === 0) break; // server truth moved (reset?); subscribe reconciles
-            deliveryArrivals += 1;
-            lastDeliveryArrivalAt = Date.now();
-            lastBatchEvents = page.length;
-            totalDeliveredEvents += page.length;
-            // Deliberately NOT deadlined, unlike the read-only steps above: a
-            // deadline can only ABANDON this promise, not cancel the frame —
-            // the old runners would keep committing in the db worker while the
-            // timeout's fresh election spun up a second drive over the same
-            // tables (the progress stores' revision/monotonic fences reject a
-            // stale writer's commits, but abandoning a healthy apply is still
-            // wrong). A wedged db worker parking this await is the known
-            // "worker death is undetected" latent — the safe fix is
-            // generation-fenced worker shutdown inside StreamBrowserDatabase,
-            // not a deadline here.
-            //
-            // This explicit pull loop scanned exactly through the page tail.
-            // The live subscription will report its own raw scan cursor.
-            const pageTail = page.at(-1)!.offset;
-            await opened.sink({
-              events: page,
-              deliveryThroughOffset: pageTail,
-              streamMaxOffset: pageTail,
-            });
-            if (!ownsRuntime()) return undefined;
-            catchUpOffset = page.at(-1)!.offset;
-            lastDeliveredOffset = catchUpOffset;
-          }
-        }
-        lastDeliveredOffset = catchUpOffset;
+            const parsed = parseBrowserCoreProcessorState(coreProcessorState);
+            return { createdAt: parsed.createdAt, maxOffset: parsed.maxOffset };
+          },
+        });
+        if (caughtUp === undefined || !ownsRuntime()) return undefined;
+        const replayAfterOffset = caughtUp.replayAfterOffset;
+        lastDeliveredOffset = replayAfterOffset;
+        processor.clearVolatileState();
+        updateLiveAgentUiState(null);
         // The live capabilities ride as SIBLINGS of the serializable
         // descriptor — the same position the wake handshake gives them,
         // built by the same shared helper so the two hosts cannot drift.
@@ -1435,7 +1441,7 @@ function createStreamRuntime(
         });
         return {
           processor,
-          replayAfterOffset: catchUpOffset,
+          replayAfterOffset,
           subscriber: {
             description: "browser",
             processor: {
@@ -1449,18 +1455,28 @@ function createStreamRuntime(
           // dropped and must not count as progress (it never advances
           // lastDeliveredOffset), or the liveness probe would read a dead
           // subscription's stale pushes as healthy.
-          processEventBatch: (batch: BrowserDeliveryFrame) =>
-            ingestWithSelfHeal(opened.sink, batch, election),
+          processEventBatch: (batch: StreamEventBatch) =>
+            ingestWithSelfHeal(processor, opened.sink, batch, election),
         };
       })
       .then(async (ready) => {
         if (ready === undefined || !ownsRuntime()) return undefined;
+        // Claim the volatile relay immediately before the atomic live open.
+        // Any old writer's overlay disappears even if it crashed without a
+        // release message; state published below belongs to this session only.
+        updateLiveAgentUiState(null);
+        liveAgentStateChannel.claim(null);
         const handle = await withDeadline(
           "subscribe",
           election.connection.subscribe({
             subscriptionKey: serverSubscriptionKey,
             processEventBatch: ready.processEventBatch,
             replayAfterOffset: ready.replayAfterOffset,
+            // Bind the open to the exact stream identity whose history was
+            // reconciled. `null` deliberately binds the pre-creation state,
+            // so creation/reset in the final-read→subscribe gap rejects.
+            expectedIncarnation: reconciledIncarnation ?? null,
+            maxReplayOffsetGap: MAX_LIVE_REPLAY_OFFSET_GAP,
             subscriber: ready.subscriber,
             getRuntimeState: ready.getRuntimeState,
             ping: ready.ping,
@@ -1524,8 +1540,9 @@ function createStreamRuntime(
   // so the server replays from there), with bounded exponential backoff so repeated failures
   // don't busy-loop. A disposed runtime, or a callback from a superseded connection, stops.
   async function ingestWithSelfHeal(
-    sink: (batch: BrowserDeliveryFrame) => Promise<void>,
-    batch: BrowserDeliveryFrame,
+    processor: CompositeMirrorDrive,
+    sink: (batch: StreamProcessorDeliveryFrame) => Promise<void>,
+    batch: StreamEventBatch,
     election: { connection: BrowserStreamClient },
   ): Promise<void> {
     // A batch delivered to a superseded election must not be applied: its
@@ -1568,16 +1585,15 @@ function createStreamRuntime(
       // Serialize the apply and RE-CHECK ownership inside the slot. The entry
       // guard above is not enough: two rapid batches both pass it, then batch
       // A's failure schedules a reconnect while batch B already holds the next
-      // slot in the runners' own chains — B would apply over the failure,
-      // advancing the cursor PAST A's rows. The relaxed (gap-tolerant)
-      // mirror trigger accepts that hole, so nothing would ever repair it; the
-      // per-event gap check fails B loudly instead. `scheduleReconnect`
-      // clears `stream` synchronously, so a re-check inside the slot sees it.
+      // slot in the runners' own chains. The inner ownership check and the
+      // progress store's durable cursor fence prevent B from advancing after
+      // A supersedes the election.
       const run = ingestChain.then(async () => {
         if (disposed || stream !== election.connection) return;
         await sink(batch);
         ingestFailureCount = 0;
-        lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.deliveryThroughOffset);
+        lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.scannedThroughOffset);
+        updateLiveAgentUiState(processor.agentUiState, { publish: true });
       });
       ingestChain = run.catch(() => undefined);
       try {
@@ -1609,6 +1625,7 @@ function createStreamRuntime(
   function stopSubscriptionElection() {
     fireAndForgetUnsubscribe(subscriptionHandle);
     subscriptionHandle = undefined;
+    liveAgentStateChannel.release();
     writerRole?.release();
     writerRole = undefined;
     // Dispose the election's member runners so queued frames (and explicit
@@ -1619,12 +1636,16 @@ function createStreamRuntime(
     // incarnation, not this best-effort stop.
     electionDrive?.dispose();
     electionDrive = undefined;
+    updateLiveAgentUiState(null);
     // In-flight own-append correlations belong to the dying subscription; the
     // fresh election replays, and a replayed delivery must not close a stale
     // loop with an inflated sample.
     currentProcessor?.subscriberMetrics.clearPendingAppends();
     currentProcessor = undefined;
-    snapshot = { ...snapshot, subscriptionStatus: "idle" };
+    snapshot = {
+      ...snapshot,
+      subscriptionStatus: "idle",
+    };
     if (!disposed) emitSnapshot();
   }
 
@@ -1682,6 +1703,7 @@ function createStreamRuntime(
   function start() {
     if (started || disposed) return;
     started = true;
+    liveAgentStateChannel.request();
     snapshot = { ...snapshot, connectionStatus: "subscribing" };
     emitSnapshot();
     refreshDatabaseInfo();
@@ -1938,6 +1960,7 @@ function createStreamRuntime(
     connectTimer = reconnectTimer = databaseInfoTimer = databaseChangeTimer = undefined;
     stopLivenessProbe();
     stopSubscriptionElection();
+    liveAgentStateChannel[Symbol.dispose]();
     stream?.[Symbol.dispose]();
     stream = undefined;
     offDatabaseChange();
@@ -2074,7 +2097,7 @@ function createStreamRuntime(
             // ~23s of backoff first.
             const transient =
               error instanceof StepTimeoutError ||
-              isSessionBrokenError(error) ||
+              isStreamSessionBrokenError(error) ||
               isStreamUnavailableError(error);
             if (disposed || !transient || attempt >= APPEND_MAX_RETRIES) throw error;
             await new Promise((resolve) =>
@@ -2094,6 +2117,7 @@ function createStreamRuntime(
       );
     },
     metrics: readMetrics,
+    agentUiState: () => liveAgentUiState,
     noteExternalAppend({ maxCommittedOffset, t0 }) {
       if (!Number.isFinite(maxCommittedOffset) || maxCommittedOffset <= 0) return;
       currentProcessor?.subscriberMetrics.noteAppendCommitted({
@@ -2182,30 +2206,6 @@ function createStreamRuntime(
  * connection and OPFS handle promptly.
  */
 const IDLE_DISPOSE_GRACE_MS = 2_000;
-
-/**
- * The stream the member runners self-pull through, with `readEvents` forced
- * to `includeEphemeral: true`. The browser mirror is the ONE consumer that
- * stores ephemeral rows (the session subscription lane delivers them; the
- * store's own catch-up pager reads them explicitly), while the public
- * `readEvents` default excludes them — so an unwrapped runner pull
- * (explicit catch-up or refold) would skip every chunk run, sealing permanent
- * holes in the mirror and false-firing the raw-events gap check. Everything
- * else passes through to the live connection.
- */
-function streamWithEphemeralRangeReads(connection: BrowserStreamClient): Stream {
-  return new Proxy(connection, {
-    get(target, property, receiver) {
-      if (property === "readEvents") {
-        return (readArgs?: Parameters<Stream["readEvents"]>[0]) =>
-          target.readEvents({ ...readArgs, includeEphemeral: true });
-      }
-      const value = Reflect.get(target, property, receiver);
-      if (typeof value !== "function") return value;
-      return (...fnArgs: unknown[]) => Reflect.apply(value, target, fnArgs);
-    },
-  }) as Stream;
-}
 
 function resolveStreamUrl(args: {
   projectId: string;

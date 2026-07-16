@@ -4639,9 +4639,10 @@ choosing one textual side.
 
 The resulting processor path keeps main's runner, registry, two durable
 progress cursors, and explicit target-offset birth barriers. Stream delivery
-now gives the runner a compact frame containing selected events,
-`deliveryThroughOffset`, and `streamMaxOffset`. A frame can durably advance
-across selector gaps without re-reading rows that the Stream already scanned.
+now gives the runner a compact frame containing selected events plus
+`scannedAfterOffset`, `scannedThroughOffset`, and `streamMaxOffset`. A frame can
+durably advance across selector gaps without re-reading rows that the Stream
+already scanned.
 If a frame reaches head without a consumed event, the runner performs an
 event-less at-head reconciliation pass; this preserves the production-proven
 case where an obligation would otherwise strand behind an unconsumed tail. The
@@ -4704,3 +4705,58 @@ work or host-observed completion. Cloudflare can freeze isolate clocks without
 network I/O, so Worker-local wall-clock deltas are neither benchmark evidence
 nor timeout correctness. Production was not deployed, erased, or otherwise
 changed.
+
+## 2026-07-16: Current-Main Merge And Correctness Baseline
+
+Draft PR #1902 then integrated exact `origin/main`
+`c2582c20064b3e2f5252908fdf30094e03d15ff6`. The merge keeps main's grouped
+activity and browser replay work alongside the optimized Stream journal,
+delivery, and processor paths. Generated OS/package ITX API graphs and examples
+were regenerated from the resolved source.
+
+The hosted-processor frame now uses main's explicit scan coordinates:
+`events`, exclusive `scannedAfterOffset`, inclusive `scannedThroughOffset`, and
+`streamMaxOffset`. The optimized frame reader proves storage exhaustion and can
+deliver one event-less or partially selected envelope through head rather than
+forcing a trailing self-pull. The event-less at-head reconciliation pass remains
+mandatory: it is what lets obligations settle when no selected event can carry
+the final caught-up signal.
+
+The public API still has one `append` operation with acknowledgement-only
+default behavior and explicit event/offset projections. Cap'n Web's
+`RpcStub<T>` projection was checked against source and collapses an overloaded
+method to one parameter/return pair, so the honest generated RPC type remains a
+union. Result-consuming deployed tests explicitly request an event projection
+and validate it. No public `appendAck`, compatibility alias, or old data format
+was added.
+
+The merged correctness baseline is green:
+
+- root `pnpm typecheck`, `pnpm lint`, and `pnpm format:check` pass;
+- the recursive workspace `pnpm test` matrix passes;
+- the focused Stream matrix passes 478 tests across 35 files;
+- the affected cross-domain matrix passes 208 tests across 11 files; and
+- the complete OS unit suite passes 1,969 tests with one intentional skip
+  across 188 files.
+
+The full test run also exposed a false positive in the dated-skip checker: its
+generic `.skip(` pattern interpreted the domain method `store.skip(...)` as a
+test skip. The scanner now recognizes only known test receivers and has a
+regression assertion for ordinary domain methods.
+
+Against this exact main before the final documentation update, the branch
+differs by 136 files and `+22,165/-3,170` lines. The Stream domain's 25 changed
+non-test production files account for `+4,446/-1,239`, net +3,207. The agreed
+eight-file journal/delivery/runner set totals 8,437 lines: 1,087 in the journal
+and 1,769 in the runner/registry. This confirms that the runtime topology still
+collapses to one Stream Durable Object, one SQLite database, Workers RPC, and
+alarms, but the source-complexity case for a coherent replacement is material.
+
+No new performance claim is attached to this merge. Checkpoint 15 remains the
+latest exact cumulative evidence, and its immutable revisions are not the
+current tree. The next acceptance gate is an exact-current-main cumulative run
+plus deployed Node-host timing of warm/cold births, sparse and empty scan
+envelopes, continuous writers, eviction, receiver retry, and singular public
+`processEvent` Worker consumers. Worker-local elapsed time remains invalid when
+there is no network I/O because Cloudflare may freeze the isolate clock.
+Production remains untouched.

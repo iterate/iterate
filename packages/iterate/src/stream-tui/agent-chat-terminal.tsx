@@ -198,7 +198,7 @@ function ChatHeader(props: { status: AgentConnectionStatus; notice: string; even
       ? "live"
       : props.status.kind === "connecting"
         ? "connecting"
-        : `reconnecting (${props.status.detail})`;
+        : `${props.status.kind} (${props.status.detail})`;
   const statusColor =
     props.status.kind === "live"
       ? COLORS.accent

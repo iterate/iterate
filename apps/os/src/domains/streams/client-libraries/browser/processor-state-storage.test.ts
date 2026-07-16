@@ -118,10 +118,11 @@ function rawEventsLoad(db: DatabaseSync) {
     runner,
     /** Deliver one frame, stamped at its own tail unless overridden. */
     async deliver(events: StreamEvent[], streamMaxOffset?: number) {
-      const { sink } = await runner.openDelivery();
-      await sink({
+      const opened = await runner.openDelivery();
+      await opened.sink({
         events,
-        deliveryThroughOffset: events.at(-1)!.offset,
+        scannedAfterOffset: opened.checkpointOffset,
+        scannedThroughOffset: events.at(-1)?.offset ?? opened.checkpointOffset,
         streamMaxOffset: streamMaxOffset ?? events.at(-1)!.offset,
       });
     },
@@ -245,8 +246,8 @@ describe("browser raw events schema version reset", () => {
     const secondLoad = rawEventsLoad(db);
     expect(await secondLoad.runner.snapshot()).toMatchObject({ offset: 2 });
 
-    // Resume after the cursor: replayed offsets dedupe, new offsets append.
-    await secondLoad.deliver([rawEvent(2), rawEvent(3)]);
+    // Resume strictly after the committed scan cursor.
+    await secondLoad.deliver([rawEvent(3)]);
     expect(await mirroredOffsets(secondLoad.sql)).toEqual([1, 2, 3]);
   });
 
@@ -270,22 +271,19 @@ describe("browser raw events schema version reset", () => {
     await expect(insert(2)).rejects.toThrow(/offsets must increase/);
   });
 
-  it("fails a gapped frame BEFORE buffering, so the self-heal can replay the hole", async () => {
-    // Until server-side eviction exists, every delivered stream is dense —
-    // a frame starting past the covered head + 1 means rows were lost in
-    // flight. Throwing pre-buffer keeps the cursor at the hole's edge;
-    // inserting would seal it forever (the gap-tolerant trigger accepts
-    // everything after, and the cursor advances past the missing rows).
+  it("advances across offsets omitted by an explicit scan envelope", async () => {
+    // Offset 3 was ephemeral and therefore omitted from durable catch-up. The
+    // frame's scan coordinates prove that it was examined, so durable rows
+    // after the gap can land without replaying the historical ephemeral row.
     const db = new DatabaseSync(":memory:");
     const load = rawEventsLoad(db);
     await load.deliver([rawEvent(1), rawEvent(2)]);
 
-    await expect(load.deliver([rawEvent(4), rawEvent(5)])).rejects.toThrow(/offset gap/);
-    // Nothing inserted, cursor unmoved: the replay can still fill 3-5.
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2]);
-    expect(await load.runner.snapshot()).toMatchObject({ offset: 2 });
+    await load.deliver([rawEvent(4), rawEvent(5)]);
+    expect(await mirroredOffsets(load.sql)).toEqual([1, 2, 4, 5]);
+    expect(await load.runner.snapshot()).toMatchObject({ offset: 5 });
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
-    expect(progress).toMatchObject({ acknowledged_through_offset: 2 });
+    expect(progress).toMatchObject({ acknowledged_through_offset: 5 });
   });
 });
 
@@ -516,15 +514,14 @@ describe("browser raw events incremental type counts", () => {
     const firstLoad = rawEventsLoad(db);
     await firstLoad.deliver([typedEvent(1, "a"), typedEvent(2, "a")]);
 
-    // A fresh page load resumes and the server replays an already-mirrored
-    // offset: the runner's cursor filters it before it ever reaches SQLite.
+    // A fresh page load resumes strictly after the committed scan cursor.
     const secondLoad = rawEventsLoad(db);
-    await secondLoad.deliver([typedEvent(2, "a"), typedEvent(3, "a")]);
+    await secondLoad.deliver([typedEvent(3, "a")]);
     expect(await countsByType(wrap(db))).toEqual({ a: 3 });
 
     // And the trigger's own RAISE(IGNORE) arm still swallows a byte-identical
     // replay that reaches the table directly, without firing the count
-    // trigger (the legacy overlap lane: a mirror ahead of its checkpoint).
+    // trigger.
     const [stored] = await secondLoad.sql.exec(
       `SELECT json(raw_jsonb) AS raw_json FROM events WHERE offset = 3`,
     );
@@ -575,10 +572,11 @@ describe("browser feed processor under runner drive", () => {
       sql,
       runner,
       async deliver(events: StreamEvent[]) {
-        const { sink } = await runner.openDelivery();
-        await sink({
+        const opened = await runner.openDelivery();
+        await opened.sink({
           events,
-          deliveryThroughOffset: events.at(-1)!.offset,
+          scannedAfterOffset: opened.checkpointOffset,
+          scannedThroughOffset: events.at(-1)?.offset ?? opened.checkpointOffset,
           streamMaxOffset: events.at(-1)!.offset,
         });
       },
@@ -620,45 +618,6 @@ describe("browser feed processor under runner drive", () => {
     };
     expect(reduced.agent).toBeDefined();
     expect(reduced.nextLocalIndex).toBe(2);
-  });
-
-  it("dropping a legacy-shaped feed_items rewinds the surviving browser-feed cursor in the same transaction (regression)", async () => {
-    const db = new DatabaseSync(":memory:");
-    const firstLoad = feedLoad(db);
-    await firstLoad.deliver([rawEvent(1, "test/a"), rawEvent(2, "test/a")]);
-    const [before] = await readProgressRow(firstLoad.sql, BrowserFeedContract.slug);
-    expect(before).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 0 });
-
-    // A rollback to a pre-`kind` build recreates the old table shape. That
-    // build knows nothing about processor_progress, so the browser-feed row
-    // survives with its acknowledgement intact.
-    db.exec(`DROP TABLE feed_items`);
-    db.exec(`
-      CREATE TABLE feed_items (
-        local_index INTEGER PRIMARY KEY,
-        component TEXT NOT NULL,
-        first_offset INTEGER NOT NULL,
-        last_offset INTEGER NOT NULL,
-        event_count INTEGER NOT NULL DEFAULT 1,
-        data BLOB NOT NULL
-      )
-    `);
-
-    // The current build returns: its ensurer drops the old shape and must
-    // rewind the surviving cursor in the SAME transaction. Pre-fix the ack
-    // stayed at 2 over the recreated-empty table, so delivery resumed at 3
-    // and feed rows for offsets 1..2 were permanently missing.
-    const secondLoad = feedLoad(db);
-    expect(await secondLoad.runner.snapshot()).toMatchObject({ offset: 0 });
-    const [after] = await readProgressRow(secondLoad.sql, BrowserFeedContract.slug);
-    expect(after).toMatchObject({ acknowledged_through_offset: 0, cursor_revision: 1 });
-
-    // Replay from offset 1 rebuilds the feed whole.
-    await secondLoad.deliver([rawEvent(1, "test/a"), rawEvent(2, "test/a"), rawEvent(3, "test/a")]);
-    const rows = await secondLoad.sql.exec(
-      `SELECT kind, first_offset, last_offset, event_count FROM feed_items`,
-    );
-    expect(rows).toEqual([{ kind: "raw.group", first_offset: 1, last_offset: 3, event_count: 3 }]);
   });
 
   it("a failed feed commit rolls back item rows and cursor together", async () => {

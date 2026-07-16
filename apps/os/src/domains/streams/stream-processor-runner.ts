@@ -41,6 +41,7 @@ import type { Stream } from "../../itx-api.generated.ts";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
+import type { StreamEventBatch } from "./rpc-types.ts";
 import {
   StreamProcessor,
   type MaybePromise,
@@ -193,23 +194,34 @@ export type DeliveryContext = {
   cursorRevision: number;
 };
 
-/** One transport frame as delivered to the sink. */
-type SinkFrame = {
-  events: readonly StreamEvent[];
-  /** Highest raw stream offset scanned to produce this selector-filtered frame. */
-  deliveryThroughOffset: number;
-  streamMaxOffset: number;
-};
+/**
+ * One transport scan as delivered to the runner. The scan coordinates are
+ * first-class rather than inferred from `events`: a delivery may deliberately
+ * omit ephemeral or selector-filtered rows, including an entirely empty
+ * interval, while still proving that every raw offset in the interval was
+ * examined. Advancing through that proof is what prevents filtered rows from
+ * wedging a processor cursor below head.
+ */
+export type StreamProcessorDeliveryFrame = Pick<
+  StreamEventBatch,
+  "events" | "scannedAfterOffset" | "scannedThroughOffset" | "streamMaxOffset"
+>;
 
 /** A consumed-type event whose payload failed the contract parse, awaiting its post-commit diagnostic. */
 type PendingParseFailure = { event: StreamEvent; error: z.ZodError };
 
 /** A pending `waitUntilEvent` waiter (see the method doc for semantics). */
-type EventWaiter = {
+type EventWaiterBase = {
   reject: (error: unknown) => void;
   resolve: () => void;
   timer?: ReturnType<typeof setTimeout>;
-} & ({ predicate: (event: StreamEvent) => boolean } | { offset: number });
+  signal?: AbortSignal;
+  abortListener?: () => void;
+};
+
+type EventWaiter =
+  | (EventWaiterBase & { kind: "predicate"; predicate: (event: StreamEvent) => boolean })
+  | (EventWaiterBase & { kind: "offset"; offset: number });
 
 /** The in-flight fold/cursor context of one frame, committed at frame end. */
 type FrameContext<State> = {
@@ -333,13 +345,13 @@ export class StreamProcessorRunner<
    */
   async openDelivery(): Promise<{
     checkpointOffset: number;
-    sink: (batch: SinkFrame) => Promise<void>;
+    sink: (batch: StreamProcessorDeliveryFrame) => Promise<void>;
   }> {
     this.#assertNotDisposed();
     await this.#load();
     return {
       checkpointOffset: this.#requireProgress().processing.acknowledgedThroughOffset,
-      sink: (batch: SinkFrame) => {
+      sink: (batch: StreamProcessorDeliveryFrame) => {
         const attempt = this.#enqueue(() => this.#processFrame(batch));
         // Zero-lag recovery must cover the WHOLE frame attempt, not merely
         // the work registered inside it (the June-10/July-7 incident class):
@@ -444,21 +456,26 @@ export class StreamProcessorRunner<
   waitUntilEvent(args: {
     predicate: (event: StreamEvent) => boolean;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<void>;
-  waitUntilEvent(args: { offset: number; timeoutMs?: number }): Promise<void>;
+  waitUntilEvent(args: { offset: number; timeoutMs?: number; signal?: AbortSignal }): Promise<void>;
   async waitUntilEvent(
     args:
-      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number }
-      | { offset: number; timeoutMs?: number },
+      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number; signal?: AbortSignal }
+      | { offset: number; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<void> {
+    if (args.signal?.aborted === true) throw abortReason(args.signal);
     if ("offset" in args) {
+      if (!Number.isSafeInteger(args.offset) || args.offset < 0) {
+        throw new Error("waitUntilEvent offset must be a non-negative safe integer");
+      }
       await this.#load();
       if (this.#requireProgress().processing.acknowledgedThroughOffset >= args.offset) return;
-      const { offset, timeoutMs } = args;
+      const { offset, signal, timeoutMs } = args;
       // No await between the check above and registering the waiter below
-      // (the helper registers synchronously), so a frame cannot
+      // (the helper below registers synchronously), so a frame cannot
       // advance the cursor past `offset` in the gap and be missed.
-      const reached = this.#registerEventWaiter({ offset }, timeoutMs);
+      const reached = this.#parkEventWaiter({ kind: "offset", offset }, { signal, timeoutMs });
       // Self-pull, not park-and-hope: this form's contract is read-your-writes
       // over an append that already committed, and a parked waiter alone would
       // hold the wait hostage to the push lane's health (a wedged
@@ -479,34 +496,16 @@ export class StreamProcessorRunner<
       });
       return await reached;
     }
-    const { predicate, timeoutMs } = args;
-    await this.#registerEventWaiter({ predicate }, timeoutMs);
-  }
-
-  #registerEventWaiter(
-    match: { predicate: (event: StreamEvent) => boolean } | { offset: number },
-    timeoutMs?: number,
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const waiter: EventWaiter = { ...match, reject, resolve };
-      this.#eventWaiters.add(waiter);
-      if (timeoutMs !== undefined) {
-        waiter.timer = setTimeout(() => {
-          this.#eventWaiters.delete(waiter);
-          reject(new Error(`waitUntilEvent timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }
-    });
+    const { predicate, signal, timeoutMs } = args;
+    await this.#parkEventWaiter({ kind: "predicate", predicate }, { signal, timeoutMs });
   }
 
   /** Release delivery resources. Idempotent; a disposed runner rejects new work. */
   dispose(): void {
     this.#disposed = true;
     for (const waiter of this.#eventWaiters) {
-      if (waiter.timer !== undefined) clearTimeout(waiter.timer);
-      waiter.reject(new Error("StreamProcessorRunner disposed"));
+      this.#settleEventWaiter(waiter, { error: new Error("StreamProcessorRunner disposed") });
     }
-    this.#eventWaiters.clear();
     this.#stateChangeObservers.clear();
   }
 
@@ -514,60 +513,43 @@ export class StreamProcessorRunner<
   // The per-event loop.
   // ---------------------------------------------------------------------------
 
-  async #processFrame(frame: SinkFrame): Promise<void> {
+  async #processFrame(frame: StreamProcessorDeliveryFrame): Promise<void> {
     const ingestStartedAtMs = this.now();
+    assertDeliveryFrame(frame);
     await this.#load();
     const committed = this.#requireProgress();
-
-    if (!Number.isSafeInteger(frame.streamMaxOffset) || frame.streamMaxOffset < 0) {
-      throw new Error(`invalid streamMaxOffset ${frame.streamMaxOffset}`);
-    }
-    if (!Number.isSafeInteger(frame.deliveryThroughOffset) || frame.deliveryThroughOffset < 0) {
-      throw new Error(`invalid deliveryThroughOffset ${frame.deliveryThroughOffset}`);
-    }
-    if (frame.deliveryThroughOffset > frame.streamMaxOffset) {
+    const committedThroughOffset = committed.processing.acknowledgedThroughOffset;
+    if (frame.scannedAfterOffset > committedThroughOffset) {
       throw new Error(
-        `deliveryThroughOffset ${frame.deliveryThroughOffset} exceeds streamMaxOffset ` +
-          `${frame.streamMaxOffset}`,
+        `delivery frame starts after the committed scan cursor: ${frame.scannedAfterOffset} > ${committedThroughOffset}`,
       );
     }
-    for (const event of frame.events) {
-      if (event.offset > frame.deliveryThroughOffset) {
-        throw new Error(
-          `event offset ${event.offset} exceeds deliveryThroughOffset ` +
-            `${frame.deliveryThroughOffset}`,
-        );
-      }
-    }
+    const frameScannedThroughOffset = Math.max(committedThroughOffset, frame.scannedThroughOffset);
 
     // Offset-dedupe against the acknowledged cursor (and within the frame):
     // redelivered events are silent skips, exactly like legacy ingest.
     const pending: StreamEvent[] = [];
-    let scan = committed.processing.acknowledgedThroughOffset;
+    let scan = committedThroughOffset;
     for (const event of frame.events) {
       if (event.offset <= scan) continue;
       scan = event.offset;
       pending.push(event);
     }
 
-    // observedHead = max(streamMaxOffset, scanned-through, last event offset),
-    // monotonic across frames: "the highest offset the runner has OBSERVED"
-    // never regresses on a stale redelivery, so a behind frame can always SEE
-    // it is behind.
+    // observedHead = max(streamMaxOffset, scanned-through), monotonic across
+    // frames: "the highest offset the runner has OBSERVED" never regresses on
+    // a stale redelivery, so a behind frame can always SEE it is behind.
     this.#observedHeadOffset = Math.max(
       this.#observedHeadOffset,
       frame.streamMaxOffset,
-      frame.deliveryThroughOffset,
-      scan,
+      frameScannedThroughOffset,
     );
-    const advancesProgress =
-      frame.deliveryThroughOffset > committed.processing.acknowledgedThroughOffset;
-    if (pending.length === 0 && !advancesProgress) return;
+    if (pending.length === 0 && frameScannedThroughOffset === committedThroughOffset) return;
     const observedHeadOffset = this.#observedHeadOffset;
     // What this frame will acknowledge through once its blocking work
     // completes — the legacy `checkpointOffset` semantics, kept verbatim for
     // the existing `processEvent` signature.
-    const frameCheckpointOffset = frame.deliveryThroughOffset;
+    const frameCheckpointOffset = frameScannedThroughOffset;
 
     // AT-HEAD is a BATCH property, not a per-event-offset one. If this batch
     // folds through the observed head (its tail is at head — no filtered
@@ -577,7 +559,7 @@ export class StreamProcessorRunner<
     // head (a batch of 100 where only the first is consumed still leaves the
     // processor at head). `caughtUp` is the at-head reconcile signal — see
     // DeliveryContext.
-    const batchReachesHead = frame.deliveryThroughOffset >= observedHeadOffset;
+    const batchReachesHead = frameScannedThroughOffset >= observedHeadOffset;
     // The offset of the LAST event this batch will actually deliver to
     // `processEvent` — a consumed type that PARSES. `isDeliverable` folds in
     // the wildcard (`"*"` consumes every type) AND excludes malformed consumed
@@ -685,11 +667,8 @@ export class StreamProcessorRunner<
       // The sender scanned every raw row through this offset. Rows omitted by
       // the processor's selector cannot affect its fold, but this progress is
       // not publishable until all selected-event work above has succeeded.
-      ctx.reducedThroughOffset = Math.max(ctx.reducedThroughOffset, frame.deliveryThroughOffset);
-      ctx.completedThroughOffset = Math.max(
-        ctx.completedThroughOffset,
-        frame.deliveryThroughOffset,
-      );
+      ctx.reducedThroughOffset = frameScannedThroughOffset;
+      ctx.completedThroughOffset = frameScannedThroughOffset;
       // EVENT-LESS at-head reconcile. Normally the reconcile rides the last
       // consumed event of a head-reaching batch (`delivery.caughtUp`). But a
       // batch can reach head with NO consumed event carrying that flag — a
@@ -752,10 +731,7 @@ export class StreamProcessorRunner<
     // failed at-head reconcile retryable: a mid-frame commit of the head
     // event would strand its at-head pass with the cursor already at head
     // and redelivery empty.
-    if (
-      ctx.eventsSinceCommit > 0 ||
-      ctx.completedThroughOffset > committed.processing.acknowledgedThroughOffset
-    ) {
+    if (ctx.eventsSinceCommit > 0 || frameScannedThroughOffset > committedThroughOffset) {
       await this.#commitFrameContext(ctx);
     }
   }
@@ -999,18 +975,22 @@ export class StreamProcessorRunner<
    * host's catch-up.
    */
   async #selfCatchUp(): Promise<void> {
+    let scannedAfterOffset = this.#requireProgress().processing.acknowledgedThroughOffset;
     using pager = this.stream.readEvents({
-      afterOffset: this.#requireProgress().processing.acknowledgedThroughOffset,
+      afterOffset: scannedAfterOffset,
       limit: this.readPageSize,
     });
     let events = await pager.next();
     while (events.length > 0) {
       const lookahead = await pager.next();
+      const scannedThroughOffset = events.at(-1)!.offset;
       await this.#processFrame({
         events,
-        deliveryThroughOffset: events.at(-1)!.offset,
+        scannedAfterOffset,
+        scannedThroughOffset,
         streamMaxOffset: (lookahead.at(-1) ?? events.at(-1))!.offset,
       });
+      scannedAfterOffset = scannedThroughOffset;
       events = lookahead;
     }
   }
@@ -1092,28 +1072,107 @@ export class StreamProcessorRunner<
     }
   }
 
-  // Settle predicate waiters from just-committed events and offset waiters
-  // from the committed scan cursor. Runs after durable commit + publication,
-  // so snapshot() already reflects the covered prefix when one resolves.
+  #parkEventWaiter(
+    match:
+      | { kind: "predicate"; predicate: (event: StreamEvent) => boolean }
+      | { kind: "offset"; offset: number },
+    opts: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const waiter: EventWaiter = { ...match, reject, resolve, signal: opts.signal };
+      this.#eventWaiters.add(waiter);
+      if (opts.timeoutMs !== undefined) {
+        waiter.timer = setTimeout(() => {
+          this.#settleEventWaiter(waiter, {
+            error: new Error(`waitUntilEvent timed out after ${opts.timeoutMs}ms`),
+          });
+        }, opts.timeoutMs);
+      }
+      if (opts.signal !== undefined) {
+        waiter.abortListener = () => {
+          this.#settleEventWaiter(waiter, { error: abortReason(opts.signal!) });
+        };
+        opts.signal.addEventListener("abort", waiter.abortListener, { once: true });
+        // The caller may abort between the public preflight check and listener
+        // registration. Re-check after registration so that edge cannot park.
+        if (opts.signal.aborted) waiter.abortListener();
+      }
+    });
+  }
+
+  #settleEventWaiter(
+    waiter: EventWaiter,
+    outcome: { error: unknown } | { value: undefined },
+  ): void {
+    if (!this.#eventWaiters.delete(waiter)) return;
+    if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+    if (waiter.signal !== undefined && waiter.abortListener !== undefined) {
+      waiter.signal.removeEventListener("abort", waiter.abortListener);
+    }
+    if ("error" in outcome) waiter.reject(outcome.error);
+    else waiter.resolve();
+  }
+
+  // Settle waiters after the durable commit + published-cursor advance.
+  // Predicate waits match actual delivered events; offset waits match the
+  // acknowledged SCAN watermark, so an empty/filtered interval cannot leave a
+  // read-your-writes waiter parked below a cursor the runner already proved.
   #resolveEventWaiters(events: readonly StreamEvent[], acknowledgedThroughOffset: number): void {
     for (const waiter of this.#eventWaiters) {
       let matched = false;
       try {
         matched =
-          "offset" in waiter
+          waiter.kind === "offset"
             ? acknowledgedThroughOffset >= waiter.offset
             : events.some(waiter.predicate);
       } catch (error) {
-        this.#eventWaiters.delete(waiter);
-        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
-        waiter.reject(error);
+        this.#settleEventWaiter(waiter, { error });
         continue;
       }
       if (matched) {
-        this.#eventWaiters.delete(waiter);
-        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
-        waiter.resolve();
+        this.#settleEventWaiter(waiter, { value: undefined });
       }
     }
   }
+}
+
+function assertDeliveryFrame(frame: StreamProcessorDeliveryFrame): void {
+  const coordinates = [
+    ["scannedAfterOffset", frame.scannedAfterOffset],
+    ["scannedThroughOffset", frame.scannedThroughOffset],
+    ["streamMaxOffset", frame.streamMaxOffset],
+  ] as const;
+  for (const [name, value] of coordinates) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`stream processor delivery ${name} must be a non-negative safe integer`);
+    }
+  }
+  if (frame.scannedThroughOffset < frame.scannedAfterOffset) {
+    throw new Error(
+      `stream processor delivery scan regressed: ${frame.scannedAfterOffset} -> ${frame.scannedThroughOffset}`,
+    );
+  }
+  if (frame.streamMaxOffset < frame.scannedThroughOffset) {
+    throw new Error(
+      `stream processor delivery scan ${frame.scannedThroughOffset} is ahead of stream head ${frame.streamMaxOffset}`,
+    );
+  }
+  let previousOffset = frame.scannedAfterOffset;
+  for (const event of frame.events) {
+    if (!Number.isSafeInteger(event.offset) || event.offset <= previousOffset) {
+      throw new Error(
+        `stream processor delivery events must increase strictly after scan cursor ${previousOffset}; found ${event.offset}`,
+      );
+    }
+    if (event.offset > frame.scannedThroughOffset) {
+      throw new Error(
+        `stream processor delivery event ${event.offset} is beyond scanned-through offset ${frame.scannedThroughOffset}`,
+      );
+    }
+    previousOffset = event.offset;
+  }
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("waitUntilEvent aborted");
 }

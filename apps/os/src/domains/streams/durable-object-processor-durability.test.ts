@@ -393,7 +393,8 @@ describe("durableObjectRecovery", () => {
     const opened = await runner1.openDelivery();
     await opened.sink({
       events: journal.rows.slice(),
-      deliveryThroughOffset: 1,
+      scannedAfterOffset: opened.checkpointOffset,
+      scannedThroughOffset: 1,
       streamMaxOffset: 1,
     });
     // The frame checkpointed — no lag left — but the alarm is armed: "died
@@ -428,7 +429,8 @@ describe("durableObjectRecovery", () => {
     const pending = journal.rows.filter((row) => row.offset > reopened.checkpointOffset);
     await reopened.sink({
       events: pending,
-      deliveryThroughOffset: journal.head(),
+      scannedAfterOffset: reopened.checkpointOffset,
+      scannedThroughOffset: journal.head(),
       streamMaxOffset: journal.head(),
     });
     expect(processedTypes).toEqual([REVIVED]);

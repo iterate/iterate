@@ -20,9 +20,10 @@
  *      steady-state redeploy are all the same single command).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
- *   5. Before touching any deployed resource, assert that the removed auth
- *      service token is absent from both Doppler and the live Worker. After
- *      deploy, force an uncached project-directory lookup through AUTH.
+ *   5. Before touching any deployed resource, assert that retired secret
+ *      bindings are absent from the live Worker and that the removed auth
+ *      service token is absent from Doppler too. After deploy, force an
+ *      uncached project-directory lookup through AUTH.
  *
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostnames (the old zombie-route/522 class).
@@ -55,6 +56,12 @@ import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 
 const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+const RETIRED_WORKER_SECRETS = [
+  RETIRED_AUTH_SERVICE_TOKEN,
+  "APP_CONFIG_GEMINI_API_KEY",
+  "APP_CONFIG_LOGS",
+  "APP_CONFIG_X_AI_API_KEY",
+] as const;
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 
 /** Preview OS always runs its first-party integration proof against the
@@ -141,11 +148,13 @@ export default async function deploy(
         secretName: RETIRED_AUTH_SERVICE_TOKEN,
         secrets: ctx.secrets,
       });
-      await assertWorkerSecretAbsent({
-        cf: ctx.cf,
-        workerName: ctx.env.osWorkerName,
-        secretName: RETIRED_AUTH_SERVICE_TOKEN,
-      });
+      for (const secretName of RETIRED_WORKER_SECRETS) {
+        await assertWorkerSecretAbsent({
+          cf: ctx.cf,
+          workerName: ctx.env.osWorkerName,
+          secretName,
+        });
+      }
 
       // Baked at deploy time, so it's the one secret not in secrets.required.
       secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({

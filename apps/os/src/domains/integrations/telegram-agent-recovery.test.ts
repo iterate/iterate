@@ -128,7 +128,8 @@ function makeHarness() {
       if (events.length > 0) {
         await woken.sink({
           events,
-          deliveryThroughOffset: head(),
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
         });
       }
@@ -173,7 +174,8 @@ describe("eviction recovery end to end", () => {
     void Promise.resolve(
       woken.sink({
         events: h.stream.events.filter((event) => event.offset > woken.checkpointOffset),
-        deliveryThroughOffset: h.head(),
+        scannedAfterOffset: woken.checkpointOffset,
+        scannedThroughOffset: h.head(),
         streamMaxOffset: h.head(),
       }),
     ).catch(() => undefined);

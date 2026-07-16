@@ -241,7 +241,7 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   await subscription.unsubscribe();
 });
 
-test("ephemeral events are second-class rows: excluded from default reads, delivered on ephemeral subscriptions", async () => {
+test("ephemeral events are raw-readable and delivered live, but never replayed to a later subscription", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/ephemeral/${marker}`;
   const ephemeralType = `${STREAM_EVENT_TYPE}/chunk`;
@@ -338,8 +338,9 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
     [after!.offset, false],
   ]);
 
-  // Ephemeral subscriptions get them on REPLAY too (the browser mirror stays
-  // dense as long as no eviction has swept the rows).
+  // A subscription opened after the writes replays durable history through
+  // the captured head, but never historical ephemeral activity. Raw/admin
+  // reads above remain the explicit inspection lane for those rows.
   const replayed: StreamEvent[] = [];
   using replaySubscription = await stream.subscribe({
     replayAfterOffset: 0,
@@ -352,9 +353,9 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
     () =>
       `replay through offset ${after!.offset}; saw ${JSON.stringify(replayed.map((e) => e.offset))}`,
   );
-  expect(replayed.some((event) => event.offset === chunk!.offset && event.ephemeral === true)).toBe(
-    true,
-  );
+  expect(replayed.map((event) => event.offset)).toContain(before!.offset);
+  expect(replayed.map((event) => event.offset)).toContain(after!.offset);
+  expect(replayed.some((event) => event.offset === chunk!.offset)).toBe(false);
 
   // Control facts can never be ephemeral.
   await expect(

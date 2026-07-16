@@ -180,7 +180,7 @@ return {
     id: "run-script",
     title: "Run a script server-side with itx.runScript",
     description:
-      "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-execution-requested/-completed) on the scope's stream.",
+      "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-run-requested/-completed) on the scope's stream.",
     context: "project",
     runtimes: ["browser", "node", "cli", "project-worker"],
     code: `

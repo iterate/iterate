@@ -59,11 +59,12 @@ export const StreamEventInput = z.object({
    * always return them) and never delivered to the durable subscription
    * lanes (wake/push/webhook) — so subscription-fed processors cannot fold
    * them or side-effect on them. Ephemeral subscriptions (`subscribe()`)
-   * receive them, live and on replay. The stream may EVICT their rows in the
-   * future (memory pressure, DO startup sweeps), so nothing durable may ever
-   * depend on one: use them for transient signals whose durable truth lands
-   * separately — LLM streaming chunks superseded by an assistant
-   * `agents/context-added` item.
+   * receive them only when appended after that exact subscription opens;
+   * historical ephemeral rows are never replayed. The stream may EVICT their
+   * rows in the future (memory pressure, DO startup sweeps), so nothing
+   * durable may ever depend on one: use them for transient signals whose
+   * durable truth lands separately — LLM streaming chunks superseded by an
+   * assistant `agents/context-added` item.
    * `z.literal(true)`, not boolean: absent = durable, so committed rows stay
    * self-describing and `ephemeral: false` is a loud input error, not a
    * silent synonym for omitting the flag.
