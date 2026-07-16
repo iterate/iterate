@@ -87,8 +87,8 @@ export default defineConfig({
     // why `doppler run -- vite dev` needs no .dev.vars file.
     cloudflare({
       viteEnvironment: { name: "ssr" },
-      // The builder and typechecker sidecars run in the same local workerd so
-      // the BUILDER/TYPECHECKER service bindings resolve in dev exactly like
+      // The sidecars run in the same local workerd so their service bindings
+      // resolve in dev exactly like
       // deployed. Deploy builds (CLOUDFLARE_ENV set) exclude them: sidecars
       // deploy from source via `wrangler deploy --config <sidecar>.jsonc`
       // (deploy.ts), and a second dist wrangler.json would break
@@ -98,6 +98,7 @@ export default defineConfig({
         : [
             { configPath: "./wrangler.builder.jsonc" },
             { configPath: "./wrangler.typechecker.jsonc" },
+            { configPath: "./wrangler.script-executor.jsonc" },
           ],
     }),
     tanstackStart(),

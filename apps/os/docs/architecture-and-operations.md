@@ -5,9 +5,10 @@ short README.
 
 ## Runtime Shape
 
-OS deploys as one Worker (see [worker-topology.md](./worker-topology.md)):
+OS deploys one product Worker (see [worker-topology.md](./worker-topology.md)):
 the dashboard, the itx api, and every Durable Object class live in a single
-script (`src/worker.ts`), plus the builder sidecar for dynamic worker builds.
+script (`src/worker.ts`). Narrow builder, typechecker, and script-executor
+sidecars keep large toolchains and cold script loading outside that bundle.
 Traffic is dispatched on hostname and path:
 
 1. Rpc lanes: `/api` (+ `/api/operator-sessions`), `/prj_<id>/...`, and project
@@ -143,6 +144,14 @@ script shape: a body that runs with `itx` (and `vars`) in scope and ends with
 an explicit `return` (see `src/itx/examples.ts`, the catalogue that doubles
 as the REPL Examples panel and the cross-runtime e2e matrix).
 
+The CapabilityHost DO journals each request and outcome. The typechecker
+sidecar compiles the script; a tiny stateless script-executor sidecar then owns
+the Worker Loader invocation. It receives durable scope coordinates, not
+forwarded service stubs, and mints the exact CapabilityHost and Project DO
+stubs locally for scoped itx and egress. This keeps cold execution from loading
+a second copy of the full OS application and avoids the per-DO four-fresh-worker
+concurrency ceiling.
+
 Capabilities are visible through `itx.__describe()`. The built-ins
 (`itx.streams`, `itx.repos`, `itx.secrets`, `itx.agents`, `itx.workers`,
 `itx.worker`, `itx.egress`, `itx.mcp`, `itx.openapi`, `itx.ai`; `itx.agent` /
@@ -201,10 +210,11 @@ deployment: a single worker ([worker-topology.md](./worker-topology.md))
 carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
 `WORKER_BUILD_CACHE` KV namespaces, the Worker Loader, the Workers AI
 binding, Cloudflare Artifacts for repos, and routes for the app base URL,
-the MCP base URL, and each project hostname base. One sidecar rides along:
-the builder worker (`wrangler.builder.jsonc`, deployed first by deploy.ts),
-the only script carrying the dynamic-worker bundler toolchain. Deploys take
-the env explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
+the MCP base URL, and each project hostname base. Three generated sidecar
+configs ride along: `wrangler.builder.jsonc`, `wrangler.typechecker.jsonc`, and
+`wrangler.script-executor.jsonc`; deploy.ts deploys them before the product
+worker. Deploys take the env explicitly: `pnpm run deploy --env preview_2` /
+`--env prd`.
 
 ## Smoke Tests
 

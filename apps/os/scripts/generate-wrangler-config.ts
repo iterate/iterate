@@ -130,6 +130,11 @@ function typecheckerWorkerName(osWorkerName: string) {
   return `${osWorkerName}-typechecker`;
 }
 
+/** The script-executor sidecar's worker name, derived the same way. */
+function scriptExecutorWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-script-executor`;
+}
+
 /**
  * SSH keys authorized to `wrangler containers ssh` into ANY sandbox instance.
  *
@@ -301,6 +306,10 @@ function workerBindings(input: {
       // wrangler.typechecker.jsonc): the one script carrying the TypeScript
       // compiler (tswasm, ~30MB wasm). Same deploy-first rule as the builder.
       { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
+      // A deliberately tiny loader-owning worker for runScript. Keeping it
+      // separate avoids cold-starting the full OS bundle for every fresh
+      // execution host while preserving one stateless loader owner per run.
+      { binding: "SCRIPT_EXECUTOR", service: scriptExecutorWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
     // The itx.search per-project instance namespace (env.SEARCH_INSTANCES,
@@ -620,6 +629,61 @@ export const typecheckerConfig = {
   ),
 };
 
+/**
+ * The script executor is a small authority-minimal sidecar: one Worker Loader
+ * plus cross-script bindings to the existing CapabilityHost and Project
+ * Durable Objects. It has no routes, secrets, compiler, or product entrypoints.
+ * Only the exact durable coordinates cross the service-RPC call.
+ */
+export const scriptExecutorConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: "os-script-executor",
+  main: "./src/script-executor.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  worker_loaders: [{ binding: "LOADER" }],
+  durable_objects: {
+    bindings: [
+      {
+        name: "CAPABILITY_HOST",
+        class_name: "CapabilityHostDurableObject",
+        script_name: config.name,
+      },
+      {
+        name: "PROJECT",
+        class_name: "ProjectDurableObject",
+        script_name: config.name,
+      },
+    ],
+  },
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: scriptExecutorWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        worker_loaders: [{ binding: "LOADER" }],
+        durable_objects: {
+          bindings: [
+            {
+              name: "CAPABILITY_HOST",
+              class_name: "CapabilityHostDurableObject",
+              script_name: env.osWorkerName,
+            },
+            {
+              name: "PROJECT",
+              class_name: "ProjectDurableObject",
+              script_name: env.osWorkerName,
+            },
+          ],
+        },
+        observability: OBSERVABILITY,
+      },
+    ]),
+  ),
+};
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
   writeGeneratedWranglerConfig({
@@ -632,6 +696,11 @@ export const writeWranglerConfig = () => {
     appLabel: "apps/os (typechecker sidecar)",
     config: typecheckerConfig,
   });
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.script-executor.jsonc", import.meta.url),
+    appLabel: "apps/os (script-executor sidecar)",
+    config: scriptExecutorConfig,
+  });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
     appLabel: "apps/os",
@@ -640,7 +709,7 @@ export const writeWranglerConfig = () => {
   });
 };
 
-/** Regenerate apps/os/wrangler{,.builder}.jsonc from the root envs.ts. */
+/** Regenerate apps/os/wrangler + sidecar configs from the root envs.ts. */
 export default function generateWranglerConfig() {
   console.log(`Wrote ${writeWranglerConfig()}`);
 }

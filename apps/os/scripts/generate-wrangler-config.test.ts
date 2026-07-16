@@ -7,6 +7,7 @@ import {
   localAuthServiceBinding,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
+  scriptExecutorConfig,
 } from "./generate-wrangler-config.ts";
 
 it.each([
@@ -27,6 +28,7 @@ it.each([
 it("names the top-level configs by service so cf:service script tags stay env-less", () => {
   expect(config.name).toBe("os");
   expect(builderConfig.name).toBe("os-builder");
+  expect(scriptExecutorConfig.name).toBe("os-script-executor");
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {
@@ -37,6 +39,51 @@ it("gives every deployed env its own worker name derived from the service name",
   for (const [envName, envBlock] of Object.entries(builderConfig.env)) {
     expect(envBlock.name, envName).toMatch(/^os-.*-builder$/);
     expect(envBlock.name, envName).not.toBe(builderConfig.name);
+  }
+  for (const [envName, envBlock] of Object.entries(scriptExecutorConfig.env)) {
+    expect(envBlock.name, envName).toMatch(/^os-.*-script-executor$/);
+    expect(envBlock.name, envName).not.toBe(scriptExecutorConfig.name);
+  }
+});
+
+it("binds every OS worker to a matching minimal script executor", () => {
+  expect(scriptExecutorConfig.compatibility_flags).toEqual(["nodejs_compat"]);
+  expect(scriptExecutorConfig.durable_objects.bindings).toEqual([
+    {
+      name: "CAPABILITY_HOST",
+      class_name: "CapabilityHostDurableObject",
+      script_name: config.name,
+    },
+    {
+      name: "PROJECT",
+      class_name: "ProjectDurableObject",
+      script_name: config.name,
+    },
+  ]);
+
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const executor = envBlock.services.find((service) => service.binding === "SCRIPT_EXECUTOR");
+    expect(executor?.service, envName).toBe(`${envBlock.name}-script-executor`);
+    expect(
+      scriptExecutorConfig.env[envName as keyof typeof scriptExecutorConfig.env],
+    ).toMatchObject({
+      name: executor?.service,
+      worker_loaders: [{ binding: "LOADER" }],
+      durable_objects: {
+        bindings: [
+          {
+            name: "CAPABILITY_HOST",
+            class_name: "CapabilityHostDurableObject",
+            script_name: envBlock.name,
+          },
+          {
+            name: "PROJECT",
+            class_name: "ProjectDurableObject",
+            script_name: envBlock.name,
+          },
+        ],
+      },
+    });
   }
 });
 

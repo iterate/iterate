@@ -203,7 +203,8 @@ export default async function deploy(
         compatibilityDate: COMPATIBILITY_DATE,
       });
 
-      // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER
+      // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER/
+      // SCRIPT_EXECUTOR
       // service bindings are by name, and a binding to a not-yet-existing
       // script fails the deploy. Sidecars have no secrets and no vite build —
       // wrangler bundles their entries directly (the toolchain wasm rides as
@@ -214,7 +215,11 @@ export default async function deploy(
       // by-value returns, every request rebuilds) until the os deploy lands.
       // If "cache never hits" appears mid-rollout, finish the deploy.
       writeWranglerConfig();
-      for (const sidecarConfig of ["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"]) {
+      for (const sidecarConfig of [
+        "wrangler.builder.jsonc",
+        "wrangler.typechecker.jsonc",
+        "wrangler.script-executor.jsonc",
+      ]) {
         run("pnpm", ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name], {
           cwd: fileURLToPath(new URL("..", import.meta.url)),
           env: credentials,

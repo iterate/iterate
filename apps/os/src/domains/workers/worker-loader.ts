@@ -5,9 +5,10 @@ import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 import { stableSha256 } from "./utils.ts";
-
-const WORKER_COMPATIBILITY_DATE = "2026-05-01";
-const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
+import {
+  DYNAMIC_WORKER_COMPATIBILITY_DATE,
+  DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
+} from "./worker-runtime-configuration.ts";
 
 /**
  * The build is real and in flight, but the caller's build budget ran out
@@ -140,8 +141,8 @@ async function resolveThroughBuilder(input: {
   const options = withIterateSdkVirtualModule(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
   const buildKey = await workerBuildKey({
-    compatibilityDate: WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
+    compatibilityDate: DYNAMIC_WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
     options,
     source: resolved,
   });
@@ -331,8 +332,8 @@ export function loadResolvedWorker({
     resolved.cacheKey,
   ].join(":");
   return env.LOADER.get(cacheKey, () => ({
-    compatibilityDate: WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
+    compatibilityDate: DYNAMIC_WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
     env: bindings,
     globalOutbound,
     mainModule: resolved.mainModule,

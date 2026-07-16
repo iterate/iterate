@@ -1,8 +1,9 @@
 # Worker topology
 
-OS deploys as **one Cloudflare Worker per environment** (`os-prd`,
-`os-preview-N`): the TanStack Start dashboard, the capnweb itx API, ingress
-routing, and **all eight Durable Object classes** live in a single script.
+OS deploys one **product Worker** per environment (`os-prd`, `os-preview-N`):
+the TanStack Start dashboard, the capnweb itx API, ingress routing, and every
+Durable Object class live in that single script. Three deliberately narrow
+sidecars quarantine the bundler, typechecker, and cold-sensitive script loader.
 
 The entry is [`src/worker.ts`](../src/worker.ts). Its fetch handler makes the
 one hostname/path routing decision (shared logic in `src/ingress.ts`):
@@ -13,28 +14,37 @@ one hostname/path routing decision (shared logic in `src/ingress.ts`):
 | api lanes       | capnweb `/api`, operator sessions, Slack webhooks, project ingress         |
 | everything else | dashboard SSR + server functions; client assets served from Workers Assets |
 
-Durable Object classes (all same-script bindings — declared by class name in
-wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
-CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
-container-backed CloudflareSandbox (`sandbox/Dockerfile`, built by
-`wrangler deploy`).
+Product Durable Object classes are same-script bindings declared by class name
+in `wrangler.jsonc` (no namespace IDs). The script-executor sidecar has
+cross-script bindings to the existing CapabilityHost and Project namespaces;
+it does not host another copy of either class.
 
-## The builder sidecar (the "+1")
+## Sidecars
 
-One deliberate exception to "one worker": dynamic worker BUILDS run in a
-separate `os-<env>-builder` worker ([`src/builder.ts`](../src/builder.ts),
-generated config `wrangler.builder.jsonc`) — the only script carrying the
-bundler toolchain (esbuild-wasm, ~14MB), so the product script stays small.
-It is the minimum possible worker: a pure build function (files in, artifact
-out) whose only binding is the `WORKER_BUILD_CACHE` KV — no DOs, no routes,
-no secrets. The os worker calls it via the `BUILDER` service binding on
-artifact-cache misses; deploy.ts deploys it first (a name binding to a
-missing script fails the deploy). Local dev runs it as a vite
-`auxiliaryWorkers` entry in the same workerd. Slated for deletion when
-builds move into the sandbox container
+| Worker                     | Purpose                                                                                              | Authority                                                                                                                    |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `os-<env>-builder`         | Dynamic Worker builds; the only script carrying esbuild-wasm (~14MB).                                | `WORKER_BUILD_CACHE` KV only.                                                                                                |
+| `os-<env>-typechecker`     | Capability declarations and itx script typechecking; the only script carrying TypeScript/tswasm.     | No bindings.                                                                                                                 |
+| `os-<env>-script-executor` | Loads and invokes one `runScript` Dynamic Worker without cold-starting another full product isolate. | Worker Loader plus cross-script CapabilityHost and Project DO namespaces; no routes, storage, secrets, compiler, or bundler. |
+
+The product worker reaches them through `BUILDER`, `TYPECHECKER`, and
+`SCRIPT_EXECUTOR` service bindings. `deploy.ts` deploys all three first (a
+name binding to a missing script fails the product deploy); local dev runs
+them as Vite `auxiliaryWorkers` in the same workerd.
+
+The script executor is intentionally a separate stateless loader owner per
+call. A CapabilityHost DO can own only four simultaneous fresh Dynamic Worker
+starts on hosted Workers; using a stateless owner preserves 20-way script
+concurrency. The executor receives only `{ projectId, scopePath }` coordinates,
+mints stable named DO stubs locally, and gives the Dynamic Worker the exact
+CapabilityHost stub for its itx plus the Project stub for egress. No native
+service stub crosses RPC (which would require workerd's unstable catch-all
+`experimental` flag), and the sidecar stays a single-digit-KiB bundle.
+
+The builder is slated for deletion when builds move into the sandbox container
 ([tasks/os-sandbox-worker-builds.md](../../../tasks/os-sandbox-worker-builds.md)).
 
-## Why one worker
+## Why one product worker
 
 The 2026-06 per-DO split (PR #1500) existed to shrink an ~89MB script whose
 bulk was sourcemaps and client assets bundled as worker modules. That problem
@@ -52,10 +62,11 @@ Everything is declared in two places:
 
 - [`envs.ts`](../../../envs.ts) (repo root) — the typed map of deployed
   environments: hostnames, worker names, Cloudflare account, resource IDs.
-- `wrangler.jsonc` — generated from envs.ts (gitignored; vite.config.ts
-  regenerates it before every dev/build, `pnpm gen:wrangler` by hand). Top
-  level is local dev; each env gets a flattened block selected at build time
-  via `CLOUDFLARE_ENV`. Its header comments explain the layout.
+- `wrangler.jsonc` plus `wrangler.builder.jsonc`,
+  `wrangler.typechecker.jsonc`, and `wrangler.script-executor.jsonc` — generated
+  from envs.ts (all gitignored; vite.config.ts regenerates them before every
+  dev/build, `pnpm gen:wrangler` by hand). Top level is local dev; each env gets
+  a flattened block selected at build time via `CLOUDFLARE_ENV`.
 
 Secrets live in Doppler only. `secrets.required` in the config lists their
 names: local dev (`doppler run -- vite dev`) loads exactly those keys from
@@ -67,7 +78,7 @@ code via `wrangler deploy --secrets-file`.
 | Command                           | What                                                                                                |
 | --------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
-| `pnpm run deploy --env preview_3` | build → deploy+secrets (one version) → smoke probe                                                  |
+| `pnpm run deploy --env preview_3` | ensure resources → deploy three sidecars → build/deploy product+secrets → smoke probe               |
 | `pnpm ensure-resources --env X`   | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                |
 | `pnpm erase-data --env X`         | wipe auth D1 rows + project-directory KV; DOs become unreachable orphans                            |
 

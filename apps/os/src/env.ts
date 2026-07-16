@@ -70,6 +70,14 @@ export interface Env {
   TYPECHECKER: Service<
     import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
   >;
+  /**
+   * Tiny stateless Dynamic Worker loader owner for runScript. It receives only
+   * durable scope coordinates; cross-script CapabilityHost and Project DO
+   * namespaces mint the scoped itx root and Dynamic Worker egress locally.
+   */
+  SCRIPT_EXECUTOR: Service<
+    import("./domains/capability-host/script-executor-entrypoint.ts").ScriptExecutorEntrypoint
+  >;
 
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject

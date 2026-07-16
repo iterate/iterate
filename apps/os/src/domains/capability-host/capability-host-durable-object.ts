@@ -24,13 +24,16 @@ type ScriptExecutionEntrypoint = {
   run(code: string, options?: { emittedJs?: string }): Promise<unknown>;
 };
 
-type ScriptExecutionLoopbackExports = {
-  ScriptExecutionEntrypoint(input: {
-    props: {
+type ScriptExecutorService = {
+  run(input: {
+    authority: {
+      ownerWorkerName: string;
       projectId: string;
       scopePath: string;
     };
-  }): ScriptExecutionEntrypoint;
+    code: string;
+    emittedJs?: string;
+  }): Promise<unknown>;
 };
 
 type CapabilityHostAncestorEntrypoint = {
@@ -50,6 +53,12 @@ type CapabilityHostAncestorEntrypoint = {
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #itx = itxForScope({
+    auth: trustedInternalAuthContext(),
+    ctx: this.ctx,
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -75,12 +84,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      itx: itxForScope({
-        auth: trustedInternalAuthContext(),
-        ctx: this.ctx,
-        path: this.#name.path,
-        projectId: this.#name.projectId,
-      }),
+      itx: this.#itx,
       // Resolve only the durable ancestor declaration folded by the
       // processor. Namespace path prefixes are never dialed implicitly.
       resolveAncestor: (path) => this.#capabilityHostAncestor(path),
@@ -116,17 +120,30 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   #scriptExecutionEntrypoint(): ScriptExecutionEntrypoint {
-    // Scripts execute in THIS scope, but the Dynamic Worker load happens in a
-    // stateless loopback entrypoint instead of this Durable Object. Keep the
-    // type shallow to avoid deep-instantiating the generated `ctx.exports`
-    // WorkerEntrypoint type through the Durable Object's processor field.
-    const exports = this.ctx.exports as unknown as ScriptExecutionLoopbackExports;
-    return exports.ScriptExecutionEntrypoint({
-      props: {
-        scopePath: this.#name.path,
-        projectId: this.#name.projectId,
+    // The large OS worker owns the durable journal and mints the authority;
+    // the tiny script-executor sidecar owns only the Dynamic Worker load. A
+    // fresh sidecar request per run preserves the loader-concurrency fix
+    // without cold-starting another copy of the entire OS bundle.
+    return {
+      run: async (code, options) => {
+        // Only plain coordinates cross this service-RPC boundary. The sidecar
+        // uses configured cross-script namespaces to mint stable DO stubs for
+        // the exact capability host and project; native ServiceStub values
+        // cannot be forwarded without workerd's unstable `experimental` flag,
+        // and an incoming application RpcStub cannot be re-serialized into a
+        // Worker Loader environment because it is not persistent.
+        const executor = this.env.SCRIPT_EXECUTOR as unknown as ScriptExecutorService;
+        return await executor.run({
+          authority: {
+            ownerWorkerName: this.env.WORKER_SELF,
+            projectId: this.#name.projectId,
+            scopePath: this.#name.path,
+          },
+          code,
+          emittedJs: options?.emittedJs,
+        });
       },
-    });
+    };
   }
 
   #capabilityHostAncestor(ancestorPath: string): CapabilityHostAncestor {
@@ -228,5 +245,15 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   async capabilityHostAncestorPath(): Promise<string | null> {
     await this.#catchUp();
     return this.#capabilityHostProcessor.ancestorPath();
+  }
+
+  /**
+   * Internal one-hop authority mint for the script executor's Dynamic Worker.
+   * The executor binds the exact named CapabilityHost DO into the isolate;
+   * this method creates a fresh scoped root in the authority-owning DO, so no
+   * RpcStub is ever forwarded through an intermediate RPC session.
+   */
+  getItxForScript(): object {
+    return this.#itx;
   }
 }

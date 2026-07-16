@@ -17,9 +17,10 @@ It combines:
   — and as the **project directory**: OS has no database of its own; slug →
   project id resolution goes through the auth worker with a `PROJECT_DIRECTORY`
   KV cache in front. All other durable state lives in Durable Object SQLite.
-- **One deployed worker** (plus the builder sidecar for dynamic worker
-  builds) — dashboard, itx API, and every Durable Object class in a single
-  script. See [docs/worker-topology.md](./docs/worker-topology.md).
+- **One product worker plus three narrow sidecars** — dashboard, itx API, and
+  every Durable Object class live in one script; bundling, typechecking, and
+  cold-sensitive `runScript` loading are isolated sidecars. See
+  [docs/worker-topology.md](./docs/worker-topology.md).
 
 Integrations are connections at fully qualified paths
 (`/integrations/<slug>/<connection>`): built-ins (Slack, Google) are named
@@ -177,8 +178,9 @@ Project-scoped and platform-wide operator browser sessions are documented in
 
 - `src/` — **itx**: `types.ts` (public contract),
   `rpc-targets.ts` (all RpcTargets), `auth.ts`, `domains/*` (DOs + stream
-  processors), `worker.ts` (the worker entry), `builder.ts` (the builder
-  sidecar entry). See [src/README.md](./src/README.md).
+  processors), `worker.ts` (the product entry), and `builder.ts`,
+  `typechecker.ts`, `script-executor.ts` (sidecar entries). See
+  [src/README.md](./src/README.md).
 - `src/itx/` — the client-side itx surface: `itx-react.tsx` (browser hooks),
   `browser-repl.ts` (REPL compiler), `examples.ts` (the example catalogue),
   `e2e/` (the example matrix). itx itself lives in `src/`.
@@ -186,8 +188,9 @@ Project-scoped and platform-wide operator browser sessions are documented in
 - `src/routes/_app` — authenticated app routes; `src/start.ts` installs the
   auth-worker request middleware.
 - `wrangler.jsonc` — the deployment config, generated from the root
-  `envs.ts` by `scripts/generate-wrangler-config.ts` (one worker, all DO
-  classes; see docs/worker-topology.md). Deploys: `pnpm run deploy --env <name>`.
+  `envs.ts` by `scripts/generate-wrangler-config.ts` (product worker plus
+  generated sidecar configs; see docs/worker-topology.md). Deploys:
+  `pnpm run deploy --env <name>`.
 
 ## History
 
