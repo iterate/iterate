@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
 import type {
   ProcessorSnapshot,
   StreamSubscriberWakeRequest,
@@ -108,6 +109,9 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   // read this DO serves (snapshots, the processor facade, the command
   // surface's read-your-writes wait) goes through the runner's progress.
   readonly #reads = this.#registry.reads(this.#schedulerProcessor);
+  readonly #processorRpc = new StreamProcessorRpcTarget(this.#reads, {
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(PROCESSOR_SLUG),
+  });
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     // The shared alarm may be firing for a keepalive slice, the scheduler's,
@@ -178,11 +182,11 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — see the
-    // field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(PROCESSOR_SLUG),
+  readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
+    return serveProcessorRead({
+      expectedProcessorSlug: PROCESSOR_SLUG,
+      processor: this.#processorRpc,
+      request,
     });
   }
 

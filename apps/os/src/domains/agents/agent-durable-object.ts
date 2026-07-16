@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -96,6 +97,9 @@ export class AgentDurableObject extends DurableObject<Env> {
   // fold reads via #agentProcessorReads) goes through the runner's committed
   // progress.
   readonly #agentReads = this.#registry.reads(this.#agentProcessor);
+  readonly #processorRpc = new StreamProcessorRpcTarget(this.#agentReads, {
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(AgentProcessorContract.slug),
+  });
 
   /** The agent processor's runner-backed fold reads (the idle debounce's
    * fire-time staleness check) — lazy closures because #agentReads is built
@@ -369,11 +373,11 @@ export class AgentDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  get processor() {
-    // Runner-backed reads (#agentReads), never the processor instance — see
-    // the field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#agentReads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(AgentProcessorContract.slug),
+  readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
+    return serveProcessorRead({
+      expectedProcessorSlug: AgentProcessorContract.slug,
+      processor: this.#processorRpc,
+      request,
     });
   }
 }

@@ -235,11 +235,13 @@ import type {
   SearchQueryResult,
   SearchResultChunk,
 } from "./domains/search/search-corpus.ts";
-import type {
-  AgentFileAttachment,
-  AgentProcessorState,
+import {
+  AgentProcessorContract,
+  type AgentFileAttachment,
+  type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import { SecretProcessorContract } from "./domains/secrets/secret-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
@@ -297,6 +299,12 @@ import type {
   WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
 import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
+import {
+  readProcessorRuntimeState,
+  readProcessorSnapshot,
+  waitUntilProcessorOffset,
+  type ProcessorReadHost,
+} from "./domains/streams/processor-rpc.ts";
 import type {
   ConnectionRuntimeState,
   SubscriptionRuntimeState,
@@ -348,6 +356,8 @@ import {
   EmailProcessorContract,
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
+import { SlackProcessorContract } from "./domains/integrations/slack-processor-contract.ts";
+import { TelegramProcessorContract } from "./domains/integrations/telegram-processor-contract.ts";
 import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
 
 /**
@@ -885,6 +895,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     return new ProcessorRelayRpcTarget<SchedulerProcessorState>({
       auth: this.props.auth,
       host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+      processorSlug: SchedulerProcessorContract.slug,
     });
   }
 
@@ -1242,6 +1253,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return new ProcessorRelayRpcTarget<RepoProcessorState>({
       auth: this.props.auth,
       host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+      processorSlug: RepoProcessorContract.slug,
     });
   }
 
@@ -2009,6 +2021,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return new ProcessorRelayRpcTarget<SecretDescription>({
       auth: this.props.auth,
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      processorSlug: SecretProcessorContract.slug,
     });
   }
 
@@ -3172,8 +3185,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
                 path: `/integrations/slack/${connection}`,
                 projectId: this.props.projectId,
               }),
-            ) as unknown as ProjectRouterProcessorHostStub,
-          processorFacade: (host) => host.slackProcessor,
+            ) as unknown as ProcessorHostStub,
+          processorSlug: SlackProcessorContract.slug,
         });
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
@@ -3285,8 +3298,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
                 path: `/integrations/telegram/${connection}`,
                 projectId: this.props.projectId,
               }),
-            ) as unknown as ProjectRouterProcessorHostStub,
-          processorFacade: (host) => host.telegramProcessor,
+            ) as unknown as ProcessorHostStub,
+          processorSlug: TelegramProcessorContract.slug,
         });
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
@@ -3588,8 +3601,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
             path: EMAIL_INTEGRATION_STREAM_PATH,
             projectId: this.props.projectId,
           }),
-        ) as unknown as ProjectRouterProcessorHostStub,
-      processorFacade: (host) => host.emailProcessor,
+        ) as unknown as ProcessorHostStub,
+      processorSlug: EmailProcessorContract.slug,
     });
   }
 
@@ -4121,6 +4134,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return new ProcessorRelayRpcTarget<AgentProcessorState>({
       auth: this.#props.auth,
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      processorSlug: AgentProcessorContract.slug,
     });
   }
 
@@ -4942,6 +4956,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     return new ProcessorRelayRpcTarget({
       auth: this.#props.auth,
       host: () => this.#durableObject as unknown as ProcessorHostStub,
+      processorSlug: CapabilityHostProcessorContract.slug,
     });
   }
 
@@ -5291,6 +5306,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProcessorRelayRpcTarget<ProjectProcessorState>({
       auth: this.#props.auth,
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      processorSlug: ProjectProcessorContract.slug,
     });
   }
 
@@ -5774,10 +5790,12 @@ export function deploymentItxForTrustedInternal(props: { ctx: CfExecutionContext
   return new SessionRpcTarget({ auth: trustedInternalAuthContext(), ctx: props.ctx });
 }
 
-async function projectProcessorState(projectId: string) {
+async function projectProcessorState(projectId: string): Promise<ProjectProcessorState> {
   const project = env.PROJECT.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
-  const processor = await project.processor;
-  const { state } = await processor.snapshot();
+  const { state } = await readProcessorSnapshot<ProjectProcessorState>(
+    project,
+    ProjectProcessorContract.slug,
+  );
   return state;
 }
 
@@ -6498,41 +6516,18 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
   }
 }
 
-/**
- * Narrow structural view of a processor-hosting Durable Object stub: every
- * host class (agent, capability-host, project, repo, scheduler, secret)
- * exposes the same `processor` facade property and the same host-level wake
- * handshake, so the relay works over one shape instead of six stub types.
- */
-type ProcessorHostStub = {
-  processor: PromiseLike<unknown>;
+/** Narrow structural view shared by every processor-hosting Durable Object. */
+type ProcessorHostStub = ProcessorReadHost & {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
 };
 
-/** The Project DO hosts three integration routers alongside its primary
- * Project processor. Their public handles must select the matching runner-
- * backed read facade; the default `processor` property intentionally remains
- * the Project processor. */
-type ProjectRouterProcessorHostStub = ProcessorHostStub & {
-  emailProcessor: PromiseLike<unknown>;
-  slackProcessor: PromiseLike<unknown>;
-  telegramProcessor: PromiseLike<unknown>;
-};
-
 /**
- * Isolate-side relay for a Durable-Object-hosted processor facade.
+ * Isolate-side relay for a Durable-Object-hosted processor.
  *
- * A DO stub's `.processor` is a Workers RPC PROPERTY read, and method calls
- * cannot be pipelined through property reads across the DO boundary: a capnweb
- * client evaluating `itx.processor.snapshot()` descends into the property's
- * thenable and fabricates exactly that pipeline, which workerd rejects with
- * `The RPC receiver does not implement the method "snapshot"`. (Awaiting the
- * property first, then calling, works — that's what this relay does.)
- *
- * So the isolate-side `processor` getters must not hand the raw stub property
- * across capnweb. This relay is a real RpcTarget at the property position:
- * each method awaits the resolved processor stub, then makes a plain method
- * call on it.
+ * The host receives one explicit processor slug plus one operation and returns
+ * only serialized data. Keeping the processor RpcTarget inside its owning DO
+ * avoids the fragile property-read -> returned-RpcTarget -> method-call chain
+ * that produced opaque workerd internal errors during concurrent cold births.
  *
  * It is also the host's WAKE DOOR (see {@link WakeableStreamProcessorRpc}):
  * `wakeStreamSubscriber` forwards to the host Durable Object's top-level
@@ -6540,39 +6535,31 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
  * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
  * exists to close for `ingest`).
  */
-class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
+class ProcessorRelayRpcTarget<State>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements WakeableStreamProcessorRpc<State>
 {
   readonly #auth: ItxAuth;
-  readonly #host: () => Host;
-  readonly #processorFacade: (host: Host) => PromiseLike<unknown>;
+  readonly #host: () => ProcessorHostStub;
+  readonly #processorSlug: string;
 
-  constructor(args: {
-    auth: ItxAuth;
-    host: () => Host;
-    processorFacade?: (host: Host) => PromiseLike<unknown>;
-  }) {
+  constructor(args: { auth: ItxAuth; host: () => ProcessorHostStub; processorSlug: string }) {
     super();
     this.#auth = args.auth;
     this.#host = args.host;
-    this.#processorFacade = args.processorFacade ?? ((host) => host.processor);
+    this.#processorSlug = args.processorSlug;
   }
 
-  async #processor(): Promise<StreamProcessorRpc<State>> {
-    return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
+  async snapshot(): Promise<ProcessorSnapshot<State>> {
+    return await readProcessorSnapshot<State>(this.#host(), this.#processorSlug);
   }
 
-  async snapshot() {
-    return await (await this.#processor()).snapshot();
+  async getRuntimeState(): Promise<ProcessorRuntimeState<State>> {
+    return await readProcessorRuntimeState<State>(this.#host(), this.#processorSlug);
   }
 
-  async getRuntimeState() {
-    return await (await this.#processor()).getRuntimeState();
-  }
-
-  async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    return await (await this.#processor()).waitUntilProcessed(input);
+  async waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
+    await waitUntilProcessorOffset(this.#host(), this.#processorSlug, input);
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */

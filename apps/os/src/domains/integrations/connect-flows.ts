@@ -25,7 +25,12 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  ProjectProcessorContract,
+  type ProjectProcessorState,
+} from "../projects/project-processor-contract.ts";
 import type { SecretRefresh } from "../secrets/types.ts";
+import { readProcessorSnapshot } from "../streams/processor-rpc.ts";
 import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
@@ -1382,7 +1387,10 @@ export async function listIntegrationConnections(
   const project = itxEnv.PROJECT.getByName(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
   );
-  const snapshot = await (await project.processor).snapshot();
+  const snapshot = await readProcessorSnapshot<ProjectProcessorState>(
+    project,
+    ProjectProcessorContract.slug,
+  );
   const entries: { connection: string; integration: string; path: string }[] = [];
   for (const stream of snapshot.state.streams) {
     const coordinates = integrationCoordinatesFromStreamPath(stream.path);

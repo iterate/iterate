@@ -4,6 +4,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -95,6 +96,12 @@ export class SecretDurableObject extends DurableObject<Env> {
   // read this DO serves (snapshots, the processor facade, live state) must go
   // through the runner's committed progress.
   readonly #reads = this.#registry.reads(this.#secretProcessor);
+  readonly #processorRpc = new StreamProcessorRpcTarget(this.#reads, {
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(SecretProcessorContract.slug),
+    // Secret material is write-only: the live state that leaves this DO is
+    // the DESCRIPTION — snapshots and runtime reads never carry ciphertext.
+    publicState: describeSecretState,
+  });
 
   // In-flight refresh, shared across concurrent callers (single-flight): a
   // burst of 401s must not fan out into N token exchanges — duplicate mints
@@ -120,15 +127,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — see the
-    // field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(SecretProcessorContract.slug),
-      // Secret material is write-only: the live state that leaves this DO is
-      // the DESCRIPTION — snapshots and onStateChange pushes must never carry
-      // the ciphertext, only the hasMaterial fact.
-      publicState: describeSecretState,
+  readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
+    return serveProcessorRead({
+      expectedProcessorSlug: SecretProcessorContract.slug,
+      processor: this.#processorRpc,
+      request,
     });
   }
 

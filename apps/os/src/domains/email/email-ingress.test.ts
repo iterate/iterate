@@ -10,14 +10,17 @@ vi.mock("../../env.ts", () => ({
   itxEnv: {
     PROJECT: {
       getByName: () => ({
-        emailProcessor: {
-          snapshot: async () => ({
+        readStreamProcessor: async (request: { operation: string; processorSlug: string }) => {
+          if (request.operation !== "snapshot" || request.processorSlug !== "email") {
+            throw new Error(`unexpected processor read ${JSON.stringify(request)}`);
+          }
+          return {
             offset: 0,
             state: {
               allowedSenders: ["owner@example.com"],
               birthCertificate: mocks.birthCertificate,
             },
-          }),
+          };
         },
       }),
     },

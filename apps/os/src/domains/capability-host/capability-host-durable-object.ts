@@ -4,6 +4,7 @@ import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -115,6 +116,9 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // read this DO serves (the processor facade, the processor's own fold
   // reads via #processorReads) goes through the runner's committed progress.
   readonly #reads = this.#registry.reads(this.#capabilityHostProcessor);
+  readonly #processorRpc = new StreamProcessorRpcTarget(this.#reads, {
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(CapabilityHostProcessorContract.slug),
+  });
 
   /** The processor's runner-backed fold reads — lazy closures because #reads
    * is built from the registered processor above; the explicit return type
@@ -213,11 +217,11 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — see the
-    // field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(CapabilityHostProcessorContract.slug),
+  readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
+    return serveProcessorRead({
+      expectedProcessorSlug: CapabilityHostProcessorContract.slug,
+      processor: this.#processorRpc,
+      request,
     });
   }
 

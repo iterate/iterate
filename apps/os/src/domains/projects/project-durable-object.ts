@@ -11,6 +11,7 @@ import {
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -200,6 +201,22 @@ export class ProjectDurableObject extends DurableObject<Env> {
     }),
   );
   readonly #emailReads = this.#registry.reads(this.#emailProcessor);
+  readonly #projectProcessorRpc = new StreamProcessorRpcTarget(this.#projectReads, {
+    // Lists served from this snapshot (child streams, secrets) must reflect
+    // a child stream created moments ago even if push delivery is lagging.
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(ProjectProcessorContract.slug),
+  });
+  readonly #slackProcessorRpc = new StreamProcessorRpcTarget(this.#slackReads, {
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(SlackProcessorContract.slug),
+  });
+  readonly #telegramProcessorRpc = new StreamProcessorRpcTarget(this.#telegramReads, {
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(TelegramProcessorContract.slug),
+  });
+  readonly #emailProcessorRpc = new StreamProcessorRpcTarget(this.#emailReads, {
+    // Email ingress reads the sender allowlist from this snapshot, so policy
+    // events appended moments ago must be pulled through before the read.
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(EmailProcessorContract.slug),
+  });
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#registry.wakeStreamSubscriber(args);
@@ -210,28 +227,37 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#registry.handleAlarm(alarmInfo);
   }
 
-  get slackProcessor() {
-    return new StreamProcessorRpcTarget(this.#slackReads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(SlackProcessorContract.slug),
-    });
-  }
-
-  get telegramProcessor() {
-    return new StreamProcessorRpcTarget(this.#telegramReads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(TelegramProcessorContract.slug),
-    });
-  }
-
-  get emailProcessor() {
-    // Runner-backed reads (#emailReads), never the processor instance — see
-    // the #projectReads comment: instance reads are stale forever under
-    // runner drive.
-    return new StreamProcessorRpcTarget(this.#emailReads, {
-      // The ingress door reads the sender allowlist from this snapshot; it
-      // must reflect a policy event appended moments ago (e.g. the birth
-      // seed) even when push delivery is lagging or a wake was dropped.
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(EmailProcessorContract.slug),
-    });
+  readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
+    switch (request.processorSlug) {
+      case ProjectProcessorContract.slug:
+        return serveProcessorRead({
+          expectedProcessorSlug: ProjectProcessorContract.slug,
+          processor: this.#projectProcessorRpc,
+          request,
+        });
+      case SlackProcessorContract.slug:
+        return serveProcessorRead({
+          expectedProcessorSlug: SlackProcessorContract.slug,
+          processor: this.#slackProcessorRpc,
+          request,
+        });
+      case TelegramProcessorContract.slug:
+        return serveProcessorRead({
+          expectedProcessorSlug: TelegramProcessorContract.slug,
+          processor: this.#telegramProcessorRpc,
+          request,
+        });
+      case EmailProcessorContract.slug:
+        return serveProcessorRead({
+          expectedProcessorSlug: EmailProcessorContract.slug,
+          processor: this.#emailProcessorRpc,
+          request,
+        });
+      default:
+        throw new Error(
+          `project processor host does not expose ${JSON.stringify(request.processorSlug)}`,
+        );
+    }
   }
 
   describe() {
@@ -244,18 +270,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): void {
     this.ctx.abort("kill requested");
-  }
-
-  get processor() {
-    // Runner-backed reads (#projectReads), never the processor instance —
-    // see the field comment: instance reads are stale forever under runner
-    // drive.
-    return new StreamProcessorRpcTarget(this.#projectReads, {
-      // Lists served from this snapshot (child streams, secrets) must reflect
-      // a child stream created moments ago even when the root stream's push
-      // delivery is lagging or a wake was dropped.
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(ProjectProcessorContract.slug),
-    });
   }
 
   /** The project's live state — the get/set/assign/subscribe surface behind `itx.liveState`. */

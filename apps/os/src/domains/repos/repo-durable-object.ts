@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
 import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -131,6 +132,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   // read this DO serves (the processor facade, live state) goes through the
   // runner's committed progress.
   readonly #reads = this.#registry.reads(this.#repoProcessor);
+  readonly #processorRpc = new StreamProcessorRpcTarget(this.#reads, {
+    catchUpBeforeSnapshot: () => this.#registry.catchUp(RepoProcessorContract.slug),
+  });
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#registry.wakeStreamSubscriber(args);
@@ -146,11 +150,11 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — see the
-    // field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(RepoProcessorContract.slug),
+  readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
+    return serveProcessorRead({
+      expectedProcessorSlug: RepoProcessorContract.slug,
+      processor: this.#processorRpc,
+      request,
     });
   }
 

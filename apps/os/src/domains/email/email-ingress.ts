@@ -22,7 +22,8 @@ import { readProjectBySlug } from "../../project-directory.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
 import { putProjectFile, sanitizeFileFilename } from "../files/project-files.ts";
-import { EmailProcessorContract } from "./email-processor-contract.ts";
+import { readProcessorSnapshot } from "../streams/processor-rpc.ts";
+import { EmailProcessorContract, type EmailProcessorState } from "./email-processor-contract.ts";
 import {
   EMAIL_BODY_TRUNCATE_CHARS,
   EMAIL_INTEGRATION_STREAM_PATH,
@@ -176,7 +177,10 @@ async function readCreatedProjectAllowedSenders(projectId: string): Promise<stri
     const project = itxEnv.PROJECT.getByName(
       DurableObjectNameCodec.stringify({ projectId, path: EMAIL_INTEGRATION_STREAM_PATH }),
     );
-    const snapshot = await (await project.emailProcessor).snapshot();
+    const snapshot = await readProcessorSnapshot<EmailProcessorState>(
+      project,
+      EmailProcessorContract.slug,
+    );
     const state = EmailProcessorContract.stateSchema.parse(snapshot.state);
     if (state.birthCertificate === null) {
       throw new Error(`Email router for project ${projectId} has not been created`);
