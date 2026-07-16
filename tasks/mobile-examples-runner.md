@@ -5,7 +5,7 @@ size: medium
 
 # mobile-examples-runner
 
-**Status summary:** fully implemented and live-e2e-proven. `apps/os`: `runExample`/`runScriptEnvelope` promoted from e2e-only test support to product source, plus a new `egress-rules-configured` example. `apps/mobile`: a new per-project Examples screen lists every phone-runnable catalogue example and runs it via `capabilityHost.runScript`, showing the JSON result inline. Unit tests + a live e2e (real project, real `runScript` call) both pass. Missing: the one manual on-device pass — see the checklist.
+**Status summary:** fully implemented and live-e2e-proven. `apps/os`: `runExample`/`runScriptEnvelope` promoted from e2e-only test support to product source, plus a new `egress-rules-configured` example. `apps/mobile`: a new per-project Examples screen lists every phone-runnable catalogue example and runs it via `capabilityHost.runScript`, showing the JSON result inline. Unit tests + a live e2e (real project, real `runScript` call) both pass. This branch also carries an unrelated but critical fix found via this very on-device pass: chat was broken for everyone (see "Found along the way"). Missing: the one manual on-device pass — see the checklist. **Also flagged, not fixed here:** the "mob" test project is missing its root capability host — a platform-wide gap for projects that predate PR #2038, see "Found along the way."
 
 ## Why
 
@@ -37,10 +37,17 @@ From a conversation while testing PR #2044's human-in-the-loop egress approvals 
 - Non-`run-script`-capable examples (session/agent-context, live-session-only)
 - Any change to the web REPL or the example catalogue's browser-eval path
 
+## Found along the way
+
+Testing this branch on-device (Expo Go, production, a real project called "mob") surfaced two bugs — both from `#2038` ("Make stream processor births explicit", merged 2026-07-16 11:09 UTC+1, the same day as PR #2044), which removed implicit/lazy stream-processor creation with no migration for existing data.
+
+- **Fixed here:** the chat send mutation (`app/project/[projectId]/chat.tsx`) and its e2e still called bare `agent.message(...)`, assuming the pre-#2038 "first message births the agent" contract. Since #2038, `message()`/`addFiles()` require an explicit `agent.create({})` first — the web dashboard's new-chat page was already updated for this (`routes/.../agents/new.tsx`), the mobile screen wasn't (written in the same window, just before #2038 landed). This broke **every** chat send, new or reopened, the moment the deployed code actually included #2038 — caught because the local dev server used while building PR #2044 hadn't been restarted since #2038 merged, so its stale-but-still-running code masked the bug through that PR's own testing. Fix: call `agent.create({})` unconditionally before every send (it's idempotent, so this is safe for both brand-new and already-created agents).
+- **Flagged, not fixed here:** the "mob" project itself is missing its root capability host (`capability host at / has not been created`), breaking `capabilityHost.runScript` — i.e. the Examples screen — for that project specifically. #2038 now births the root capability host only inside the `project/created` reducer path, which runs once, at project-creation time. "mob" was created before #2038 and never got that retroactive birth — this affects every pre-existing project, not just "mob", and the PR explicitly disclaims a migration path ("Existing streams are expected to be erased before rollout"). This isn't a mobile-app bug and isn't fixed in this branch; it needs either a backfill script for pre-#2038 projects or "mob" recreated fresh. Worth raising with whoever owns that migration gap.
+
 ## Handoff — the one manual pass (needs a phone)
 
 1. `pnpm --dir apps/mobile start` in this worktree, Expo Go, scan the QR.
-2. Sign in, open a project (or use the dedicated approvals-testing project), tap **Examples**.
+2. Sign in, open a project **created after 2026-07-16** (post-#2038 — see "Found along the way": pre-existing projects like "mob" are missing their root capability host and will fail step 3 with an unrelated platform bug), tap **Examples**.
 3. Run `egress-rules-configured` — should show a JSON result (`host`, `ruleKey`, `offset`).
 4. In that project's chat, ask an agent: "Fetch https://httpbin.org/post and tell me what it returns."
 5. Open **Approvals** — the held request should appear; enroll (if not already) and approve. Confirm the agent's fetch resolves. This is the full "no laptop anywhere in the loop" proof this task exists for.
@@ -49,3 +56,4 @@ From a conversation while testing PR #2044's human-in-the-loop egress approvals 
 
 - 2026-07-16: `apps/os` half done and live-verified. Started before PR #2044 (`os-ios-app`, adds `apps/mobile` to main) merged, to get a head start on the OS-side pieces that don't depend on `apps/mobile` existing.
 - 2026-07-16: #2044 merged, `main` pulled into this branch cleanly (no conflicts — different files). `apps/mobile` half built: `lib/examples.ts` (filter), `lib/run-example.ts` (Expo-free runner), `app/project/[projectId]/examples.tsx` (screen), nav entry, unit tests, live e2e (`e2e/example-runner.e2e.test.ts`) — all green. Also hit a local-only snag: this worktree's Doppler scope for `apps/mobile` wasn't set up yet (`doppler configure` still pointed the directory at the `_shared` project from before `apps/mobile` existed) — fixed with `doppler setup --project os --config dev --no-interactive` in `apps/mobile`; not a code issue, just this machine's per-worktree Doppler cache.
+- 2026-07-16 PM: on-device pass against production found the two issues above ("Found along the way"). Diagnosed by tracing the error strings to `assertAgentCreated`/`CapabilityHostProcessor#assertCreated` and finding PR #2038 in git log — confirmed by restarting the local dev server (it had been running since before #2038 merged and was silently serving stale code) and watching `chat-roundtrip.e2e.test.ts` go from green to reproducing the exact same error, then back to green after the fix. Landed the `agent.create({})` fix on this branch (not a separate PR) to keep everything in one place to review.
