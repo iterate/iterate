@@ -324,6 +324,17 @@ type HarnessArgs = {
   now?: () => number;
 };
 
+function deliveryFrame(events: StreamEvent[], streamMaxOffset: number) {
+  const scannedAfterOffset =
+    events[0]?.offset === undefined ? streamMaxOffset : events[0].offset - 1;
+  return {
+    events,
+    scannedAfterOffset,
+    scannedThroughOffset: events.at(-1)?.offset ?? scannedAfterOffset,
+    streamMaxOffset,
+  };
+}
+
 function makeHarness(args: HarnessArgs = {}) {
   const journal = args.journal ?? makeJournal();
   const store = args.store ?? makeProgressStore();
@@ -357,7 +368,7 @@ function makeHarness(args: HarnessArgs = {}) {
       const { sink } = await runner.openDelivery();
       const head = streamMaxOffset ?? journal.head();
       for (const events of frames) {
-        await sink({ events, streamMaxOffset: head });
+        await sink(deliveryFrame(events, head));
       }
     },
     /** Open delivery and push everything past the persisted cursor as ONE frame. */
@@ -365,7 +376,7 @@ function makeHarness(args: HarnessArgs = {}) {
       const opened = await runner.openDelivery();
       const events = journal.rows().filter((row) => row.offset > opened.checkpointOffset);
       if (events.length > 0) {
-        await opened.sink({ events, streamMaxOffset: journal.head() });
+        await opened.sink(deliveryFrame(events, journal.head()));
       }
       return opened.checkpointOffset;
     },
@@ -380,7 +391,7 @@ function makeHarness(args: HarnessArgs = {}) {
         .rows()
         .filter((row) => row.offset > opened.checkpointOffset && consumed.has(row.type));
       if (events.length > 0) {
-        await opened.sink({ events, streamMaxOffset: journal.head() });
+        await opened.sink(deliveryFrame(events, journal.head()));
       }
       return opened.checkpointOffset;
     },
@@ -525,6 +536,25 @@ describe("StreamProcessorRunner batch-division invariance", () => {
   });
 });
 
+describe("StreamProcessorRunner delivery coordinates", () => {
+  it("rejects a frame whose scan starts beyond the committed cursor", async () => {
+    const harness = makeHarness();
+    harness.journal.seed({ type: REQUESTED, payload: { id: "a" } });
+    harness.journal.seed({ type: REQUESTED, payload: { id: "b" } });
+    const opened = await harness.runner.openDelivery();
+
+    await expect(
+      opened.sink({
+        events: [harness.journal.rows()[1]!],
+        scannedAfterOffset: 1,
+        scannedThroughOffset: 2,
+        streamMaxOffset: 2,
+      }),
+    ).rejects.toThrow(/starts after the committed scan cursor: 1 > 0/);
+    expect(harness.store.record?.processing.acknowledgedThroughOffset ?? 0).toBe(0);
+  });
+});
+
 // =============================================================================
 // 2 + 3. Strict blocker ordering; background overtaking
 // =============================================================================
@@ -625,7 +655,7 @@ describe("StreamProcessorRunner crash/redelivery", () => {
     const { sink } = await harness.runner.openDelivery();
     // Deliberately un-awaited: the frame wedges on event 2's blocker and the
     // incarnation is dropped underneath it, like an eviction.
-    void sink({ events: harness.journal.rows().slice(), streamMaxOffset: 3 });
+    void sink(deliveryFrame(harness.journal.rows().slice(), 3));
     await tick();
 
     // Nothing durable happened: per-frame cadence, frame never completed.
@@ -662,7 +692,7 @@ describe("StreamProcessorRunner crash/redelivery", () => {
 
     harness.store.failCommitOnce(new Error("KV write lost"));
     const { sink } = await harness.runner.openDelivery();
-    const frame = { events: harness.journal.rows().slice(), streamMaxOffset: 2 };
+    const frame = deliveryFrame(harness.journal.rows().slice(), 2);
 
     await expect(sink(frame)).rejects.toThrow("KV write lost");
     // PERSIST-BEFORE-ADVANCE: the failed durable write left the published
@@ -698,7 +728,7 @@ describe("StreamProcessorRunner crash/redelivery", () => {
     const opened = await revived.runner.openDelivery();
     expect(opened.checkpointOffset).toBe(2);
     // The transport redelivers the same frame anyway (at-least-once).
-    await opened.sink({ events: revived.journal.rows().slice(), streamMaxOffset: 2 });
+    await opened.sink(deliveryFrame(revived.journal.rows().slice(), 2));
 
     expect(revived.journal.attempts.length).toBe(attemptsBefore); // zero re-runs
     expect(revived.store.record?.processing.acknowledgedThroughOffset).toBe(2);
@@ -907,7 +937,7 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
       },
     });
     const { sink } = await a.runner.openDelivery();
-    const frameA = sink({ events: journal.rows().slice(0, 1), streamMaxOffset: 2 });
+    const frameA = sink(deliveryFrame(journal.rows().slice(0, 1), 2));
     await tick();
     expect(a.store.record).toBeUndefined();
 
@@ -966,7 +996,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
 
     // Frame 1: the requested event, delivered mid-catch-up (head is at 2). It
     // is behind head, so NOT caughtUp — nothing may act on a partial fold.
-    await sink({ events: [requestedEvent!], streamMaxOffset: 2 });
+    await sink(deliveryFrame([requestedEvent!], 2));
     expect(processPhases).toEqual(["1:catching-up:1"]);
     expect(headCalls).toEqual([]);
     expect(journal.rows(SIBLING)).toHaveLength(0);
@@ -977,7 +1007,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     // DEFERS: the runner never acts on a fold no consumed event delivered it at
     // head. (In production the trailing self-pull still advances the cursor to
     // head; the reconcile waits for a consumed-at-head event.)
-    await sink({ events: [noiseEvent!], streamMaxOffset: 2 });
+    await sink(deliveryFrame([noiseEvent!], 2));
     expect(processPhases).toEqual(["1:catching-up:1"]); // still no processEvent
     expect(headCalls).toEqual([]); // deferred — no consumed event at head
     expect(journal.rows(SIBLING)).toHaveLength(0);
@@ -986,7 +1016,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     // head-reaching batch carries `caughtUp`, and the reconcile drives every
     // open obligation over the final fold.
     journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 3: consumed, at head
-    await sink({ events: [journal.rows()[2]!], streamMaxOffset: 3 });
+    await sink(deliveryFrame([journal.rows()[2]!], 3));
     expect(processPhases).toEqual(["1:catching-up:1", "3:live:0"]);
     expect(headCalls).toEqual([{ open: ["a", "b"], phase: "live" }]);
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
@@ -1050,7 +1080,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     const harness = makeHarness({ journal, hooks });
 
     const { sink } = await harness.runner.openDelivery();
-    const frame = { events: journal.rows().slice(), streamMaxOffset: 2 };
+    const frame = deliveryFrame(journal.rows().slice(), 2);
     await expect(sink(frame)).rejects.toThrow("at-head work failed");
 
     // NOTHING committed — the head event (and its at-head pass) stays retryable.

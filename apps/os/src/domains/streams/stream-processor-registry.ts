@@ -125,8 +125,12 @@ export type RegisteredProcessorState<P extends RegisterableProcessor> = Processo
 export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitUntilEvent"> & {
   waitUntilEvent(
     input:
-      | { offset: number; timeoutMs?: number }
-      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number },
+      | { offset: number; timeoutMs?: number; signal?: AbortSignal }
+      | {
+          predicate: (event: StreamEvent) => boolean;
+          timeoutMs?: number;
+          signal?: AbortSignal;
+        },
   ): Promise<void>;
   /** The runner's committed fold, synchronously (schema default until loaded). */
   readonly currentState: State;

@@ -76,7 +76,7 @@ export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
  * Trailing delay before the fold's busy→idle flip is announced as a
  * status-changed event. The fold passes through idle for one append
  * round-trip during every hand-off (llm-request-completed lands, THEN the
- * extracted script-execution-requested lands; script-execution-completed
+ * extracted script-run-requested lands; script-run-settled
  * lands, THEN the rendered result input lands), and announcing those blips
  * would flicker every "is thinking..." surface downstream. Busy flips
  * announce immediately — only idle waits.
@@ -1081,8 +1081,8 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/agent/status-changed",
-    "events.iterate.com/capability-host/script-execution-requested",
-    "events.iterate.com/capability-host/script-execution-completed",
+    "events.iterate.com/capability-host/script-run-requested",
+    "events.iterate.com/capability-host/script-run-settled",
     // Core lifecycle RE-CHECK signals. Neither folds into state (reduce
     // ignores them) — they are consumed so their at-head delivery gives the
     // obligation reconcile (`processEvent` under `delivery.caughtUp`) a
@@ -1115,7 +1115,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/agent/status-changed",
-    "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/capability-host/script-run-requested",
   ],
 });
 

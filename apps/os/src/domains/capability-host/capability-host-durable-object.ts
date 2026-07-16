@@ -17,11 +17,17 @@ import {
   type CapabilityHostProcessorReads,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
-import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  type ScriptExecutionSettlement,
+} from "./capability-host-processor-contract.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
-  run(code: string, options?: { emittedJs?: string }): Promise<unknown>;
+  run(
+    code: string,
+    options: { emittedJs?: string; expiresAt: number },
+  ): Promise<ScriptExecutionSettlement>;
 };
 
 type ScriptExecutorService = {
@@ -33,7 +39,8 @@ type ScriptExecutorService = {
     };
     code: string;
     emittedJs?: string;
-  }): Promise<unknown>;
+    expiresAt: number;
+  }): Promise<ScriptExecutionSettlement>;
 };
 
 type CapabilityHostAncestorEntrypoint = {
@@ -140,7 +147,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
             scopePath: this.#name.path,
           },
           code,
-          emittedJs: options?.emittedJs,
+          emittedJs: options.emittedJs,
+          expiresAt: options.expiresAt,
         });
       },
     };

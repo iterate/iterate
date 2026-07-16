@@ -130,6 +130,8 @@ function makeHarness() {
           projectId: null,
           path: HOME,
           events,
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
           state: null,
         });
@@ -177,6 +179,8 @@ describe("eviction recovery end to end", () => {
         projectId: null,
         path: HOME,
         events: h.stream.events.filter((event) => event.offset > woken.checkpointOffset),
+        scannedAfterOffset: woken.checkpointOffset,
+        scannedThroughOffset: h.head(),
         streamMaxOffset: h.head(),
         state: null,
       }),

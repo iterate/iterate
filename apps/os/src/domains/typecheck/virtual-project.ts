@@ -430,7 +430,7 @@ function exceedsNestingDepth(code: string, limit: number): boolean {
 }
 
 /**
- * The pre-execution typecheck for a `script-execution-requested` block:
+ * The pre-execution typecheck for a `script-run-requested` block:
  * everything checkItxScript checks, read through the permissive-by-default
  * policy above. Blocking requires an error diagnostic in the script's OWN
  * code (`script.ts`) from the allowlist: a syntax error or a near-miss typo.

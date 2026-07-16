@@ -2,10 +2,8 @@ import { expect, type Page } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
-// Post-append delivery waits get an explicit window instead of the
-// spinner-waiter default: while an appended event is in flight to the
-// browser subscription nothing paints and no spinner shows, so the default
-// fails fast ("Timeout 1ms") — and the browser store's stall self-heal
+// Post-append delivery waits get an explicit backstop in addition to the
+// page's `data-spinner` append progress. The browser store's stall self-heal
 // (stream-browser-store liveness probe, #1501) needs up to ~30s to reconnect
 // when a fresh stream's first delivery stalls
 // (tasks/stream-subscriber-deliveries-stall-mid-turn.md). Killed runs

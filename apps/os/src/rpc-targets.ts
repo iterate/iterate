@@ -531,8 +531,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
-   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`
-   * events too — remember their rows may be evicted if you record the offset.
+   * Durable rows after `afterOffset` are replayed. It can also match an
+   * `ephemeral: true` event appended after this wait opens, but historical
+   * ephemeral rows are never replayed.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -582,8 +583,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Session-scoped live event delivery (the "ephemeral" subscription lane —
    * also the only lane that receives `ephemeral: true` events):
-   * `processEventBatch` is called for every committed batch (optionally
-   * replayed from `replayAfterOffset`); returns an unsubscribe handle.
+   * `processEventBatch` first receives durable history after
+   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
+   * when appended after this exact subscription opens and are never replayed.
+   * Returns an unsubscribe handle.
    * Forgotten on disconnect — durable delivery is configured as data instead,
    * by appending a `subscription-configured` event (wake or push mode) to the
    * stream.
@@ -592,6 +595,17 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     subscriptionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /**
+     * Atomically bind this open to the stream identity observed during
+     * catch-up. `null` means the caller observed a stream with no committed
+     * creation fact yet. A mismatch rejects before replacing any connection.
+     */
+    expectedIncarnation?: string | null;
+    /**
+     * Atomically reject instead of opening when the current raw-log head is
+     * more than this many offsets beyond `replayAfterOffset`.
+     */
+    maxReplayOffsetGap?: number;
     /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
     selector?: { eventTypes?: string[]; condition?: string };

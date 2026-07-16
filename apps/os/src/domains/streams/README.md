@@ -104,18 +104,18 @@ expression naming the method to invoke on the ordinary domain surface
 delegates to the project worker — `["streams", ["get", path], "acceptCrossPost"]`);
 webhook is the same cursor machinery pointed at plain HTTP:
 
-|                         | ephemeral                              | durable `wake`                                                      | durable `push`                                                | durable `webhook`                                |
-| ----------------------- | -------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------ |
-| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost` | external HTTP receivers                          |
-| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`           | config event, `delivery: {mode:"webhook", url}`  |
-| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log            | **stream** — same cursor row, advanced per EVENT |
-| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                      | authoritative cursor                                          | authoritative cursor                             |
-| sink arrives as         | `subscribe()` parameter                | returned from the expression-named poke                             | named by a persisted itx expression                           | the configured URL                               |
-| warm transport          | retained one-way callback              | retained one-way sink                                               | fresh awaited call per batch                                  | one `fetch` POST per event                       |
-| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)           | the 2xx response (**the ack**), per event        |
-| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)         | same spine, same machine, per-event granularity  |
-| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
-| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
+|                         | ephemeral                                                                   | durable `wake`                                                      | durable `push`                                                | durable `webhook`                                |
+| ----------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------ |
+| who                     | browsers, tests, `waitForEvent`                                             | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost` | external HTTP receivers                          |
+| subscription            | `subscribe()` (session)                                                     | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`           | config event, `delivery: {mode:"webhook", url}`  |
+| offset owner            | client, in-memory                                                           | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log            | **stream** — same cursor row, advanced per EVENT |
+| stream-side row         | none                                                                        | observational watermark (poke coalescing, lag)                      | authoritative cursor                                          | authoritative cursor                             |
+| sink arrives as         | `subscribe()` parameter                                                     | returned from the expression-named poke                             | named by a persisted itx expression                           | the configured URL                               |
+| warm transport          | retained one-way callback                                                   | retained one-way sink                                               | fresh awaited call per batch                                  | one `fetch` POST per event                       |
+| return frames per batch | **zero** (result disposed unpulled)                                         | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)           | the 2xx response (**the ack**), per event        |
+| retry / failure         | client's problem                                                            | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)         | same spine, same machine, per-event granularity  |
+| replay                  | durable rows after `replayAfterOffset`; ephemeral rows only live after open | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
+| filter                  | `selector` / `eventTypes` on subscribe                                      | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
 
 ### Ephemeral events
 
@@ -131,7 +131,9 @@ breaker, same pause door), with two deliberate demotions:
   drop ephemeral events from delivery exactly the way selectors already skip
   non-matching events (skip-not-defer: cursors advance over their offsets),
   so subscription-fed processors never fold or side-effect on one. Ephemeral
-  `subscribe()` connections receive them, live and on replay.
+  `subscribe()` connections receive an ephemeral row only when it is appended
+  after that exact connection opens. Reconnect/catch-up replays durable rows
+  only; historical ephemeral rows are never delivered.
 
 The whole pattern in one shape — the rule is "never derive durable state
 from an ephemeral event"; the durable truth is always its own append:

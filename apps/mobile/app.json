@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Iterate",
+    "slug": "iterate",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "iterate",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b0b0f",
+    "ios": {
+      "bundleIdentifier": "com.iterate.mobile",
+      "supportsTablet": false
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-web-browser",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b0b0f",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -66,6 +66,7 @@ export function StreamFeedView({
   liveState,
   onInspectEvent,
   onInspectLlmRequest,
+  onInspectScriptExecution,
   projectSlug,
 }: {
   database: StreamBrowserDatabase;
@@ -79,6 +80,8 @@ export function StreamFeedView({
   onInspectEvent?: (offset: number) => void;
   /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
+  /** Opens the script execution inspector at this execution id (code steps only). */
+  onInspectScriptExecution?: (executionId: string) => void;
   projectSlug?: string;
 }) {
   // No memo: building the filter is trivial and db.query dedupes by
@@ -92,10 +95,9 @@ export function StreamFeedView({
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const live = filter.agent == null ? null : (liveState?.live ?? null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Ids whose disclosure the user flipped away from its default state.
-  // Activities and live-rail steps default collapsed (has(id) = expanded);
-  // steps inside an expanded settled activity default expanded when their
-  // detail has content (has(id) = collapsed).
+  // Ids of activity summaries the user expanded. Operation rows inside an
+  // expanded activity open their URL-backed inspector instead of nesting a
+  // second disclosure state.
   const [toggledIds, setToggledIds] = useState<ReadonlySet<string>>(new Set());
 
   // The live in-flight activity is the list's trailing item so it's inside
@@ -252,6 +254,7 @@ export function StreamFeedView({
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
+                    onInspectScriptExecution={onInspectScriptExecution}
                   />
                 ) : row == null ? (
                   // Not-yet-loaded rows must measure exactly estimateSize
@@ -269,6 +272,7 @@ export function StreamFeedView({
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}
+                    onInspectScriptExecution={onInspectScriptExecution}
                     projectSlug={projectSlug}
                   />
                 ) : (

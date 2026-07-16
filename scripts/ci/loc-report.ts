@@ -17,20 +17,25 @@ import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 export const groups: Array<{ name: string; glob: string; priority: number }> = [
   // Files with linguist-generated set in .gitattributes (e.g. pnpm-lock.yaml,
   // routeTree.gen.ts) also land here, ahead of every glob - see computeReport.
-  { name: "Generated", glob: "{**/.generated/**,**/generated/**,**/*.generated.*}", priority: 8 },
+  { name: "Generated", glob: "{**/.generated/**,**/generated/**,**/*.generated.*}", priority: 9 },
+  // Mobile is its own group (not folded into Product) so a PR's mobile-app
+  // share is visible at a glance - matched before Tests/UI components too,
+  // so apps/mobile's own tests and components land here, not smeared across
+  // those groups.
+  { name: "Mobile", glob: "apps/mobile/**", priority: 2 },
   {
     name: "Tests",
     glob: "{**/*.{test,spec}.*,**/{e2e,tests,__tests__,test-helpers}/**}",
-    priority: 3,
+    priority: 4,
   },
-  { name: "UI components", glob: "{packages/ui/**,**/components/**}", priority: 2 },
-  { name: "Docs", glob: "{docs/**,**/*.md}", priority: 6 },
-  { name: "CI & scripts", glob: "{.depot/**,.github/**,scripts/**,**/scripts/**}", priority: 4 },
-  { name: "Config", glob: "**/*.{json,jsonc,json5,yml,yaml,toml}", priority: 5 },
+  { name: "UI components", glob: "{packages/ui/**,**/components/**}", priority: 3 },
+  { name: "Docs", glob: "{docs/**,**/*.md}", priority: 7 },
+  { name: "CI & scripts", glob: "{.depot/**,.github/**,scripts/**,**/scripts/**}", priority: 5 },
+  { name: "Config", glob: "**/*.{json,jsonc,json5,yml,yaml,toml}", priority: 6 },
   { name: "Product", glob: "{apps,packages}/**", priority: 1 },
   // "Other" is the code-level fallback for anything unmatched (globs skip dotfiles, so a
   // literal `**` catch-all wouldn't actually catch everything).
-  { name: "Other", glob: "", priority: 7 },
+  { name: "Other", glob: "", priority: 8 },
 ];
 
 /** markdownAnnotator label for the managed PR-body section. */

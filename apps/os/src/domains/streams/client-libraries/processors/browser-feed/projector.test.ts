@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../../schemas.ts";
 import {
+  BROWSER_FEED_SCHEMA_VERSION,
   initialBrowserFeedState,
   MAX_GROUP_EVENTS,
   planBrowserFeedOps,
@@ -34,6 +35,15 @@ function userMessage(offset: number, text: string): StreamEvent {
 }
 
 const START = initialBrowserFeedState();
+
+describe("browser-feed projector state boundary", () => {
+  it("identifies every newly projected state as the current clean-cut schema", () => {
+    expect(START.schemaVersion).toBe(BROWSER_FEED_SCHEMA_VERSION);
+    expect(planBrowserFeedOps(START, [event(1, DEBUG)]).endState.schemaVersion).toBe(
+      BROWSER_FEED_SCHEMA_VERSION,
+    );
+  });
+});
 
 describe("browser-feed projector — raw lens", () => {
   it("writes specific-renderer events as their own raw singleton rows", () => {
@@ -160,7 +170,11 @@ describe("browser-feed projector — raw lens", () => {
     // One coalesced op per bounded group: two full groups plus a partial third.
     expect(ops).toHaveLength(3);
     expect(ops.map((op) => op.localIndex)).toEqual([0, 1, 2]);
-    expect(ops.map((op) => op.eventCount)).toEqual([MAX_GROUP_EVENTS, MAX_GROUP_EVENTS, 5]);
+    expect(ops.map((op) => ("eventCount" in op ? op.eventCount : null))).toEqual([
+      MAX_GROUP_EVENTS,
+      MAX_GROUP_EVENTS,
+      5,
+    ]);
     expect(endState.open?.eventCount).toBe(5);
     expect(endState.nextLocalIndex).toBe(3);
   });
@@ -234,12 +248,95 @@ describe("browser-feed projector — one interleaved order", () => {
       llmRequestOffset: 2,
       result: { status: "success" },
     });
-    const second = planBrowserFeedOps(first.endState, [completed]);
+    const idle = event(4, "events.iterate.com/agent/status-changed", {
+      busy: false,
+      sinceOffset: 3,
+    });
+    const second = planBrowserFeedOps(first.endState, [completed, idle]);
     expect(second.endState.agent.live).toBeNull();
     const settled = second.ops.find(
       (op) => op.kind === "insert" && op.itemKind === "agent.activity",
     );
     expect(settled).toBeDefined();
+  });
+
+  it("replaces an inferred script outcome when its durable settlement arrives late", () => {
+    const requested = event(1, "events.iterate.com/capability-host/script-run-requested", {
+      executionId: "late-script",
+      code: "async () => mutate()",
+      expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
+    });
+    const idle = event(2, "events.iterate.com/agent/status-changed", {
+      busy: false,
+      sinceOffset: 1,
+    });
+    const first = planBrowserFeedOps(START, [requested, idle]);
+    const inserted = first.ops.find(
+      (op) => op.kind === "insert" && op.itemKind === "agent.activity",
+    );
+    if (inserted?.kind !== "insert") throw new Error("expected settled activity insert");
+    expect(first.endState.provisionalAgentItemIndexes).toEqual({
+      "activity-1": inserted.localIndex,
+    });
+
+    const completed = event(3, "events.iterate.com/capability-host/script-run-settled", {
+      executionId: "late-script",
+      settlement: { status: "succeeded", result: "committed" },
+    });
+    const second = planBrowserFeedOps(first.endState, [completed]);
+    expect(second.ops[0]).toMatchObject({
+      kind: "replace",
+      localIndex: inserted.localIndex,
+      itemKind: "agent.activity",
+      data: {
+        id: "activity-1",
+        steps: [
+          {
+            kind: "code",
+            outcomeSource: "durable",
+            success: true,
+            result: "committed",
+          },
+        ],
+      },
+    });
+    expect(second.endState.nextLocalIndex).toBe(first.endState.nextLocalIndex + 1);
+    expect(second.endState.provisionalAgentItemIndexes).toEqual({});
+  });
+
+  it("does not retain replacement indexes for ordinary settled feed items", () => {
+    const projected = planBrowserFeedOps(START, [
+      userMessage(1, "hello"),
+      event(2, WEB_MESSAGE_SENT, { message: "hi" }),
+    ]);
+
+    expect(projected.endState.provisionalAgentItemIndexes).toEqual({});
+  });
+
+  it("prunes replacement indexes when malformed history exceeds the correction window", () => {
+    const events = Array.from({ length: 40 }, (_, index) => {
+      const requestedOffset = index * 2 + 1;
+      return [
+        event(requestedOffset, "events.iterate.com/capability-host/script-run-requested", {
+          executionId: `missing-${index}`,
+          code: `async () => ${index}`,
+          expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
+        }),
+        event(requestedOffset + 1, "events.iterate.com/agent/status-changed", {
+          busy: false,
+          sinceOffset: requestedOffset,
+        }),
+      ];
+    }).flat();
+
+    const projected = planBrowserFeedOps(START, events);
+    const provisionalIds = Object.keys(projected.endState.agent.provisionalActivities);
+    const indexedIds = Object.keys(projected.endState.provisionalAgentItemIndexes);
+
+    expect(provisionalIds).toHaveLength(32);
+    expect(indexedIds).toEqual(provisionalIds);
+    expect(indexedIds).not.toContain("activity-1");
+    expect(indexedIds).toContain("activity-79");
   });
 
   it("is deterministic and folds identically event-by-event and whole-batch", () => {

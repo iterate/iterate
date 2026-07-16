@@ -584,7 +584,7 @@ meaning. Doctrine lines that keep this from becoming B:
   `{type: "project" | "agent", id}` — never the last human who spoke.
 
 This also fixes the audit gap: every `capability-provided` /
-`script-execution-requested` journal event gains an actor.
+`script-run-requested` journal event gains an actor.
 
 ### ALT 3 — per-principal views as ordinary extends (state, not permissions)
 

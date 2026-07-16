@@ -198,10 +198,10 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
         }),
       }),
       expect.objectContaining({
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
       }),
       expect.objectContaining({
-        type: "events.iterate.com/capability-host/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-run-settled",
       }),
       expect.objectContaining({ type: AGENT_WEB_MESSAGE_SENT_TYPE }),
     ]),
@@ -305,7 +305,7 @@ test("Late agent subscriptions replay history after an earlier birth certificate
       wakeExpressionRoot(event) === "capabilityHosts",
   )?.offset;
   const scriptRequestedOffset = events.find(
-    (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+    (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
   )?.offset;
   const birthCertificateOffset = events.find(
     (event) => event.type === "events.iterate.com/agent/created",

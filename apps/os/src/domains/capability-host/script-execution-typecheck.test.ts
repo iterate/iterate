@@ -23,9 +23,9 @@ import {
 const T = {
   created: "events.iterate.com/capability-host/created",
   provided: "events.iterate.com/capability-host/capability-provided",
-  requested: "events.iterate.com/capability-host/script-execution-requested",
-  started: "events.iterate.com/capability-host/script-execution-started",
-  completed: "events.iterate.com/capability-host/script-execution-completed",
+  requested: "events.iterate.com/capability-host/script-run-requested",
+  started: "events.iterate.com/capability-host/script-run-started",
+  completed: "events.iterate.com/capability-host/script-run-settled",
 } as const;
 
 function capabilityHostStream(ancestorPath: string | null = null): MemoryStream {
@@ -58,6 +58,7 @@ function makeProcessor(options: {
     capabilities: CapabilityDescription[];
     code: string;
   }) => Promise<ScriptExecutionCheck>;
+  runScriptInBackground?: (work: () => Promise<unknown>) => void;
 }): Harness {
   let runner!: Harness["runner"];
   const processor = new CapabilityHostProcessor({
@@ -67,13 +68,21 @@ function makeProcessor(options: {
     projectId: null,
     resolveAncestor: options.ancestor === undefined ? undefined : () => options.ancestor!,
     scriptExecutionEntrypoint: {
-      run:
-        options.run ??
-        (() => {
-          throw new Error("must not run in this scenario");
-        }),
+      run: async (code) => {
+        const result = await (
+          options.run ??
+          (() => {
+            throw new Error("must not run in this scenario");
+          })
+        )(code);
+        return {
+          status: "succeeded" as const,
+          ...(result === undefined ? {} : { result }),
+        };
+      },
     },
     typecheckScript: options.typecheckScript,
+    runScriptInBackground: options.runScriptInBackground,
     reads: {
       snapshot: () => runner.snapshot(),
       waitUntilEvent: (input) =>
@@ -127,7 +136,7 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() =>
       expect(completion(stream)?.payload).toMatchObject({
         executionId: "exec-unconfigured",
-        error: expect.stringContaining("has not been created"),
+        settlement: { error: expect.stringContaining("has not been created") },
       }),
     );
     expect(stream.events.some((event) => event.type === T.started)).toBe(false);
@@ -149,11 +158,20 @@ describe("script execution typecheck gate", () => {
       const completed = completion(stream);
       expect(completed?.payload).toMatchObject({
         executionId: "exec-1",
-        error: expect.stringContaining("NOT executed"),
+        settlement: {
+          status: "failed",
+          error: expect.stringContaining("NOT executed"),
+          failureKind: "typecheck",
+          phase: "typecheck",
+          executionMayHaveOccurred: false,
+          cancellation: "not-applicable",
+        },
       });
-      expect((completed!.payload as { error: string }).error).toContain("Did you mean 'get'");
+      expect((completed!.payload as { settlement: { error: string } }).settlement.error).toContain(
+        "Did you mean 'get'",
+      );
       // Shared with the run/settle lanes, so a race collapses to one completion.
-      expect(completed?.idempotencyKey).toBe("capability-host/script-execution-completed@exec-1");
+      expect(completed?.idempotencyKey).toBe("capability-host/script-run-settled@exec-1");
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(false);
   });
@@ -172,7 +190,10 @@ describe("script execution typecheck gate", () => {
     await requestScript(stream, harness);
 
     await vi.waitFor(() => {
-      expect(completion(stream)?.payload).toMatchObject({ executionId: "exec-1", result: 42 });
+      expect(completion(stream)?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: 42 },
+      });
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(true);
     expect(ran).toHaveLength(1);
@@ -240,7 +261,10 @@ describe("script execution typecheck gate", () => {
     await requestScript(stream, harness);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
-    expect(completion(stream)?.payload).not.toHaveProperty("error");
+    expect(completion(stream)?.payload).toMatchObject({
+      executionId: "exec-1",
+      settlement: { status: "succeeded", result: null },
+    });
     expect(ran).toHaveLength(1);
   });
 
@@ -261,7 +285,7 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(typecheckScript).toHaveBeenCalledTimes(2);
     expect(completion(stream)?.payload).toMatchObject({
-      error: expect.stringContaining("Did you mean 'get'"),
+      settlement: { error: expect.stringContaining("Did you mean 'get'") },
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(false);
     expect(run).not.toHaveBeenCalled();
@@ -281,7 +305,10 @@ describe("script execution typecheck gate", () => {
     await requestScript(stream, harness);
 
     await vi.waitFor(() => {
-      expect(completion(stream)?.payload).toMatchObject({ executionId: "exec-1", result: "ok" });
+      expect(completion(stream)?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: "ok" },
+      });
     });
     expect(ran).toHaveLength(1);
   });
@@ -368,6 +395,36 @@ describe("script execution typecheck gate", () => {
       recordedSpans.find((span) => span.name === "capability_host.script_request_consume")
         ?.attributes,
     ).toMatchObject({ "iterate.capability_host.request_offset": 2 });
+  });
+
+  it("keeps concurrent request launches in their foreground RPC owners", async () => {
+    const stream = capabilityHostStream();
+    const foregroundLaunches = vi.fn();
+    const backgroundWork: Promise<unknown>[] = [];
+    const harness = makeProcessor({
+      stream,
+      run: async (code) => code,
+      runScriptInBackground: (work) => {
+        foregroundLaunches();
+        backgroundWork.push(work());
+      },
+    });
+    await harness.runner.catchUp();
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, (_, index) => harness.processor.runScript(`async () => ${index}`)),
+    );
+    await Promise.all(backgroundWork);
+
+    expect(foregroundLaunches).toHaveBeenCalledTimes(20);
+    expect(results.map(({ result }) => result)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `async () => ${index}`),
+    );
+    expect(
+      recordedSpans
+        .filter((span) => span.name === "capability_host.script_execution")
+        .map((span) => span.attributes["iterate.capability_host.script_launch_owner"]),
+    ).toEqual(Array.from({ length: 20 }, () => "foreground"));
   });
 
   it("folds unseen journal events before consuming its own request", async () => {

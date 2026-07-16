@@ -53,8 +53,8 @@ around:
 - `events.iterate.com/agent/llm-request-started`
 - `events.iterate.com/agent/llm-response-chunk`
 - `events.iterate.com/agent/llm-request-completed`
-- `events.iterate.com/capability-host/script-execution-requested`
-- `events.iterate.com/capability-host/script-execution-completed`
+- `events.iterate.com/capability-host/script-run-requested`
+- `events.iterate.com/capability-host/script-run-settled`
 - `events.iterate.com/agents/web-message-sent`
 
 If streamed LLM chunks dominate the stream before script execution starts,
