@@ -4700,10 +4700,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       project.processor.waitUntilProcessed({
         offset: Math.max(created.offset, subscription.offset),
         // A create must never leave its caller parked behind a wedged
-        // processor indefinitely. The processor's own sibling barriers are
-        // bounded more tightly, leaving this outer wait room to observe a
-        // transport redelivery after a failed frame.
-        timeoutMs: 60_000,
+        // processor indefinitely. One project birth frame has a shared 30s
+        // sibling-barrier deadline; 75s leaves a second full frame plus 15s
+        // for durable-delivery backoff and transport redial.
+        timeoutMs: 75_000,
       }),
     );
     // The project now EXISTS and its birth has been processed. Whether to
@@ -6572,7 +6572,17 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    return await this.#callProcessor((processor) => processor.waitUntilProcessed(input));
+    const deadline = input.timeoutMs === undefined ? undefined : Date.now() + input.timeoutMs;
+    return await this.#callProcessor((processor) => {
+      if (deadline === undefined) return processor.waitUntilProcessed(input);
+      const timeoutMs = deadline - Date.now();
+      if (timeoutMs <= 0) {
+        throw new Error(
+          `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
+        );
+      }
+      return processor.waitUntilProcessed({ ...input, timeoutMs });
+    });
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */

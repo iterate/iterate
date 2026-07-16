@@ -23,7 +23,7 @@ import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-doma
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
-const SIBLING_BIRTH_WAIT_TIMEOUT_MS = 30_000;
+const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 30_000;
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectProcessorContract,
@@ -287,28 +287,38 @@ export class ProjectProcessor extends StreamProcessor<
           // through one frame. Every wait is bounded so a broken sibling
           // fails the frame and enters ordinary durable redelivery instead of
           // pinning project creation forever.
+          const siblingBirthDeadline = Date.now() + SIBLING_BIRTH_BARRIER_TIMEOUT_MS;
+          const remainingSiblingBirthWaitMs = () => {
+            const remaining = siblingBirthDeadline - Date.now();
+            if (remaining <= 0) {
+              throw new Error(
+                `project sibling birth barrier timed out after ${SIBLING_BIRTH_BARRIER_TIMEOUT_MS}ms`,
+              );
+            }
+            return remaining;
+          };
           await timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
             this.deps.itx.capabilityHost.processor.waitUntilProcessed({
               offset: capabilityHostOffset,
-              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+              timeoutMs: remainingSiblingBirthWaitMs(),
             }),
           );
           await timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
             this.deps.itx.scheduler.processor.waitUntilProcessed({
               offset: schedulerOffset,
-              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+              timeoutMs: remainingSiblingBirthWaitMs(),
             }),
           );
           await timedStep("create-timing", timing, "wait-config-repo-birth", () =>
             this.deps.itx.repo.processor.waitUntilProcessed({
               offset: configRepoOffset,
-              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+              timeoutMs: remainingSiblingBirthWaitMs(),
             }),
           );
           await timedStep("create-timing", timing, "wait-email-router-birth", () =>
             this.deps.itx.email.processor.waitUntilProcessed({
               offset: emailRouterOffset,
-              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+              timeoutMs: remainingSiblingBirthWaitMs(),
             }),
           );
         });

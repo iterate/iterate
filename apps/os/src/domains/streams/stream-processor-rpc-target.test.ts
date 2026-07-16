@@ -61,7 +61,9 @@ describe("ProcessorRelayRpcTarget", () => {
       [Symbol.dispose]: vi.fn(),
       getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
       snapshot: async () => ({ offset: 1, state: {} }),
-      waitUntilProcessed: vi.fn(async () => undefined),
+      waitUntilProcessed: vi.fn(
+        async (_input: { offset: number; timeoutMs?: number }) => undefined,
+      ),
     };
     const lifecycleReset = Object.assign(
       new Error("Durable Object reset because its code was updated."),
@@ -85,7 +87,11 @@ describe("ProcessorRelayRpcTarget", () => {
       relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 }),
     ).resolves.toBeUndefined();
     expect(acquisitions).toBe(2);
-    expect(processor.waitUntilProcessed).toHaveBeenCalledWith({ offset: 3, timeoutMs: 30_000 });
+    expect(processor.waitUntilProcessed).toHaveBeenCalledOnce();
+    const retriedWait = processor.waitUntilProcessed.mock.calls[0]?.[0];
+    expect(retriedWait).toMatchObject({ offset: 3 });
+    expect(retriedWait?.timeoutMs).toBeGreaterThan(0);
+    expect(retriedWait?.timeoutMs).toBeLessThanOrEqual(30_000);
     expect(processor[Symbol.dispose]).toHaveBeenCalledOnce();
   });
 
@@ -108,5 +114,49 @@ describe("ProcessorRelayRpcTarget", () => {
 
     await expect(relay.snapshot()).rejects.toBe(applicationError);
     expect(acquisitions).toBe(1);
+  });
+
+  it("shares one waitUntilProcessed timeout across a lifecycle retry", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const lifecycleReset = Object.assign(
+      new Error("Durable Object reset because its code was updated."),
+      { durableObjectReset: true },
+    );
+    const waits: { offset: number; timeoutMs?: number }[] = [];
+    const processor = {
+      [Symbol.dispose]: vi.fn(),
+      getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+      snapshot: async () => ({ offset: 1, state: {} }),
+      waitUntilProcessed: async (input: { offset: number; timeoutMs?: number }) => {
+        waits.push(input);
+        if (waits.length === 1) {
+          now += 70;
+          throw lifecycleReset;
+        }
+      },
+    };
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve(processor),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+    });
+
+    try {
+      await expect(
+        relay.waitUntilProcessed({ offset: 3, timeoutMs: 100 }),
+      ).resolves.toBeUndefined();
+      expect(waits).toEqual([
+        { offset: 3, timeoutMs: 100 },
+        { offset: 3, timeoutMs: 30 },
+      ]);
+      expect(processor[Symbol.dispose]).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

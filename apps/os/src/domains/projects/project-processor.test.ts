@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
@@ -77,6 +77,8 @@ function makeHarness(
 
 type ProcessorName = "capability-host" | "email" | "repo" | "scheduler";
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("ProjectProcessor bootstrap", () => {
   it("creates each required sibling processor explicitly", async () => {
     const { driver, network, stream } = makeHarness();
@@ -119,6 +121,8 @@ describe("ProjectProcessor bootstrap", () => {
   });
 
   it("does not finish project birth until every sibling processor has folded its batch", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const releases = {} as Record<Exclude<ProcessorName, "email">, () => void>;
     const barriers = {} as Record<Exclude<ProcessorName, "email">, Promise<void>>;
     for (const processor of ["capability-host", "scheduler", "repo"] as const) {
@@ -141,6 +145,7 @@ describe("ProjectProcessor bootstrap", () => {
     expect(settled).toBe(false);
     expect(processorWaits).toEqual([{ offset: 3, processor: "capability-host" }]);
 
+    now += 10_000;
     releases["capability-host"]();
     await processorWaitStarted.scheduler;
     expect(processorWaits).toEqual([
@@ -148,6 +153,7 @@ describe("ProjectProcessor bootstrap", () => {
       { offset: 2, processor: "scheduler" },
     ]);
 
+    now += 5_000;
     releases.scheduler();
     await processorWaitStarted.repo;
     expect(processorWaits).toEqual([
@@ -156,6 +162,7 @@ describe("ProjectProcessor bootstrap", () => {
       { offset: 3, processor: "repo" },
     ]);
 
+    now += 5_000;
     releases.repo();
     await processorWaitStarted.email;
     expect(processorWaits).toEqual([
@@ -164,7 +171,7 @@ describe("ProjectProcessor bootstrap", () => {
       { offset: 3, processor: "repo" },
       { offset: 3, processor: "email" },
     ]);
-    expect(processorWaitTimeouts).toEqual([30_000, 30_000, 30_000, 30_000]);
+    expect(processorWaitTimeouts).toEqual([30_000, 20_000, 15_000, 10_000]);
 
     await delivery;
     expect(settled).toBe(true);
