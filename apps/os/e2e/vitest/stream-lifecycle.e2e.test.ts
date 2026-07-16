@@ -568,6 +568,46 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
   }
 });
 
+test("a stream DO kill mid-call rejects with the stream-unavailable tag", async () => {
+  // The retryability contract: a rejection caused by the DO incarnation dying
+  // (kill/eviction/deploy reset) must cross the wire tagged
+  // `stream-unavailable: …` so clients can retry instead of treating it as an
+  // app-level failure — the browser mirror's appendBatch rides exactly this
+  // tag to survive kills mid-blast (see domains/streams/stream-unavailable.ts;
+  // workerd's `durableObjectReset` flag never survives capnweb, so the worker
+  // door is the only hop that can tell the two apart). The parked waitForEvent
+  // makes the proof deterministic: its runtime connection registering proves
+  // the call is in flight inside the DO when kill() lands.
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `lifecycle-kill-tag-${marker}` });
+  using stream = project.streams.get(`/lifecycle-kill-tag-${marker}`);
+
+  const parked = (async () => {
+    try {
+      await stream.waitForEvent({ eventTypes: [WAIT_FOR_EVENT_TYPE], timeoutMs: 60_000 });
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  })();
+  await waitForWaitForEventConnection(stream);
+
+  // The abort can take the kill() call itself down with it — that rejection
+  // is incidental; the parked call's is the one under test.
+  await stream.kill().catch(() => undefined);
+
+  const rejection = await parked;
+  expect(rejection).toBeInstanceOf(Error);
+  expect((rejection as Error).message).toContain("stream-unavailable: ");
+  expect((rejection as Error).message).toContain("kill requested");
+});
+
 async function waitForConfiguredProcessorConnections(
   stream: Stream,
   opts: { expectedKeys?: readonly string[]; settled?: boolean } = {},
