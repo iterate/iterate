@@ -51,10 +51,26 @@ function projectCreated(offset = 1): StreamEvent {
   );
 }
 
-function makeHarness() {
+function makeHarness(options: { capabilityHostBirthBarrier?: Promise<void> } = {}) {
   const network = new MemoryStreamNetwork();
+  const processorWaits: { offset: number; processor: string }[] = [];
+  let resolveProcessorWaitsStarted!: () => void;
+  const processorWaitsStarted = new Promise<void>((resolve) => {
+    resolveProcessorWaitsStarted = resolve;
+  });
+  const waitUntilProcessed = (processor: string) => async (input: { offset: number }) => {
+    processorWaits.push({ offset: input.offset, processor });
+    if (processorWaits.length === 4) resolveProcessorWaitsStarted();
+    if (processor === "capability-host") await options.capabilityHostBirthBarrier;
+  };
   const itx = {
+    capabilityHost: {
+      processor: { waitUntilProcessed: waitUntilProcessed("capability-host") },
+    },
+    email: { processor: { waitUntilProcessed: waitUntilProcessed("email") } },
     projectId: "prj_test",
+    repo: { processor: { waitUntilProcessed: waitUntilProcessed("repo") } },
+    scheduler: { processor: { waitUntilProcessed: waitUntilProcessed("scheduler") } },
     streams: { get: (path: string) => network.get(path) },
     worker: { fetch: async () => ({}) },
     search: { ensureIndex: async () => ({ created: true }) },
@@ -65,7 +81,7 @@ function makeHarness() {
     projectId: "prj_test",
     itx,
   });
-  return { network, processor };
+  return { network, processor, processorWaits, processorWaitsStarted };
 }
 
 describe("ProjectProcessor bootstrap", () => {
@@ -102,6 +118,39 @@ describe("ProjectProcessor bootstrap", () => {
         ready: false,
       },
     });
+  });
+
+  it("does not finish the project birth until every sibling processor has folded its batch", async () => {
+    let releaseCapabilityHostBirth!: () => void;
+    const capabilityHostBirthBarrier = new Promise<void>((resolve) => {
+      releaseCapabilityHostBirth = resolve;
+    });
+    const { processor, processorWaits, processorWaitsStarted } = makeHarness({
+      capabilityHostBirthBarrier,
+    });
+
+    let settled = false;
+    const ingestion = processor
+      .ingest({ events: [projectCreated()], streamMaxOffset: 1 })
+      .then(() => {
+        settled = true;
+      });
+
+    await processorWaitsStarted;
+    expect(settled).toBe(false);
+    expect(processorWaits).toEqual(
+      expect.arrayContaining([
+        { offset: 2, processor: "capability-host" },
+        { offset: 2, processor: "scheduler" },
+        { offset: 3, processor: "repo" },
+        { offset: 3, processor: "email" },
+      ]),
+    );
+    expect(processorWaits).toHaveLength(4);
+
+    releaseCapabilityHostBirth();
+    await ingestion;
+    expect(settled).toBe(true);
   });
 
   it("throws when a second project birth certificate is reduced", async () => {

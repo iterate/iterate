@@ -295,7 +295,12 @@ function ProjectReactivityContent() {
                 <dt className="text-muted-foreground">Events</dt>
                 <dd data-testid="reactivity-stream-event-count">{testStream.events.length}</dd>
                 <dt className="text-muted-foreground">Status</dt>
-                <dd data-testid="reactivity-action-status">{action.status}</dd>
+                <dd
+                  data-spinner={action.status === "running" ? "true" : undefined}
+                  data-testid="reactivity-action-status"
+                >
+                  {action.status}
+                </dd>
                 <dt className="text-muted-foreground">Marker</dt>
                 <dd className="truncate font-mono" data-testid="reactivity-last-action-marker">
                   {action.marker || "-"}
