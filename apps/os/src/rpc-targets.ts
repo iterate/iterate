@@ -6497,7 +6497,15 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
         // must be released deterministically. In-process targets are real
         // RpcTargets and remain owned by their host.
         if (processor !== undefined && !(processor instanceof RpcTarget)) {
-          (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+          try {
+            (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+          } catch (error) {
+            // Disposal is cleanup, not the authoritative processor outcome. A
+            // stale workerd RPC stub can reject disposal after its backing DO
+            // resets; preserve the success/error/retry already chosen above,
+            // while keeping the cleanup failure observable.
+            console.warn("processor relay transient facade dispose failed", { error });
+          }
         }
       }
     }
