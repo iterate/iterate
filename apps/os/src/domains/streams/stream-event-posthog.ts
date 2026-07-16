@@ -1,71 +1,40 @@
 import { tracing } from "cloudflare:workers";
 import { v5 as uuidv5 } from "uuid";
 
-const POSTHOG_BATCH_MAX_BYTES = 4_000_000;
-const POSTHOG_READ_MAX_EVENTS = 20_000;
-const POSTHOG_MAX_ATTEMPTS = 5;
-const POSTHOG_RETRY_BASE_MS = [1_000, 5_000, 30_000, 120_000] as const;
-const POSTHOG_FLUSH_DELAY_MS = 50;
-const POSTHOG_UUID_NAMESPACE = "859c5a5d-bd37-55a7-97d7-443357d30a36";
+const PAGE_SIZE = 500;
+const MAX_ATTEMPTS = 5;
+const RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000] as const;
+const MAX_RETRY_AFTER_MS = 30_000;
+const FLUSH_DELAY_MS = 50;
+const UUID_NAMESPACE = "859c5a5d-bd37-55a7-97d7-443357d30a36";
 const STATE_KEY = "posthogStreamEventExport";
-
-let invalidConfigReported = false;
 
 export type CommittedStreamEventTelemetry = Readonly<{
   committedAt: string;
+  eventType: string;
   offset: number;
 }>;
 
-type CaptureContext = {
-  afterOffset: number;
+type Page = {
   attempt: number;
-  eventCount: number;
-  firstOffset?: number;
-  generation: number;
-  lastOffset?: number;
-  projectId: string | null;
-  streamId: string;
-  workerName: string;
+  blockedBy: string | null;
+  createdAt: string;
+  pendingOffsets: number[];
+  throughOffset: number;
 };
 
-type CaptureFailure =
-  | { kind: "http"; status: number }
-  | { kind: "internal" }
-  | { kind: "network" }
-  | { kind: "oversized"; maxBytes: number }
-  | { kind: "timeout" };
+type ExportState = {
+  cursor: number;
+  dueAt: number | null;
+  page: Page | null;
+};
 
-type CaptureResult =
-  | { outcome: "accepted" }
-  | { failure: CaptureFailure; outcome: "failed" | "unknown" };
-
-type TraceSpan = { setAttribute(name: string, value: boolean | number | string): void };
+export type StreamEventPostHogRecoveryState = Readonly<ExportState>;
 
 type DurableState = {
   get<T>(key: string): T | undefined;
   put(key: string, value: unknown): void;
 };
-
-type ExportState = {
-  attempt: number;
-  cursor: number;
-  generation: number;
-  lastAbandonment: Abandonment | null;
-  lastError: string | null;
-  nextAttemptAt: number | null;
-};
-
-type Abandonment = {
-  afterOffset: number;
-  attempt: number;
-  failureKind: string;
-  firstOffset: number | null;
-  generation: number;
-  lastOffset: number | null;
-  recordedAt: string;
-};
-
-export type StreamEventPostHogRecoveryState = Readonly<ExportState>;
 
 type ExporterInput = {
   apiKey: string;
@@ -78,46 +47,58 @@ type ExporterInput = {
   workerName: string;
 };
 
-/**
- * Read the one optional binding owned by stream telemetry. StreamDurableObject
- * is also hosted by streams-example-app, so parsing OS's full AppConfig here
- * would make that smaller host fail during construction.
- */
+type CaptureContext = {
+  afterOffset: number;
+  attempt: number;
+  eventCount: number;
+  firstOffset?: number;
+  lastOffset?: number;
+  projectId: string | null;
+  streamId: string;
+};
+
+type CaptureResult = {
+  dropDetail?: string;
+  dropCount: number;
+  failureKind?: string;
+  pendingOffsets: number[];
+  retryDetail?: string;
+  retryAfterMs?: number;
+  retryable: boolean;
+  warningCount: number;
+};
+
+type TraceSpan = { setAttribute(name: string, value: boolean | number | string): void };
+
+/** Parse only the optional binding shared by OS and the smaller streams example app. */
 export function posthogApiKeyFromStreamEnv(env: unknown): string | undefined {
   if (env === null || typeof env !== "object") return undefined;
   const raw = (env as Record<string, unknown>).APP_CONFIG_POSTHOG;
   if (raw === undefined) return undefined;
+  if (typeof raw !== "string") throw new Error("invalid PostHog stream telemetry config");
 
+  let parsed: unknown;
   try {
-    if (typeof raw !== "string") throw new Error("expected a JSON string");
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object") throw new Error("expected an object");
-    const apiKey = (parsed as Record<string, unknown>).apiKey;
-    if (typeof apiKey !== "string" || apiKey.trim() === "") throw new Error("missing apiKey");
-    return apiKey.trim();
+    parsed = JSON.parse(raw);
   } catch {
-    if (!invalidConfigReported) {
-      invalidConfigReported = true;
-      emitError({
-        schema: "iterate.stream-telemetry.v1",
-        message: "stream_posthog_config_invalid",
-        operation: "posthog.configure_stream_events",
-        outcome: "disabled",
-        failureKind: "config",
-      });
-    }
-    return undefined;
+    throw new Error("invalid PostHog stream telemetry config");
   }
+  const apiKey =
+    parsed !== null && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>).apiKey
+      : undefined;
+  if (typeof apiKey !== "string" || apiKey.trim() === "") {
+    throw new Error("invalid PostHog stream telemetry config");
+  }
+  return apiKey.trim();
 }
 
 /**
- * Durable, payload-blind delivery from one stream to PostHog.
+ * Exports committed event metadata without touching product payloads.
  *
- * The existing append log is the outbox. This class stores only an offset,
- * next-attempt time, bounded retry count, recovery generation, current
- * failure, and last durable abandonment. Product requests never encode JSON
- * or fetch PostHog; they only persist a near-term alarm desire. Each alarm
- * performs at most one request.
+ * The stream log is the outbox. A bounded persisted page remembers only which
+ * offsets PostHog has asked us to retry. Known acknowledgements are never sent
+ * again; an ambiguous network outcome remains necessarily at-least-once.
  */
 export class StreamEventPostHogExporter {
   readonly #apiKey: string;
@@ -127,6 +108,8 @@ export class StreamEventPostHogExporter {
   readonly #state: DurableState;
   readonly #streamId: string;
   readonly #workerName: string;
+  #blocked = false;
+  #epoch = 0;
   #exportState: ExportState;
 
   constructor(input: ExporterInput) {
@@ -140,225 +123,172 @@ export class StreamEventPostHogExporter {
 
     const stored = input.state.get<unknown>(STATE_KEY);
     const parsed = parseExportState(stored);
-    if (stored !== undefined && parsed === undefined) {
-      throw new Error("invalid durable PostHog stream export state");
+    if (stored === undefined) {
+      this.#exportState = { cursor: input.initialOffset, dueAt: null, page: null };
+      this.#persist();
+      return;
     }
-    if (parsed !== undefined && parsed.cursor > input.initialOffset) {
-      throw new Error("PostHog stream export cursor exceeds the stream allocator");
+    if (
+      parsed !== undefined &&
+      parsed.cursor <= input.initialOffset &&
+      (parsed.page === null || parsed.page.throughOffset <= input.initialOffset)
+    ) {
+      this.#exportState = parsed;
+      if (parsed.page !== null && parsed.page.blockedBy !== null) {
+        this.#reportBlocked(parsed.page.blockedBy, this.#captureContext([], parsed.page.attempt));
+      }
+      if (parsed.cursor < input.initialOffset && parsed.dueAt === null && parsed.page === null) {
+        this.#update({ dueAt: Date.now() + FLUSH_DELAY_MS });
+      }
+      return;
     }
-    this.#exportState =
-      parsed ??
-      ({
-        attempt: 0,
-        cursor: input.initialOffset,
-        generation: 0,
-        lastAbandonment: null,
-        lastError: null,
-        nextAttemptAt: null,
-      } satisfies ExportState);
-    if (stored === undefined) this.#persist();
+
+    this.#blocked = true;
+    this.#exportState = { cursor: input.initialOffset, dueAt: null, page: null };
+    emitError({
+      schema: "iterate.stream-telemetry.v1",
+      message: "stream_posthog_state_blocked",
+      operation: "posthog.configure_stream_events",
+      outcome: "blocked",
+      failureKind: parsed === undefined ? "invalid_state" : "state_ahead",
+      projectId: input.projectId,
+      streamId: input.streamId,
+    });
   }
 
   get nextAttemptAt(): number | null {
-    return this.#exportState.nextAttemptAt;
+    return this.#blocked ? null : this.#exportState.dueAt;
   }
 
-  /** Mark durable work once; the caller publishes this desire to the shared alarm. */
-  requestFlush(now = Date.now()): number {
-    if (this.#exportState.nextAttemptAt !== null) return this.#exportState.nextAttemptAt;
-    const nextAttemptAt = now + POSTHOG_FLUSH_DELAY_MS;
-    this.#update({ nextAttemptAt });
-    return nextAttemptAt;
+  /** Product commits only persist a wake-up desire; they never call PostHog. */
+  requestFlush(now = Date.now()): number | null {
+    if (this.#blocked) return null;
+    if (this.#exportState.page !== null && this.#exportState.page.blockedBy !== null) return null;
+    if (this.#exportState.dueAt !== null) return this.#exportState.dueAt;
+    const dueAt = now + FLUSH_DELAY_MS;
+    this.#update({ dueAt });
+    return dueAt;
   }
 
-  /**
-   * Attempt one API-sized page when due. Returns the still-durable next alarm
-   * desire, or null when the cursor is caught up.
-   */
+  /** Attempt at most one bounded page beneath the native alarm trace root. */
   async flushIfDue(firedAt = Date.now()): Promise<number | null> {
-    if (this.#exportState.nextAttemptAt === null || this.#exportState.nextAttemptAt > firedAt) {
-      return this.#exportState.nextAttemptAt;
+    if (this.#blocked || this.#exportState.dueAt === null) return null;
+    if (this.#exportState.dueAt !== null && this.#exportState.dueAt > firedAt) {
+      return this.#exportState.dueAt;
     }
 
-    const { attempt, cursor, generation } = this.#exportState;
-    let candidates: CommittedStreamEventTelemetry[];
-    try {
-      candidates = this.#readEvents(cursor, POSTHOG_READ_MAX_EVENTS);
-    } catch {
-      return this.#recordInternalFailure({ attempt: attempt + 1, cursor, generation });
-    }
-    if (candidates.length === 0) {
-      this.#setCaughtUp();
-      return null;
-    }
-
-    const provisionalContext = this.#captureContext(candidates, attempt + 1);
-    let encoded: ReturnType<typeof encodeBatch>;
-    try {
-      encoded = encodeBatch(this.#apiKey, provisionalContext, candidates);
-    } catch {
-      return this.#recordInternalFailure({
-        attempt: attempt + 1,
-        cursor,
-        events: candidates,
-        generation,
-      });
-    }
-    const page = candidates.slice(0, encoded.eventCount);
-    const context = this.#captureContext(page, attempt + 1);
-    const result = await this.#attemptCapture(context, encoded.body);
-
-    // Recovery can replace the log while the fetch is in flight. Its reset
-    // owns the new cursor/desire; this stale completion must not acknowledge it.
-    if (this.#exportState.generation !== generation || this.#exportState.cursor !== cursor) {
-      return this.#exportState.nextAttemptAt;
-    }
-
-    if (result.outcome !== "accepted" && isBlocked(result.failure)) {
-      reportBlocked(context, result.failure);
-      this.#update({
-        attempt: 0,
-        lastError: `blocked:${failureKind(result.failure)}`,
-        nextAttemptAt: null,
-      });
-      return null;
-    }
-
-    if (result.outcome !== "accepted" && isRetryable(result.failure)) {
-      if (context.attempt < POSTHOG_MAX_ATTEMPTS) {
-        const nextAttemptAt = Date.now() + retryDelay(context.attempt, this.#random());
-        this.#update({
-          attempt: context.attempt,
-          lastError: failureKind(result.failure),
-          nextAttemptAt,
-        });
-        return nextAttemptAt;
+    const epoch = this.#epoch;
+    const cursor = this.#exportState.cursor;
+    let page = this.#exportState.page;
+    const candidates = this.#readEvents(cursor, PAGE_SIZE);
+    let events: CommittedStreamEventTelemetry[];
+    if (page === null) {
+      if (candidates.length === 0) {
+        this.#update({ dueAt: null });
+        return null;
       }
-      reportAbandoned(context, result.failure);
-    } else if (result.outcome !== "accepted") {
-      reportAbandoned(context, result.failure);
+      page = {
+        attempt: 0,
+        blockedBy: null,
+        createdAt: new Date(firedAt).toISOString(),
+        pendingOffsets: candidates.map(({ offset }) => offset),
+        throughOffset: candidates.at(-1)!.offset,
+      };
+      events = candidates;
+    } else {
+      const byOffset = new Map(candidates.map((event) => [event.offset, event]));
+      events = page.pendingOffsets.flatMap((offset) => {
+        const event = byOffset.get(offset);
+        return event === undefined ? [] : [event];
+      });
+      if (events.length !== page.pendingOffsets.length) {
+        return this.#block(page, "source_gap", this.#captureContext(events, page.attempt));
+      }
     }
 
-    // A permanent rejection or exhausted transient retry advances loudly so
-    // one bad page cannot hot-loop or block every later event.
-    const nextCursor = page.at(-1)!.offset;
+    const attempt = page.attempt >= MAX_ATTEMPTS ? MAX_ATTEMPTS : page.attempt + 1;
+    page = {
+      ...page,
+      attempt,
+      blockedBy: attempt === MAX_ATTEMPTS ? "attempt_interrupted" : null,
+    };
     this.#update({
-      attempt: 0,
-      cursor: nextCursor,
-      ...(result.outcome === "accepted"
-        ? {}
-        : { lastAbandonment: abandonment(context, result.failure) }),
-      lastError:
-        result.outcome === "accepted"
-          ? null
-          : `abandoned:${failureKind(result.failure)}:${context.firstOffset}-${context.lastOffset}`,
+      dueAt: attempt === MAX_ATTEMPTS ? null : Date.now() + retryDelay(attempt, this.#random()),
+      page,
     });
+    const context = this.#captureContext(events, attempt);
+    const result = await this.#capture(page, events, context);
 
-    if (this.#readEvents(nextCursor, 1).length > 0) {
-      const nextAttemptAt = Date.now();
-      this.#update({ nextAttemptAt });
-      return nextAttemptAt;
+    // Recovery may replace the log while the outbound fetch yields.
+    if (
+      this.#epoch !== epoch ||
+      this.#exportState.cursor !== cursor ||
+      this.#exportState.page?.createdAt !== page.createdAt
+    ) {
+      return this.#exportState.dueAt;
     }
-    this.#setCaughtUp();
-    return null;
+
+    if (result.dropCount > 0) this.#reportDrops(context, result);
+    if (result.pendingOffsets.length === 0) {
+      let dueAt: number | null;
+      try {
+        dueAt = this.#readEvents(page.throughOffset, 1).length === 0 ? null : Date.now();
+      } catch (error) {
+        // Never resend a page PostHog has already acknowledged merely because
+        // the one-row tail probe failed. Persist progress, then let the native
+        // alarm retry surface the local storage failure.
+        this.#update({ cursor: page.throughOffset, dueAt: Date.now(), page: null });
+        throw error;
+      }
+      this.#update({ cursor: page.throughOffset, dueAt, page: null });
+      return this.#exportState.dueAt;
+    }
+
+    const nextPage = { ...page, blockedBy: null, pendingOffsets: result.pendingOffsets };
+    return this.#scheduleFailure(
+      nextPage,
+      result.failureKind ?? "protocol",
+      result.retryable,
+      result.retryAfterMs,
+      context,
+      result.retryDetail,
+    );
   }
 
-  /** Recovery imports are durable history, not new telemetry. */
-  resetTo(offset: number): void {
-    this.adoptRecoveryState(resetStreamEventPostHogForRecovery(this.#state, offset));
-  }
-
-  /** Adopt only after the storage transaction which wrote this reset commits. */
+  /** Adopt only after the storage transaction which replaced the log commits. */
   adoptRecoveryState(state: StreamEventPostHogRecoveryState): void {
+    this.#epoch += 1;
+    this.#blocked = false;
     this.#exportState = { ...state };
   }
 
-  async #recordInternalFailure(args: {
-    attempt: number;
-    cursor: number;
-    events?: readonly CommittedStreamEventTelemetry[];
-    generation: number;
-  }): Promise<number | null> {
-    const context = this.#captureContext(args.events ?? [], args.attempt);
-    const failure = { kind: "internal" } as const;
-    try {
-      await tracing.enterSpan("posthog.capture_stream_events", async (span) => {
-        setSpanContext(span, context);
-        setSpanFailure(span, failure, "failed");
-        span.setAttribute(
-          "iterate.telemetry.disposition",
-          args.attempt < POSTHOG_MAX_ATTEMPTS ? "retry" : "abandoned",
-        );
+  async #capture(
+    page: Page,
+    events: readonly CommittedStreamEventTelemetry[],
+    context: CaptureContext,
+  ): Promise<CaptureResult> {
+    let completed: CaptureResult | undefined;
+    const send = async (span: TraceSpan): Promise<CaptureResult> => {
+      setSpanContext(span, context);
+      completed = await sendBatch({
+        apiKey: this.#apiKey,
+        body: encodeBatch(this.#workerName, this.#streamId, this.#projectId, page, events),
+        eventOffsets: events.map(({ offset }) => offset),
+        eventUuids: events.map((event) => eventUuid(this.#workerName, this.#streamId, event)),
+        attempt: context.attempt,
+        requestId: pageRequestId(this.#workerName, this.#streamId, this.#exportState.cursor, page),
       });
-    } catch {
-      // The durable state transition below remains the source of truth when
-      // the optional tracing API itself fails.
-    }
+      setSpanResult(span, completed, context.attempt);
+      return completed;
+    };
 
-    if (
-      this.#exportState.generation !== args.generation ||
-      this.#exportState.cursor !== args.cursor
-    ) {
-      return this.#exportState.nextAttemptAt;
-    }
-    if (args.attempt < POSTHOG_MAX_ATTEMPTS) {
-      const nextAttemptAt = Date.now() + retryDelay(args.attempt, this.#random());
-      this.#update({ attempt: args.attempt, lastError: "internal", nextAttemptAt });
-      return nextAttemptAt;
-    }
-
-    reportAbandoned(context, failure);
-    this.#update({
-      attempt: 0,
-      lastAbandonment: abandonment(context, failure),
-      lastError: `abandoned:internal:after-${args.cursor}`,
-      nextAttemptAt: null,
-    });
-    return null;
-  }
-
-  async #attemptCapture(context: CaptureContext, body: string | undefined): Promise<CaptureResult> {
-    let captured: CaptureResult | undefined;
     try {
-      return await tracing.enterSpan("posthog.capture_stream_events", async (rawSpan) => {
-        const span = bestEffortSpan(rawSpan);
-        setSpanContext(span, context);
-        if (body === undefined) {
-          captured = {
-            failure: { kind: "oversized", maxBytes: POSTHOG_BATCH_MAX_BYTES },
-            outcome: "failed",
-          } as const;
-          setSpanFailure(span, captured.failure, captured.outcome);
-          span.setAttribute("iterate.telemetry.disposition", "abandoned");
-          return captured;
-        }
-
-        captured = await sendBatch(span, body);
-        span.setAttribute(
-          "iterate.telemetry.disposition",
-          captured.outcome === "accepted"
-            ? "advanced"
-            : isBlocked(captured.failure)
-              ? "blocked"
-              : isRetryable(captured.failure) && context.attempt < POSTHOG_MAX_ATTEMPTS
-                ? "retry"
-                : "abandoned",
-        );
-        return captured;
-      });
+      return await tracing.enterSpan("posthog.capture_stream_events", (rawSpan) =>
+        send(bestEffortSpan(rawSpan)),
+      );
     } catch {
-      // Tracing describes delivery; it must never become delivery. If the
-      // platform tracing API fails before invoking our callback, perform the
-      // same request without a custom span. If it fails while closing a span,
-      // return the already-completed request result without sending twice.
-      if (captured !== undefined) return captured;
-      if (body === undefined) {
-        return {
-          failure: { kind: "oversized", maxBytes: POSTHOG_BATCH_MAX_BYTES },
-          outcome: "failed",
-        };
-      }
-      return sendBatch(NOOP_SPAN, body);
+      // A failure closing the span must not send the page twice.
+      return completed ?? send(NOOP_SPAN);
     }
   }
 
@@ -370,18 +300,61 @@ export class StreamEventPostHogExporter {
       afterOffset: this.#exportState.cursor,
       attempt,
       eventCount: events.length,
-      generation: this.#exportState.generation,
       ...(events.length === 0
         ? {}
         : { firstOffset: events[0]!.offset, lastOffset: events.at(-1)!.offset }),
       projectId: this.#projectId,
       streamId: this.#streamId,
-      workerName: this.#workerName,
     };
   }
 
-  #setCaughtUp(): void {
-    this.#update({ attempt: 0, lastError: null, nextAttemptAt: null });
+  #scheduleFailure(
+    page: Page,
+    failureKind: string,
+    retryable: boolean,
+    retryAfterMs?: number,
+    context = this.#captureContext([], page.attempt),
+    detail?: string,
+  ): number | null {
+    const fastRetry = retryable && page.attempt < MAX_ATTEMPTS;
+    if (!fastRetry) return this.#block(page, failureKind, context, detail);
+    const dueAt = Date.now() + retryDelay(page.attempt, this.#random(), retryAfterMs);
+    this.#update({
+      dueAt,
+      page: { ...page, blockedBy: null },
+    });
+    return dueAt;
+  }
+
+  #block(page: Page, failureKind: string, context: CaptureContext, detail?: string): null {
+    this.#update({ dueAt: null, page: { ...page, blockedBy: failureKind } });
+    this.#reportBlocked(failureKind, context, detail);
+    return null;
+  }
+
+  #reportBlocked(failureKind: string, context: CaptureContext, detail?: string): void {
+    emitError({
+      schema: "iterate.stream-telemetry.v1",
+      message: "stream_posthog_capture_blocked",
+      operation: "posthog.capture_stream_events",
+      outcome: "blocked",
+      failureKind,
+      ...(detail === undefined ? {} : { detail }),
+      ...context,
+    });
+  }
+
+  #reportDrops(context: CaptureContext, result: CaptureResult): void {
+    emitError({
+      schema: "iterate.stream-telemetry.v1",
+      message: "stream_posthog_events_dropped",
+      operation: "posthog.capture_stream_events",
+      outcome: "dropped",
+      failureKind: "event_drop",
+      dropCount: result.dropCount,
+      ...(result.dropDetail === undefined ? {} : { detail: result.dropDetail }),
+      ...context,
+    });
   }
 
   #update(patch: Partial<ExportState>): void {
@@ -395,178 +368,303 @@ export class StreamEventPostHogExporter {
   }
 }
 
-/**
- * Reset telemetry alongside a recovery log replacement, even when export is
- * disabled in this incarnation. Call inside the same storage transaction and
- * adopt the returned state in a warm exporter only after that transaction
- * commits.
- */
+/** Reset telemetry atomically beside an authoritative recovery log import. */
 export function resetStreamEventPostHogForRecovery(
   state: DurableState,
   offset: number,
 ): StreamEventPostHogRecoveryState {
-  const stored = state.get<unknown>(STATE_KEY);
-  const previous = parseExportState(stored);
-  if (stored !== undefined && previous === undefined) {
-    throw new Error("invalid durable PostHog stream export state");
-  }
-  const next = {
-    attempt: 0,
-    cursor: offset,
-    generation: (previous?.generation ?? 0) + 1,
-    lastAbandonment: previous?.lastAbandonment ?? null,
-    lastError: null,
-    nextAttemptAt: null,
-  } satisfies ExportState;
+  const next = { cursor: offset, dueAt: null, page: null } satisfies ExportState;
   state.put(STATE_KEY, next);
   return next;
 }
 
-function validNonNegativeInteger(value: unknown): number | undefined {
+function parseExportState(value: unknown): ExportState | undefined {
+  if (!isExactObject(value, ["cursor", "dueAt", "page"])) return undefined;
+  const cursor = nonNegativeInteger(value.cursor);
+  const dueAt = value.dueAt === null ? null : nonNegativeInteger(value.dueAt);
+  const page = value.page === null ? null : parsePage(value.page, cursor);
+  if (cursor === undefined || dueAt === undefined || page === undefined) return undefined;
+  if (page !== null && (page.blockedBy === null) === (dueAt === null)) return undefined;
+  return { cursor, dueAt, page };
+}
+
+function parsePage(value: unknown, cursor: number | undefined): Page | null | undefined {
+  if (
+    cursor === undefined ||
+    !isExactObject(value, ["attempt", "blockedBy", "createdAt", "pendingOffsets", "throughOffset"])
+  ) {
+    return undefined;
+  }
+  const attempt = nonNegativeInteger(value.attempt);
+  const throughOffset = nonNegativeInteger(value.throughOffset);
+  if (
+    attempt === undefined ||
+    attempt > MAX_ATTEMPTS ||
+    throughOffset === undefined ||
+    throughOffset <= cursor ||
+    typeof value.createdAt !== "string" ||
+    !Array.isArray(value.pendingOffsets) ||
+    value.pendingOffsets.length === 0 ||
+    value.pendingOffsets.length > PAGE_SIZE
+  ) {
+    return undefined;
+  }
+  const pendingOffsets = value.pendingOffsets.map(nonNegativeInteger);
+  const blockedBy =
+    value.blockedBy === null
+      ? null
+      : typeof value.blockedBy === "string" && /^[a-z0-9_]{1,64}$/.test(value.blockedBy)
+        ? value.blockedBy
+        : undefined;
+  if (
+    blockedBy === undefined ||
+    pendingOffsets.some((offset) => offset === undefined) ||
+    pendingOffsets.some((offset, index) =>
+      index === 0 ? offset! <= cursor : offset! <= pendingOffsets[index - 1]!,
+    ) ||
+    pendingOffsets.at(-1)! > throughOffset ||
+    !Number.isFinite(Date.parse(value.createdAt))
+  ) {
+    return undefined;
+  }
+  return {
+    attempt,
+    blockedBy,
+    createdAt: value.createdAt,
+    pendingOffsets: pendingOffsets as number[],
+    throughOffset,
+  };
+}
+
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
+  );
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-function parseExportState(value: unknown): ExportState | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const state = value as Partial<ExportState>;
-  const attempt = validNonNegativeInteger(state.attempt);
-  const cursor = validNonNegativeInteger(state.cursor);
-  const generation = validNonNegativeInteger(state.generation);
-  const lastAbandonment = parseAbandonment(state.lastAbandonment);
-  const nextAttemptAt =
-    state.nextAttemptAt === null ? null : validNonNegativeInteger(state.nextAttemptAt);
-  if (
-    attempt === undefined ||
-    cursor === undefined ||
-    generation === undefined ||
-    lastAbandonment === undefined ||
-    (state.lastError !== null && typeof state.lastError !== "string") ||
-    nextAttemptAt === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    attempt,
-    cursor,
-    generation,
-    lastAbandonment,
-    lastError: state.lastError,
-    nextAttemptAt,
-  };
-}
-
-function parseAbandonment(value: unknown): Abandonment | null | undefined {
-  if (value === null) return null;
-  if (typeof value !== "object") return undefined;
-  const record = value as Partial<Abandonment>;
-  const afterOffset = validNonNegativeInteger(record.afterOffset);
-  const attempt = validNonNegativeInteger(record.attempt);
-  const firstOffset =
-    record.firstOffset === null ? null : validNonNegativeInteger(record.firstOffset);
-  const generation = validNonNegativeInteger(record.generation);
-  const lastOffset = record.lastOffset === null ? null : validNonNegativeInteger(record.lastOffset);
-  if (
-    afterOffset === undefined ||
-    attempt === undefined ||
-    typeof record.failureKind !== "string" ||
-    firstOffset === undefined ||
-    generation === undefined ||
-    lastOffset === undefined ||
-    typeof record.recordedAt !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    afterOffset,
-    attempt,
-    failureKind: record.failureKind,
-    firstOffset,
-    generation,
-    lastOffset,
-    recordedAt: record.recordedAt,
-  };
-}
-
-function retryDelay(attempt: number, random: number): number {
-  const base = POSTHOG_RETRY_BASE_MS[attempt - 1]!;
-  return Math.round(base * (0.8 + Math.min(1, Math.max(0, random)) * 0.4));
+function retryDelay(attempt: number, random: number, retryAfterMs?: number): number {
+  const base = RETRY_DELAYS_MS[Math.max(0, attempt - 1)] ?? RETRY_DELAYS_MS.at(-1)!;
+  const jittered = Math.round(base * (0.8 + Math.min(1, Math.max(0, random)) * 0.4));
+  return retryAfterMs === undefined
+    ? jittered
+    : Math.max(jittered, Math.min(retryAfterMs, MAX_RETRY_AFTER_MS));
 }
 
 function encodeBatch(
-  apiKey: string,
-  context: CaptureContext,
+  workerName: string,
+  streamId: string,
+  projectId: string | null,
+  page: Page,
   events: readonly CommittedStreamEventTelemetry[],
-): { body: string | undefined; eventCount: number } {
-  const prefix = `{"api_key":${JSON.stringify(apiKey)},"batch":[`;
-  const suffix = "]}";
-  const encoder = new TextEncoder();
-  const encodedEvents: string[] = [];
-  let byteLength = encoder.encode(prefix + suffix).byteLength;
-
-  for (const event of events) {
-    const insertId = `stream:${context.streamId}:${context.generation}:${event.offset}`;
-    const encoded = JSON.stringify({
-      event: "iterate stream event committed",
-      uuid: uuidv5(insertId, POSTHOG_UUID_NAMESPACE),
-      timestamp: event.committedAt,
-      properties: {
-        distinct_id: `stream:${context.streamId}`,
-        $geoip_disable: true,
-        $insert_id: insertId,
-        $is_server: true,
-        $lib: "iterate-os-worker",
-        $process_person_profile: false,
-        worker_name: context.workerName,
-        stream_scope: context.projectId === null ? "deployment" : "project",
-        ...(context.projectId === null ? {} : { project_id: context.projectId }),
-        stream_id: context.streamId,
-        stream_event_offset: event.offset,
-        stream_recovery_generation: context.generation,
-      },
-    });
-    const nextByteLength =
-      byteLength + (encodedEvents.length === 0 ? 0 : 1) + encoder.encode(encoded).byteLength;
-    if (nextByteLength > POSTHOG_BATCH_MAX_BYTES) break;
-    byteLength = nextByteLength;
-    encodedEvents.push(encoded);
-  }
-
-  if (encodedEvents.length === 0) return { body: undefined, eventCount: 1 };
-  return { body: prefix + encodedEvents.join(",") + suffix, eventCount: encodedEvents.length };
+): string {
+  return JSON.stringify({
+    created_at: page.createdAt,
+    batch: events.map((event) => {
+      const uuid = eventUuid(workerName, streamId, event);
+      return {
+        event: "iterate stream event committed",
+        uuid,
+        distinct_id: `stream:${workerName}:${streamId}`,
+        timestamp: event.committedAt,
+        options: { process_person_profile: false },
+        properties: {
+          $geoip_disable: true,
+          $insert_id: uuid,
+          $is_server: true,
+          worker_name: workerName,
+          stream_scope: projectId === null ? "deployment" : "project",
+          ...(projectId === null ? {} : { project_id: projectId }),
+          stream_id: streamId,
+          stream_event_type: event.eventType,
+          stream_event_offset: event.offset,
+        },
+      };
+    }),
+  });
 }
 
-async function sendBatch(span: TraceSpan, body: string): Promise<CaptureResult> {
+function eventUuid(
+  workerName: string,
+  streamId: string,
+  event: CommittedStreamEventTelemetry,
+): string {
+  return uuidv5(
+    JSON.stringify([
+      "iterate-stream-event-v1",
+      workerName,
+      streamId,
+      event.offset,
+      event.committedAt,
+    ]),
+    UUID_NAMESPACE,
+  );
+}
+
+function pageRequestId(workerName: string, streamId: string, cursor: number, page: Page): string {
+  return uuidv5(
+    JSON.stringify([
+      "iterate-stream-page-v1",
+      workerName,
+      streamId,
+      cursor,
+      page.throughOffset,
+      page.createdAt,
+    ]),
+    UUID_NAMESPACE,
+  );
+}
+
+async function sendBatch(args: {
+  apiKey: string;
+  attempt: number;
+  body: string;
+  eventOffsets: readonly number[];
+  eventUuids: readonly string[];
+  requestId: string;
+}): Promise<CaptureResult> {
   let response: Response | undefined;
   try {
-    response = await fetch("https://eu.i.posthog.com/batch/", {
+    response = await fetch("https://eu.i.posthog.com/i/v1/analytics/events", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
+      headers: {
+        authorization: `Bearer ${args.apiKey}`,
+        "content-type": "application/json",
+        "posthog-attempt": String(args.attempt),
+        "posthog-request-id": args.requestId,
+        "posthog-request-timestamp": new Date(Date.now()).toISOString(),
+        "posthog-sdk-info": "iterate-os-worker/1.0",
+        "user-agent": "iterate-os-worker/1.0",
+      },
+      body: args.body,
       signal: AbortSignal.timeout(5_000),
     });
+    const retryAfterMs = parseRetryAfter(response, Date.now());
     if (!response.ok) {
-      const failure = { kind: "http", status: response.status } as const;
-      setSpanFailure(span, failure, "failed");
-      return { failure, outcome: "failed" };
+      return failureResult(
+        args.eventOffsets,
+        `http_${response.status}`,
+        [408, 500, 502, 503, 504].includes(response.status),
+        retryAfterMs,
+      );
     }
-    span.setAttribute("iterate.telemetry.outcome", "accepted");
-    return { outcome: "accepted" };
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      return failureResult(args.eventOffsets, "protocol", true, retryAfterMs);
+    }
+    return parseCaptureResponse(body, args.eventUuids, args.eventOffsets, retryAfterMs);
   } catch (error) {
-    const failure = {
-      kind:
-        error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name)
-          ? "timeout"
-          : "network",
-    } as const;
-    setSpanFailure(span, failure, "unknown");
-    return { failure, outcome: "unknown" };
+    const kind =
+      error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name)
+        ? "timeout"
+        : "network";
+    return failureResult(args.eventOffsets, kind, true);
   } finally {
     try {
       await response?.body?.cancel();
     } catch {
-      // Response cleanup cannot change a committed stream operation.
+      // Cleanup cannot change the acknowledgement result.
     }
   }
+}
+
+function parseCaptureResponse(
+  value: unknown,
+  uuids: readonly string[],
+  offsets: readonly number[],
+  retryAfterMs?: number,
+): CaptureResult {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return failureResult(offsets, "protocol", true, retryAfterMs);
+  }
+  const results = (value as { results?: unknown }).results;
+  if (results === null || typeof results !== "object" || Array.isArray(results)) {
+    return failureResult(offsets, "protocol", true, retryAfterMs);
+  }
+
+  const pendingOffsets: number[] = [];
+  let dropCount = 0;
+  let warningCount = 0;
+  let protocolFailure = false;
+  let dropDetail: string | undefined;
+  let retryDetail: string | undefined;
+  for (let index = 0; index < uuids.length; index += 1) {
+    const entry = (results as Record<string, unknown>)[uuids[index]!];
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      pendingOffsets.push(offsets[index]!);
+      protocolFailure = true;
+      continue;
+    }
+    const result = (entry as { result?: unknown }).result;
+    const detail = safeDetail((entry as { details?: unknown }).details);
+    if (result === "ok") continue;
+    if (result === "warning") {
+      warningCount += 1;
+      continue;
+    }
+    if (result === "drop") {
+      dropCount += 1;
+      dropDetail ??= detail;
+      continue;
+    }
+    pendingOffsets.push(offsets[index]!);
+    retryDetail ??= detail;
+    if (result !== "retry") protocolFailure = true;
+  }
+
+  return {
+    pendingOffsets,
+    dropCount,
+    warningCount,
+    retryable: pendingOffsets.length > 0,
+    ...(pendingOffsets.length === 0
+      ? {}
+      : { failureKind: protocolFailure ? "protocol" : "event_retry" }),
+    ...(dropDetail === undefined ? {} : { dropDetail }),
+    ...(retryDetail === undefined ? {} : { retryDetail }),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+  };
+}
+
+function failureResult(
+  pendingOffsets: readonly number[],
+  failureKind: string,
+  retryable: boolean,
+  retryAfterMs?: number,
+): CaptureResult {
+  return {
+    dropCount: 0,
+    failureKind,
+    pendingOffsets: [...pendingOffsets],
+    retryable,
+    warningCount: 0,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+  };
+}
+
+function parseRetryAfter(response: Response, now: number): number | undefined {
+  const value = response.headers.get("retry-after")?.trim();
+  if (value === undefined || value === "") return undefined;
+  if (/^\d+$/.test(value)) {
+    const milliseconds = Number(value) * 1_000;
+    return Number.isSafeInteger(milliseconds) && milliseconds > 0 ? milliseconds : undefined;
+  }
+  const milliseconds = Date.parse(value) - now;
+  return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : undefined;
+}
+
+function safeDetail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return /^[a-z0-9_]{1,64}$/.test(value) ? value : "other";
 }
 
 function setSpanContext(span: TraceSpan, context: CaptureContext): void {
@@ -576,13 +674,35 @@ function setSpanContext(span: TraceSpan, context: CaptureContext): void {
   if (context.firstOffset !== undefined) {
     span.setAttribute("iterate.telemetry.first_offset", context.firstOffset);
   }
-  span.setAttribute("iterate.telemetry.generation", context.generation);
   if (context.lastOffset !== undefined) {
     span.setAttribute("iterate.telemetry.last_offset", context.lastOffset);
   }
   span.setAttribute("iterate.stream.id", context.streamId);
   span.setAttribute("iterate.stream.scope", context.projectId === null ? "deployment" : "project");
   if (context.projectId !== null) span.setAttribute("iterate.project.id", context.projectId);
+}
+
+function setSpanResult(span: TraceSpan, result: CaptureResult, attempt: number): void {
+  span.setAttribute("iterate.telemetry.drop_count", result.dropCount);
+  span.setAttribute("iterate.telemetry.warning_count", result.warningCount);
+  span.setAttribute("iterate.telemetry.pending_count", result.pendingOffsets.length);
+  span.setAttribute(
+    "iterate.telemetry.outcome",
+    result.pendingOffsets.length > 0 ? "blocked" : result.dropCount > 0 ? "partial" : "accepted",
+  );
+  span.setAttribute(
+    "iterate.telemetry.disposition",
+    result.pendingOffsets.length === 0
+      ? "advanced"
+      : result.retryable && attempt < MAX_ATTEMPTS
+        ? "retry"
+        : "blocked",
+  );
+  if (result.failureKind !== undefined) {
+    span.setAttribute("iterate.telemetry.failure_kind", result.failureKind);
+  }
+  const detail = result.dropDetail ?? result.retryDetail;
+  if (detail !== undefined) span.setAttribute("iterate.telemetry.detail", detail);
 }
 
 const NOOP_SPAN: TraceSpan = { setAttribute: () => undefined };
@@ -593,77 +713,16 @@ function bestEffortSpan(span: TraceSpan): TraceSpan {
       try {
         span.setAttribute(name, value);
       } catch {
-        // Custom span enrichment is optional; delivery is not.
+        // Span enrichment is optional; delivery is not.
       }
     },
   };
-}
-
-function setSpanFailure(
-  span: TraceSpan,
-  failure: CaptureFailure,
-  outcome: "failed" | "unknown",
-): void {
-  span.setAttribute("iterate.telemetry.outcome", outcome);
-  span.setAttribute("iterate.telemetry.failure_kind", failureKind(failure));
-}
-
-function reportAbandoned(context: CaptureContext, failure: CaptureFailure): void {
-  emitError({
-    schema: "iterate.stream-telemetry.v1",
-    message: "stream_posthog_capture_abandoned",
-    operation: "posthog.capture_stream_events",
-    outcome: "failed",
-    ...context,
-    failureKind: failureKind(failure),
-  });
-}
-
-function reportBlocked(context: CaptureContext, failure: CaptureFailure): void {
-  emitError({
-    schema: "iterate.stream-telemetry.v1",
-    message: "stream_posthog_capture_blocked",
-    operation: "posthog.capture_stream_events",
-    outcome: "blocked",
-    ...context,
-    failureKind: failureKind(failure),
-  });
-}
-
-function abandonment(context: CaptureContext, failure: CaptureFailure): Abandonment {
-  return {
-    afterOffset: context.afterOffset,
-    attempt: context.attempt,
-    failureKind: failureKind(failure),
-    firstOffset: context.firstOffset ?? null,
-    generation: context.generation,
-    lastOffset: context.lastOffset ?? null,
-    recordedAt: new Date(Date.now()).toISOString(),
-  };
-}
-
-function failureKind(failure: CaptureFailure): string {
-  return failure.kind === "http" ? `http_${failure.status}` : failure.kind;
-}
-
-function isRetryable(failure: CaptureFailure): boolean {
-  if (["internal", "network", "timeout"].includes(failure.kind)) return true;
-  return (
-    failure.kind === "http" &&
-    ([408, 409, 425, 429].includes(failure.status) || failure.status >= 500)
-  );
-}
-
-function isBlocked(failure: CaptureFailure): boolean {
-  return (
-    failure.kind === "http" && !isRetryable(failure) && ![400, 413, 422].includes(failure.status)
-  );
 }
 
 function emitError(value: object): void {
   try {
     console.error(value);
   } catch {
-    // Optional telemetry can never change the product operation it observes.
+    // Diagnostics cannot change product or exporter state.
   }
 }

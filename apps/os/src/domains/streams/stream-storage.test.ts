@@ -117,7 +117,11 @@ describe("StreamEventLog.getRange", () => {
     expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
     expect(log.getCommitMetadata(0, 10)).toEqual(
-      committedEvents.map(({ createdAt: committedAt, offset }) => ({ committedAt, offset })),
+      committedEvents.map(({ createdAt: committedAt, offset, type: eventType }) => ({
+        committedAt,
+        eventType,
+        offset,
+      })),
     );
 
     expect(
@@ -129,6 +133,17 @@ describe("StreamEventLog.getRange", () => {
     ).toEqual([
       { offset: 1, byteLength: insertedByteLengths[0] },
       { offset: 2, byteLength: insertedByteLengths[1] },
+    ]);
+
+    log.insert([
+      event(3, "customer-secret"),
+      event(4, `events.iterate.com/test/${"x".repeat(257)}`),
+      event(5, "events.iterate.com/test/contains space"),
+    ]);
+    expect(log.getCommitMetadata(2, 10)).toEqual([
+      { committedAt: new Date(3).toISOString(), eventType: "customer-secret", offset: 3 },
+      { committedAt: new Date(4).toISOString(), eventType: "redacted", offset: 4 },
+      { committedAt: new Date(5).toISOString(), eventType: "redacted", offset: 5 },
     ]);
   });
 

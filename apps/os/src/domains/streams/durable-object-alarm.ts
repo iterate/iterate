@@ -1,14 +1,10 @@
-/**
- * Multiplex independent desires onto a Durable Object's single platform
- * alarm. Storage reads/writes are serialized so a later request can never
- * overwrite an earlier one after an await.
- */
+/** Serializes ordinary alarm arms with the currently running alarm turn. */
 export class DurableObjectAlarm {
   readonly #ctx: DurableObjectState;
   readonly #diagnosticContext: { projectId: string | null; streamId: string };
-  readonly #slices = new Map<string, number>();
-  #chain: Promise<void> = Promise.resolve();
-  #platformAlarmAt: number | null | undefined;
+  #chain = Promise.resolve();
+  #generation = 0;
+  #running = false;
 
   constructor(
     ctx: DurableObjectState,
@@ -18,79 +14,62 @@ export class DurableObjectAlarm {
     this.#diagnosticContext = diagnosticContext;
   }
 
-  set(name: string, at: number | null): Promise<void> {
-    this.#setDesired(name, at);
-    return this.reconcile();
-  }
-
-  /** Fire-and-forget minimum for producers which can race under one owner name. */
-  scheduleNoLaterThan(name: string, at: number): void {
-    const current = this.#slices.get(name);
-    if (current === undefined || at < current) this.#slices.set(name, at);
-    const scheduled = this.reconcile().catch((error: unknown) => {
-      // setAlarm/deleteAlarm are storage writes. Keep their rejection on the
-      // invocation so the Durable Object output gate fails and Cloudflare
-      // restarts the object instead of acknowledging work without a wake-up.
-      // The structured line adds stream identity; it never converts failure
-      // into success.
-      try {
-        console.error({
-          schema: "iterate.stream-alarm.v1",
-          message: "stream_alarm_reconciliation_failed",
-          operation: "stream.reconcile_alarm",
-          outcome: "failed",
-          errorName: error instanceof Error ? error.name : "NonErrorThrowable",
-          ...this.#diagnosticContext,
-        });
-      } catch {
-        // Preserve the storage failure even if optional diagnostics fail.
-      }
+  /** Between alarm turns, move the platform alarm earlier but never later. */
+  armNoLaterThan(at: number): void {
+    const generation = this.#generation;
+    const armed = this.#enqueue(async () => {
+      if (!this.#mayArm(generation)) return;
+      const current = await this.#ctx.storage.getAlarm();
+      if (!this.#mayArm(generation)) return;
+      if (current === null || at < current) await this.#ctx.storage.setAlarm(at);
+    }).catch((error: unknown) => {
+      emitAlarmError(error, this.#diagnosticContext);
       throw error;
     });
-    this.#ctx.waitUntil(scheduled);
+    this.#ctx.waitUntil(armed);
   }
 
-  /** Record that the platform consumed this alarm and drop every due slice. */
-  fired(at = Date.now()): Promise<void> {
-    return this.#enqueue(() => {
-      this.#platformAlarmAt = null;
-      for (const [name, desiredAt] of this.#slices) {
-        if (desiredAt <= at) this.#slices.delete(name);
-      }
-      return Promise.resolve();
-    });
+  /** Suppress constructor and background arms as the first line of alarm(). */
+  begin(): void {
+    this.#generation += 1;
+    this.#running = true;
   }
 
-  reconcile(): Promise<void> {
+  /** Replace the consumed alarm with the exact deadline derived from durable owner state. */
+  complete(exactAt: number | null): Promise<void> {
+    this.#generation += 1;
     return this.#enqueue(async () => {
-      if (this.#platformAlarmAt === undefined) {
-        const inherited = await this.#ctx.storage.getAlarm();
-        this.#platformAlarmAt = inherited;
-        if (inherited !== null) this.#slices.set("@inherited", inherited);
-      }
-
-      let earliest: number | null = null;
-      for (const at of this.#slices.values()) {
-        if (earliest === null || at < earliest) earliest = at;
-      }
-      if (earliest === this.#platformAlarmAt) return;
-
-      this.#platformAlarmAt = earliest;
-      if (earliest === null) await this.#ctx.storage.deleteAlarm();
-      else await this.#ctx.storage.setAlarm(earliest);
+      if (exactAt === null) await this.#ctx.storage.deleteAlarm();
+      else await this.#ctx.storage.setAlarm(exactAt);
+      this.#running = false;
     });
+  }
+
+  #mayArm(generation: number): boolean {
+    return generation === this.#generation && !this.#running;
   }
 
   #enqueue(work: () => Promise<void>): Promise<void> {
     const step = this.#chain.then(work);
-    this.#chain = step.catch(() => {
-      this.#platformAlarmAt = undefined;
-    });
+    this.#chain = step.catch(() => undefined);
     return step;
   }
+}
 
-  #setDesired(name: string, at: number | null): void {
-    if (at === null) this.#slices.delete(name);
-    else this.#slices.set(name, at);
+function emitAlarmError(
+  error: unknown,
+  context: { projectId: string | null; streamId: string },
+): void {
+  try {
+    console.error({
+      schema: "iterate.stream-alarm.v1",
+      message: "stream_alarm_arm_failed",
+      operation: "stream.arm_alarm",
+      outcome: "failed",
+      errorName: error instanceof Error ? error.name : "NonErrorThrowable",
+      ...context,
+    });
+  } catch {
+    // Preserve the storage failure if optional diagnostics fail.
   }
 }

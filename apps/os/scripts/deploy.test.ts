@@ -9,7 +9,11 @@ import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
 } from "../../../scripts/lib/deploy-helpers.ts";
-import { assertPreviewPetshopIntegrationConfigured, isExactOsProjectMiss } from "./deploy.ts";
+import {
+  assertPosthogProjectApiKey,
+  assertPreviewPetshopIntegrationConfigured,
+  isExactOsProjectMiss,
+} from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
@@ -91,5 +95,28 @@ describe("auth Workers RPC deployment proof", () => {
     await expect(
       isExactOsProjectMiss(Response.json({ error: "not found" }, { status: 200 })),
     ).resolves.toBe(false);
+  });
+});
+
+describe("PostHog deployment preflight", () => {
+  it("accepts only a response which resolves the configured project token", async () => {
+    await expect(
+      assertPosthogProjectApiKey("phc_configured", async () =>
+        Response.json({ token: "phc_configured" }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects unknown tokens and malformed success responses", async () => {
+    await expect(
+      assertPosthogProjectApiKey("phc_configured", async () =>
+        Response.json({ token: "phc_other" }),
+      ),
+    ).rejects.toThrow("PostHog project API key preflight failed (HTTP 200)");
+    await expect(
+      assertPosthogProjectApiKey("phc_configured", async () =>
+        Response.json({ detail: "Invalid token" }, { status: 401 }),
+      ),
+    ).rejects.toThrow("PostHog project API key preflight failed (HTTP 401)");
   });
 });

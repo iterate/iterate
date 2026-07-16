@@ -194,50 +194,79 @@ payloads into a second outbox or introduce a coordinator:
   only persists a near-term alarm desire after the stream commit succeeds, so
   PostHog cannot consume an ITX request's six outbound-connection slots or
   distort its trace duration.
-- The exporter stores only an offset cursor, next-attempt time, bounded retry
-  count, recovery generation, current failure, and the last durable
-  abandonment record. Its storage reader returns `{offset, committedAt}` and
-  has no API through which a payload, path, event type, idempotency key,
-  metadata, or source lineage can reach PostHog. Present malformed state or a
-  cursor beyond the stream allocator disables export loudly without replacing
-  the evidence or guessing a baseline.
+- The complete durable state is four scalar fields: `cursor`, `attempt`,
+  `lastError`, and `nextAttemptAt`. There is no coordinator, second event copy,
+  pending-offset list, recovery generation, deployment-version gate, or
+  compatibility schema. An exact parser rejects additive or legacy state.
+- The payload-blind SQLite reader returns only `offset`, `committedAt`, and a
+  bounded event-type facet. A type crosses the boundary only when it is at most
+  256 UTF-8 bytes, uses a conservative URL-safe character set, and begins with
+  the documented `events.iterate.com/` namespace; every other value becomes
+  the one fixed `redacted` value in SQL before JavaScript materializes it. No
+  payload, path, idempotency key, metadata, or source lineage is readable by
+  the exporter.
 - The fixed `iterate stream event committed` event is indexed by `project_id`,
-  an opaque `stream_id`, offset, worker, and project/deployment scope. It sets
-  `$process_person_profile: false` and disables geo-IP enrichment.
-- One native Durable Object alarm awaits at most one PostHog `/batch/` request:
-  at most 20,000 metadata rows, a 4 MB body, and a 5-second HTTP timeout. A
-  backlog schedules the next page on a subsequent alarm rather than creating
-  concurrent requests. A small alarm multiplexer preserves the earliest desire
-  shared with subscription retries. Every new commit publishes the durable
-  desire before post-commit fan-out, and an idempotent caller retry republishes
-  it. A failed platform alarm write remains a rejected storage operation on the
-  invocation: Cloudflare's output gate discards the response and restarts the
-  object instead of acknowledging a committed event with no wake-up.
-- Network, timeout, 408, 409, 425, 429, and 5xx outcomes retry at most five
-  times with jittered backoff. Retries reuse deterministic event UUIDs and
-  `$insert_id` values scoped to the recovery generation, so retry dedupe
-  survives while a restored log may safely reuse an offset. Event-specific
-  rejection (400, 413, or 422) or exhausted transient retries advance the
-  cursor only after a structured error and durable abandonment marker; later
-  success clears current failure but retains that marker. Authentication and
-  other configuration responses block loudly with the cursor unchanged, and
-  a later append or idempotent retry re-attempts the same page after the
-  configuration is repaired.
+  opaque `stream_id`, `stream_event_type`, offset, worker, and
+  project/deployment scope. It disables person profiles and geo-IP enrichment.
+  Deployment streams deliberately omit `project_id` instead of inventing one.
+- The sender uses PostHog's per-event acknowledgement endpoint,
+  `/i/v1/analytics/events`, because `/batch/` cannot prove which members of a
+  mixed batch were accepted. PostHog's first-party JavaScript sender uses this
+  endpoint, but it is not documented as a stable public raw-HTTP API. That is a
+  conscious compatibility risk: strict response-contract tests and a preview
+  ingestion proof are release requirements, and an unexpected response shape
+  leaves the cursor unchanged. We do not guess success from a 2xx response.
+- One native Durable Object alarm awaits at most one PostHog request: at most
+  20,000 metadata rows, a 4 MB body, and a 5-second timeout. A backlog schedules
+  its next page on a subsequent alarm rather than creating concurrency. The
+  alarm multiplexer preserves the earliest durable desire shared with
+  subscription retries. Every new commit publishes its desire before
+  post-commit fan-out, and an idempotent caller retry republishes it. If the
+  platform alarm write fails, the invocation rejects so Cloudflare's output
+  gate cannot acknowledge a commit with no wake-up.
+- A page advances only when its response contains exactly the requested UUIDs
+  and every result is `ok` or `warning`. Any `retry`, `drop`, missing/extra UUID,
+  malformed response, timeout, network uncertainty, or HTTP failure keeps the
+  scalar cursor unchanged and resends the whole page. Stable event UUIDs make
+  already-accepted members idempotent; there is no skip or abandonment path.
+- Event UUID and `$insert_id` are the same UUIDv5 derived from the deployment
+  worker, stream ID, offset, commit timestamp, and bounded event type. The
+  request ID is derived from its ordered event UUIDs, and batch `created_at`
+  uses the final included commit timestamp, so the logical page remains stable
+  across retries and object eviction.
+- Event-level `retry`, protocol/internal/network/timeout uncertainty, and only
+  HTTP 408/500/502/503/504 receive fast jittered retries, for at most five total
+  attempts. A positive `Retry-After` delta or HTTP date is a minimum delay; its
+  server-provided floor is capped at 30 seconds. Other statuses, `drop`, an
+  oversized event, and exhausted retries enter a one-hour cooldown immediately.
+  A cooldown alarm makes exactly one real probe with the same code version;
+  failure schedules another hour and success resumes normally. This bounds
+  noise without requiring a deploy to restore liveness.
+- Malformed state or a cursor ahead of the authoritative allocator is replaced
+  loudly with cursor zero and replayed. Content-derived identities deduplicate
+  rows PostHog already accepted. No malformed values are copied to logs. A
+  valid idle cursor found behind the append log rebuilds its alarm desire.
 - Each attempt is a `posthog.capture_stream_events` custom span beneath the
-  native alarm trace root. Success means PostHog returned 2xx (`accepted`), not
-  proven ingestion; timeout/network outcomes remain `unknown`. A failure in
-  the optional custom tracing API falls back to the same delivery without a
-  custom span and never consumes the delivery retry budget.
+  native alarm trace root. It records bounded project/stream coordinates,
+  offset range, event count, attempt, failure kind, outcome, and the disposition
+  `advanced`, `retry`, or `cooldown`; it never records event content. Tracing
+  failure falls back to the same delivery without sending twice or consuming a
+  retry. An acknowledgement proves synchronous ingestion acceptance, not that
+  PostHog's asynchronous query path has made the event visible.
 
 Existing history is not backfilled on rollout, idempotency hits are not new
-commits, and recovery imports reset the cursor without replaying restored
-history. A recovery generation fence prevents an in-flight old-log response
-from acknowledging the replacement log.
+commits, and recovery imports reset the cursor without exporting imported
+history. A private in-memory epoch fence prevents an in-flight response from an
+old log from acknowledging its replacement. A replacement row with changed
+immutable event facts receives a changed identity; an exact replay receives the
+same identity.
 
 No Analytics Engine, coordinator Durable Object, or custom dashboard is part
 of this slice. Cloudflare's native trace viewer and PostHog's live event feed
-are the operator surfaces. Semantic event facets and deep links can follow only
-once their bounded privacy/query contracts are proven.
+are the operator surfaces. The API key remains optional only because the shared
+Stream Durable Object also runs in a smaller example host; deployed OS config
+requires it, and deployment preflight validates the key against PostHog before
+publishing a Worker.
 
 For an unexpected browser or Worker failure an operator should be able to:
 
@@ -375,6 +404,16 @@ alarm actions. Possible later operation adapters are:
 - [ ] Logging failure cannot alter the product outcome.
 - [ ] Secrets, bodies, scripts, prompts, arguments/results, auth headers, and
       query parameters are absent from logs, exceptions, and replay.
+- [ ] Every newly committed stream event appears once in PostHog under its
+      project (or explicit deployment scope), including after an object sleeps.
+- [ ] Mixed/unknown PostHog responses retain the scalar cursor and resend the
+      whole page with stable UUIDs; no event can be skipped or abandoned.
+- [ ] A failed sender self-heals through one bounded hourly probe without a
+      deployment, retry storm, or append-driven probe storm.
+- [ ] A preview trace shows `posthog.capture_stream_events` beneath the native
+      Durable Object alarm with coherent timing and only bounded attributes.
+- [ ] The exact preview UUID is queryable in PostHog's live event feed; a 2xx
+      response alone is not accepted as the proof.
 
 ## Primary references
 
@@ -398,3 +437,6 @@ alarm actions. Possible later operation adapters are:
 - PostHog replay privacy:
   https://posthog.com/docs/session-replay/privacy
 - PostHog logs and replay: https://posthog.com/docs/logs/link-session-replay
+- PostHog first-party JavaScript sender implementation (source of the
+  per-event acknowledgement contract):
+  https://github.com/PostHog/posthog-js/tree/main/packages/core/src

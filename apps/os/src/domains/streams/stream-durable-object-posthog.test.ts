@@ -2,7 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { STREAM_RECOVERY_FORMAT, STREAM_RECOVERY_VERSION } from "./recovery.ts";
+import {
+  STREAM_RECOVERY_FORMAT,
+  STREAM_RECOVERY_VERSION,
+  type StreamRecoveryRestoreInput,
+} from "./recovery.ts";
 import { StreamEventPostHogExporter } from "./stream-event-posthog.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 import { StreamSubscribers } from "./stream-subscribers.ts";
@@ -16,10 +20,9 @@ beforeEach(() => {
 });
 
 describe("StreamDurableObject PostHog boundary", () => {
-  it("publishes new and idempotently retried commits without passing event data", () => {
+  it("creates one payload-blind export obligation per nonempty commit", () => {
     const { stream } = createStream();
-    requestFlush.mockClear().mockReturnValueOnce(1_050);
-
+    requestFlush.mockClear();
     const first = {
       type: "events.iterate.test/posthog-boundary",
       idempotencyKey: "same-event",
@@ -38,44 +41,30 @@ describe("StreamDurableObject PostHog boundary", () => {
 
     requestFlush.mockClear();
     expect(stream.append(first)).toEqual([appended[0]]);
-    expect(requestFlush).toHaveBeenCalledOnce();
-
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const failedInput = {
-      type: "events.iterate.test/posthog-boundary",
-      idempotencyKey: "telemetry-failure",
-      payload: { private: "still committed" },
-    } as const;
-    requestFlush.mockImplementationOnce(() => {
-      throw new Error("telemetry exploded");
-    });
-    expect(() => stream.append(failedInput)).toThrow("telemetry exploded");
-    const survived = stream.getEvent({ idempotencyKey: failedInput.idempotencyKey });
-    expect(survived?.offset).toBe(appended[2]!.offset + 1);
-    expect(error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        errorName: "Error",
-        message: "stream_posthog_flush_request_failed",
-        projectId: null,
-        streamId: "stream-do-id",
-      }),
-    );
-    requestFlush.mockClear();
-    expect(stream.append(failedInput)).toEqual([survived]);
-    expect(requestFlush).toHaveBeenCalledOnce();
-
-    requestFlush.mockClear();
-    expect(() =>
-      stream.append({
-        type: "events.iterate.test/posthog-boundary",
-        offset: 999,
-        payload: {},
-      } as unknown as Parameters<StreamDurableObject["append"]>[0]),
-    ).toThrow();
     expect(requestFlush).not.toHaveBeenCalled();
   });
 
-  it("publishes the durable export desire before post-commit fan-out can fail", async () => {
+  it("rolls back the event if its local export obligation cannot commit", () => {
+    const { stream } = createStream();
+    requestFlush.mockClear().mockImplementationOnce(() => {
+      throw new Error("telemetry state unavailable");
+    });
+    const input = {
+      type: "events.iterate.test/atomic-posthog-obligation",
+      idempotencyKey: "atomic-posthog-obligation",
+      payload: {},
+    } as const;
+    const before = stream.runtimeState().coreProcessorState.maxOffset;
+
+    expect(() => stream.append(input)).toThrow("telemetry state unavailable");
+    expect(stream.getEvent({ idempotencyKey: input.idempotencyKey })).toBeUndefined();
+    expect(stream.runtimeState().coreProcessorState.maxOffset).toBe(before);
+
+    requestFlush.mockReturnValue(1_050);
+    expect(stream.append(input)[0]?.offset).toBe(before + 1);
+  });
+
+  it("commits the export obligation before post-commit fan-out", async () => {
     const { alarmAt, stream } = createStream();
     const wake = vi.spyOn(StreamSubscribers.prototype, "wake").mockImplementationOnce(() => {
       throw new Error("subscriber fan-out failed");
@@ -94,108 +83,106 @@ describe("StreamDurableObject PostHog boundary", () => {
       wake.mock.invocationCallOrder[0]!,
     );
     await vi.waitFor(() => expect(alarmAt()).toBe(1_050));
-
-    requestFlush.mockClear();
-    const committed = stream.getEvent({ idempotencyKey: input.idempotencyKey });
-    expect(stream.append(input)).toEqual([committed]);
-    expect(requestFlush).toHaveBeenCalledOnce();
+    expect(stream.getEvent({ idempotencyKey: input.idempotencyKey })).toBeDefined();
     wake.mockRestore();
   });
 
-  it("awaits the PostHog page under the native alarm invocation", async () => {
-    const { stream } = createStream();
+  it("awaits PostHog beneath the native alarm invocation", async () => {
+    let resolveFlush: () => void = () => undefined;
+    flushIfDue.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFlush = () => resolve(null);
+      }),
+    );
+    const { consumeAlarm, stream } = createStream({ initialAlarmAt: 1_000 });
     requestFlush.mockClear();
+    consumeAlarm();
 
-    await stream.alarm();
+    let completed = false;
+    const alarm = stream.alarm().then(() => {
+      completed = true;
+    });
+    await vi.waitFor(() => expect(flushIfDue).toHaveBeenCalledOnce());
+    expect(completed).toBe(false);
 
-    expect(flushIfDue).toHaveBeenCalledOnce();
+    resolveFlush();
+    await alarm;
     expect(requestFlush).not.toHaveBeenCalled();
   });
 
-  it("preserves a new append desire that arrives while the alarm flush is yielding", async () => {
-    let resolveFlush: (next: number | null) => void = () => undefined;
+  it("publishes work committed while an alarm fetch is yielding", async () => {
+    let resolveFlush: () => void = () => undefined;
     flushIfDue.mockReturnValueOnce(
       new Promise((resolve) => {
-        resolveFlush = resolve;
+        resolveFlush = () => resolve(null);
       }),
     );
-    const nextAttemptAt = vi.spyOn(StreamEventPostHogExporter.prototype, "nextAttemptAt", "get");
-    nextAttemptAt.mockReturnValueOnce(null).mockReturnValue(2_050);
-    const { alarmAt, stream } = createStream();
+    const nextAttemptAt = vi
+      .spyOn(StreamEventPostHogExporter.prototype, "nextAttemptAt", "get")
+      .mockReturnValue(2_050);
+    const { alarmAt, consumeAlarm, stream } = createStream({ initialAlarmAt: 1_000 });
     requestFlush.mockClear().mockReturnValue(2_050);
+    consumeAlarm();
 
     const alarm = stream.alarm();
     await vi.waitFor(() => expect(flushIfDue).toHaveBeenCalledOnce());
     stream.append({ type: "events.iterate.test/during-posthog-flush", payload: {} });
-    resolveFlush(null);
+    resolveFlush();
     await alarm;
 
     expect(alarmAt()).toBe(2_050);
     nextAttemptAt.mockRestore();
   });
 
-  it("leaves Cloudflare's native alarm retry intact when subscription work throws", async () => {
-    const onAlarm = vi.spyOn(StreamSubscribers.prototype, "onAlarm").mockImplementationOnce(() => {
-      throw new Error("subscription alarm failed");
+  it.each([
+    ["subscription work", () => vi.spyOn(StreamSubscribers.prototype, "onAlarm")],
+    ["core checkpoint", null],
+  ] as const)("preserves Cloudflare's native retry when %s throws", async (_label, spyFactory) => {
+    const onAlarm = spyFactory?.().mockImplementationOnce(() => {
+      throw new Error("alarm work failed");
     });
-    const { alarmAt, deleteAlarm, stream } = createStream({ initialAlarmAt: 1_000 });
-
-    await expect(stream.alarm()).rejects.toThrow("subscription alarm failed");
-
-    expect(alarmAt()).toBe(1_000);
-    expect(deleteAlarm).not.toHaveBeenCalled();
-    onAlarm.mockRestore();
-  });
-
-  it("leaves Cloudflare's native alarm retry intact when checkpointing throws", async () => {
-    const { alarmAt, deleteAlarm, failCoreCheckpoint, stream } = createStream({
+    const { alarmAt, consumeAlarm, failCoreCheckpoint, setAlarm, stream } = createStream({
       initialAlarmAt: 1_000,
     });
-    failCoreCheckpoint();
+    setAlarm.mockClear();
+    consumeAlarm();
+    if (spyFactory === null) failCoreCheckpoint();
 
-    await expect(stream.alarm()).rejects.toThrow("core checkpoint failed");
+    await expect(stream.alarm()).rejects.toThrow();
 
-    expect(alarmAt()).toBe(1_000);
-    expect(deleteAlarm).not.toHaveBeenCalled();
+    expect(alarmAt()).toBeNull();
+    expect(setAlarm).not.toHaveBeenCalled();
+    onAlarm?.mockRestore();
   });
 
-  it("republishes the old durable PostHog desire when a flush state write throws", async () => {
+  it("preserves Cloudflare's native retry when PostHog fails", async () => {
     flushIfDue.mockRejectedValueOnce(new Error("posthog state write failed"));
-    const { alarmAt, deleteAlarm, stream } = createStream({
-      initialAlarmAt: 1_000,
-      posthogState: {
-        attempt: 0,
-        cursor: 0,
-        generation: 0,
-        lastAbandonment: null,
-        lastError: null,
-        nextAttemptAt: 1_000,
-      },
-    });
+    const { alarmAt, consumeAlarm, setAlarm, stream } = createStream({ initialAlarmAt: 1_000 });
+    setAlarm.mockClear();
+    consumeAlarm();
 
     await expect(stream.alarm()).rejects.toThrow("posthog state write failed");
 
-    expect(alarmAt()).toBe(1_000);
-    expect(deleteAlarm).not.toHaveBeenCalled();
+    expect(alarmAt()).toBeNull();
+    expect(setAlarm).not.toHaveBeenCalled();
   });
 
-  it("leaves a consumed successful alarm unscheduled when no durable owner remains", async () => {
-    const { deleteAlarm, setAlarm, stream } = createStream({
+  it("deletes a stale replacement after a successful turn with no owner", async () => {
+    const { alarmAt, consumeAlarm, deleteAlarm, setAlarm, stream } = createStream({
       initialAlarmAt: 1_000,
       posthogEnabled: false,
     });
     setAlarm.mockClear();
+    consumeAlarm();
 
     await stream.alarm();
 
-    // Cloudflare consumes the running alarm before invoking the handler; no
-    // owner remains, so neither a replacement nor an explicit cancellation is
-    // necessary.
+    expect(deleteAlarm).toHaveBeenCalledOnce();
     expect(setAlarm).not.toHaveBeenCalled();
-    expect(deleteAlarm).not.toHaveBeenCalled();
+    expect(alarmAt()).toBeNull();
   });
 
-  it("adopts a committed recovery generation before tearing down subscribers", () => {
+  it("adopts committed recovery telemetry before tearing down subscribers", () => {
     const adopt = vi.spyOn(StreamEventPostHogExporter.prototype, "adoptRecoveryState");
     const reset = vi
       .spyOn(StreamSubscribers.prototype, "resetForRecovery")
@@ -204,70 +191,67 @@ describe("StreamDurableObject PostHog boundary", () => {
       });
     const { stream, values } = createStream();
 
-    expect(() =>
-      stream.restoreFromRecovery({
-        format: STREAM_RECOVERY_FORMAT,
-        version: STREAM_RECOVERY_VERSION,
-        stream: { projectId: null, path: "/" },
-        highestAssignedOffset: 1,
-        events: [
-          {
-            type: "events.iterate.com/stream/created",
-            payload: { projectId: null, path: "/" },
-            createdAt: "2026-07-16T00:00:00.000Z",
-            offset: 1,
-            path: "/",
-          },
-        ],
-      }),
-    ).toThrow("subscriber disposal failed");
+    expect(() => stream.restoreFromRecovery(recoveryInput())).toThrow("subscriber disposal failed");
 
     expect(adopt).toHaveBeenCalledOnce();
     expect(adopt.mock.invocationCallOrder[0]).toBeLessThan(reset.mock.invocationCallOrder[0]!);
-    expect(values.get("posthogStreamEventExport")).toMatchObject({ cursor: 1, generation: 1 });
-    expect(stream.runtimeState().coreProcessorState.maxOffset).toBe(1);
-    const [afterRecovery] = stream.append({
-      type: "events.iterate.test/after-recovery-cleanup-failure",
-      payload: {},
+    expect(values.get("posthogStreamEventExport")).toEqual({
+      cursor: 1,
+      dueAt: null,
+      page: null,
     });
-    expect(afterRecovery?.offset).toBe(2);
-    expect(stream.runtimeState().coreProcessorState.maxOffset).toBe(2);
+    expect(stream.runtimeState().coreProcessorState.maxOffset).toBe(1);
     adopt.mockRestore();
     reset.mockRestore();
   });
 
-  it("aborts recovery before replacing the log when telemetry state is malformed", () => {
+  it("lets authoritative recovery replace malformed telemetry state", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const malformed = { generation: "unknown", raw: "preserve me" };
-    const { stream, values } = createStream({ posthogState: malformed });
-    const before = stream.getEvents({ includeEphemeral: true });
+    const { stream, values } = createStream({
+      posthogState: { cursor: "unknown", raw: "customer-secret" },
+    });
 
-    expect(() =>
-      stream.restoreFromRecovery({
-        format: STREAM_RECOVERY_FORMAT,
-        version: STREAM_RECOVERY_VERSION,
-        stream: { projectId: null, path: "/" },
-        highestAssignedOffset: 1,
-        events: [
-          {
-            type: "events.iterate.com/stream/created",
-            payload: { projectId: null, path: "/" },
-            createdAt: "2026-07-16T00:00:00.000Z",
-            offset: 1,
-            path: "/",
-          },
-        ],
-      }),
-    ).toThrow("invalid durable PostHog stream export state");
+    expect(stream.restoreFromRecovery(recoveryInput())).toEqual({
+      restoredEventCount: 1,
+      lastImportedOffset: 1,
+      currentMaxOffset: 2,
+    });
 
-    expect(values.get("posthogStreamEventExport")).toBe(malformed);
-    expect(stream.getEvents({ includeEphemeral: true })).toEqual(before);
-    expect(error).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "stream_posthog_state_initialization_failed" }),
-    );
+    expect(values.get("posthogStreamEventExport")).toEqual({
+      cursor: 1,
+      dueAt: null,
+      page: null,
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain("customer-secret");
     error.mockRestore();
   });
+
+  it("does not construct export work without PostHog config", () => {
+    requestFlush.mockClear();
+
+    createStream({ posthogEnabled: false });
+
+    expect(requestFlush).not.toHaveBeenCalled();
+  });
 });
+
+function recoveryInput(): StreamRecoveryRestoreInput {
+  return {
+    format: STREAM_RECOVERY_FORMAT,
+    version: STREAM_RECOVERY_VERSION,
+    stream: { projectId: null, path: "/" },
+    highestAssignedOffset: 1,
+    events: [
+      {
+        type: "events.iterate.com/stream/created",
+        payload: { projectId: null, path: "/" },
+        createdAt: "2026-07-16T00:00:00.000Z",
+        offset: 1,
+        path: "/",
+      },
+    ],
+  };
+}
 
 type CreateStreamOptions = {
   initialAlarmAt?: number;
@@ -275,18 +259,12 @@ type CreateStreamOptions = {
   posthogState?: unknown;
 };
 
-function createStream(options: CreateStreamOptions = {}): {
-  alarmAt(): number | null;
-  deleteAlarm: ReturnType<typeof vi.fn>;
-  failCoreCheckpoint(): void;
-  setAlarm: ReturnType<typeof vi.fn>;
-  stream: StreamDurableObject;
-  values: Map<string, unknown>;
-} {
+function createStream(options: CreateStreamOptions = {}) {
   const values = new Map<string, unknown>();
   if (options.posthogState !== undefined) {
     values.set("posthogStreamEventExport", options.posthogState);
   }
+  const db = new DatabaseSync(":memory:");
   let alarmAt: number | null = options.initialAlarmAt ?? null;
   let coreCheckpointFails = false;
   const deleteAlarm = vi.fn(async () => {
@@ -295,7 +273,13 @@ function createStream(options: CreateStreamOptions = {}): {
   const setAlarm = vi.fn(async (at: number | Date) => {
     alarmAt = typeof at === "number" ? at : at.getTime();
   });
+  const waitUntilPromises: Promise<unknown>[] = [];
   const ctx = {
+    blockConcurrencyWhile: (callback: () => Promise<unknown>) => {
+      const promise = callback();
+      void promise.catch(() => undefined);
+      return promise;
+    },
     id: {
       name: DurableObjectNameCodec.stringify(
         { path: "/", projectId: null },
@@ -310,17 +294,31 @@ function createStream(options: CreateStreamOptions = {}): {
       kv: {
         get: <T>(key: string) => values.get(key) as T | undefined,
         put: (key: string, value: unknown) => {
-          if (key === "state" && coreCheckpointFails) {
-            throw new Error("core checkpoint failed");
-          }
+          if (key === "state" && coreCheckpointFails) throw new Error("core checkpoint failed");
           values.set(key, value);
         },
       },
-      sql: wrapSqlStorage(new DatabaseSync(":memory:")),
-      transactionSync: <T>(callback: () => T) => callback(),
+      sql: wrapSqlStorage(db),
+      transactionSync: <T>(callback: () => T): T => {
+        const snapshot = new Map(values);
+        db.exec("begin");
+        try {
+          const result = callback();
+          db.exec("commit");
+          return result;
+        } catch (error) {
+          db.exec("rollback");
+          values.clear();
+          for (const [key, value] of snapshot) values.set(key, value);
+          throw error;
+        }
+      },
     },
     exports: {},
-    waitUntil: () => undefined,
+    waitUntil: (promise: Promise<unknown>) => {
+      waitUntilPromises.push(promise);
+      void promise.catch(() => undefined);
+    },
   } as unknown as DurableObjectState;
   const env = {
     ...(options.posthogEnabled === false
@@ -331,6 +329,9 @@ function createStream(options: CreateStreamOptions = {}): {
   const stream = new StreamDurableObject(ctx, env);
   return {
     alarmAt: () => alarmAt,
+    consumeAlarm: () => {
+      alarmAt = null;
+    },
     deleteAlarm,
     failCoreCheckpoint: () => {
       coreCheckpointFails = true;
@@ -338,6 +339,7 @@ function createStream(options: CreateStreamOptions = {}): {
     setAlarm,
     stream,
     values,
+    waitUntilPromises,
   };
 }
 

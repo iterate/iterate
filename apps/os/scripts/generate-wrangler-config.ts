@@ -41,6 +41,7 @@ export const REQUIRED_SECRETS = [
   "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
   "APP_CONFIG_OPEN_AI_API_KEY",
+  "APP_CONFIG_POSTHOG",
   "SECRET_ENCRYPTION_KEY",
 ];
 
@@ -67,7 +68,6 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
-  "APP_CONFIG_POSTHOG",
   // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
   // transfers (exact names the SDK reads). Optional: without them the
   // sandbox DO falls back to streaming archives through the BACKUP_BUCKET

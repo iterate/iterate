@@ -101,29 +101,15 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #posthog = (() => {
     const apiKey = posthogApiKeyFromStreamEnv(this.env);
     if (apiKey === undefined) return undefined;
-    try {
-      return new StreamEventPostHogExporter({
-        apiKey,
-        initialOffset: this.#log.highestAssignedOffset(),
-        projectId: this.name.projectId,
-        readEvents: (afterOffset, limit) => this.#log.getCommitMetadata(afterOffset, limit),
-        state: this.ctx.storage.kv,
-        streamId: this.ctx.id.toString(),
-        workerName: this.env.WORKER_SELF,
-      });
-    } catch (error) {
-      console.error({
-        schema: "iterate.stream-telemetry.v1",
-        message: "stream_posthog_state_initialization_failed",
-        operation: "posthog.configure_stream_events",
-        outcome: "disabled",
-        failureKind: "storage",
-        errorName: error instanceof Error ? error.name : "NonErrorThrowable",
-        projectId: this.name.projectId,
-        streamId: this.ctx.id.toString(),
-      });
-      return undefined;
-    }
+    return new StreamEventPostHogExporter({
+      apiKey,
+      initialOffset: this.#log.highestAssignedOffset(),
+      projectId: this.name.projectId,
+      readEvents: (afterOffset, limit) => this.#log.getCommitMetadata(afterOffset, limit),
+      state: this.ctx.storage.kv,
+      streamId: this.ctx.id.toString(),
+      workerName: this.env.WORKER_SELF,
+    });
   })();
   /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)
@@ -171,7 +157,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => this.#alarm.scheduleNoLaterThan("subscriptions", atMs),
+      armAlarm: (atMs) => this.#alarm.armNoLaterThan(atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -180,11 +166,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
-    const posthogAlarmAt = this.#posthog?.nextAttemptAt;
-    if (posthogAlarmAt !== null && posthogAlarmAt !== undefined) {
-      this.#alarm.scheduleNoLaterThan("posthog", posthogAlarmAt);
-    }
-
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
@@ -223,29 +204,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Native alarm root: route every due slice, then publish the next earliest desire. */
+  /** Native alarm root: run due work, then publish the exact remaining deadline. */
   async alarm(): Promise<void> {
-    const firedAt = Date.now();
-    await this.#alarm.fired(firedAt);
-    let productPreludeCompleted = false;
-    try {
-      // The constructor's `woken` append already ran `#subscribers.wake()`;
-      // onAlarm re-derives any remaining durable subscription retry.
-      this.#flushCoreProcessorState();
-      this.#subscribers.onAlarm();
-      productPreludeCompleted = true;
-
-      await this.#posthog?.flushIfDue(firedAt);
-    } finally {
-      // A subscriber/core exception must leave Cloudflare's running alarm
-      // untouched so its native retry survives. Once product work completed,
-      // republish the exporter's current durable desire after the await: an
-      // append or recovery may have replaced it while the fetch yielded.
-      if (productPreludeCompleted) {
-        if (this.#posthog === undefined) await this.#alarm.reconcile();
-        else await this.#alarm.set("posthog", this.#posthog.nextAttemptAt);
-      }
-    }
+    this.#alarm.begin();
+    // The constructor's `woken` append already ran `#subscribers.wake()`;
+    // onAlarm retries due durable deliveries.
+    this.#flushCoreProcessorState();
+    this.#subscribers.onAlarm();
+    await this.#posthog?.flushIfDue(Date.now());
+    // Read after the fetch: append or recovery may have changed the durable
+    // PostHog deadline while the request yielded.
+    await this.#alarm.complete(
+      minimumDeadline(this.#subscribers.nextAttemptAt, this.#posthog?.nextAttemptAt ?? null),
+    );
   }
 
   // ===========================================================================
@@ -338,16 +309,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     if (newEvents.length === 0) {
-      // An earlier attempt may have committed the idempotent event and then
-      // failed while publishing its export alarm. Re-publish from the durable
-      // log on retry; an already caught-up exporter turns this into one empty,
-      // harmless alarm rather than risking an unexported committed event.
-      if (events.length > 0) this.#requestPostHogFlush();
       return events;
     }
 
-    // 2. Persist event rows and reduced core state. Durable Object SQL storage
-    // runs synchronously in the object's thread; each sql.exec() is atomic and
+    // 2. Commit event rows and the local export obligation atomically. The
+    // PostHog network request remains alarm-owned; this transaction only makes
+    // it impossible to commit a row without also remembering that work exists.
+    // Durable Object SQL storage runs synchronously in the object's thread and
     // Output Gates hold responses until writes are durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
@@ -355,7 +323,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // boundary. The KV state checkpoint is DEBOUNCED (see
     // #checkpointCoreProcessorState) — event rows are the durable truth, and
     // boot catch-up folds past a lagging checkpoint by design.
-    const byteLengths = this.#log.insert(newEvents);
+    const { byteLengths, posthogAlarmAt } = this.ctx.storage.transactionSync(() => ({
+      byteLengths: this.#log.insert(newEvents),
+      posthogAlarmAt: this.#posthog?.requestFlush() ?? null,
+    }));
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(newEvents.length);
     this.#metrics.ingress.bump(
@@ -363,10 +334,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.length,
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
-    // Publish the durable export obligation before any post-commit product
-    // fan-out can throw. The event log is the payload-blind outbox; this does
-    // not encode an event or perform a network request.
-    this.#requestPostHogFlush();
+    if (posthogAlarmAt !== null) this.#alarm.armNoLaterThan(posthogAlarmAt);
 
     // 3. Post-commit product fan-out. One wake covers every lane:
     // live connection pumps re-arm, lagging wake subscribers get poked,
@@ -1164,27 +1132,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  #requestPostHogFlush(): void {
-    const posthog = this.#posthog;
-    if (posthog === undefined) return;
-    try {
-      const flushAt = posthog.requestFlush();
-      this.#alarm.scheduleNoLaterThan("posthog", flushAt);
-    } catch (error) {
-      console.error({
-        schema: "iterate.stream-telemetry.v1",
-        message: "stream_posthog_flush_request_failed",
-        operation: "posthog.schedule_stream_events",
-        outcome: "failed",
-        failureKind: "storage",
-        errorName: error instanceof Error ? error.name : "NonErrorThrowable",
-        projectId: this.name.projectId,
-        streamId: this.ctx.id.toString(),
-      });
-      throw error;
-    }
-  }
-
   // ===========================================================================
   // Core state checkpoint: reduced state in KV, rebuilt from the event log.
   // ===========================================================================
@@ -1670,4 +1617,12 @@ function idleTeardownMs(env: Env): number {
   const raw = (env as { STREAM_IDLE_TEARDOWN_MS?: string | number }).STREAM_IDLE_TEARDOWN_MS;
   const parsed = typeof raw === "string" ? Number(raw) : raw;
   return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60_000;
+}
+
+function minimumDeadline(...deadlines: (number | null)[]): number | null {
+  let minimum: number | null = null;
+  for (const deadline of deadlines) {
+    if (deadline !== null && (minimum === null || deadline < minimum)) minimum = deadline;
+  }
+  return minimum;
 }

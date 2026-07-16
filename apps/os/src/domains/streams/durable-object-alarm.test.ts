@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DurableObjectAlarm } from "./durable-object-alarm.ts";
 
 describe("DurableObjectAlarm", () => {
-  it("serializes concurrent desires so a later alarm cannot overwrite an earlier one", async () => {
+  it("serializes arms without letting a later deadline win", async () => {
     let releaseRead: (value: number | null) => void = () => undefined;
     const read = new Promise<number | null>((resolve) => {
       releaseRead = resolve;
@@ -11,89 +11,95 @@ describe("DurableObjectAlarm", () => {
     h.getAlarm.mockReturnValueOnce(read);
     const alarm = alarmFor(h.ctx);
 
-    const later = alarm.set("later", 100);
-    const earlier = alarm.set("earlier", 50);
+    alarm.armNoLaterThan(100);
+    alarm.armNoLaterThan(50);
     releaseRead(null);
-    await Promise.all([later, earlier]);
+    await Promise.all(h.waitUntilPromises);
 
     expect(h.alarmAt()).toBe(50);
-    expect(h.setAlarm.mock.calls.map(([at]) => at)).toEqual([50]);
+    expect(h.setAlarm.mock.calls.map(([at]) => at)).toEqual([100, 50]);
   });
 
-  it("adopts an inherited alarm and re-points after it fires", async () => {
-    const h = harness(25);
+  it("makes constructor arms inert once the alarm turn begins", async () => {
+    const h = harness(50);
     const alarm = alarmFor(h.ctx);
 
-    await alarm.set("later", 100);
-    expect(h.alarmAt()).toBe(25);
+    alarm.armNoLaterThan(25);
+    alarm.begin();
+    await alarm.complete(null);
+    await Promise.all(h.waitUntilPromises);
 
-    await alarm.fired(25);
-    await alarm.reconcile();
+    expect(h.setAlarm).not.toHaveBeenCalled();
+    expect(h.deleteAlarm).toHaveBeenCalledOnce();
+    expect(h.alarmAt()).toBeNull();
+  });
+
+  it("publishes the exact owner minimum after success", async () => {
+    const h = harness(50);
+    const alarm = alarmFor(h.ctx);
+
+    alarm.begin();
+    await alarm.complete(100);
+
+    expect(h.setAlarm).toHaveBeenCalledOnce();
+    expect(h.setAlarm).toHaveBeenCalledWith(100);
     expect(h.alarmAt()).toBe(100);
   });
 
-  it.each([
-    ["posthog", 50, "subscriptions", 100],
-    ["subscriptions", 50, "posthog", 100],
-  ] as const)(
-    "preserves the later %s/%s owner after the earlier %s/%s owner fires",
-    async (earlierName, earlierAt, laterName, laterAt) => {
-      const h = harness();
-      const alarm = alarmFor(h.ctx);
-      await alarm.set(laterName, laterAt);
-      await alarm.set(earlierName, earlierAt);
-
-      await alarm.fired(earlierAt);
-      await alarm.reconcile();
-
-      expect(h.alarmAt()).toBe(laterAt);
-    },
-  );
-
-  it("re-reads platform state and repairs a failed alarm write", async () => {
-    const h = harness();
-    h.setAlarm.mockRejectedValueOnce(new Error("temporary storage failure"));
+  it("lets work arriving during the exact write move the replacement earlier", async () => {
+    let releaseWrite: () => void = () => undefined;
+    const h = harness(50);
+    h.setAlarm.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = () => {
+            h.setAlarmValue(100);
+            resolve();
+          };
+        }),
+    );
     const alarm = alarmFor(h.ctx);
 
-    await expect(alarm.set("posthog", 50)).rejects.toThrow("temporary storage failure");
-    await alarm.reconcile();
+    alarm.begin();
+    const completion = alarm.complete(100);
+    await vi.waitFor(() => expect(h.setAlarm).toHaveBeenCalledOnce());
+    alarm.armNoLaterThan(75);
+    releaseWrite();
+    await completion;
+    await Promise.all(h.waitUntilPromises);
 
-    expect(h.alarmAt()).toBe(50);
-    expect(h.getAlarm).toHaveBeenCalledTimes(2);
+    expect(h.alarmAt()).toBe(75);
+    expect(h.setAlarm.mock.calls.map(([at]) => at)).toEqual([100, 75]);
   });
 
-  it("keeps a failed scheduled write rejected on the invocation output gate", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const h = harness();
-    h.setAlarm.mockRejectedValueOnce(new Error("temporary storage failure"));
+  it("does not replace Cloudflare's native retry on failure", () => {
+    const h = harness(null);
     const alarm = alarmFor(h.ctx);
 
-    alarm.scheduleNoLaterThan("posthog", 50);
-    await expect(h.waitUntilPromises.at(-1)).rejects.toThrow("temporary storage failure");
+    alarm.begin();
 
-    expect(h.setAlarm).toHaveBeenCalledOnce();
+    expect(h.setAlarm).not.toHaveBeenCalled();
+    expect(h.deleteAlarm).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed ordinary arm rejected on the output gate", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const h = harness();
+    h.setAlarm.mockRejectedValueOnce(new Error("storage unavailable"));
+    const alarm = alarmFor(h.ctx);
+
+    alarm.armNoLaterThan(50);
+    await expect(h.waitUntilPromises.at(-1)).rejects.toThrow("storage unavailable");
+
     expect(error).toHaveBeenCalledWith({
       schema: "iterate.stream-alarm.v1",
-      message: "stream_alarm_reconciliation_failed",
-      operation: "stream.reconcile_alarm",
+      message: "stream_alarm_arm_failed",
+      operation: "stream.arm_alarm",
       outcome: "failed",
       errorName: "Error",
       projectId: "prj_test",
       streamId: "stream-test",
     });
-  });
-
-  it("never delays an earlier deadline published by the same owner", async () => {
-    const h = harness();
-    const alarm = alarmFor(h.ctx);
-
-    alarm.scheduleNoLaterThan("subscriptions", 50);
-    alarm.scheduleNoLaterThan("subscriptions", 100);
-    await vi.waitFor(() => expect(h.alarmAt()).toBe(50));
-
-    await alarm.fired(50);
-    alarm.scheduleNoLaterThan("subscriptions", 100);
-    await vi.waitFor(() => expect(h.alarmAt()).toBe(100));
   });
 });
 
@@ -118,5 +124,15 @@ function harness(initialAlarm: number | null = null) {
       void promise.catch(() => undefined);
     },
   } as unknown as DurableObjectState;
-  return { alarmAt: () => alarmAt, ctx, deleteAlarm, getAlarm, setAlarm, waitUntilPromises };
+  return {
+    alarmAt: () => alarmAt,
+    ctx,
+    deleteAlarm,
+    getAlarm,
+    setAlarm,
+    setAlarmValue: (at: number | null) => {
+      alarmAt = at;
+    },
+    waitUntilPromises,
+  };
 }

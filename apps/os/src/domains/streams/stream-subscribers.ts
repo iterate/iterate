@@ -353,43 +353,29 @@ export class StreamSubscribers {
     if (this.#idleTimer !== undefined) clearTimeout(this.#idleTimer);
     this.#idleTimer = undefined;
     this.#tearingDown = true;
-    let closeFailureCount = 0;
     try {
       for (const connection of [...this.#connections.values()]) {
-        try {
-          connection.close("replaced", false);
-        } catch {
-          closeFailureCount += 1;
-        }
+        connection.close("replaced", false);
       }
     } finally {
       this.#tearingDown = false;
-      this.#pokesInFlight.clear();
-      this.#pushDrains.clear();
-      this.#batchLimits.clear();
-      this.#consecutiveSkips.clear();
-      this.#subscriptionMetrics.clear();
-      this.#freshTail = [];
     }
-    if (closeFailureCount > 0) {
-      try {
-        console.error({
-          schema: "iterate.stream-recovery.v1",
-          message: "stream_recovery_connection_cleanup_failed",
-          operation: "stream.restore",
-          outcome: "degraded",
-          failureCount: closeFailureCount,
-        });
-      } catch {
-        // A diagnostic sink cannot resurrect pre-recovery delivery state.
-      }
-    }
+    this.#pokesInFlight.clear();
+    this.#pushDrains.clear();
+    this.#batchLimits.clear();
+    this.#consecutiveSkips.clear();
+    this.#subscriptionMetrics.clear();
+    this.#freshTail = [];
   }
 
-  /** The DO alarm handler body: retry whatever is due, then re-arm. */
+  /** Retry whatever is due. The caller reads nextAttemptAt after wake-up. */
   onAlarm(): void {
     this.wake();
-    this.#armAlarmFromStore();
+  }
+
+  /** Earliest durable retry not parked or already in flight. */
+  get nextAttemptAt(): number | null {
+    return this.#nextAlarmFromStore();
   }
 
   // ===========================================================================
@@ -946,7 +932,7 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
   }
 
-  #armAlarmFromStore(): void {
+  #nextAlarmFromStore(): number | null {
     // Not a bare MIN over the rows: parked rows keep their cursor but must
     // not drive the alarm, and a row whose retry is IN FLIGHT this very turn
     // still carries its (past) due time until the attempt settles — re-arming
@@ -960,7 +946,7 @@ export class StreamSubscribers {
       if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
-    if (next !== null) this.#hooks.armAlarm(next);
+    return next;
   }
 
   // ===========================================================================

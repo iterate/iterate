@@ -33,7 +33,13 @@ const textEncoder = new TextEncoder();
  * cap with these instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
-export type CommittedStreamEventMetadata = { committedAt: string; offset: number };
+export type CommittedStreamEventMetadata = {
+  committedAt: string;
+  eventType: string;
+  offset: number;
+};
+
+const REDACTED_EVENT_TYPE = "redacted";
 
 export class StreamEventLog {
   constructor(
@@ -99,12 +105,26 @@ export class StreamEventLog {
     return Math.max(this.highestOffset(), sequence);
   }
 
-  /** Payload-blind cursor read for the alarm-owned PostHog exporter. */
+  /**
+   * Payload-blind cursor read for the alarm-owned PostHog exporter. Only our
+   * bounded event-type alphabet crosses the telemetry boundary. The SQL
+   * expression performs that classification before an arbitrary type can be
+   * materialized in JavaScript or become a high-cardinality property.
+   */
   getCommitMetadata(afterOffset: number, limit: number): CommittedStreamEventMetadata[] {
     return this.sql
       .exec<CommittedStreamEventMetadata>(
         `
-          select offset, created_at as committedAt
+          select
+            offset,
+            case
+              when type not glob '*[^A-Za-z0-9./_-]*'
+                and length(cast(type as blob)) > 0
+                and length(cast(type as blob)) <= 256
+              then type
+              else '${REDACTED_EVENT_TYPE}'
+            end as eventType,
+            created_at as committedAt
           from events
           where offset > ?
           order by offset asc
