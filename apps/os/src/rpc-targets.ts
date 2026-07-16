@@ -204,6 +204,7 @@ import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
+  enqueueAutomaticStreamIndex,
   ensureProjectSearchInstance,
   indexDocument,
   indexPinnedStreamEvent,
@@ -5096,10 +5097,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
   readonly #props: ProjectRpcTargetProps;
-  // One project target backs one stream's cached push connection. Keep its
-  // derived search rewrites ordered without putting them on the authoritative
-  // delivery acknowledgement path.
-  #streamSearchIndexTail: Promise<void> = Promise.resolve();
 
   constructor(props: ProjectRpcTargetProps) {
     super();
@@ -5482,13 +5479,17 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       throw error;
     }
     // Search is a derived mirror, so it must neither extend nor reject the
-    // authoritative delivery acknowledgement. The cached project target is
-    // private to this stream's push connection; its tail preserves the same
-    // per-stream ordering after the acknowledgement returns.
-    this.#streamSearchIndexTail = this.#streamSearchIndexTail.then(() =>
-      this.#indexStreamSearch(batch),
-    );
-    this.#props.ctx.waitUntil(this.#streamSearchIndexTail);
+    // authoritative delivery acknowledgement. The isolate-wide per-stream
+    // tail also survives a cached project-target remint after a push failure.
+    if (batch.projectId !== null) {
+      this.#props.ctx.waitUntil(
+        enqueueAutomaticStreamIndex({
+          projectId: batch.projectId,
+          path: batch.path,
+          run: () => this.#indexStreamSearch(batch),
+        }),
+      );
+    }
   }
 
   /**

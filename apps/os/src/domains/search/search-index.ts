@@ -142,6 +142,26 @@ export async function triggerProjectSearchSyncDebounced(projectId: string): Prom
   await triggerProjectSearchSync(projectId);
 }
 
+// `ctx.exports` remints of a stream's cached project target stay in this
+// isolate, and waitUntil keeps the isolate alive while an index task runs.
+// Keep the tail here rather than on one target instance so a push failure and
+// target remint cannot let two rewrites of the same R2 segment overlap.
+const automaticStreamIndexTails = new Map<string, Promise<void>>();
+
+export function enqueueAutomaticStreamIndex(input: {
+  projectId: string;
+  path: string;
+  run: () => Promise<void>;
+}): Promise<void> {
+  const key = JSON.stringify([input.projectId, input.path]);
+  const previous = automaticStreamIndexTails.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(input.run);
+  automaticStreamIndexTails.set(key, current);
+  return current.finally(() => {
+    if (automaticStreamIndexTails.get(key) === current) automaticStreamIndexTails.delete(key);
+  });
+}
+
 /**
  * Pin ONE stream event into the corpus as a focused document (the write side
  * of `itx.search.indexEvent`). The event already lives in its 100-offset
@@ -183,12 +203,12 @@ export async function indexPinnedStreamEvent(input: {
  *
  * That full re-read is also what makes this safe to run as a best-effort
  * first-party step on the shared project-worker delivery (root
- * `processEventBatch`) instead of its own checkpointed lane. The project
- * target queues adjacent batches in order under waitUntil, so they cannot
- * rewrite one R2 object concurrently and indexing does not delay the delivery
- * acknowledgement. A transient R2 failure is logged; the NEXT batch in the
- * same segment heals it by re-reading and rewriting the whole segment. Only a
- * segment that goes permanently quiet right after a failed write stays short until
+ * `processEventBatch`) instead of its own checkpointed lane. An isolate-wide
+ * per-stream tail queues adjacent batches in order under waitUntil, so they
+ * cannot rewrite one R2 object concurrently and indexing does not delay the
+ * delivery acknowledgement. A transient R2 failure is logged; the NEXT batch
+ * in the same segment heals it by re-reading and rewriting the whole segment.
+ * Only a segment that goes permanently quiet right after a failed write stays short until
  * `itx.search.indexStream`/reindex — acceptable for a derived, rebuildable
  * corpus.
  */

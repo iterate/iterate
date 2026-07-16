@@ -22,7 +22,11 @@ vi.mock("../../env.ts", () => ({
   },
 }));
 
-import { indexStreamEventBatch, triggerProjectSearchSyncDebounced } from "./search-index.ts";
+import {
+  enqueueAutomaticStreamIndex,
+  indexStreamEventBatch,
+  triggerProjectSearchSyncDebounced,
+} from "./search-index.ts";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -81,6 +85,39 @@ describe("passive project search sync", () => {
 });
 
 describe("automatic stream indexing", () => {
+  it("serializes the same stream across independent target callers", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const order: string[] = [];
+    const key = {
+      projectId: "prj_00000000000000000000000000000005",
+      path: "/agents/reminted",
+    };
+
+    const first = enqueueAutomaticStreamIndex({
+      ...key,
+      run: async () => {
+        order.push("first:start");
+        await firstBlocked;
+        order.push("first:end");
+      },
+    });
+    const second = enqueueAutomaticStreamIndex({
+      ...key,
+      run: async () => {
+        order.push("second");
+      },
+    });
+
+    await vi.waitFor(() => expect(order).toEqual(["first:start"]));
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(order).toEqual(["first:start", "first:end", "second"]);
+  });
+
   it("does not delete an absent segment when the batch has no indexable events", async () => {
     const housekeepingEvent = {
       type: "events.iterate.com/stream/woken",
