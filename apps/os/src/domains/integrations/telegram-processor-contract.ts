@@ -4,6 +4,22 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+
+const TelegramBirthCertificate = z.object({
+  config: z.object({ connection: z.string() }),
+});
+
+export const TelegramAgentBirthCertificate = z.object({
+  config: z.object({
+    connection: z.string(),
+    chatId: z.string(),
+    messageThreadId: z.string().optional(),
+  }),
+});
+export type TelegramAgentBirthCertificate = z.output<typeof TelegramAgentBirthCertificate>;
 
 /** One `/new` session start, ordered by `(date, messageId)`: `date` is unix
  * seconds so same-second ties are possible; `message_id` is strictly
@@ -42,16 +58,17 @@ const SessionStart = z.object({
  *    `/integrations/telegram/{connection}` as
  *    `events.iterate.com/telegram/webhook-received`.
  * 2. This processor forwards the event (plus `replyHint`, when the update is
- *    a reply) to the latest session's agent stream. The `telegram-agent`
- *    processor on that stream does the actual agent transcription; the
- *    project processor's child-stream-created lane gives the routed stream
- *    its subscriptions.
+ *    a reply) to the latest session's agent stream. It explicitly creates the
+ *    Agent, CapabilityHost, and Telegram facet and installs all three
+ *    subscriptions before forwarding; the `telegram-agent` processor does
+ *    the transcription.
  */
 export const TelegramProcessorContract = defineProcessorContract({
   slug: "telegram",
   version: "0.2.0",
   description: "Routes raw Telegram webhook updates into Telegram-backed agent streams.",
   stateSchema: z.object({
+    birthCertificate: TelegramBirthCertificate.nullable().default(null),
     /**
      * Per-chat `/new` session starts, oldest first, keyed by the chat's path
      * suffix (`chat-{chatId}` or `chat-{chatId}/topic-{threadId}`). The last
@@ -67,6 +84,28 @@ export const TelegramProcessorContract = defineProcessorContract({
     sentMessages: z.record(z.string(), z.object({ sessionPath: z.string() })).default({}),
   }),
   events: {
+    "events.iterate.com/telegram/created": {
+      description: "Birth certificate for this Telegram webhook router.",
+      payloadSchema: TelegramBirthCertificate,
+      examples: [
+        {
+          description: "A Telegram connection router is born for one bot connection.",
+          payload: { config: { connection: "support-bot" } },
+        },
+      ],
+    },
+    "events.iterate.com/telegram-agent/created": {
+      description: "Birth certificate for the Telegram facet on an agent stream.",
+      payloadSchema: TelegramAgentBirthCertificate,
+      examples: [
+        {
+          description: "A Telegram facet binds an agent stream to one chat topic.",
+          payload: {
+            config: { connection: "support-bot", chatId: "555123", messageThreadId: "42" },
+          },
+        },
+      ],
+    },
     "events.iterate.com/telegram/webhook-received": {
       description:
         "Raw Telegram Update, appended by the webhook door to `/integrations/telegram/{connection}` and forwarded (plus `replyHint` when the update replies to an earlier message) to routed chat/session streams. `botId` is the receiving bot's numeric id (the webhook path segment).",
@@ -122,10 +161,20 @@ export const TelegramProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "events.iterate.com/telegram/created",
     "events.iterate.com/telegram/webhook-received",
     "events.iterate.com/telegram/message-sent",
   ],
-  emits: ["events.iterate.com/telegram/webhook-received"],
+  processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
+  emits: [
+    "events.iterate.com/agent/created",
+    "events.iterate.com/agents/context-added",
+    "events.iterate.com/capability-host/created",
+    "events.iterate.com/capability-host/capability-provided",
+    "events.iterate.com/telegram-agent/created",
+    "events.iterate.com/telegram/webhook-received",
+    "events.iterate.com/stream/subscription-configured",
+  ],
 });
 
 /**

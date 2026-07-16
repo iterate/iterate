@@ -33,7 +33,6 @@ import { SlackProcessor } from "../integrations/slack-processor-implementation.t
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
-import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
@@ -82,12 +81,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  // This DO instance may host one connection's router stream
-  // (/integrations/{slack,telegram}/{connection}): the name IS the connection,
-  // for both routing and the bot-token secret path. Null (a non-connection
-  // path) is passed through — a router processor errors loudly if a mis-armed
-  // subscription ever wakes it there.
-  readonly #integrationConnection = connectionFromIntegrationStreamPath(this.#name.path);
   readonly #registry = createStreamProcessorRegistry(this.ctx, {
     stream: this.#stream,
     path: this.#name.path,
@@ -154,15 +147,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      connection: this.#integrationConnection,
-      acknowledgeRoutedWebhook: async ({ payload }) => {
-        if (this.#integrationConnection === null) return;
+      acknowledgeRoutedWebhook: async ({ connection, payload }) => {
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
         try {
           await callProjectSlackWebApi({
             body: { channel: ack.channel, name: "eyes", timestamp: ack.timestamp },
-            connection: this.#integrationConnection,
+            connection,
             method: "reactions.add",
             projectId: this.#name.projectId,
           });
@@ -190,14 +181,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      connection: this.#integrationConnection,
     }),
   );
 
   // The email thread router — same hosting shape as the Slack router: it only
   // ever WAKES on the Durable Object instance addressed at
-  // `/integrations/email`, where project bootstrap (or the email ingress
-  // door's belt-and-braces append) configured its subscription.
+  // `/integrations/email`, where project bootstrap explicitly created it and
+  // configured its subscription. Email ingress only appends received mail.
   readonly #emailProcessor = this.#registry.register(
     new EmailProcessor({
       stream: this.#stream,

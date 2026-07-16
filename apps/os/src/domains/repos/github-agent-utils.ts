@@ -1,9 +1,9 @@
 // Path scheme for GitHub pull-request agents: one agent stream per PR of a
 // GitHub link, at `/agents/repos/g~<link-fingerprint>/pull-requests/<number>`.
 // Shaped after the email thread scheme (`/agents/email/t<threadId>`): the repo
-// processor routes PR webhooks here, the `github-agent` processor on the
-// routed stream projects them, and the project processor's
-// child-stream-created lane births the agent on first append.
+// processor explicitly appends the Agent, Capability Host, and GitHub facet
+// birth certificates before routing the first webhook here. The stream path
+// itself selects none of those processors.
 
 import { readNumber, readRecord } from "../integrations/utils.ts";
 
@@ -35,7 +35,7 @@ export async function githubAgentPath(
   return `${GITHUB_AGENT_PATH_PREFIX}g~${fingerprint}${PULL_REQUESTS_SEGMENT}${prNumber}`;
 }
 
-/** Whether an agent path is a GitHub agent stream (birth wiring + prompt pick). */
+/** Whether a path uses the bounded GitHub pull-request agent naming scheme. */
 export function isGithubAgentPath(agentPath: string): boolean {
   if (!agentPath.startsWith(GITHUB_AGENT_PATH_PREFIX)) return false;
   const rest = agentPath.slice(GITHUB_AGENT_PATH_PREFIX.length);

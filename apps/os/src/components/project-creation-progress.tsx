@@ -20,25 +20,25 @@ function creationSteps(state: ProjectProcessorState | undefined): CreationStep[]
   // steps in projects.create): slack routing is appended right after the root
   // saga, then the repo seeds (the slow artifact step) — so ticks appear top
   // to bottom instead of a later row completing while an earlier one spins.
-  // The onboarding agent is not a saga step: it births lazily when its chat
-  // page is first opened.
+  // The onboarding agent is not a saga step: its chat page explicitly creates
+  // it before sending the first message.
   return [
-    { key: "registered", label: "Registering project", done: state?.createRequest != null },
+    { key: "registered", label: "Registering project", done: state?.birthCertificate != null },
     {
       key: "integrations",
       label: "Wiring integrations",
       done:
         state !== undefined &&
-        (state.streams.some((stream) => stream.path === "/integrations/slack") || state.created),
+        (state.streams.some((stream) => stream.path === "/integrations/email") || state.ready),
     },
     { key: "repo", label: "Seeding repository", done: (state?.repos.length ?? 0) > 0 },
-    { key: "created", label: "Finalizing project", done: state?.created ?? false },
+    { key: "ready", label: "Finalizing project", done: state?.ready ?? false },
   ];
 }
 
 /**
  * The "Creating project" checklist the home page shows until the bootstrap
- * saga commits `project/created`. Every tick appears the moment the processor
+ * saga commits `project/ready`. Every tick appears the moment the processor
  * pushes the state change that records it; the first not-yet-done step wears
  * the spinner.
  */

@@ -14,6 +14,7 @@ import {
   connectAgentFeed,
   resolveItxAuth,
 } from "../../../../packages/iterate/src/stream-tui/agent-connection.ts";
+import { onboardingAgentCreateInput } from "../../src/lib/onboarding-agent.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
@@ -24,14 +25,6 @@ const startedAt = Date.now();
 const project = await createTestProject({ slugPrefix: "tui-smoke" });
 log(`created project ${project.project.id} at ${project.baseUrl}`);
 
-// The onboarding agent births lazily on first use (the dashboard's chat page
-// does this same configure({}) when it opens); without it there is no
-// unprompted greeting to fold.
-{
-  using agent = project.agent(AGENT_PATH);
-  await agent.configure({});
-}
-
 const model = createAgentFeedModel();
 let notifyChange = () => {};
 
@@ -40,6 +33,7 @@ const connection = connectAgentFeed({
   baseUrl: project.baseUrl,
   projectId: project.project.id,
   agentPath: AGENT_PATH,
+  createInput: onboardingAgentCreateInput(project.project.id),
   replayAfterOffset: () => model.snapshot().lastOffset,
   onEvents: (events) => {
     if (model.applyEvents(events)) notifyChange();

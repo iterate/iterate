@@ -6,6 +6,7 @@ import {
   E2E_CI_RETRIES,
   E2E_HEAVY_TEST_TIMEOUT_MS,
   E2E_TEST_TIMEOUT_MS,
+  OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   PREVIEW_RUN_WATCHDOG_SECS,
   SPEC_ACTION_TIMEOUT_MS,
@@ -99,6 +100,13 @@ describe("retries live in exactly one layer", () => {
       "utf8",
     );
     expect(source).toContain("const ATTEMPTS = 2;");
+  });
+
+  it("bounds the onboarding smoke and streams its progress before the suites start", () => {
+    const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
+    expect(script).toContain(
+      `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
+    );
   });
 });
 

@@ -8,7 +8,7 @@
  * `connectItx` (apps/os/src/itx-client.ts) hands us the same `Agent`
  * capability the web app uses, a live `stream.subscribe` pumps events into
  * the shared agent-ui reducer (@iterate-com/ui), and sends go through
- * `agent.sendMessage`. This file owns only terminal runtime state and
+ * `agent.message`. This file owns only terminal runtime state and
  * rendering.
  */
 import { StyledText, bg, fg } from "@opentui/core";
@@ -20,6 +20,10 @@ import type {
   AgentUiItem,
   AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import {
+  ONBOARDING_AGENT_PATH,
+  onboardingAgentCreateInput,
+} from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
 import {
   connectAgentFeed,
@@ -32,7 +36,6 @@ import {
   formatStepLine,
   streamingTail,
 } from "./feed-format.ts";
-
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
 }
@@ -82,6 +85,8 @@ const connection = connectAgentFeed({
   baseUrl: args.baseUrl,
   projectId: args.projectId,
   agentPath: args.agentPath,
+  createInput:
+    args.agentPath === ONBOARDING_AGENT_PATH ? onboardingAgentCreateInput(args.projectId) : {},
   replayAfterOffset: () => model.snapshot().lastOffset,
   onEvents: (events) => {
     if (model.applyEvents(events)) patchAppState({ feed: model.snapshot() });

@@ -1,19 +1,12 @@
-import type { ProcessorEvent } from "../streams/processor-contracts.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
-import { githubAgentSubscriptionConfiguredEvent } from "./github-agent-mechanics.ts";
+import { githubAgentCreationEvents } from "./github-agent-mechanics.ts";
 import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";
 import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
   type RepoCommittedFileChange,
 } from "./repo-task-events.ts";
-
-/** The one event this processor acts on, narrowed from the contract by its type string. */
-type RepoCreateRequested = ProcessorEvent<
-  RepoProcessorContract,
-  "events.iterate.com/repo/create-requested"
->;
 
 type RepoProcessorDeps = {
   createRepoArtifact(input: { path: string; projectId: string | null }): Promise<{
@@ -40,13 +33,16 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     state,
   }: Parameters<StreamProcessor<RepoProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/repo/create-requested":
-        return { ...state, createRequested: true };
       case "events.iterate.com/repo/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("repo received more than one created event");
+        }
+        return { ...state, birthCertificate: event.payload };
+      case "events.iterate.com/repo/ready":
         return {
           ...state,
           artifactName: event.payload.artifactName,
-          created: true,
+          ready: true,
           defaultBranch: event.payload.defaultBranch,
           remote: event.payload.remote,
         };
@@ -115,6 +111,16 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): undefined {
     const { blockProcessorWhile, event, state, append, appendTo } = args;
+    if (event.type === "events.iterate.com/repo/created") {
+      blockProcessorWhile(() =>
+        appendTo("/", {
+          type: "events.iterate.com/repo/created",
+          idempotencyKey: this.idempotencyKey("catalog-created", event),
+          payload: event.payload,
+        }),
+      );
+    }
+    if (state.birthCertificate === null) return;
     // AT-HEAD reconcile (was onCaughtUp): drive the repo's two durable
     // obligations (create, github-import) from the whole fold. ONE outer
     // blocking closure so the create seed+append is awaited before this head
@@ -122,6 +128,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (args.delivery.caughtUp) {
       args.blockProcessorWhileCaughtUp(() => this.#reconcileObligations(args));
     }
+    if (event.type === "events.iterate.com/repo/created") return;
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);
       const commitOid = push?.afterCommitOid;
@@ -205,10 +212,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       }
 
       // PR webhooks route to a per-PR agent stream, everything else (pushes,
-      // stars, plain issues) stays a repo-stream fact. The first forward's
-      // route event births the agent (child-stream-created lane) and durably
-      // records which PR it serves; idempotency keys make replays and repeat
-      // deliveries fold to nothing.
+      // stars, plain issues) stays a repo-stream fact. The first forward
+      // explicitly creates the agent, capability host, and GitHub
+      // facet before the webhook. Idempotency keys make replay repair safe.
       const prNumbers = pullRequestNumbersFromWebhookBody(
         (event.payload as { body?: unknown }).body,
       );
@@ -241,21 +247,15 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
             // connection must repoint existing PR agents.
             await appendTo(
               streamPath,
-              {
-                type: "events.iterate.com/github-agent/route-configured" as const,
-                idempotencyKey: this.idempotencyKey(
-                  `github-agent-route:${github.installationId}:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
-                ),
-                payload: {
-                  ...github,
-                  number: prNumber,
-                  repoPath: this.path,
-                  streamPath,
-                },
-              },
-              githubAgentSubscriptionConfiguredEvent({
-                agentPath: streamPath,
+              ...githubAgentCreationEvents({
+                connection: github.connection,
+                installationId: github.installationId,
+                number: prNumber,
+                owner: github.owner,
+                path: streamPath,
                 projectId,
+                repo: github.repo,
+                repoPath: this.path,
               }),
               {
                 type: "events.iterate.com/github/webhook-received" as const,
@@ -268,12 +268,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       });
       return;
     }
-
-    if (event.type !== "events.iterate.com/repo/create-requested") return;
-    // Address validation stays per-event (a mis-addressed request is a loud
-    // error); the creation itself is reconciled from the at-head fold in
-    // #reconcileObligations (processEvent under delivery.caughtUp).
-    this.#assertOwnCreateRequest(event);
   }
 
   /** GitHub imports can involve two network services and a git transfer, so
@@ -298,12 +292,12 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    *
    * CREATION is an OBLIGATION driven from the at-head fold, never a per-event
    * reaction: a journal refold (the normal aftermath of a state-schema
-   * deploy) replays `create-requested` with event-time state in which
-   * `created` is still false, but the at-head fold (`args.state`, NOT
-   * `previousState`) has already absorbed the journaled `repo/created` fact —
+   * deploy) replays the `repo/created` birth certificate, but the at-head fold
+   * (`args.state`, NOT `previousState`) has already absorbed any journaled
+   * `repo/ready` fact —
    * so `createRepoArtifact`, whose seeding force-pushes the seed commit and
-   * would clobber user commits, provably never re-runs. The `created`
-   * idempotency key binds NO event offset (`this.idempotencyKey("created")`),
+   * would clobber user commits, provably never re-runs. The `ready`
+   * idempotency key binds NO event offset (`this.idempotencyKey("ready")`),
    * so a redelivery/revival cannot rotate it and re-seed. No expiry on
    * purpose: "this repo should exist" does not go stale, and the vendor call
    * is idempotent (get-or-create + re-seed of a fresh repo folds to a no-op),
@@ -312,7 +306,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   async #reconcileObligations(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
-    if (args.state.createRequested && !args.state.created) {
+    if (args.state.birthCertificate === null) return;
+    if (!args.state.ready) {
       // Create inline — this runs inside the head event's outer blocking
       // closure (see processEvent), so awaiting the seed + `created` append
       // holds the frame; a nested blockProcessorWhile would register after the
@@ -322,8 +317,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         projectId: this.projectId,
       });
       await args.append({
-        type: "events.iterate.com/repo/created",
-        idempotencyKey: this.idempotencyKey("created"),
+        type: "events.iterate.com/repo/ready",
+        idempotencyKey: this.idempotencyKey("ready"),
         payload: {
           ...payload,
           path: this.path,
@@ -385,14 +380,5 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         this.#liveGithubImports.delete(request.requestId);
       }
     });
-  }
-
-  /** Reject a create-requested addressed to a different repo than this processor serves. */
-  #assertOwnCreateRequest(event: RepoCreateRequested): void {
-    if (event.payload.projectId !== this.projectId || event.payload.path !== this.path) {
-      throw new Error(
-        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.projectId}:${this.path}"`,
-      );
-    }
   }
 }

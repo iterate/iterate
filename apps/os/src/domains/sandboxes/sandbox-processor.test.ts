@@ -21,14 +21,30 @@ function sandboxHarness() {
 }
 
 describe("SandboxProcessor", () => {
+  it("throws when a second sandbox birth certificate is reduced", async () => {
+    const { stream, driver } = sandboxHarness();
+    await stream.append(
+      event("events.iterate.com/sandbox/created", { config: { instanceType: "basic" } }),
+      event("events.iterate.com/sandbox/created", { config: { instanceType: "basic" } }),
+    );
+
+    await expect(driver.deliver()).rejects.toThrow("more than one sandbox/created event");
+  });
+
   it("folds a pet's whole life: created → running → stopped → running → destroyed", async () => {
     const { stream, driver } = sandboxHarness();
     // create-requested lands on the /sandboxes catalogue stream, not here —
     // the pet's own stream starts with the completion.
-    await stream.append(event("events.iterate.com/sandbox/created", { instanceType: "basic" }));
+    await stream.append(
+      event("events.iterate.com/sandbox/created", { config: { instanceType: "basic" } }),
+    );
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { status: "created", instanceType: "basic", lastBackupId: null },
+      state: {
+        birthCertificate: { config: { instanceType: "basic" } },
+        status: "created",
+        lastBackupId: null,
+      },
     });
 
     await stream.append(
@@ -38,7 +54,7 @@ describe("SandboxProcessor", () => {
     );
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { status: "stopped", instanceType: "basic", lastBackupId: "bkp-1" },
+      state: { status: "stopped", lastBackupId: "bkp-1" },
     });
 
     await stream.append(
@@ -50,14 +66,14 @@ describe("SandboxProcessor", () => {
     );
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { status: "destroyed", instanceType: "basic" },
+      state: { status: "destroyed" },
     });
   });
 
   it("destroyed is terminal — a late-delivered stopped cannot resurrect the status", async () => {
     const { stream, driver } = sandboxHarness();
     await stream.append(
-      event("events.iterate.com/sandbox/created", { instanceType: "lite" }),
+      event("events.iterate.com/sandbox/created", { config: { instanceType: "lite" } }),
       event("events.iterate.com/sandbox/destroyed"),
       // The SDK delivers a stop that happened while the Durable Object was
       // hibernated on the NEXT wake — after the destroy already landed.
@@ -93,7 +109,7 @@ describe("SandboxProcessor", () => {
     await stream.append(event("events.iterate.com/agent/turn-started"));
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: null, status: "created" },
+      state: { birthCertificate: null, lastBackupId: null, status: null },
     });
   });
 });

@@ -104,9 +104,9 @@ function ProjectSecretsIndexContent() {
 
   const createSecret = useMutation({
     mutationFn: async (input: { name: string; material: string; egressUrls: string[] }) => {
-      // Material and egress land in ONE update, so the secret is born already
+      // Material and egress land in ONE birth, so the secret is born already
       // pinned to its hosts — no window where it exists but cannot be used.
-      await itx.secrets.get(secretPathFromName(input.name)).update({
+      await itx.secrets.get(secretPathFromName(input.name)).create({
         egress: { urls: input.egressUrls },
         material: input.material,
       });

@@ -80,8 +80,7 @@ function makeHarness() {
         stream,
         path: HOME,
         projectId: null,
-        agentPath: HOME,
-        sendTelegramMessage: (body) => send.impl(body),
+        sendTelegramMessage: ({ body }) => send.impl(body),
         now: () => clock.now,
       }),
       { recovery: true },
@@ -162,10 +161,16 @@ describe("eviction recovery end to end", () => {
     // is armed, and the cursor is held BEFORE the send-requested event. The
     // frame never resolves — do not await it.
     h.send.impl = () => new Promise<never>(() => {});
-    await h.stream.append({
-      type: "events.iterate.com/telegram/send-requested",
-      payload: { text: "The deploy is green." },
-    });
+    await h.stream.append(
+      {
+        type: "events.iterate.com/telegram-agent/created",
+        payload: { config: { chatId: String(CHAT_ID), connection: CONNECTION } },
+      },
+      {
+        type: "events.iterate.com/telegram/send-requested",
+        payload: { text: "The deploy is green." },
+      },
+    );
     const woken = await h.wake();
     void Promise.resolve(
       woken.sink({
@@ -214,7 +219,7 @@ describe("eviction recovery end to end", () => {
     const marker = h.stream.events.find(
       (event) => event.type === "events.iterate.com/telegram/message-sent",
     );
-    expect(marker?.payload).toMatchObject({ messageId: 777, requestOffset: 1 });
+    expect(marker?.payload).toMatchObject({ messageId: 777, requestOffset: 2 });
     // The provenance claim landed on the connection stream.
     expect(h.network.eventsAt(`/integrations/telegram/${CONNECTION}`).map((e) => e.type)).toEqual([
       "events.iterate.com/telegram/message-sent",

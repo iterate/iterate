@@ -285,24 +285,24 @@ describe("stream capnweb protocol", () => {
     ]);
   });
 
-  it("deduplicates same-batch idempotency keys before writing", async () => {
+  it("deduplicates identical same-batch idempotency retries and rejects conflicts", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-same-batch-idempotency");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const batch = await stream.stream.append(
-      {
-        type: "test.stream.capnweb-same-batch-idempotency",
-        idempotencyKey: "same-batch",
-        payload: { n: 1 },
-      },
-      {
-        type: "test.stream.capnweb-same-batch-idempotency",
-        idempotencyKey: "same-batch",
-        payload: { n: 2 },
-      },
-    );
+    const event = {
+      type: "test.stream.capnweb-same-batch-idempotency",
+      idempotencyKey: "same-batch",
+      payload: { n: 1 },
+    } as const;
+    const batch = await stream.stream.append(event, event);
 
     expect(batch[1]).toEqual(batch[0]);
+    await expect(
+      stream.stream.append({
+        ...event,
+        payload: { n: 2 },
+      }),
+    ).rejects.toThrow('idempotency key "same-batch" already names a different event');
     await expect(
       stream.stream
         .getEvents({ afterOffset: 0 })

@@ -51,7 +51,7 @@ export function CreateProjectForm() {
       // progress live from processor pushes until `state.created` flips.
       const project = itx.projects.create({
         slug: input.slug,
-        waitUntilCreated: false,
+        waitUntilReady: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
       // ONE pipelined round trip, then navigate: __describe() rides the create
