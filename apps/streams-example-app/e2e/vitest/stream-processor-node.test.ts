@@ -133,6 +133,10 @@ describe("node-hosted stream processor (e2e)", () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(outputs.length).toBeGreaterThan(0);
+      // The echoed append becomes readable before the runner's progress
+      // commit is guaranteed to have completed. Observe both independent
+      // effects instead of racing the local durability callback.
+      await waitUntil(() => saved?.reduction.state.seen === 1, 5_000);
       expect(saved?.reduction.state.seen).toBe(1);
     } finally {
       handle.unsubscribe();
