@@ -135,12 +135,22 @@ class TaskProcessor extends StreamProcessor<
 
 type Journal = ReturnType<typeof makeJournal>;
 
-function makeJournal(homePath = HOME) {
+function makeJournal(
+  homePath = HOME,
+  options: {
+    /** Freeze each pager's rows at readEvents() time, like a snapshotting
+     * remote page source. Used to prove a coalesced later target gets a
+     * trailing pass rather than sharing an older read blindly. */
+    snapshotReadSessions?: boolean;
+    onReadSession?: (session: number) => void;
+  } = {},
+) {
   const rowsByPath = new Map<string, StreamEvent[]>();
   /** EVERY append attempt, deduped or not — the at-least-once evidence. */
   const attempts: { path: string; event: StreamEventInput; deduped: boolean }[] = [];
   const failNext = new Map<string, Error>();
   let createdAtClock = 0;
+  let readSessionCount = 0;
 
   const rowsFor = (path: string): StreamEvent[] => {
     let rows = rowsByPath.get(path);
@@ -186,11 +196,14 @@ function makeJournal(homePath = HOME) {
         beforeOffset?: number | null;
         limit?: number;
       }) => {
+        readSessionCount += 1;
+        const rowsAtOpen = options.snapshotReadSessions ? [...rowsFor(path)] : undefined;
+        options.onReadSession?.(readSessionCount);
         let cursor = args?.afterOffset ?? 0;
         const limit = args?.limit ?? 500;
         return {
           next: () => {
-            const page = rowsFor(path)
+            const page = (rowsAtOpen ?? rowsFor(path))
               .filter(
                 (row) =>
                   row.offset > cursor &&
@@ -209,6 +222,7 @@ function makeJournal(homePath = HOME) {
     homePath,
     stream: streamAt(homePath),
     attempts,
+    readSessionCount: () => readSessionCount,
     rows: (path = homePath) => rowsFor(path),
     head: () => rowsFor(homePath).at(-1)?.offset ?? 0,
     /** Seed a raw journal fact directly (no attempt logged — it's the fixture). */
@@ -1295,6 +1309,54 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
     expect(snapshot.offset).toBe(committed.offset);
     expect(snapshot.state.open).toContain("ryw");
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(committed.offset);
+  });
+
+  it("coalesces concurrent offset waiters into one target-aware self-pull", async () => {
+    const harness = makeHarness();
+    // Complete the memoized load before measuring journal reads: this test is
+    // about the offset waiters' pulls, not progress initialization.
+    await harness.runner.snapshot();
+    const committed = Array.from({ length: 20 }, (_, index) =>
+      harness.journal.seed({ type: REQUESTED, payload: { id: `ryw-${index}` } }),
+    );
+    const readsBefore = harness.journal.readSessionCount();
+
+    await Promise.all(
+      committed.map((event) =>
+        harness.runner.waitUntilEvent({ offset: event.offset, timeoutMs: 500 }),
+      ),
+    );
+
+    expect(harness.journal.readSessionCount() - readsBefore).toBe(1);
+    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(20);
+    expect((await harness.runner.snapshot()).state.open).toEqual(
+      Array.from({ length: 20 }, (_, index) => `ryw-${index}`),
+    );
+  });
+
+  it("runs one trailing pull when a later committed target was outside the active read", async () => {
+    const firstReadStarted = deferred();
+    const journal = makeJournal(HOME, {
+      snapshotReadSessions: true,
+      onReadSession: (session) => {
+        if (session === 1) firstReadStarted.resolve();
+      },
+    });
+    const harness = makeHarness({ journal });
+    await harness.runner.snapshot();
+
+    const first = journal.seed({ type: REQUESTED, payload: { id: "first" } });
+    const firstWait = harness.runner.waitUntilEvent({ offset: first.offset, timeoutMs: 500 });
+    await firstReadStarted.promise;
+    // The active pager has already frozen its view at offset 1. This later
+    // waiter must request one trailing pass; sharing only the active promise
+    // would park forever because no push delivery is coming in this fixture.
+    const second = journal.seed({ type: REQUESTED, payload: { id: "second" } });
+    const secondWait = harness.runner.waitUntilEvent({ offset: second.offset, timeoutMs: 500 });
+
+    await expect(Promise.all([firstWait, secondWait])).resolves.toEqual([undefined, undefined]);
+    expect(journal.readSessionCount()).toBe(2);
+    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(second.offset);
   });
 });
 

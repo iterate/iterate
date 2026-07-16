@@ -267,6 +267,13 @@ export class StreamProcessorRunner<
   #observedHeadOffset = 0;
   /** Serializes frames + self-pulls; failures are contained per entry. */
   #chain: Promise<void> = Promise.resolve();
+  /** Highest already-committed offset an offset waiter has asked a self-pull
+   * to cover. Concurrent waiters share one drain: enqueueing one journal read
+   * per waiter builds a cross-request promise chain in a Durable Object and
+   * can exhaust Cloudflare's subrequest-depth limit under fan-out. */
+  #pendingOffsetSelfPull: number | undefined;
+  /** The one active drain for {@link #pendingOffsetSelfPull}. */
+  #offsetSelfPullDrain: Promise<void> | undefined;
   #disposed = false;
   readonly #eventWaiters = new Set<EventWaiter>();
   readonly #stateChangeObservers = new Set<
@@ -493,20 +500,16 @@ export class StreamProcessorRunner<
       // over an append that already committed, and a parked waiter alone would
       // hold the wait hostage to the push lane's health (a wedged
       // subscription, a lost wake dial — the orphaned-announcement incident
-      // class). The catch-up rides the runner chain, serialized with delivered
-      // frames — no double-drive against a concurrent live frame, because
-      // redelivered offsets dedupe against the acknowledged cursor — and
-      // resolves the waiter through the ordinary frame commit. A genuinely
-      // future offset stays parked for delivery. Pull failures are logged, not
-      // rethrown: the waiter stays valid (a later frame still resolves it) and
-      // `timeoutMs` stays the caller's bound.
-      this.catchUp().catch((error: unknown) => {
-        console.error(
-          `stream processor "${this.driver.contract.slug}" waitUntilEvent(offset ${offset}) ` +
-            `self-pull failed; the waiter stays parked for delivery`,
-          error,
-        );
-      });
+      // class). Concurrent offset waiters coalesce into one target-aware drain
+      // rather than enqueueing one redundant journal pull per RPC. The drain
+      // rides the runner chain, serialized with delivered frames — no
+      // double-drive against a concurrent live frame, because redelivered
+      // offsets dedupe against the acknowledged cursor — and resolves waiters
+      // through the ordinary frame commit. A genuinely future offset stays
+      // parked for delivery. Pull failures are logged, not rethrown: waiters
+      // stay valid (a later frame still resolves them) and `timeoutMs` stays
+      // the caller's bound.
+      this.#scheduleOffsetSelfPull(offset);
       return await reached;
     }
     const { predicate, timeoutMs } = args;
@@ -540,6 +543,7 @@ export class StreamProcessorRunner<
   /** Release delivery resources. Idempotent; a disposed runner rejects new work. */
   dispose(): void {
     this.#disposed = true;
+    this.#pendingOffsetSelfPull = undefined;
     for (const waiter of this.#eventWaiters) {
       if (waiter.timer !== undefined) clearTimeout(waiter.timer);
       waiter.reject(new Error("StreamProcessorRunner disposed"));
@@ -1011,6 +1015,61 @@ export class StreamProcessorRunner<
       () => undefined,
     );
     return next;
+  }
+
+  /**
+   * Coalesce offset-pinned read-your-writes pulls through the highest target.
+   *
+   * A target that arrives while the active pass is reading becomes one
+   * trailing pass only when the first pass did not already cover it. This is
+   * target-aware rather than a plain single-flight: sharing a pull that began
+   * before a later append could otherwise leave that later waiter parked even
+   * though its event already exists. A failed pass is not retried in a loop;
+   * push delivery / durable recovery remains the retry lane, and the original
+   * waiter's timeout (when supplied) remains its explicit bound.
+   */
+  #scheduleOffsetSelfPull(offset: number): void {
+    this.#pendingOffsetSelfPull = Math.max(this.#pendingOffsetSelfPull ?? 0, offset);
+    if (this.#offsetSelfPullDrain !== undefined) return;
+
+    const drain = this.#drainOffsetSelfPull();
+    this.#offsetSelfPullDrain = drain;
+    void drain.finally(() => {
+      if (this.#offsetSelfPullDrain !== drain) return;
+      this.#offsetSelfPullDrain = undefined;
+      // A target can arrive after the drain's final loop check but before this
+      // finalizer runs. Start a fresh drain so that narrow race cannot strand
+      // an already-committed offset.
+      if (!this.#disposed && this.#pendingOffsetSelfPull !== undefined) {
+        this.#scheduleOffsetSelfPull(this.#pendingOffsetSelfPull);
+      }
+    });
+  }
+
+  async #drainOffsetSelfPull(): Promise<void> {
+    while (this.#pendingOffsetSelfPull !== undefined) {
+      const target = this.#pendingOffsetSelfPull;
+      this.#pendingOffsetSelfPull = undefined;
+      if (this.#requireProgress().processing.acknowledgedThroughOffset >= target) continue;
+
+      try {
+        await this.catchUp();
+      } catch (error) {
+        const highestTarget = Math.max(target, this.#pendingOffsetSelfPull ?? target);
+        // Do not immediately re-enter the same failed Cloudflare request
+        // lineage. The waiter remains registered for push delivery/recovery,
+        // exactly as it did before pulls were coalesced.
+        this.#pendingOffsetSelfPull = undefined;
+        if (!this.#disposed) {
+          console.error(
+            `stream processor "${this.driver.contract.slug}" waitUntilEvent(offset <= ` +
+              `${highestTarget}) self-pull failed; waiters stay parked for delivery`,
+            error,
+          );
+        }
+        return;
+      }
+    }
   }
 
   #assertNotDisposed(): void {
