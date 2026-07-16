@@ -435,8 +435,10 @@ independent sockets from killing each other. Collapse to one:
   `useItx(slug)` / `connectItx(slug)` = `session.projects.get(slug)`, and
   `projects.get` now accepts a **URL slug** (or `prj_` id), so the browser passes
   `params.projectSlug` straight through with no client-side slug→id hop.
-  `<ItxProvider>` is a pure session gate (auth-suspends once); `<ProjectScope
-slug>` carries the ambient slug — no socket of its own.
+  There is **no provider**: the socket is module-global and every hook dials it
+  lazily, so `<ProjectScope slug>` just carries the ambient slug (for `useItx()`
+  with no arg) and pre-warms the socket — the sidebar / ⌘K / admin use itx with
+  no `<ProjectScope>` at all.
 - **Reconnect is invisible.** React reads an immutable `Snapshot`;
   `snapshot.session` keeps the last live session across a transport gap, so
   `useIterateSession()` suspends exactly once (first load) and reads are
@@ -463,8 +465,11 @@ slug>` carries the ambient slug — no socket of its own.
   after create/unlock), distinct from transport recovery.
 - **Deleted:** the socket `Map`, `connectionKey`, `ItxAddress`,
   `evictItxSocket`/`evictItxSocketIfCurrent`, the `Session & Project` handle
-  intersection, and the mirror's dedicated socket. The mirror rides the shared
-  session and can no longer blank the page on its own reconnect.
+  intersection, the mirror's dedicated socket, **`<ItxProvider>`** (no provider is
+  needed above a module-global socket — its pre-warm folded into `<ProjectScope>`),
+  and the **12 per-page `<ItxBoundary>` wrappers** (TanStack Router already wraps
+  every route match in `<Suspense>` via its `defaultPendingComponent`). The mirror
+  rides the shared session and can no longer blank the page on its own reconnect.
 
 Reviewed before implementation by codex (gpt-5.6-sol, max reasoning) for React
 19 / TanStack Start idiom; its corrections — immutable snapshot, session-owned

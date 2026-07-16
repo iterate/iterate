@@ -168,7 +168,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
 - [Preview CI performance](docs/ci-preview-performance.md) — how the preview deploy+e2e check stays ~2-3 min, the budget guardrail, and how to keep it fast without raising cost
 - [TypeScript conventions](docs/typescript-conventions.md)
-- [Frontend development](docs/frontend-development.md) — the apps/os programming model: one capnweb capability tree over one WebSocket, the thin itx hooks (`useSession`/`useItx`, `useItxQuery`/`useSessionQuery`, `useLiveState`), and LiveView-style live state from Durable Objects
+- [Frontend development](docs/frontend-development.md) — the apps/os programming model: one capnweb capability tree over one WebSocket, the thin itx hooks (`useIterateSession`/`useItx`, `useItxQuery`/`useIterateSessionQuery`, `useLiveState`), and LiveView-style live state from Durable Objects
 - [Design system & React](docs/design-system.md)
 - [Slack testing](docs/slack-testing.md) — real Slack flows; **`SLACK_CI_BOT_TOKEN` trigger actor**; channel membership (`#slack-agent-e2e-test`); preview setup; duplicate-bot caveats
 - [GitHub production smoke testing](docs/github-smoke-testing.md) — post-recreation config sync, authenticated requests, and webhook routing

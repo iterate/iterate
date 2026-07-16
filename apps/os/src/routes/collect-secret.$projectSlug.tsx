@@ -30,7 +30,7 @@ import { ProjectScope, useItx, useItxQuery } from "~/itx/itx-react.tsx";
 // first and returns here.
 export const Route = createFileRoute("/collect-secret/$projectSlug")({
   validateSearch: CollectSecretSearch,
-  // ItxProvider dials a WebSocket and throws during SSR — same shape as the
+  // ProjectScope dials a WebSocket and throws during SSR — same shape as the
   // project layout (_app/projects/$projectSlug/route.tsx).
   ssr: false,
   beforeLoad: async ({ context, location, params }) => {
