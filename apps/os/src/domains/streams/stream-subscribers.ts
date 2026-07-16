@@ -349,19 +349,37 @@ export class StreamSubscribers {
     if (this.#idleTimer !== undefined) clearTimeout(this.#idleTimer);
     this.#idleTimer = undefined;
     this.#tearingDown = true;
+    let closeFailureCount = 0;
     try {
       for (const connection of [...this.#connections.values()]) {
-        connection.close("replaced", false);
+        try {
+          connection.close("replaced", false);
+        } catch {
+          closeFailureCount += 1;
+        }
       }
     } finally {
       this.#tearingDown = false;
+      this.#pokesInFlight.clear();
+      this.#pushDrains.clear();
+      this.#batchLimits.clear();
+      this.#consecutiveSkips.clear();
+      this.#subscriptionMetrics.clear();
+      this.#freshTail = [];
     }
-    this.#pokesInFlight.clear();
-    this.#pushDrains.clear();
-    this.#batchLimits.clear();
-    this.#consecutiveSkips.clear();
-    this.#subscriptionMetrics.clear();
-    this.#freshTail = [];
+    if (closeFailureCount > 0) {
+      try {
+        console.error({
+          schema: "iterate.stream-recovery.v1",
+          message: "stream_recovery_connection_cleanup_failed",
+          operation: "stream.restore",
+          outcome: "degraded",
+          failureCount: closeFailureCount,
+        });
+      } catch {
+        // A diagnostic sink cannot resurrect pre-recovery delivery state.
+      }
+    }
   }
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */

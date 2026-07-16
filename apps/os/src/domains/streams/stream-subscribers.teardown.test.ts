@@ -8,7 +8,7 @@
 // This file drives the real module with a DO-faithful harness: facts land in
 // the log, every fact-append triggers wake(), parked facts fold.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CoreProcessorContract,
   type SubscriptionConfiguredPayload,
@@ -372,5 +372,38 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
 
     expect(h.subscribers.hasConnection("live")).toBe(false);
     expect(h.log).toHaveLength(eventCountBeforeReset);
+  });
+
+  it("recovery clears every old-log connection when one disposer throws", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const h = makeFaithfulHarness();
+    let healthyDisposed = false;
+    const broken = Object.assign(() => undefined, {
+      [Symbol.dispose]() {
+        throw new Error("broken RPC disposer");
+      },
+    }) as RetainedProcessEventBatch;
+    const healthy = Object.assign(() => undefined, {
+      [Symbol.dispose]() {
+        healthyDisposed = true;
+      },
+    }) as RetainedProcessEventBatch;
+    h.subscribers.openEphemeral({ subscriptionKey: "broken", sink: broken });
+    h.subscribers.openEphemeral({ subscriptionKey: "healthy", sink: healthy });
+
+    expect(() => h.subscribers.resetForRecovery()).not.toThrow();
+
+    expect(h.subscribers.hasConnection("broken")).toBe(false);
+    expect(h.subscribers.hasConnection("healthy")).toBe(false);
+    expect(healthyDisposed).toBe(true);
+    expect(error).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith({
+      schema: "iterate.stream-recovery.v1",
+      message: "stream_recovery_connection_cleanup_failed",
+      operation: "stream.restore",
+      outcome: "degraded",
+      failureCount: 1,
+    });
+    error.mockRestore();
   });
 });

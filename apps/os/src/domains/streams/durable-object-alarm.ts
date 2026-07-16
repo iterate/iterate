@@ -5,23 +5,49 @@
  */
 export class DurableObjectAlarm {
   readonly #ctx: DurableObjectState;
+  readonly #diagnosticContext: { projectId: string | null; streamId: string };
   readonly #slices = new Map<string, number>();
   #chain: Promise<void> = Promise.resolve();
   #platformAlarmAt: number | null | undefined;
 
-  constructor(ctx: DurableObjectState) {
+  constructor(
+    ctx: DurableObjectState,
+    diagnosticContext: { projectId: string | null; streamId: string },
+  ) {
     this.#ctx = ctx;
+    this.#diagnosticContext = diagnosticContext;
   }
 
   set(name: string, at: number | null): Promise<void> {
-    if (at === null) this.#slices.delete(name);
-    else this.#slices.set(name, at);
+    this.#setDesired(name, at);
     return this.reconcile();
   }
 
-  /** Fire-and-forget form for synchronous product paths; reconciliation owns diagnostics. */
-  schedule(name: string, at: number | null): void {
-    void this.set(name, at).catch(() => undefined);
+  /** Fire-and-forget minimum for producers which can race under one owner name. */
+  scheduleNoLaterThan(name: string, at: number): void {
+    const current = this.#slices.get(name);
+    if (current === undefined || at < current) this.#slices.set(name, at);
+    const scheduled = this.reconcile().catch((error: unknown) => {
+      // setAlarm/deleteAlarm are storage writes. Keep their rejection on the
+      // invocation so the Durable Object output gate fails and Cloudflare
+      // restarts the object instead of acknowledging work without a wake-up.
+      // The structured line adds stream identity; it never converts failure
+      // into success.
+      try {
+        console.error({
+          schema: "iterate.stream-alarm.v1",
+          message: "stream_alarm_reconciliation_failed",
+          operation: "stream.reconcile_alarm",
+          outcome: "failed",
+          errorName: error instanceof Error ? error.name : "NonErrorThrowable",
+          ...this.#diagnosticContext,
+        });
+      } catch {
+        // Preserve the storage failure even if optional diagnostics fail.
+      }
+      throw error;
+    });
+    this.#ctx.waitUntil(scheduled);
   }
 
   /** Record that the platform consumed this alarm and drop every due slice. */
@@ -57,11 +83,14 @@ export class DurableObjectAlarm {
 
   #enqueue(work: () => Promise<void>): Promise<void> {
     const step = this.#chain.then(work);
-    this.#chain = step.catch((error: unknown) => {
+    this.#chain = step.catch(() => {
       this.#platformAlarmAt = undefined;
-      console.error("stream alarm reconciliation failed", error);
     });
-    this.#ctx.waitUntil(this.#chain);
     return step;
+  }
+
+  #setDesired(name: string, at: number | null): void {
+    if (at === null) this.#slices.delete(name);
+    else this.#slices.set(name, at);
   }
 }

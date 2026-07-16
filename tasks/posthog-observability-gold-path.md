@@ -195,9 +195,12 @@ payloads into a second outbox or introduce a coordinator:
   PostHog cannot consume an ITX request's six outbound-connection slots or
   distort its trace duration.
 - The exporter stores only an offset cursor, next-attempt time, bounded retry
-  count, recovery generation, and last failure. Its storage reader returns
-  `{offset, committedAt}` and has no API through which a payload, path, event
-  type, idempotency key, metadata, or source lineage can reach PostHog.
+  count, recovery generation, current failure, and the last durable
+  abandonment record. Its storage reader returns `{offset, committedAt}` and
+  has no API through which a payload, path, event type, idempotency key,
+  metadata, or source lineage can reach PostHog. Present malformed state or a
+  cursor beyond the stream allocator disables export loudly without replacing
+  the evidence or guessing a baseline.
 - The fixed `iterate stream event committed` event is indexed by `project_id`,
   an opaque `stream_id`, offset, worker, and project/deployment scope. It sets
   `$process_person_profile: false` and disables geo-IP enrichment.
@@ -205,15 +208,26 @@ payloads into a second outbox or introduce a coordinator:
   at most 20,000 metadata rows, a 4 MB body, and a 5-second HTTP timeout. A
   backlog schedules the next page on a subsequent alarm rather than creating
   concurrent requests. A small alarm multiplexer preserves the earliest desire
-  shared with subscription retries.
-- Network, timeout, 408, 429, and 5xx outcomes retry at most five times with
-  jittered backoff. Retries reuse deterministic event UUIDs and `$insert_id`
-  values. Permanent rejection or exhausted retries advance the cursor only
-  after a structured error and durable abandonment marker, preventing both
-  silent loss and an infinite hot loop.
+  shared with subscription retries. Every new commit publishes the durable
+  desire before post-commit fan-out, and an idempotent caller retry republishes
+  it. A failed platform alarm write remains a rejected storage operation on the
+  invocation: Cloudflare's output gate discards the response and restarts the
+  object instead of acknowledging a committed event with no wake-up.
+- Network, timeout, 408, 409, 425, 429, and 5xx outcomes retry at most five
+  times with jittered backoff. Retries reuse deterministic event UUIDs and
+  `$insert_id` values scoped to the recovery generation, so retry dedupe
+  survives while a restored log may safely reuse an offset. Event-specific
+  rejection (400, 413, or 422) or exhausted transient retries advance the
+  cursor only after a structured error and durable abandonment marker; later
+  success clears current failure but retains that marker. Authentication and
+  other configuration responses block loudly with the cursor unchanged, and
+  a later append or idempotent retry re-attempts the same page after the
+  configuration is repaired.
 - Each attempt is a `posthog.capture_stream_events` custom span beneath the
   native alarm trace root. Success means PostHog returned 2xx (`accepted`), not
-  proven ingestion; timeout/network outcomes remain `unknown`.
+  proven ingestion; timeout/network outcomes remain `unknown`. A failure in
+  the optional custom tracing API falls back to the same delivery without a
+  custom span and never consumes the delivery retry budget.
 
 Existing history is not backfilled on rollout, idempotency hits are not new
 commits, and recovery imports reset the cursor without replaying restored

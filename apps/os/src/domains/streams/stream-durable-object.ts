@@ -36,7 +36,11 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
-import { posthogApiKeyFromStreamEnv, StreamEventPostHogExporter } from "./stream-event-posthog.ts";
+import {
+  posthogApiKeyFromStreamEnv,
+  resetStreamEventPostHogForRecovery,
+  StreamEventPostHogExporter,
+} from "./stream-event-posthog.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
@@ -89,7 +93,10 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  */
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
-  readonly #alarm = new DurableObjectAlarm(this.ctx);
+  readonly #alarm = new DurableObjectAlarm(this.ctx, {
+    projectId: this.name.projectId,
+    streamId: this.ctx.id.toString(),
+  });
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   readonly #posthog = (() => {
     const apiKey = posthogApiKeyFromStreamEnv(this.env);
@@ -104,13 +111,16 @@ export class StreamDurableObject extends DurableObject<Env> {
         streamId: this.ctx.id.toString(),
         workerName: this.env.WORKER_SELF,
       });
-    } catch {
+    } catch (error) {
       console.error({
         schema: "iterate.stream-telemetry.v1",
         message: "stream_posthog_state_initialization_failed",
         operation: "posthog.configure_stream_events",
         outcome: "disabled",
         failureKind: "storage",
+        errorName: error instanceof Error ? error.name : "NonErrorThrowable",
+        projectId: this.name.projectId,
+        streamId: this.ctx.id.toString(),
       });
       return undefined;
     }
@@ -161,7 +171,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => this.#alarm.schedule("subscriptions", atMs),
+      armAlarm: (atMs) => this.#alarm.scheduleNoLaterThan("subscriptions", atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -172,7 +182,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#coreProcessorState = this.#readCoreProcessorState();
     const posthogAlarmAt = this.#posthog?.nextAttemptAt;
     if (posthogAlarmAt !== null && posthogAlarmAt !== undefined) {
-      this.#alarm.schedule("posthog", posthogAlarmAt);
+      this.#alarm.scheduleNoLaterThan("posthog", posthogAlarmAt);
     }
 
     // The first boot appends the stream's birth certificate; every wake
@@ -217,18 +227,24 @@ export class StreamDurableObject extends DurableObject<Env> {
   async alarm(): Promise<void> {
     const firedAt = Date.now();
     await this.#alarm.fired(firedAt);
+    let productPreludeCompleted = false;
     try {
       // The constructor's `woken` append already ran `#subscribers.wake()`;
       // onAlarm re-derives any remaining durable subscription retry.
-      this.#subscribers.onAlarm();
       this.#flushCoreProcessorState();
+      this.#subscribers.onAlarm();
+      productPreludeCompleted = true;
 
-      const posthogAlarmAt = await this.#posthog?.flushIfDue(firedAt);
-      if (this.#posthog !== undefined) {
-        await this.#alarm.set("posthog", posthogAlarmAt ?? null);
-      }
+      await this.#posthog?.flushIfDue(firedAt);
     } finally {
-      await this.#alarm.reconcile();
+      // A subscriber/core exception must leave Cloudflare's running alarm
+      // untouched so its native retry survives. Once product work completed,
+      // republish the exporter's current durable desire after the await: an
+      // append or recovery may have replaced it while the fetch yielded.
+      if (productPreludeCompleted) {
+        if (this.#posthog === undefined) await this.#alarm.reconcile();
+        else await this.#alarm.set("posthog", this.#posthog.nextAttemptAt);
+      }
     }
   }
 
@@ -321,7 +337,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
 
-    if (newEvents.length === 0) return events;
+    if (newEvents.length === 0) {
+      // An earlier attempt may have committed the idempotent event and then
+      // failed while publishing its export alarm. Re-publish from the durable
+      // log on retry; an already caught-up exporter turns this into one empty,
+      // harmless alarm rather than risking an unexported committed event.
+      if (events.length > 0) this.#requestPostHogFlush();
+      return events;
+    }
 
     // 2. Persist event rows and reduced core state. Durable Object SQL storage
     // runs synchronously in the object's thread; each sql.exec() is atomic and
@@ -340,8 +363,12 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.length,
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
-    // 3. Post-commit fan-out. Core side effects are fire-and-forget where
-    // async, so nothing here can fail the append. One wake covers every lane:
+    // Publish the durable export obligation before any post-commit product
+    // fan-out can throw. The event log is the payload-blind outbox; this does
+    // not encode an event or perform a network request.
+    this.#requestPostHogFlush();
+
+    // 3. Post-commit product fan-out. One wake covers every lane:
     // live connection pumps re-arm, lagging wake subscribers get poked,
     // lagging push subscriptions drain. The spine triggers on WATERMARK LAG,
     // never on event types — a subscriber-disconnected fact whose teardown
@@ -358,26 +385,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     // so a stream that just went quiet sheds its durable delivery sessions
     // and lets both DOs hibernate.
     this.#subscribers.armOrClearIdleTimer();
-
-    const posthog = this.#posthog;
-    if (posthog !== undefined) {
-      try {
-        // The event log is the outbox. No event object crosses this boundary,
-        // and no PostHog fetch runs in the product invocation.
-        const flushAt = posthog.requestFlush();
-        if (flushAt !== null) this.#alarm.schedule("posthog", flushAt);
-      } catch {
-        console.error({
-          schema: "iterate.stream-telemetry.v1",
-          message: "stream_posthog_flush_request_failed",
-          operation: "posthog.schedule_stream_events",
-          outcome: "failed",
-          failureKind: "storage",
-          projectId: this.name.projectId,
-          streamId: this.ctx.id.toString(),
-        });
-      }
-    }
 
     return events;
   }
@@ -563,19 +570,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     assertValidStreamRecoveryLog(parsed, this.name);
     const recoveredCoreState = this.#foldRecoveryCoreProcessorState(parsed);
 
-    this.ctx.storage.transactionSync(() => {
+    const posthogRecoveryState = this.ctx.storage.transactionSync(() => {
+      const reset = resetStreamEventPostHogForRecovery(
+        this.ctx.storage.kv,
+        parsed.highestAssignedOffset,
+      );
       this.#log.replaceAll(parsed.events, parsed.highestAssignedOffset);
-      this.#posthog?.resetTo(parsed.highestAssignedOffset);
       this.ctx.storage.sql.exec("delete from subscriptions");
       this.ctx.storage.kv.put("state", recoveredCoreState);
       this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
+      return reset;
     });
     // Do not tear down the live runtime until the atomic storage replacement
     // succeeds. A failed transaction leaves both the old journal and its
     // in-memory delivery machinery usable.
-    this.#subscribers.resetForRecovery();
+    this.#posthog?.adoptRecoveryState(posthogRecoveryState);
     this.#recordCoreProcessorCheckpointWritten();
     this.#coreProcessorState = recoveredCoreState;
+    this.#subscribers.resetForRecovery();
 
     // The imported incarnation's live connections are gone. A fresh woken
     // fact clears their folded roster and reconciles every durable subscriber.
@@ -1150,6 +1162,27 @@ export class StreamDurableObject extends DurableObject<Env> {
     void promise.catch((error: unknown) => {
       console.error("stream core background work failed", error);
     });
+  }
+
+  #requestPostHogFlush(): void {
+    const posthog = this.#posthog;
+    if (posthog === undefined) return;
+    try {
+      const flushAt = posthog.requestFlush();
+      this.#alarm.scheduleNoLaterThan("posthog", flushAt);
+    } catch (error) {
+      console.error({
+        schema: "iterate.stream-telemetry.v1",
+        message: "stream_posthog_flush_request_failed",
+        operation: "posthog.schedule_stream_events",
+        outcome: "failed",
+        failureKind: "storage",
+        errorName: error instanceof Error ? error.name : "NonErrorThrowable",
+        projectId: this.name.projectId,
+        streamId: this.ctx.id.toString(),
+      });
+      throw error;
+    }
   }
 
   // ===========================================================================
