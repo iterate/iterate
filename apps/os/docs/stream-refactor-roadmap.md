@@ -65,7 +65,7 @@ These are the only incremental experiments worth considering before the
 replacement. Each change must remain independently revertible and must not add
 another long-lived state machine.
 
-### 1. Measure the integrated scanned-through runner
+### 1. Measure the integrated scanned-through runner (broad gate complete)
 
 The current-main semantic merge has implemented the compact private frame:
 selected events plus `scannedAfterOffset`, `scannedThroughOffset`, and
@@ -81,13 +81,19 @@ frame exists; those are availability and recovery paths. The duplicate work
 that has been removed is the pull that merely rediscovered a scanned-through
 boundary already supplied by a frame.
 
-The first post-merge task is to measure this implementation before changing it.
-Cover warm and cold agent, capability-host, repo, scheduler, secret, and full
-project births from a Node host, plus sparse selected frames, an empty
-head-reaching frame, continuous writers, forced kills, and receiver failure.
-Record Stream reads/RPC turns as well as end-to-end readiness. This determines
-whether the compact frame earns a measurable birth/sparse-delivery win and
-establishes the exact-main baseline for all later work.
+The exact-current-main broad gate is complete. Candidate `b2712ad09` versus
+main `7495c6802` improved the conservative equal-workload p50/p95/mean by
+30.568%/27.018%/31.619% across 50 passing fresh processes and 35,750
+host-timed observations. This proves the merged implementation retained a
+large cumulative win; it does not isolate the compact frame's contribution.
+
+The remaining focused attribution should cover warm and cold agent,
+capability-host, repo, scheduler, secret, and full project births from a Node
+host, plus sparse selected frames, an empty head-reaching frame, continuous
+writers, forced kills, and receiver failure. Record Stream reads/RPC turns as
+well as end-to-end readiness. Do this only if deciding whether to simplify the
+runner before landing; it is no longer a blocker for the broad performance
+claim.
 
 Only then compare cold barriers that scan to the captured head with a
 target-bounded variant. A target-bounded fold must not report a false head or
@@ -97,14 +103,38 @@ consequential side effects, so a smaller read is not worth ambiguous liveness.
 Require at least 5% p50 and mean improvement with no greater than 2% p95/p99
 regression for any additional mechanism.
 
-### 2. Packed activation record
+### 2. Diagnose activation tail, then pack the activation record
 
 Store canonical Stream name and the optional core checkpoint in one physical
 KV record. The measured ceiling is about 0.26-0.28 ms, roughly 11%-12% of the
 observed 2.2-2.5 ms activation path. Reject it if the full cold-activation suite
 does not improve p50 and mean by at least 5% without a material p95 regression.
 
-### 3. Keyed homogeneous insert
+Checkpoint 16 makes this the highest-priority bounded experiment. Five
+100-sample processes found forced-reactivation head p50 neutral at 0.62%
+slower, but p95 66.69% slower (2.735 ms to 4.559 ms). Dense
+post-reactivation read improved 15.73% p50 but regressed 9.98% p95. First
+instrument activation read count, bytes, checkpoint decode, and GC from the
+Node host/workerd profiler; do not infer elapsed time from a Worker clock.
+Packing one record has too small a measured ceiling to explain the whole p95
+gap, so keep it only if it improves the distribution rather than merely the
+best case.
+
+### 3. Typed post-commit deltas
+
+The source-owned and transactional-outbox redesigns both make the append
+reducer emit a typed control delta alongside the committed event. The current
+kernel validates and parses subscription control events in the reducer, then
+parses them again in post-commit processing. Preserve one parsed result through
+the commit boundary instead. This should delete code and parser work without
+changing persistence, RPC, or recovery ownership. Accept only if the diff is a
+net simplification and all control-event/recovery tests remain exact.
+
+This is the best clarity-first change after activation diagnosis: it should be
+roughly tens of lines, removes duplicate work, and does not add a state machine
+or consistency boundary.
+
+### 4. Keyed homogeneous insert
 
 A derived keyed insert reduces statements and bindings for large uniformly
 keyed batches, but its only positive result is a host-SQLite microbenchmark.
@@ -114,7 +144,23 @@ and deployed evidence at 500 and 1,000 events. It must preserve idempotency
 input alignment, byte-boundary rebinding, chunk transactions, and same-batch
 duplicate behavior exactly.
 
-### 4. Direct Project Worker delivery
+### 5. Integrated sparse scan and durable claim
+
+The transactional-outbox spike's strongest result was a 55.0% local reduction
+for sparse selection plus claim construction. Its query establishes the raw
+scan boundary, selected offsets, byte bound, and persisted one-frame claim as
+one storage-owned operation instead of materializing the same decision through
+separate planner and claim stages. Port the smallest version into the current
+source-owned outbox, preserving output-gate ordering, poison bisection, epochs,
+chunk hydration, and event-less scanned-through progress. The result is not a
+shipping claim until a deployed sparse Worker-consumer lane improves by at
+least 5% without singleton, dense, or p95/p99 regression.
+
+This is higher upside than the keyed insert but also higher risk. Do not start
+it until the landing branch is either frozen or copied to an isolated
+experiment worktree.
+
+### 6. Direct Project Worker delivery
 
 Re-run the preserved direct Project Worker path only after the merged baseline
 is stable. The first deployed PCM run improved p50 throughput but regressed
@@ -126,6 +172,33 @@ Use generic and direct source Durable Objects in one deployment, randomized
 ABBA pairs, fresh projects, and Node-host end-to-end timing. Require at least
 5% paired p50/capacity improvement, no more than 2% p95/p99 regression, exact
 recovery, and no source-DO duration or hibernation regression.
+
+## Parallel Kernel Spike Result
+
+Three executable no-compatibility spikes tested ownership changes against
+merged baseline `0128ebe73`:
+
+- A 1,927-line source-owned kernel reduced local 100-event append work by
+  11.8%-21.3%, but regressed singleton append 10.8% and sparse framing 9.0%.
+- A 2,425-line receiver credit/pull kernel made the receiver authoritative for
+  cursor and claim state. It added two cross-DO calls and four writes per
+  caught-up burst; singleton delivery became three calls/seven writes rather
+  than one/three, and local controls were 16.9%-23.4% slower.
+- A 2,427-line transactional-outbox kernel reduced its local sparse
+  scan-plus-claim lane 55.0%, but regressed singleton append 23.7% and sparse
+  read 3.1%.
+
+These counts exclude substantial omitted production surface and are ownership
+signals, not feature-parity comparisons. Do not replace the current kernel with
+any spike. Keep source ownership as the default, consider receiver ownership
+only where an already-existing processor Durable Object can atomically commit
+its projection and cursor, and promote only the typed-delta and integrated
+scan/claim mechanisms through the normal deployed gates.
+
+The spikes contain 60 passing focused tests and 9,923 total lines. They remain
+outside the shipping diff and are archived at
+`~/stream-kernel-redesign-experiments-2026-07-16.tar.gz`, SHA-256
+`7ced9e22f851344f471619b8db41496d7ed1485ccdf515de8e982fa63373cf05`.
 
 ## Post-2038 Integration Result
 
@@ -153,8 +226,10 @@ The merge met the semantic gates:
 Root typecheck, lint, formatting, and recursive workspace tests pass at the
 integration snapshot. The focused Stream matrix passes 478 tests, the affected
 cross-domain matrix passes 208, and the full OS suite passes 1,969 tests with
-one intentional skip. The exact-main cumulative run and deployed birth/Worker
-consumer gates are still required before this tree is a shipping candidate.
+one intentional skip. Later bootstrap/idempotency fixes pass 544 Stream tests
+and deployed preview proof. The exact-current-main cumulative gate is complete;
+the corrected full preview and destructive rollout runbook remain before this
+tree is a shipping candidate.
 
 ## Replacement Architecture
 

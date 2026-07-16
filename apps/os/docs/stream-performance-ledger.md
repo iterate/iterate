@@ -4796,3 +4796,155 @@ Local proof at this checkpoint is 544 passing Stream-domain tests, clean OS and
 playground TypeScript, and clean focused lint. The replacement preview run,
 full deployed lane, and post-deploy error audit remain pending. Production was
 not deployed, erased, or otherwise changed.
+
+## 2026-07-16: Three Executable Kernel Redesign Spikes
+
+Three independent agents built isolated, no-compatibility kernels under
+`apps/os/src/domains/streams/experiments`. None modified production files.
+Together they contribute 60 passing focused tests and 9,923 lines of
+implementation, tests, benchmarks, adapters, and documentation. OS TypeScript
+and each experiment's scoped lint/typecheck pass.
+
+The 1,927-line source-owned implementation has three explicit state machines
+and four tables. In three paired Node SQLite process runs it was 21.3% faster
+for 100 tiny appends and 11.8% faster for 100 x 1 KiB, but 10.8% slower for a
+singleton and 9.0% slower for a 20-of-2,000 sparse frame. It validates that a
+substantially smaller ownership model is possible, but not that omitted
+production semantics can be added inside the same budget or without losing the
+current hot paths.
+
+The 2,425-line receiver credit/pull implementation moves exact claims, cursor,
+retry, and poison state to a receiver Durable Object. For 100,000 events in 391
+pages it models 393 cross-object calls and 787 writes versus source push's 391
+calls and 783 writes. At singleton, one frame becomes head notification, page
+pull, and quiet-tail report: three calls and seven writes versus one and three.
+Two local runs found it 16.9% and 23.4% slower. It is rejected as the general
+protocol; its only credible niche is an existing stateful processor DO that can
+commit projection and cursor in one transaction.
+
+The 2,427-line transactional-outbox implementation has two durable state
+machines and four tables. Twenty-one alternating local samples found sparse
+scan plus durable claim 55.0% faster, but singleton append 23.7% slower and
+sparse read 3.1% slower. Its integrated demand-bounded scan/claim and typed
+post-commit control deltas are the strongest mechanisms to extract; the whole
+kernel does not clear replacement gates.
+
+All timings use a Node-host clock, but they measure local SQLite/JavaScript
+only, not workerd, output gates, eviction, alarms, capability disposal,
+placement, or Workers RPC. No percentage in this section is a deployed or
+shipping performance claim.
+
+The untracked experiment tree is preserved outside temporary storage at
+`/Users/jonastemplestein/stream-kernel-redesign-experiments-2026-07-16.tar.gz`
+(80 KiB), SHA-256
+`7ced9e22f851344f471619b8db41496d7ed1485ccdf515de8e982fa63373cf05`.
+Production remains untouched.
+
+## 2026-07-16: Preview-9 Replacement Proof And Test-Contract Fix
+
+Exact correction commit `04479c168cf6e471d7e28768a78dba9a5f697a56`
+deployed to preview-9 as Streams Worker version
+`aafec577-96fc-42d3-b2f8-5e6028463989` and OS Worker version
+`cf364f8f-7b15-4574-80a4-0d7e1bfb5523`. The deployed Streams suite passed 20
+tests with one intentional expected failure. Its browser lane passed 30 with
+one intentional skip, and the all-projection/idempotency proof passed in 1.657
+seconds. The explicit 32 MiB WebSocket frame-ceiling test retried once and then
+passed.
+
+A Cloudflare telemetry audit over the deployed window found zero recurrences
+of `table events already exists`. Its remaining Stream error-level rows were
+induced by negative tests: the oversized-frame rejection plus deliberate
+`kill`, `reset`, invalid-subscription, and conflicting-idempotency RPC
+exceptions. They are modelled test outcomes rather than unexplained runtime
+failures. The broader OS preview still contains unrelated R2 missing-key error
+telemetry and therefore is not globally error-clean.
+
+The preview job's only final OS Vitest failure was branch-induced but not a
+Stream runtime failure. The dynamic capability-pipelining proof mounted
+`Stream.append`, called its new acknowledgement-only default, and destructured
+the resulting `undefined` as though the old full-event default still existed.
+The proof now explicitly passes `{ return: "events" }` for all three dynamic
+capability paths. A deployed targeted rerun passes 3/3 in 53.25 seconds. The
+Project Worker `processEventBatch` cross-post test that had retried in the full
+job also passed cleanly in a 9.847-second deployed rerun.
+
+This establishes deployed correctness for bootstrap recovery, all append
+projections, idempotency conflicts, dynamic append capability transport, and
+the cross-post path. The full CI run remains red until the test correction is
+committed and redeployed. Production was not deployed or erased.
+
+## 2026-07-16: Sixteenth Exact Current-Main Cumulative Checkpoint
+
+Freshly fetched `origin/main` advanced by one runtime-neutral inspector UI
+commit to `7495c680220d3c8cf0c7ffeb7ffec28a6c2c18f8`. It was merged and pushed as
+candidate `b2712ad0934de105bdc8d112fc1d042226a5d5a6`. Separate detached
+worktrees ran those exact immutable revisions. Every elapsed-time sample was
+taken by the Node host around awaited network/RPC work or host-observed
+delivery; no result depends on a Worker-local clock advancing without network
+I/O.
+
+Five alternating fresh processes per revision ran each of the complete suite,
+enlarged append/reactivation tails, enlarged live delivery, enlarged
+cross-post, and storage/reactivation lanes. All 50 processes, exact-revision
+checks, metric sets, sample cardinalities, and semantic assertions passed.
+Together they contributed 35,750 finite host-timed observations from
+`2026-07-16T18:27:10.459Z` through `2026-07-16T18:37:01.570Z`.
+
+| Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
+| ------------------------- | --------------: | --------------: | ---------------: |
+| Unmodified full suite     |     **28.889%** |     **18.188%** |      **29.914%** |
+| Conservative substitution |     **30.568%** |     **27.018%** |      **31.619%** |
+
+The conservative row uses the established substitutions: enlarged controls
+replace the full-suite acknowledgement-only singleton, 100-event append,
+concurrent-32 append, one-subscriber delivery, and 25-subscriber delivery.
+This is an equal-workload geometric summary, not production-traffic weighting
+and not a sum of prior percentages.
+
+Focused median-of-five results were:
+
+| Focused workload                     | P50 change |  P95 change | Mean change |
+| ------------------------------------ | ---------: | ----------: | ----------: |
+| Append one 1 KiB event               |     69.16% |      65.90% |      66.34% |
+| Append 100 tiny events               |     32.35% |      19.66% |      31.08% |
+| Append 100 x 1 KiB events            |     30.40% |      15.66% |      28.84% |
+| Append 1,000 tiny events             |     36.27% |      12.11% |      31.59% |
+| Append 100 keyed tiny events         |     18.28% |      14.04% |      18.65% |
+| Append 32 concurrent singleton calls |     33.18% |      24.47% |      29.12% |
+| Deliver to one live subscriber       |     49.27% |      55.12% |      45.91% |
+| Deliver to 25 live subscribers       |      9.01% |       7.15% |      10.56% |
+| Dense post-reactivation read         |     15.73% |      -9.98% |      13.32% |
+| Sparse post-reactivation read        |     22.24% |      -2.58% |      19.90% |
+| Append one inline 768 KiB event      |     46.08% |      37.63% |      37.91% |
+| Append one chunked 1.1 MiB event     |      2.22% |       6.07% |       1.36% |
+| Enlarged dense cross-post            |      2.80% |       3.10% |       3.37% |
+| Enlarged sparse cross-post           |      8.62% |       9.60% |      10.43% |
+| Forced-reactivation head             |     -0.62% | **-66.69%** |      -6.01% |
+
+Positive values mean lower candidate latency. The fixed-work p50 throughput
+increases were 47.82% for 100 tiny events, 43.68% for 100 x 1 KiB, 56.92% for
+1,000 tiny, 49.65% for concurrent-32, and 9.90% for 25-subscriber fanout.
+
+The low-count full-suite p95 rows are noisy and sometimes contradict the
+larger controls. The larger controls clear append, concurrency, and live
+delivery p95. They do not clear activation: forced-reactivation head is neutral
+at p50 but repeats a severe candidate p95 tail, and dense post-reactivation
+read is 9.98% slower at p95. Activation profiling and state-read compaction are
+therefore the next bounded performance task. The chunked 1.1 MiB lane is now
+neutral rather than a cumulative win.
+
+An immediately preceding attribution matrix compared `04479c168` with
+`c2582c200`. Its 50 passing processes reported 34.582%/36.349%/33.763%
+unmodified p50/p95/mean improvements and 33.422%/36.498%/33.430%
+conservatively. Since the only intervening main change was UI, the difference
+between matrices is local-run variance. The current-head matrix above is the
+shipping headline.
+
+Both complete matrices, server logs, metadata, reproducible validator, and
+analyses are archived at
+`/Users/jonastemplestein/stream-performance-evidence-2026-07-16.tar.gz` (9.1
+MiB compressed), SHA-256
+`09caee4e742ab454ea2e8e2047c8146c24bbe965963a4790ee2e2ab9c2ba9552`.
+Both benchmark servers were stopped. If optimization remains active, the next
+exact-current-main checkpoint is due by `2026-07-16T22:37:01.570Z`.
+Production remains untouched.

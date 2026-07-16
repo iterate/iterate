@@ -1,13 +1,13 @@
 # Stream Performance Handoff
 
 Snapshot captured on 2026-07-15 and updated on 2026-07-16 after semantically
-integrating `origin/main` through `c2582c200` into draft PR
+integrating `origin/main` through `7495c6802` into draft PR
 [#1902](https://github.com/iterate/iterate/pull/1902). The integrated history
 includes the #2002 processor runner/registry redesign, #2038 explicit processor
-births, and #2040 native trace roots for Stream retry alarms. The last Stream
-runtime revision covered by the cumulative checkpoint remains `886b5ecf1`;
-the current merged tree has not yet been cumulatively benchmarked. Production
-has not been deployed, erased, or otherwise changed.
+births, #2040 native trace roots for Stream retry alarms, and #2046's
+runtime-neutral inspector UI. Exact merged candidate `b2712ad09` has now been
+benchmarked against exact current main `7495c6802`. Production has not been
+deployed, erased, or otherwise changed.
 
 ## 2026-07-16 Integration Update
 
@@ -35,9 +35,9 @@ The resolved tree passes root typecheck, lint, formatting, and the recursive
 workspace test matrix. The focused Stream matrix passes 478 tests; the affected
 cross-domain matrix passes 208. The complete OS unit suite passes 1,969 tests
 with one intentional skip across 188 files. Generated OS and package ITX
-APIs/examples were regenerated from source. The exact post-merge cumulative
-and deployed benchmarks remain pending; do not reinterpret the historical
-checkpoint as a measurement of the current merged tree.
+APIs/examples were regenerated from source. Later bootstrap/idempotency fixes
+pass 544 Stream-domain tests, and the exact post-merge cumulative checkpoint is
+recorded below.
 
 ### Preview-9 correctness findings
 
@@ -48,8 +48,9 @@ not exercised:
 - Fresh schema creation used several synchronous DDL statements without an
   explicit transaction. An interrupted first activation could therefore leave
   an unversioned partial `events` table. Every later activation retried
-  `create table events`, failed with `SQLITE_ERROR: table events already
-exists`, and permanently wedged that Stream. Preview telemetry recorded 124
+  `create table events`, failed with
+  `SQLITE_ERROR: table events already exists`, and permanently wedged that
+  Stream. Preview telemetry recorded 124
   such errors and one 60-second append invocation. Schema creation now runs in
   `transactionSync`; an absent schema marker identifies a fresh/interrupted
   bootstrap whose partial Stream-owned tables are replaced, while any SQL
@@ -71,8 +72,103 @@ transport bug. The expanded deployed test covers same-batch and persisted
 retries in acknowledgement, offset, and event projection modes.
 
 The fixes pass OS and playground TypeScript, focused lint, and all 544 current
-Stream-domain tests locally. A new preview deployment and telemetry audit are
-still required before this paragraph may be treated as deployed proof.
+Stream-domain tests locally. Preview-9 deployed exact fix commit `04479c168` as
+Streams Worker version `aafec577-96fc-42d3-b2f8-5e6028463989`. The deployed
+Streams suite passed 20 tests with one intentional expected failure; its browser
+lane passed 30 with one intentional skip. The all-projection/idempotency proof
+passed in 1.657 seconds. The only retry was the explicit 32 MiB WebSocket frame
+ceiling, which then passed.
+
+Cloudflare telemetry for the deployed window contained no recurrence of
+`table events already exists`. The remaining Stream error rows were all
+induced by explicit negative tests: two representations of each oversized
+frame attempt plus deliberate `kill`, `reset`, invalid-subscription, and
+idempotency-conflict RPC exceptions. The OS preview job's final failure was a
+separate test-contract defect: a dynamically mounted append capability
+destructured the new acknowledgement-only default. It now requests
+`{ return: "events" }`; the deployed targeted rerun passes 3/3. The earlier
+Project Worker cross-post retry also passed cleanly when rerun against the same
+deployment. A new full preview is still required after committing that test
+correction, but the Stream runtime fixes themselves have deployed proof.
+
+### Exact current-main checkpoint
+
+Two immutable local Worker stacks compared exact merged candidate
+`b2712ad0934de105bdc8d112fc1d042226a5d5a6` with freshly fetched exact main
+`7495c680220d3c8cf0c7ffeb7ffec28a6c2c18f8`. Five alternating fresh processes
+per revision ran each of the complete suite, enlarged append/reactivation,
+live delivery, enlarged cross-post, and storage/reactivation lanes. All 50
+processes and 35,750 host-timed observations passed identity, cardinality,
+finiteness, and semantic validation.
+
+| Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
+| ------------------------- | --------------: | --------------: | ---------------: |
+| Unmodified full suite     |     **28.889%** |     **18.188%** |      **29.914%** |
+| Conservative substitution |     **30.568%** |     **27.018%** |      **31.619%** |
+
+The conservative row replaces low-count full-suite singleton append,
+100-event append, concurrent append, and one/25-subscriber rows with their
+larger focused controls. It is an equal-workload geometric summary, not a
+production-traffic weighting. A separate immediately preceding 50-process
+matrix against `c2582c200` reported 34.582%/36.349%/33.763% for the unmodified
+suite and 33.422%/36.498%/33.430% conservatively. The intervening main commit
+changed only inspector UI, so the spread quantifies local-run variance rather
+than a Stream-runtime attribution.
+
+The larger controls retain the useful wins: p50 improved 69.16% for
+acknowledgement-only 1 KiB append, 32.35% for 100 tiny events, 30.40% for 100 x
+1 KiB, 36.27% for 1,000 tiny, 33.18% for 32 concurrent singleton calls, 49.27%
+for one live subscriber, 9.01% for 25 live subscribers, and 46.08% for one
+inline 768 KiB event. Corresponding p50 throughput improved 47.82%, 43.68%,
+56.92%, 49.65%, and 9.90% in the batch/concurrent/fanout lanes.
+
+The primary unresolved regression is activation tail latency. Across five
+100-sample processes, forced-reactivation head p50 was neutral at 0.62% slower,
+but p95 was 66.69% slower (2.735 ms to 4.559 ms). Dense post-reactivation read
+improved 15.73% p50 while regressing 9.98% p95. Sparse post-reactivation read
+improved 22.24% p50 and remained neutral at 2.58% slower p95. The 1.1 MiB
+chunked append is now neutral at 2.22% faster p50 and 1.36% faster mean. These
+tails make activation diagnosis, not another broad delivery mechanism, the
+next performance gate.
+
+Both matrices, server logs, metadata, validator, and analyses are archived at
+`~/stream-performance-evidence-2026-07-16.tar.gz` (9.1 MiB compressed),
+SHA-256
+`09caee4e742ab454ea2e8e2047c8146c24bbe965963a4790ee2e2ab9c2ba9552`.
+
+### Parallel redesign findings
+
+Three isolated executable kernels were built from merged baseline `0128ebe73`.
+They intentionally omit compatibility and production integration; their local
+SQLite/process timings are architectural probes, not deployed performance
+claims.
+
+| Kernel               | Implementation | State shape                              |                         Strongest local result |                                                                   Blocking result |
+| -------------------- | -------------: | ---------------------------------------- | ---------------------------------------------: | --------------------------------------------------------------------------------: |
+| Source-owned minimal |    1,927 lines | 3 state machines, 4 tables               |                   100 tiny append 21.3% faster |                                  singleton 10.8% slower; sparse frame 9.0% slower |
+| Receiver credit/pull |    2,425 lines | state split across source + receiver DOs | receiver projection can commit with its cursor | local model 16.9%-23.4% slower; singleton becomes 3 calls/7 writes instead of 1/3 |
+| Transactional outbox |    2,427 lines | 2 durable machines, 4 tables             |               sparse scan + claim 55.0% faster |                                   singleton 23.7% slower; sparse read 3.1% slower |
+
+No complete replacement clears the gate. Receiver-owned pull is rejected as
+the general delivery protocol because it moves rather than removes durable
+coordination and is worst for singleton/trickle traffic. It remains credible
+only for a processor that is already a Durable Object and can transactionally
+commit projection state with its cursor.
+
+The source-owned and outbox spikes converge on two bounded follow-ups: emit a
+typed post-commit delta so control events are parsed once, and combine sparse
+frame selection with durable claim construction so the chosen events are not
+materialized twice. Both must be implemented as independently revertible
+changes in the current kernel and proved in workerd plus deployed
+Worker-to-Worker lanes. The existing demand-bound tail, explicit scan
+coordinates, singular callback over private frames, and exact output-gated
+claim are already the right substrate rather than novel redesign results.
+
+The 60 focused redesign tests pass, and the experiments pass strict TypeScript
+and scoped lint. Their 9,923 source/test/doc lines remain untracked so they do
+not inflate this shipping PR. A durable archive is at
+`~/stream-kernel-redesign-experiments-2026-07-16.tar.gz` (80 KiB), SHA-256
+`7ced9e22f851344f471619b8db41496d7ed1485ccdf515de8e982fa63373cf05`.
 
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
@@ -83,13 +179,13 @@ acceptance gates are in the
 
 ## Executive Summary
 
-The measured pre-merge implementation is a large, real performance win. Its
-latest exact-main checkpoint used 50 valid fresh Node/Vitest processes and
-reported an equal-workload geometric improvement of 39.619% p50, 32.229% p95,
-and 37.648% mean under the conservative substitution rule. The unmodified full
-suite improved 34.518% p50, 33.336% p95, and 34.818% mean. These are
-equal-workload summaries, not production-traffic weighting, a sum of isolated
-wins, or a fresh claim for the current merged tree.
+The measured merged implementation is a large, real performance win. Its
+latest exact-current-main checkpoint used 50 valid fresh Node/Vitest processes
+and reported an equal-workload geometric improvement of 30.568% p50, 27.018%
+p95, and 31.619% mean under the conservative substitution rule. The unmodified
+full suite improved 28.889% p50, 18.188% p95, and 29.914% mean. These are
+equal-workload summaries, not production-traffic weighting or a sum of
+isolated wins.
 
 The strongest mechanisms are straightforward:
 
@@ -112,30 +208,28 @@ and performance oracle.
 
 ## Measured Result
 
-The latest cumulative comparison used candidate `c00545e81` against exact
-main `b560198aa`. The current merged tree is not byte-identical to either arm
-and has not yet been measured against current main; the table below is the
-immutable historical checkpoint. Every timer was on the Node host around
+The latest cumulative comparison used merged candidate `b2712ad09` against
+exact current main `7495c6802`. Every timer was on the Node host around
 awaited network/RPC work or host-observed delivery; no claim relies on a
 Worker-local clock advancing while Cloudflare has no network I/O in flight.
 
 | Workload                            |  Main p50 | Candidate p50 |        Change |
 | ----------------------------------- | --------: | ------------: | ------------: |
-| Append one 1 KiB event, no result   |  3.259 ms |      0.863 ms | 73.51% faster |
-| Append 100 tiny events              |  6.534 ms |      4.369 ms | 33.12% faster |
-| Append 100 x 1 KiB events           | 13.379 ms |      6.840 ms | 48.87% faster |
-| Append 1,000 tiny events            | 43.715 ms |     20.539 ms | 53.02% faster |
-| 32 concurrent singleton appends     | 14.144 ms |      8.882 ms | 37.21% faster |
-| Append to one live subscriber       |  2.616 ms |      1.007 ms | 61.52% faster |
-| Append to 25 live subscribers       |  4.103 ms |      3.699 ms |  9.84% faster |
-| Read hot head                       |  0.874 ms |      0.576 ms | 34.18% faster |
-| Read 500 dense 4 KiB events         | 22.078 ms |     13.936 ms | 36.88% faster |
-| Read 20 selected events from 2,000  |  1.286 ms |      0.857 ms | 33.40% faster |
-| Read latest selected event          |  1.161 ms |      0.595 ms | 48.74% faster |
-| Append one inline 768 KiB event     | 51.719 ms |     25.377 ms | 50.93% faster |
-| Append one chunked 1.1 MiB event    | 41.034 ms |     36.402 ms | 11.29% faster |
-| Dense durable cross-post            |  6.988 ms |      6.326 ms |  9.47% faster |
-| Sparse durable cross-post, 1 of 100 |  9.825 ms |      7.485 ms | 23.81% faster |
+| Append one 1 KiB event, no result   |  2.535 ms |      0.782 ms | 69.16% faster |
+| Append 100 tiny events              |  4.358 ms |      2.948 ms | 32.35% faster |
+| Append 100 x 1 KiB events           |  8.043 ms |      5.598 ms | 30.40% faster |
+| Append 1,000 tiny events            | 25.911 ms |     16.513 ms | 36.27% faster |
+| 32 concurrent singleton appends     | 10.915 ms |      7.294 ms | 33.18% faster |
+| Append to one live subscriber       |  1.810 ms |      0.918 ms | 49.27% faster |
+| Append to 25 live subscribers       |  3.526 ms |      3.208 ms |  9.01% faster |
+| Read hot head                       |  0.707 ms |      0.507 ms | 28.19% faster |
+| Read 500 dense 4 KiB events         | 15.108 ms |     13.164 ms | 12.87% faster |
+| Read 20 selected events from 2,000  |  0.800 ms |      0.848 ms |  6.04% slower |
+| Read latest selected event          |  0.776 ms |      0.564 ms | 27.37% faster |
+| Append one inline 768 KiB event     | 42.974 ms |     23.171 ms | 46.08% faster |
+| Append one chunked 1.1 MiB event    | 36.314 ms |     35.509 ms |  2.22% faster |
+| Dense durable cross-post            |  4.713 ms |      4.582 ms |  2.80% faster |
+| Sparse durable cross-post, 1 of 100 |  6.205 ms |      5.671 ms |  8.62% faster |
 
 Focused demand-bound replay used 1,000 Streams with 500 events each. Compared
 with exact main, the shipping implementation improved p50/p95/p99/mean by
@@ -387,16 +481,14 @@ unmeasured and should not delay the landing decision.
 
 ## Most Promising Remaining Experiments
 
-The next action is measurement, not another mechanism. Capture an exact-main
-post-#2038 cumulative baseline and a focused processor-birth/scanned-through
-baseline before changing the integrated runner. The focused lane must cover a
-warm already-acknowledged barrier, a cold sparse catch-up, an empty selected
-frame that scans to head, continuous writers, process eviction, and a failed
-receiver retry. Time append/birth through observed readiness on the Node host.
-This establishes whether the merged runner retained the historical 35%-40%
-suite gain and how much duplicate sparse catch-up work the compact frame
-actually removed. There is currently correctness evidence for this integration
-but no post-main performance number.
+The exact-current-main broad measurement is complete and establishes that the
+merged runner retained a roughly 30% central equal-workload gain. If runner
+attribution affects the landing decision, the remaining focused lane must
+cover a warm already-acknowledged barrier, a cold sparse catch-up, an empty
+selected frame that scans to head, continuous writers, process eviction, and a
+failed receiver retry. Time append/birth through observed readiness on the
+Node host. This lane is required to isolate the compact frame's contribution,
+not to support the cumulative headline.
 
 The only delivery experiment with a credible deployed-scale mechanism is the
 preserved direct Project Worker lane from `9fd1cbbb3`. It bypasses the
@@ -454,9 +546,9 @@ evidence to decide.
    after the destructive rollout procedure is approved, or replace it in one
    branch using the current implementation as an oracle. Do not maintain both
    kernels or add compatibility dispatch.
-3. If shipping current, run one final exact-current-main cumulative checkpoint,
-   keep the PR draft until that result and the wipe/rollback runbook are in the
-   PR body, then stop benchmarking.
+3. If shipping current, treat the exact-current-main checkpoint as complete.
+   Keep the PR draft until the corrected full preview and wipe/rollback runbook
+   are in the PR body, then stop broad benchmarking.
 4. If replacing now, freeze the public API and benchmark corpus. The
    replacement must pass the current Stream suite, crash matrix, post-GC replay
    profile, and deployed Worker-consumer lanes before the current code is
@@ -500,12 +592,23 @@ size: 6.1 MB compressed
 sha256: da898b32fd4dcdd169da08bf16c64b75aca7ef4337d9bca9f9d06f45918da903
 ```
 
+The two 2026-07-16 post-merge cumulative matrices are separately archived at:
+
+```text
+/Users/jonastemplestein/stream-performance-evidence-2026-07-16.tar.gz
+files: 190
+size: 9.1 MB compressed
+sha256: 09caee4e742ab454ea2e8e2047c8146c24bbe965963a4790ee2e2ab9c2ba9552
+```
+
 High-value live paths:
 
 | Evidence                      | Path                                                                                 |
 | ----------------------------- | ------------------------------------------------------------------------------------ |
 | Checkpoint 15 raw pool        | `/tmp/cumulative-15-{full,tail,live,crosspost,storage}-{main,candidate}-r{1..5}.log` |
 | Checkpoint 15 validation      | `/tmp/cumulative-15-analysis.txt`                                                    |
+| Checkpoint 16 archive         | `~/stream-performance-evidence-2026-07-16.tar.gz`                                    |
+| Checkpoint 16 live analysis   | `~/stream-performance-evidence-2026-07-16-current-main/analysis.{txt,json}`          |
 | Shipping replay profile       | `/private/tmp/replay-workerd-profile-shipping-release-focused.cpuprofile`            |
 | Shipping replay summary       | `/private/tmp/replay-workerd-profile-shipping-release-focused-summary.json`          |
 | Deployed final callback proof | `/tmp/payload-release-deployed-{durable,ephemeral}-886b5ecf1-r*.log`                 |
@@ -521,7 +624,8 @@ important source locations are:
 | Coherent kernel                 | `/Users/jonastemplestein/.superset/worktrees/iterate/graceful-snowplow-stream-kernel`            | Seven untracked experiment files; volatile until committed |
 | Pull/demand kernel              | `/private/tmp/iterate-stream-pull-track-b`                                                       | Committed core plus uncommitted demand-session files       |
 | Storage explorer                | `/private/tmp/iterate-stream-storage-explorer-a`                                                 | Modified storage source/tests/ledger; uncommitted          |
-| Current-main checkpoint control | `/private/tmp/iterate-stream-cumulative-15-main`                                                 | Detached exact baseline                                    |
+| Current-main checkpoint control | `/private/tmp/iterate-stream-current-main-20260716`                                              | Detached exact `7495c6802` baseline                        |
+| Current candidate control       | `/private/tmp/iterate-stream-current-candidate-20260716`                                         | Detached exact `b2712ad09` candidate                       |
 | Legacy KV implementations       | `/private/tmp/iterate-stream-kv-yolo`, `/private/tmp/iterate-stream-legacy-kv-yolo`              | Clean experiment branches                                  |
 | Radical journal/pump            | `/private/tmp/iterate-stream-radical-journal`, `/private/tmp/iterate-stream-radical-credit-pump` | Clean experiment branches                                  |
 
@@ -536,12 +640,13 @@ include `src/workerd/api/sync-kv.c++` and `src/workerd/util/sqlite-kv.h`.
 
 Give another agent this document and ask it to read, in order:
 
-1. The latest five ledger sections, then the rejected-direction headings.
+1. The latest seven ledger sections, then the rejected-direction headings.
 2. `stream-durable-object.ts`, `stream-storage.ts`,
    `stream-delivery-frame-reader.ts`, `stream-subscribers.ts`, and
    `subscription-cursor-store.ts`.
 3. The coherent-kernel experimental source and tests in the separate worktree.
-4. `/tmp/cumulative-15-analysis.txt` and the shipping replay summary JSON.
+4. `~/stream-performance-evidence-2026-07-16-current-main/analysis.txt` and the
+   shipping replay summary JSON.
 
 Ask it to answer these concrete questions:
 
