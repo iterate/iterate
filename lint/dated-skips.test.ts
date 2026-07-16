@@ -58,11 +58,6 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "expanded tail rows can grow under the sticky composer",
     note: "known tail re-pin regression, evidence in the spec comment (PR #2024)",
   },
-  {
-    file: "apps/streams-example-app/e2e/playwright/stream-browser.spec.ts",
-    match: "Double DO kill under CI worker contention",
-    note: "CI-only mirror retry-budget boundary, needs product investigation (PR #2024)",
-  },
 ];
 
 test("parked skip/fixme/todo markers carry an unexpired `revisit by` date", () => {

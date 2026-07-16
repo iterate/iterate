@@ -39,6 +39,7 @@ import {
   type ProcessorProgressStore,
 } from "../../stream-processor-runner.ts";
 import type { StreamProcessor } from "../../stream-processor.ts";
+import { isStreamUnavailableError } from "../../stream-unavailable.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import {
   browserProcessorProgressStore,
@@ -2058,12 +2059,19 @@ function createStreamRuntime(
             }
             return committed;
           } catch (error) {
-            // Retry only transport-shaped failures (timeouts, broken
-            // sessions, a reconnect that didn't land in time). An app-level
-            // rejection — validation and friends — would fail identically 8
-            // times; surface it immediately instead of burning ~23s of
-            // backoff first.
-            const transient = error instanceof StepTimeoutError || isSessionBrokenError(error);
+            // Retry only failures that don't indict the call itself:
+            // transport-shaped ones (timeouts, broken sessions, a reconnect
+            // that didn't land in time) and server-tagged DO-lifecycle ones
+            // (`stream-unavailable: …` — the stream DO died mid-call under a
+            // kill/eviction/deploy; the session is healthy and the DO reboots
+            // on the next call, so no reconnect is needed, just the retry).
+            // An app-level rejection — validation and friends — would fail
+            // identically 8 times; surface it immediately instead of burning
+            // ~23s of backoff first.
+            const transient =
+              error instanceof StepTimeoutError ||
+              isSessionBrokenError(error) ||
+              isStreamUnavailableError(error);
             if (disposed || !transient || attempt >= APPEND_MAX_RETRIES) throw error;
             await new Promise((resolve) =>
               setTimeout(resolve, Math.min(5_000, 250 * 2 ** attempt)),
