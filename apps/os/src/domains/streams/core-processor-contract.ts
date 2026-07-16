@@ -242,7 +242,7 @@ const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodT
  * subscriptions, from the reduced roster
  * (`connectionsByKey[..].subscriber.processor.announcement`).
  */
-export const ProcessorContractAnnouncement = z.object({
+const ProcessorContractAnnouncement = z.object({
   slug: z.string().trim().min(1),
   version: z.string().trim().min(1),
   description: z.string(),
@@ -255,8 +255,6 @@ export const ProcessorContractAnnouncement = z.object({
     }),
   ),
 });
-
-export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnnouncement>;
 
 /**
  * Identity the connecting party passes in its subscribe call. All fields are
