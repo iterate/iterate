@@ -84,6 +84,20 @@ remaining work is _completing_ the model, not undoing a parallel one.
   kernel and deleted files; the current browser model now lives in
   `docs/frontend-development.md`, so trim the README to a short pointer.
 
+### Known accepted edges (from the review rounds)
+
+- **A generation superseded during its backoff window rejects awaiters late** —
+  `reconnectIterateSession()` during a paced re-dial doesn't reject the waiting
+  generation's `connecting` immediately; its `beginDial` timer fires the
+  superseded-rejection (worst case ~10s). Bounded, rare (a semantic reset inside
+  a dial-failure storm), and fixing it means re-adding a settle handle to
+  `Generation`. Revisit with the non-React core extraction.
+- **The `useLiveState` node barrier is transient-and-healing by design** — an
+  old-node diff landing in the commit gap, or a discarded concurrent render
+  re-arming the barrier, can blank/flash one frame and self-heal on the next
+  push. A blocked-until-reset latch would close both but could wedge permanently
+  in the discarded-render case (documented at the barrier).
+
 ### Considered and kept as-is
 
 - **`useReconnectableItxEffect` stays a separate private hook.** Both reviews

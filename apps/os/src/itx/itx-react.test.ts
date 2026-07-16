@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 // failure); `lastRoot` is the resolved session the latest dial produced.
 const control = vi.hoisted(() => ({
   hangAuthProbe: false,
+  hangFirstAuth: false,
   authProbeError: undefined as Error | undefined,
   authError: undefined as Error | undefined,
   lastRoot: undefined as unknown,
@@ -33,6 +34,7 @@ vi.mock("capnweb", () => ({
           [Symbol.dispose]: vi.fn(),
         });
         if (calls > 1) return handleFor("");
+        if (control.hangFirstAuth) return new Promise(() => {});
         if (control.authError) return Promise.reject(control.authError);
         const root = Object.assign(handleFor(""), {
           projects: { get: (slug: string) => handleFor(slug) },
@@ -67,6 +69,7 @@ class FakeWebSocket {
 
 beforeEach(() => {
   control.hangAuthProbe = false;
+  control.hangFirstAuth = false;
   control.authProbeError = undefined;
   control.authError = undefined;
   control.lastRoot = undefined;
@@ -167,6 +170,9 @@ describe("itx session socket", () => {
     // The stale first socket opens LATE: it must close itself, not publish.
     FakeWebSocket.instances[0]!.fire("open");
     await vi.waitFor(() => {});
+    // The CAS bails BEFORE creating an RPC session: the corpse never even
+    // authenticates (a published corpse would poison snapshot.session).
+    expect(control.lastRoot).toBeUndefined();
     expect(connectIterateSession()).toBe(second); // still the successor, not the corpse
     // The successor opening is what actually publishes a session.
     FakeWebSocket.instances[1]!.fire("open");
@@ -286,6 +292,29 @@ describe("itx session socket", () => {
     expect(await connectIterateSession()).toBe(control.lastRoot);
     await act(async () => root.unmount());
     container.remove();
+  });
+
+  test("the dial timeout spans authenticate: a hung handshake closes and re-dials", async () => {
+    // A server that accepts the WebSocket but never answers authenticate must
+    // be a FAILED dial (close → paced re-dial), not an infinite spinner.
+    vi.useFakeTimers();
+    try {
+      const { connectIterateSession } = await import("./itx-react.tsx");
+      control.hangFirstAuth = true;
+      const first = connectIterateSession();
+      FakeWebSocket.instances[0]!.fire("open"); // opens, then authenticate hangs
+      await vi.advanceTimersByTimeAsync(15_000); // DIAL_TIMEOUT_MS
+      await expect(first).rejects.toThrow(/closed before connecting/);
+      // The timeout closed the wedged socket and a fresh dial replaced it.
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      control.hangFirstAuth = false;
+      const second = connectIterateSession();
+      FakeWebSocket.instances[1]!.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(second).resolves.toBe(control.lastRoot);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a terminal authenticate rejection PARKS: no dial storm, explicit reset revives", async () => {
@@ -622,6 +651,69 @@ describe("useItxSubscription liveness", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test("useLiveState drops its value when the AMBIENT ProjectScope slug changes (no cross-project stale state)", async () => {
+    // The router does NOT remount route components on param-only navigation, so
+    // /projects/a/... → /projects/b/... changes the ambient scope under a
+    // mounted hook. Project A's state must never render under project B — the
+    // node key includes the EFFECTIVE slug, so the switch resets + barriers.
+    const [{ useLiveState, ProjectScope }, React, { createRoot }] = await Promise.all([
+      import("./itx-react.tsx"),
+      import("react"),
+      import("react-dom/client"),
+    ]);
+    const { act, createElement } = React;
+
+    // One captured update-sink per subscription; the test pushes snapshots.
+    const sinks: Array<(update: unknown) => void> = [];
+    const live = () => ({
+      subscribe: async (onUpdate: (update: unknown) => void) => {
+        sinks.push(onUpdate);
+        return { ping: () => true, unsubscribe: vi.fn() };
+      },
+    });
+    function Harness() {
+      const { value } = useLiveState(live as never, (s: { name: string }) => s.name, []);
+      return createElement("output", null, value ?? "∅");
+    }
+
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    const rendered = () => container.querySelector("output")?.textContent;
+    const renderScope = (slug: string) =>
+      act(async () => {
+        root.render(createElement(ProjectScope, { slug, children: createElement(Harness) }));
+      });
+
+    await renderScope("project-a");
+    await act(async () => {
+      FakeWebSocket.instances.at(-1)!.fire("open");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(sinks).toHaveLength(1);
+    await act(async () => {
+      sinks[0]!({ type: "snapshot", revision: 0, state: { name: "alpha" } });
+    });
+    expect(rendered()).toBe("alpha");
+
+    // Param-only navigation: same tree, new ambient slug. The held value must
+    // drop IMMEDIATELY — never project A's state under project B.
+    await renderScope("project-b");
+    expect(rendered()).toBe("∅");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(rendered()).toBe("∅"); // still nothing until B pushes
+    expect(sinks).toHaveLength(2); // re-subscribed for project B
+    await act(async () => {
+      sinks[1]!({ type: "snapshot", revision: 0, state: { name: "beta" } });
+    });
+    expect(rendered()).toBe("beta");
+    await act(async () => root.unmount());
+    container.remove();
   });
 
   test("regaining connectivity while HIDDEN still checks (a backgrounded tab recovers)", async () => {

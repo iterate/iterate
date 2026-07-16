@@ -1122,9 +1122,15 @@ export function useLiveState<State, Selected = State>(
 } {
   // useState, not useMemo: the store holds the accumulated live value.
   const [store] = useState(() => createLiveStateStore<State>());
-  // The node this hook points at — the caller's deps AND the project scope
-  // (opts.slug re-points the subscription without appearing in deps).
-  const nodeKey = [opts?.slug, ...deps];
+  // The node this hook points at — the caller's deps AND the EFFECTIVE project
+  // (exactly what re-points the subscription): `opts.slug` if given, else the
+  // ambient <ProjectScope>. The ambient slug matters — the router does NOT
+  // remount route components on param-only navigation, so /projects/a/repos →
+  // /projects/b/repos changes the scope under a mounted hook, and without it
+  // in the key project A's state would render under project B until B's first
+  // push.
+  const scopedSlug = useContext(ProjectScopeContext);
+  const nodeKey = [opts?.slug ?? scopedSlug, ...deps];
   // Node change = a different node: drop the held state (its slice is
   // meaningless now).
   // eslint-disable-next-line react-hooks/exhaustive-deps -- node identity by design
@@ -1171,6 +1177,13 @@ export function useLiveState<State, Selected = State>(
   // a node switch the pre-switch state becomes a BARRIER — selection returns
   // `undefined` until the store moves past it (the reset, then the new node's
   // first push) — so the previous node's value can never render under the new.
+  // Two accepted edges, both self-healing within one push: the barrier compares
+  // by identity, so an old-node diff landing in the commit gap produces a fresh
+  // object that slips past it for one frame (the reset then clears it); and a
+  // DISCARDED concurrent render with a different key re-arms the barrier
+  // against the still-current node (blanking until its next push) — a
+  // blocked-until-reset latch would close both but could wedge permanently in
+  // the discarded-render case, so transient-and-healing wins.
   const cache = useRef<{
     key: unknown[];
     barrier: State | undefined;
