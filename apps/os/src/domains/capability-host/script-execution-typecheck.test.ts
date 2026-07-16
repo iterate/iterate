@@ -128,7 +128,7 @@ describe("script execution typecheck gate", () => {
         ran.push(code);
         return 42;
       },
-      typecheckScript: async () => ({ verdict: "clean" }),
+      typecheckScript: async () => ({ verdict: "clean", needsScopeTypes: false }),
     });
     await requestScript(stream, processor);
 
@@ -139,24 +139,48 @@ describe("script execution typecheck gate", () => {
     expect(ran).toHaveLength(1);
   });
 
-  it("traces capability discovery, compilation, the started append, and loopback separately", async () => {
+  it("skips capability discovery when the platform-only compile emits JavaScript", async () => {
     const stream = new MemoryStream();
+    const describeCapabilities = vi.fn(async () => []);
+    const typecheckScript = vi.fn(async () => ({
+      verdict: "clean" as const,
+      emittedJs: "export default 1",
+      needsScopeTypes: false,
+    }));
     const processor = makeProcessor({
       stream,
       run: async () => "ok",
-      typecheckScript: async () => ({ verdict: "clean", emittedJs: "export default 1" }),
+      path: "/agents/test",
+      ancestor: {
+        invokeCapability: () => Promise.reject(new Error("unused")),
+        describeCapabilities,
+      },
+      typecheckScript,
+    });
+    await stream.append({
+      type: T.ancestorConfigured,
+      payload: { ancestorPath: "/" },
     });
     await requestScript(stream, processor);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
+    expect(typecheckScript).toHaveBeenCalledTimes(1);
+    expect(typecheckScript).toHaveBeenCalledWith({
+      capabilities: [],
+      code: expect.any(String),
+    });
+    expect(describeCapabilities).not.toHaveBeenCalled();
     expect(recordedSpans.map((span) => span.name)).toEqual([
       "capability_host.script_execution",
-      "capability_host.script_describe_capabilities",
       "capability_host.script_typecheck",
       "capability_host.script_started_append",
       "capability_host.script_loopback",
       "capability_host.script_completion_append",
     ]);
+    expect(recordedSpans[1]?.attributes).toMatchObject({
+      "iterate.capability_host.typecheck_surface": "platform",
+      "iterate.capability_host.has_emitted_js": true,
+    });
     expect(recordedSpans[0]?.attributes).toMatchObject({
       "iterate.capability_host.script_outcome": "succeeded",
     });
@@ -234,7 +258,7 @@ describe("script execution typecheck gate", () => {
       },
       typecheckScript: async ({ capabilities }) => {
         seen.push(capabilities);
-        return { verdict: "clean" };
+        return { verdict: "clean", needsScopeTypes: capabilities.length === 0 };
       },
     });
     await stream.append({
@@ -248,10 +272,73 @@ describe("script execution typecheck gate", () => {
     await requestScript(stream, processor);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.map((capability) => capability.path.join("."))).toEqual(
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual([]);
+    expect(seen[1]!.map((capability) => capability.path.join("."))).toEqual(
       expect.arrayContaining(["local", "tools.weather"]),
     );
+  });
+
+  it("consumes a contiguous requested append without waiting for a subscription wake", async () => {
+    const stream = new MemoryStream();
+    const run = vi.fn(async () => "ok");
+    const processor = makeProcessor({ stream, run });
+    const [configured] = await stream.append({
+      type: T.ancestorConfigured,
+      payload: { ancestorPath: null },
+    });
+    await processor.ingest({ events: [configured!], streamMaxOffset: configured!.offset });
+
+    const result = processor.runScript("async () => null");
+
+    // MemoryStream never wakes processors. Reaching completion proves
+    // runScript synchronously ingested its own contiguous requested event and
+    // drove the reconciler without the subscription round-trip.
+    await vi.waitFor(() => expect(completion(stream)).toBeDefined());
+    expect(run).toHaveBeenCalledTimes(1);
+
+    // Deliver the resulting started/completed facts so the public method's
+    // future-event waiter observes the durable completion, as production's
+    // normal subscription lane does.
+    const tail = stream.events.at(-1)!;
+    await processor.ingest({ events: stream.events, streamMaxOffset: tail.offset });
+    await expect(result).resolves.toMatchObject({ result: "ok" });
+    expect(
+      recordedSpans.find((span) => span.name === "capability_host.script_request_consume")
+        ?.attributes,
+    ).toMatchObject({ "iterate.capability_host.request_contiguous": true });
+  });
+
+  it("never skips an unseen journal event to consume its own request", async () => {
+    const stream = new MemoryStream();
+    const run = vi.fn(async () => "ok");
+    const processor = makeProcessor({ stream, run });
+    const [configured] = await stream.append({
+      type: T.ancestorConfigured,
+      payload: { ancestorPath: null },
+    });
+    await processor.ingest({ events: [configured!], streamMaxOffset: configured!.offset });
+    // This fact wins the next offset but is deliberately not delivered yet.
+    await stream.append({ type: "events.iterate.com/agents/user-message-sent", payload: {} });
+
+    const result = processor.runScript("async () => null");
+    await vi.waitFor(() =>
+      expect(stream.events.some((event) => event.type === T.requested)).toBe(true),
+    );
+    expect(run).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(
+        recordedSpans.find((span) => span.name === "capability_host.script_request_consume")
+          ?.attributes,
+      ).toMatchObject({ "iterate.capability_host.request_contiguous": false }),
+    );
+
+    const requestedTail = stream.events.at(-1)!;
+    await processor.ingest({ events: stream.events, streamMaxOffset: requestedTail.offset });
+    await vi.waitFor(() => expect(completion(stream)).toBeDefined());
+    const completionTail = stream.events.at(-1)!;
+    await processor.ingest({ events: stream.events, streamMaxOffset: completionTail.offset });
+    await expect(result).resolves.toMatchObject({ result: "ok" });
   });
 
   it("a rejected execution deletes its obligation — the reconciler never re-runs it", async () => {

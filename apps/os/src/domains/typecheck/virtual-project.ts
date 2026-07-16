@@ -342,6 +342,10 @@ function assembleScriptProject(
 export type ScriptExecutionCheck =
   | {
       verdict: "clean";
+      /** Whether script-own diagnostics remain that a dynamic scope type may
+       * resolve. A caller may first check the static Project surface and only
+       * assemble capability declarations when this is true. */
+      needsScopeTypes: boolean;
       /** The compiler's emitted JavaScript module for the script (default
        * export = the script function). Same wasm compile as the check —
        * emit costs nothing — and it is what the runtime executes, so
@@ -482,11 +486,18 @@ export async function checkItxScriptForExecution(input: {
       isProvableBlocker(diagnostic),
   );
   if (blocking.length === 0) {
+    const needsScopeTypes = checked.diagnostics.some(
+      (diagnostic) => diagnostic.category === "error" && diagnostic.fileName === "script.ts",
+    );
     // `js` can come back EMPTY when the program has errors anywhere (broken
     // mount declarations included) — the compiler emits nothing it can't
     // vouch for. Treat empty as absent: execution falls back to the raw
     // code, exactly the unchecked path's behavior.
-    return { verdict: "clean", emittedJs: checked.js ? checked.js : undefined };
+    return {
+      verdict: "clean",
+      emittedJs: checked.js ? checked.js : undefined,
+      needsScopeTypes,
+    };
   }
   const problems = formatProblems(blocking, {
     label: "script",

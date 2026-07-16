@@ -648,9 +648,23 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#requireAncestorDeclaration(this.state.ancestor);
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
-    await this.append({
+    const [requested] = await this.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
       payload: { code, executionId },
+    });
+    // The public DO door caught this processor up immediately before calling
+    // runScript. In the uncontended case our new event is therefore the exact
+    // next journal offset: consume that committed fact directly instead of
+    // waiting for StreamDurableObject to wake us and read it back over RPC.
+    // `ingest` is serialized and drops offsets already checkpointed, so a
+    // simultaneous subscription delivery is harmless. If another writer won
+    // the next offset, leave the non-contiguous suffix to normal catch-up —
+    // skipping over an unseen journal fact would be incorrect.
+    await tracing.enterSpan("capability_host.script_request_consume", async (span) => {
+      const contiguous = requested.offset === this.checkpointOffset + 1;
+      span.setAttribute("iterate.capability_host.request_contiguous", contiguous);
+      if (!contiguous) return;
+      await this.ingest({ events: [requested], streamMaxOffset: requested.offset });
     });
     const event = await completed;
     const payload = event.payload as CompletedPayload;
@@ -691,6 +705,39 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     const typecheckScript = this.#typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
     try {
+      const check = (capabilities: CapabilityDescription[], surface: "platform" | "scope") =>
+        tracing.enterSpan("capability_host.script_typecheck", async (span) => {
+          span.setAttribute("iterate.capability_host.script_chars", code.length);
+          span.setAttribute("iterate.capability_host.capability_count", capabilities.length);
+          span.setAttribute("iterate.capability_host.typecheck_surface", surface);
+          const result = await typecheckScript({ capabilities, code });
+          span.setAttribute("iterate.capability_host.typecheck_verdict", result.verdict);
+          span.setAttribute(
+            "iterate.capability_host.has_emitted_js",
+            result.verdict === "clean" && result.emittedJs !== undefined,
+          );
+          return result;
+        });
+
+      // Most scripts use only the static Project surface. Compile that first:
+      // a diagnostic-free successful emit proves no dynamic mount declaration
+      // was needed, so walking the explicit ancestor graph would only add cold
+      // Durable Object RPCs. Script diagnostics or a missing emit mean the
+      // static surface was insufficient; only then assemble and check the full
+      // scope.
+      const platformChecked = await check([], "platform");
+      if (
+        platformChecked.verdict === "clean" &&
+        !platformChecked.needsScopeTypes &&
+        platformChecked.emittedJs !== undefined
+      ) {
+        return { rejection: null, emittedJs: platformChecked.emittedJs };
+      }
+      // An unavailable/crashed checker cannot become authoritative merely by
+      // adding mount declarations. Preserve the permissive unchecked lane
+      // without paying capability discovery first.
+      if (platformChecked.verdict === "unchecked") return { rejection: null };
+
       const capabilities = await tracing.enterSpan(
         "capability_host.script_describe_capabilities",
         async (span) => {
@@ -701,17 +748,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
           return described;
         },
       );
-      const checked = await tracing.enterSpan("capability_host.script_typecheck", async (span) => {
-        span.setAttribute("iterate.capability_host.script_chars", code.length);
-        span.setAttribute("iterate.capability_host.capability_count", capabilities.length);
-        const result = await typecheckScript({ capabilities, code });
-        span.setAttribute("iterate.capability_host.typecheck_verdict", result.verdict);
-        span.setAttribute(
-          "iterate.capability_host.has_emitted_js",
-          result.verdict === "clean" && result.emittedJs !== undefined,
-        );
-        return result;
-      });
+      const checked = await check(capabilities, "scope");
       if (checked.verdict === "clean") {
         // Check and emit are one compile: what runs IS the compiler's
         // type-stripped output, so scripts are genuinely TypeScript.

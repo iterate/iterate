@@ -774,6 +774,7 @@ test("execution gate: clean TypeScript scripts come back with runnable emitted J
     `async (itx) => {\n  const hits = [1, 2].map((r: any, i: number) => ({ r, i }));\n  return hits as any;\n}`,
   );
   expect(checked.verdict).toBe("clean");
+  expect(checked).toMatchObject({ needsScopeTypes: false });
   const emitted = (checked as { emittedJs?: string }).emittedJs ?? "";
   expect(emitted).toContain("export default script");
   expect(emitted).not.toContain(": any");
@@ -788,6 +789,19 @@ test("execution gate: clean TypeScript scripts come back with runnable emitted J
   ]);
   expect(withBrokenMount).toMatchObject({ verdict: "clean" });
   expect((withBrokenMount as { emittedJs?: string }).emittedJs).toContain("export default script");
+});
+
+test("execution gate: a platform-only check reports when dynamic scope types are needed", async () => {
+  const platformOnly = await gate(
+    "async (itx) => itx.tools.weather.forecast({ city: 'London' })",
+    [],
+  );
+  expect(platformOnly).toMatchObject({ verdict: "clean", needsScopeTypes: true });
+
+  const withScope = await gate("async (itx) => itx.tools.weather.forecast({ city: 'London' })", [
+    WEATHER_MOUNT,
+  ]);
+  expect(withScope).toMatchObject({ verdict: "clean", needsScopeTypes: false });
 });
 
 test("execution gate: a compiler crash and an unreachable checker both run unchecked", async () => {
