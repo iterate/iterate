@@ -102,6 +102,12 @@ import type { LiveStateRpc } from "../domains/streams/rpc-types.ts";
 import type { Project, Session, UnauthenticatedOs } from "../itx-api.generated.ts";
 import { createLiveStateStore } from "../lib/live-state/store.ts";
 
+// A handle is a capnweb `RpcStub` — a chainable proxy over the contract
+// interface. `authenticate()` / `projects.get()` return an `RpcPromise` (a stub
+// that is *also* awaitable); an RpcPromise is assignable to the plain RpcStub,
+// so the pipelined calls narrow to these without a cast. `RpcStub<Session>` (not
+// the awaitable RpcPromise) keeps `Promise<SessionStub>` from nesting.
+
 /** The Session catalog (what `authenticate()` returns): vends project itxs. */
 type SessionStub = RpcStub<Session>;
 /** A project capability handle — `session.projects.get(slug)`. */
@@ -189,7 +195,7 @@ function projectStubFor(session: SessionStub, slug: string): ProjectStub {
   }
   let stub = cache.get(slug);
   if (stub === undefined) {
-    stub = session.projects.get(slug) as unknown as ProjectStub;
+    stub = session.projects.get(slug);
     cache.set(slug, stub);
   }
   return stub;
@@ -282,9 +288,7 @@ function dial(): Generation {
       // the first read (like any RPC error), and `_app` middleware has already
       // gated the page's auth, so a live socket here is effectively authenticated.
       const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws);
-      const root = unauthenticated.authenticate({
-        type: "from-server-cookie",
-      }) as unknown as SessionStub;
+      const root = unauthenticated.authenticate({ type: "from-server-cookie" });
       generation.session = root;
       generation.ping = async () => {
         // Any round trip proves the transport; authenticate rides the session
@@ -602,7 +606,7 @@ export function useItxQuery<T>({
     queryKey: ["itx", ...(Array.isArray(key) ? key : [key])],
     queryFn: async () => {
       const session = await connectSession();
-      const itx = session.projects.get(slug) as unknown as ProjectStub;
+      const itx = session.projects.get(slug);
       // `return await` is load-bearing: dispose only AFTER the RPC result has
       // fully resolved (the serialized result is already pulled, so disposing
       // the short-lived stub can't invalidate it).
