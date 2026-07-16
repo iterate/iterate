@@ -154,7 +154,7 @@ return {
     id: "run-script",
     title: "Run a script server-side with itx.runScript",
     description:
-      "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-execution-requested/-completed) on the scope's stream.",
+      "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-run-requested/-completed) on the scope's stream.",
     context: "project",
     runtimes: ["browser", "node", "cli", "project-worker"],
     code: `
@@ -661,7 +661,9 @@ if (!response.ok) {
   throw new Error(\`Postman Echo returned \${response.status}: \${await response.text()}\`);
 }
 
-const body = await response.json();
+// json() resolves the honest \`unknown\`; parsing the text keeps this
+// plain-JS body's dynamic reads over the echoed shape typecheckable.
+const body = JSON.parse(await response.text());
 const after = await secret.__describe();
 const echoedSecret = body?.headers?.["x-itx-secret"];
 
@@ -763,7 +765,7 @@ return { record }; // ["capability-provided", "capability-revoked"]
     id: "agent-send-message",
     title: "Send a message to an agent (also how you create one)",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends the unified message-received event to the agent's stream and returns it — the sender is derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured). This is ALSO how you create, spawn, or birth a new child agent / subagent to delegate work to: messaging a fresh /agents/** path births that agent with default policy — put everything the child needs in the message.",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends an agents/context-added item to the agent's stream and returns it — the sender and user/developer role are derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured). This is ALSO how you create, spawn, or birth a new child agent / subagent to delegate work to: messaging a fresh /agents/** path births that agent with default policy — put everything the child needs in the message.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `

@@ -24,7 +24,7 @@ describe("replayScriptExecution", () => {
       rawEventJsons: [
         row(
           7,
-          "events.iterate.com/capability-host/script-execution-requested",
+          "events.iterate.com/capability-host/script-run-requested",
           {
             code: "async () => ({ ok: true })",
             executionId: "agent-output:7",
@@ -34,7 +34,7 @@ describe("replayScriptExecution", () => {
         ),
         row(
           8,
-          "events.iterate.com/capability-host/script-execution-started",
+          "events.iterate.com/capability-host/script-run-started",
           {
             executionId: "agent-output:7",
           },
@@ -42,7 +42,7 @@ describe("replayScriptExecution", () => {
         ),
         row(
           9,
-          "events.iterate.com/capability-host/script-execution-completed",
+          "events.iterate.com/capability-host/script-run-settled",
           {
             executionId: "agent-output:7",
             settlement: { status: "succeeded", result: { ok: true } },
@@ -73,13 +73,13 @@ describe("replayScriptExecution", () => {
       executionId: "failed-1",
       nowMs: Date.parse("2026-07-15T20:30:03.000Z"),
       rawEventJsons: [
-        row(1, "events.iterate.com/capability-host/script-execution-requested", {
+        row(1, "events.iterate.com/capability-host/script-run-requested", {
           code: "async () => boom()",
           executionId: "failed-1",
           expiresAt: Date.parse("2026-07-15T20:30:10.000Z"),
         }),
         "not json",
-        row(2, "events.iterate.com/capability-host/script-execution-completed", {
+        row(2, "events.iterate.com/capability-host/script-run-settled", {
           executionId: "failed-1",
           settlement: {
             status: "failed",
@@ -104,7 +104,7 @@ describe("replayScriptExecution", () => {
   });
 
   it("shows requested-only and started executions as queued and running", () => {
-    const requested = row(1, "events.iterate.com/capability-host/script-execution-requested", {
+    const requested = row(1, "events.iterate.com/capability-host/script-run-requested", {
       code: "async () => 1",
       executionId: "exec-1",
       expiresAt: Date.parse("2026-07-15T20:30:10.000Z"),
@@ -122,7 +122,7 @@ describe("replayScriptExecution", () => {
         nowMs: Date.parse("2026-07-15T20:30:03.000Z"),
         rawEventJsons: [
           requested,
-          row(2, "events.iterate.com/capability-host/script-execution-started", {
+          row(2, "events.iterate.com/capability-host/script-run-started", {
             executionId: "exec-1",
           }),
         ],
@@ -135,7 +135,7 @@ describe("replayScriptExecution", () => {
       executionId: "queued-expired",
       nowMs: Date.parse("2026-07-15T20:30:10.000Z"),
       rawEventJsons: [
-        row(1, "events.iterate.com/capability-host/script-execution-requested", {
+        row(1, "events.iterate.com/capability-host/script-run-requested", {
           code: "async () => 1",
           executionId: "queued-expired",
           expiresAt: Date.parse("2026-07-15T20:30:06.000Z"),
@@ -155,12 +155,12 @@ describe("replayScriptExecution", () => {
       executionId: "started-expired",
       nowMs: Date.parse("2026-07-15T20:30:10.000Z"),
       rawEventJsons: [
-        row(1, "events.iterate.com/capability-host/script-execution-requested", {
+        row(1, "events.iterate.com/capability-host/script-run-requested", {
           code: "async () => chargeCard()",
           executionId: "started-expired",
           expiresAt: Date.parse("2026-07-15T20:30:06.000Z"),
         }),
-        row(2, "events.iterate.com/capability-host/script-execution-started", {
+        row(2, "events.iterate.com/capability-host/script-run-started", {
           executionId: "started-expired",
         }),
       ],
@@ -185,7 +185,7 @@ describe("replayScriptExecution", () => {
         executionId: "missing-deadline",
         nowMs: Date.parse("2026-07-15T20:30:02.000Z"),
         rawEventJsons: [
-          row(1, "events.iterate.com/capability-host/script-execution-requested", {
+          row(1, "events.iterate.com/capability-host/script-run-requested", {
             code: "async () => 1",
             executionId: "missing-deadline",
           }),
@@ -202,7 +202,7 @@ describe("replayScriptExecution", () => {
           executionId: "invalid-deadline",
           nowMs: Date.parse("2026-07-15T20:30:02.000Z"),
           rawEventJsons: [
-            row(1, "events.iterate.com/capability-host/script-execution-requested", {
+            row(1, "events.iterate.com/capability-host/script-run-requested", {
               code: "async () => 1",
               executionId: "invalid-deadline",
               expiresAt,
@@ -218,12 +218,12 @@ describe("replayScriptExecution", () => {
       executionId: "malformed-completion",
       nowMs: Date.parse("2026-07-15T20:30:03.000Z"),
       rawEventJsons: [
-        row(1, "events.iterate.com/capability-host/script-execution-requested", {
+        row(1, "events.iterate.com/capability-host/script-run-requested", {
           code: "async () => 1",
           executionId: "malformed-completion",
           expiresAt: Date.parse("2026-07-15T20:30:10.000Z"),
         }),
-        row(2, "events.iterate.com/capability-host/script-execution-completed", {
+        row(2, "events.iterate.com/capability-host/script-run-settled", {
           executionId: "malformed-completion",
           settlement: { status: "failed", error: "missing classification" },
         }),

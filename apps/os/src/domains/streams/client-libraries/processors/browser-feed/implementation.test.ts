@@ -2,7 +2,9 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { Stream } from "../../../../../itx-api.generated.ts";
 import type { StreamEvent } from "../../../schemas.ts";
-import { browserProcessorStateStorage } from "../../browser/processor-state-storage.ts";
+import { StreamProcessorRunner } from "../../../stream-processor-runner.ts";
+import { CompositeMirrorDrive } from "../../browser/composite-mirror-drive.ts";
+import { browserProcessorProgressStore } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserFeedContract } from "./contract.ts";
 import { BrowserFeedProcessor } from "./implementation.ts";
@@ -46,6 +48,48 @@ function event(
   };
 }
 
+function makeHarness(sql: SqlClient, subscriptionKey = "browser-feed-test") {
+  const stream = {
+    append: async () => [],
+    readEvents: async () => [],
+  } as unknown as Stream;
+  const processor = new BrowserFeedProcessor({
+    sql,
+    stream,
+    path: "/tests/live-feed",
+    projectId: null,
+  });
+  const runner = new StreamProcessorRunner({
+    processor,
+    stream,
+    durability: {
+      progress: browserProcessorProgressStore<BrowserFeedState>({
+        sql,
+        processorSlug: BrowserFeedContract.slug,
+        subscriptionKey,
+        ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
+        projection: processor.projectionBuffer,
+      }),
+    },
+  });
+  const composite = new CompositeMirrorDrive([
+    { slug: BrowserFeedContract.slug, processor, runner },
+  ]);
+  return {
+    composite,
+    processor,
+    runner,
+    async deliver(args: {
+      events: StreamEvent[];
+      scannedAfterOffset: number;
+      scannedThroughOffset: number;
+    }) {
+      const opened = await composite.openDelivery();
+      await opened.sink({ ...args, streamMaxOffset: args.scannedThroughOffset });
+    },
+  };
+}
+
 describe("BrowserFeedProcessor live ephemerals", () => {
   it("accepts only empty or current-schema reducer state", () => {
     const current = BrowserFeedContract.stateSchema.parse({});
@@ -77,18 +121,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
 
   it("renders live chunks from memory without persisting the chunk or its reduced state", async () => {
     const sql = sqliteClient();
-    const storage = browserProcessorStateStorage<BrowserFeedState>({
-      sql,
-      processorSlug: BrowserFeedContract.slug,
-    });
-    const processor = new BrowserFeedProcessor({
-      sql,
-      stream: { append() {} } as unknown as Stream,
-      path: "/tests/live-feed",
-      projectId: null,
-      readState: storage.readState,
-      writeState: storage.writeState,
-    });
+    const harness = makeHarness(sql);
     const requested = event(1, "events.iterate.com/agent/llm-request-requested", {
       model: "test/model",
     });
@@ -99,68 +132,54 @@ describe("BrowserFeedProcessor live ephemerals", () => {
       true,
     );
 
-    await processor.ingestLive({
+    await harness.deliver({
       events: [requested, chunk],
       scannedAfterOffset: 0,
       scannedThroughOffset: 2,
-      streamMaxOffset: 2,
     });
 
-    expect(processor.agentUiState.live?.steps[0]).toMatchObject({
+    expect(harness.composite.agentUiState?.live?.steps[0]).toMatchObject({
       kind: "llm",
       responseText: "hello",
     });
-    expect(processor.state.agent.live?.steps[0]).toMatchObject({
+    expect(harness.runner.currentState.agent.live?.steps[0]).toMatchObject({
       kind: "llm",
       responseText: "",
     });
-    expect(await processor.snapshot()).toMatchObject({ offset: 2 });
+    expect(await harness.runner.snapshot()).toMatchObject({ offset: 2 });
     expect(await sql.exec(`SELECT COUNT(*) AS count FROM feed_items`)).toMatchObject([
       { count: 1 },
     ]);
 
-    processor.clearVolatileState();
-    expect(processor.agentUiState.live?.steps[0]).toMatchObject({ responseText: "" });
+    harness.composite.clearVolatileState();
+    expect(harness.composite.agentUiState).toBeNull();
+    expect(harness.runner.currentState.agent.live?.steps[0]).toMatchObject({ responseText: "" });
   });
 
   it("seeds a cold live tail from its persisted checkpoint and skips replay overlap", async () => {
     const sql = sqliteClient();
-    const storage = browserProcessorStateStorage<BrowserFeedState>({
-      sql,
-      processorSlug: BrowserFeedContract.slug,
-    });
-    const constructorArgs = {
-      sql,
-      stream: { append() {} } as unknown as Stream,
-      path: "/tests/live-feed",
-      projectId: null,
-      readState: storage.readState,
-      writeState: storage.writeState,
-    };
     const requested = event(1, "events.iterate.com/agent/llm-request-requested", {
       model: "test/model",
     });
 
-    const writer = new BrowserFeedProcessor(constructorArgs);
-    await writer.ingestLive({
+    const writer = makeHarness(sql);
+    await writer.deliver({
       events: [requested],
       scannedAfterOffset: 0,
       scannedThroughOffset: 1,
-      streamMaxOffset: 1,
     });
 
     // A new runtime may subscribe from a sibling processor's older checkpoint.
     // Its first live envelope can therefore overlap this feed's checkpoint.
-    const reader = new BrowserFeedProcessor(constructorArgs);
-    await reader.ingestLive({
+    const reader = makeHarness(sql);
+    await reader.deliver({
       events: [requested],
       scannedAfterOffset: 0,
       scannedThroughOffset: 1,
-      streamMaxOffset: 1,
     });
 
-    expect(reader.agentUiState.live?.steps).toHaveLength(1);
-    expect(reader.agentUiState.live?.steps[0]).toMatchObject({
+    expect(reader.runner.currentState.agent.live?.steps).toHaveLength(1);
+    expect(reader.runner.currentState.agent.live?.steps[0]).toMatchObject({
       kind: "llm",
       llmRequestOffset: 1,
       model: "test/model",
@@ -169,22 +188,11 @@ describe("BrowserFeedProcessor live ephemerals", () => {
 
   it("corrects a durable script result after the in-memory correction window was pruned", async () => {
     const sql = sqliteClient();
-    const storage = browserProcessorStateStorage<BrowserFeedState>({
-      sql,
-      processorSlug: BrowserFeedContract.slug,
-    });
-    const processor = new BrowserFeedProcessor({
-      sql,
-      stream: { append() {} } as unknown as Stream,
-      path: "/tests/live-feed",
-      projectId: null,
-      readState: storage.readState,
-      writeState: storage.writeState,
-    });
+    const harness = makeHarness(sql);
     const history = Array.from({ length: 40 }, (_, index) => {
       const requestedOffset = index * 2 + 1;
       return [
-        event(requestedOffset, "events.iterate.com/capability-host/script-execution-requested", {
+        event(requestedOffset, "events.iterate.com/capability-host/script-run-requested", {
           executionId: `missing-${index}`,
           code: `async () => ${index}`,
           expiresAt: 15 * 60_000,
@@ -196,23 +204,21 @@ describe("BrowserFeedProcessor live ephemerals", () => {
       ];
     }).flat();
 
-    await processor.ingest({
+    await harness.deliver({
       events: history,
       scannedAfterOffset: 0,
       scannedThroughOffset: 80,
-      streamMaxOffset: 80,
     });
-    expect(processor.state.agent.provisionalActivities["activity-1"]).toBeUndefined();
+    expect(harness.runner.currentState.agent.provisionalActivities["activity-1"]).toBeUndefined();
 
-    const completion = event(81, "events.iterate.com/capability-host/script-execution-completed", {
+    const completion = event(81, "events.iterate.com/capability-host/script-run-settled", {
       executionId: "missing-0",
       settlement: { status: "succeeded", result: "durable truth" },
     });
-    await processor.ingest({
+    await harness.deliver({
       events: [completion],
       scannedAfterOffset: 80,
       scannedThroughOffset: 81,
-      streamMaxOffset: 81,
     });
 
     const activityRows = await sql.exec(

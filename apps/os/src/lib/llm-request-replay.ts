@@ -31,7 +31,7 @@ export type LlmRequestReplayMessage = {
   /** Stable identity: a message IS its position in the replayed request (the
    * journal is immutable, so the same offset always folds to the same list). */
   id: string;
-  role: "system" | "user" | "assistant";
+  role: "system" | "developer" | "user" | "assistant";
   /** Flattened exactly as sent: file attachments become their hint lines. */
   content: string;
 };
@@ -43,7 +43,7 @@ export type LlmRequestReplayResponse = {
   text: string;
   /** Streamed reasoning ("thinking") text, where the model reported any. */
   thinkingText: string;
-  /** "output" = the committed output-added fact; "chunks" = re-assembled
+  /** "output" = the committed assistant context item; "chunks" = re-assembled
    * from streamed deltas (partial or pre-settle). */
   source: "output" | "chunks";
 };
@@ -123,6 +123,7 @@ const CancelledPayloadSlice = z.looseObject({
   llmRequestOffset: z.number(),
 });
 const OutputPayloadSlice = z.looseObject({
+  role: z.literal("assistant"),
   content: z.string(),
   llmRequestOffset: z.number(),
 });
@@ -199,7 +200,7 @@ function parseEventRows(rawEventJsons: readonly string[]): StreamEvent[] {
 }
 
 /**
- * The request's response: the committed output-added text is authoritative
+ * The request's response: committed assistant context is authoritative
  * when the turn settled with one; thinking text only ever exists in the
  * streamed chunks. Without an output (cancelled, failed, or still in
  * flight), the chunks' re-assembled partial text is all there is.
@@ -211,7 +212,7 @@ function replayResponse(input: {
 }): LlmRequestReplayResponse | null {
   let outputText: string | null = null;
   for (const event of input.events) {
-    if (event.type !== "events.iterate.com/agent/output-added") continue;
+    if (event.type !== "events.iterate.com/agents/context-added") continue;
     const parsed = OutputPayloadSlice.safeParse(event.payload);
     if (!parsed.success || parsed.data.llmRequestOffset !== input.llmRequestOffset) continue;
     outputText = parsed.data.content;

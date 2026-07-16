@@ -5,77 +5,106 @@ import {
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamProcessor } from "../../../stream-processor.ts";
+import type { StreamEvent } from "../../../schemas.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
+import { ensureBrowserProcessorProgressSchema } from "../../browser/processor-state-storage.ts";
+import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserFeedContract } from "./contract.ts";
 import {
-  AGENT_KIND_PREFIX,
-  isAgentActivity,
   planBrowserFeedOps,
+  RAW_GROUP_KIND,
+  isAgentActivity,
   type BrowserFeedState,
   type FeedOp,
 } from "./projector.ts";
 export { BrowserFeedContract } from "./contract.ts";
 export { BROWSER_FEED_SCHEMA_VERSION } from "./projector.ts";
+export type { BrowserFeedState };
 
 /** The table this processor owns — the ONLY rendered-feed table in the mirror. */
 export const BROWSER_FEED_TABLE = "feed_items";
 
-export type { BrowserFeedState };
+type VolatileAgentState = { state: AgentUiState; throughOffset: number };
 
 /**
  * Folds stream events into the single `feed_items` projection for the browser
- * feed UI. The projection logic lives in the pure `planBrowserFeedOps` helper:
- * `reduce` runs it one event at a time to advance state, and
- * `processEventBatch` runs it over the whole batch (from the same batch-entry
- * state) to produce one SQLite transaction — keeping the two in lockstep by
- * construction.
+ * feed UI. The projection logic lives in the pure `planBrowserFeedOps` helper,
+ * run one event at a time by BOTH hooks — `reduce` keeps its `endState`,
+ * `processEvent` keeps its `ops` — so state and projection stay in lockstep by
+ * construction. The ops are buffered into {@link projectionBuffer}; the
+ * browser progress store (processor-state-storage.ts) flushes them and the
+ * two-cursor progress record in ONE SQLite transaction per delivered frame.
+ *
+ * The open raw-group row grows with every folded event; its per-event ops are
+ * COALESCED in the buffer to one upsert per commit carrying the row's final
+ * data (matching the legacy batch override's one-statement-per-touched-row
+ * serialization cost — without it a monotype catch-up would serialize the
+ * group's cumulative events array once per event, O(n²) bytes on the exact
+ * deep-replay path the mirror's flow control protects).
  */
 export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, { sql: SqlClient }> {
   readonly contract = BrowserFeedContract;
-  #volatileAgentState: AgentUiState | null = null;
+  #volatileAgentState: VolatileAgentState | null = null;
+  readonly #pendingActivityRows = new Map<
+    number,
+    { activity: AgentUiActivity; sourceOffset: number }
+  >();
+
+  /** Shared with the progress store — see the class doc. One per instance. */
+  readonly projectionBuffer = new BrowserProjectionWriteBuffer();
+
+  /** Projection schema for the progress store's first-open (prepare() successor). */
+  ensureProjectionSchema(sql: SqlClient): Promise<void> {
+    return ensureBrowserFeedSchema(sql);
+  }
 
   /**
-   * Fold a genuinely live delivery into the transient agent tail while
-   * persisting only durable events. Ephemeral chunks never enter the SQLite
-   * projection or reduced state; the scan checkpoint may advance across their
-   * consumed offsets so reconnects cannot replay them. Reconnecting
-   * intentionally drops this memory.
+   * Build (without publishing) the transient agent-tail candidate for one
+   * genuinely live frame. The durable runners still receive only durable
+   * events; this overlay folds the original event order so a chunk before a
+   * completion cannot be replayed after that completion. A frame with no
+   * ephemeral event starts no overlay, while later durable frames continue an
+   * already-live overlay until reconnect clears it.
    */
-  async ingestLive(
-    args: Parameters<StreamProcessor<BrowserFeedContract>["ingest"]>[0],
-  ): Promise<void> {
-    // A fresh browser processor can already have a complete SQLite checkpoint.
-    // Load it before seeding the volatile tail, and ignore replay overlap from
-    // a sibling processor whose (smaller) checkpoint selected the composite
-    // subscription cursor. StreamProcessor.ingest applies the same overlap
-    // rule to the durable projection below.
-    const snapshot = await this.snapshot();
-    let agent = this.#volatileAgentState ?? snapshot.state.agent;
+  prepareVolatileFrame(args: {
+    events: readonly StreamEvent[];
+    persistedState: unknown;
+    persistedThroughOffset: number;
+    scannedThroughOffset: number;
+  }): VolatileAgentState | null {
+    if (
+      this.#volatileAgentState === null &&
+      !args.events.some((event) => event.ephemeral === true)
+    ) {
+      return null;
+    }
+    const persistedState = BrowserFeedContract.stateSchema.parse(args.persistedState);
+    let state = this.#volatileAgentState?.state ?? persistedState.agent;
+    const afterOffset = this.#volatileAgentState?.throughOffset ?? args.persistedThroughOffset;
     for (const event of args.events) {
-      if (event.offset <= snapshot.offset) continue;
-      agent = reduceAgentUi(
-        agent,
+      if (event.offset <= afterOffset) continue;
+      state = reduceAgentUi(
+        state,
         event as unknown as Parameters<typeof reduceAgentUi>[1],
       ).endState;
     }
-    await super.ingest({
-      ...args,
-      events: args.events.filter((event) => event.ephemeral !== true),
-    });
-    this.#volatileAgentState = agent;
+    return {
+      state,
+      throughOffset: Math.max(afterOffset, args.scannedThroughOffset),
+    };
   }
 
-  get agentUiState(): AgentUiState {
-    return this.#volatileAgentState ?? this.state.agent;
+  commitVolatileFrame(candidate: VolatileAgentState | null): void {
+    if (candidate !== null) this.#volatileAgentState = candidate;
+  }
+
+  get volatileAgentUiState(): AgentUiState | null {
+    return this.#volatileAgentState?.state ?? null;
   }
 
   clearVolatileState(): void {
     this.#volatileAgentState = null;
-  }
-
-  protected override async prepare(): Promise<void> {
-    await ensureBrowserFeedSchema(this.deps.sql);
   }
 
   protected override reduce(
@@ -84,82 +113,118 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     return planBrowserFeedOps(args.state, [args.event]).endState;
   }
 
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<BrowserFeedContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    const { ops } = planBrowserFeedOps(args.previousState, args.events);
-    await appendPrunedActivityCorrections(this.deps.sql, ops, args.events);
+  protected override processEvent(
+    args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
+  ): undefined {
+    const { ops } = planBrowserFeedOps(args.previousState, [args.event]);
+    // A drained buffer means a new frame has started. Pending rows exist only
+    // to make late corrections inside ONE uncommitted frame visible; SQLite
+    // is authoritative after the preceding frame commits.
+    if (this.projectionBuffer.pendingCount === 0) this.#pendingActivityRows.clear();
 
-    if (ops.length > 0) {
-      await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
+    const executionId =
+      args.event.type === "events.iterate.com/capability-host/script-run-settled"
+        ? readExecutionId(args.event.payload)
+        : null;
+    const alreadyCorrected =
+      executionId !== null &&
+      ops.some(
+        (op) =>
+          op.kind === "replace" &&
+          isAgentActivity(op.data) &&
+          activityHasDurableExecution(op.data, executionId),
+      );
+    if (executionId !== null && !alreadyCorrected) {
+      args.blockProcessorWhile(async () => {
+        const correction = await this.#findPrunedActivityCorrection(args.event, executionId);
+        this.#appendOps(
+          args.event.offset,
+          correction === null ? ops : [...ops, correction],
+          args.state.open,
+        );
+      });
+      return;
     }
-
-    await super.processEventBatch(args);
+    this.#appendOps(args.event.offset, ops, args.state.open);
   }
-}
 
-/**
- * The reducer keeps only a bounded hot window of inferred script outcomes.
- * A completion that arrives after that window must still replace the
- * previously rendered row. Recover the current activity from SQLite (or from
- * an insert earlier in this same batch), run it through the canonical reducer,
- * and append a normal replace op. This keeps reducer memory bounded without
- * silently discarding late durable truth.
- */
-async function appendPrunedActivityCorrections(
-  sql: SqlClient,
-  ops: FeedOp[],
-  events: Parameters<StreamProcessor<BrowserFeedContract>["processEventBatch"]>[0]["events"],
-): Promise<void> {
-  const rows = new Map<number, AgentUiActivity>();
-  const alreadyCorrected = new Set<string>();
-  for (const op of ops) {
-    if ((op.kind === "insert" || op.kind === "replace") && isAgentActivity(op.data)) {
-      rows.set(op.localIndex, op.data);
-      if (op.kind === "replace") {
-        for (const step of op.data.steps) {
-          if (step.kind === "code" && step.outcomeSource === "durable") {
-            alreadyCorrected.add(step.executionId);
-          }
-        }
+  #appendOps(offset: number, ops: readonly FeedOp[], open: BrowserFeedState["open"]): void {
+    if (ops.length === 0) return;
+    for (const op of ops) {
+      if ((op.kind === "insert" || op.kind === "replace") && isAgentActivity(op.data)) {
+        this.#pendingActivityRows.set(op.localIndex, { activity: op.data, sourceOffset: offset });
       }
     }
+    this.projectionBuffer.append(
+      offset,
+      ops.map((op) => {
+        if (op.kind === "replace" || open === null || op.localIndex !== open.localIndex) {
+          // Settled rows (agent items, raw singletons, groups closed within
+          // this event): one immutable statement each.
+          return { build: () => feedOpToStatement(op) };
+        }
+        // The still-open raw group row. Always written as the UPSERT shape
+        // with the row's FULL current values: a pending same-key write may be
+        // the row's original insert (which a plain UPDATE must not replace —
+        // the row would never be created), and against an already-committed
+        // row the upsert's conflict arm is exactly the legacy UPDATE.
+        const upsert: FeedOp =
+          op.kind === "insert"
+            ? op
+            : {
+                kind: "insert",
+                localIndex: op.localIndex,
+                itemKind: RAW_GROUP_KIND,
+                firstOffset: open.firstOffset,
+                lastOffset: op.lastOffset,
+                eventCount: op.eventCount,
+                data: op.data,
+              };
+        return {
+          coalesceKey: `feed-item:${op.localIndex}`,
+          build: () => feedOpToStatement(upsert),
+        };
+      }),
+    );
   }
 
-  for (const event of events) {
-    if (event.type !== "events.iterate.com/capability-host/script-execution-completed") continue;
-    const executionId = readExecutionId(event.payload);
-    if (executionId == null || alreadyCorrected.has(executionId)) continue;
-
-    let matched = findInferredActivityRow(rows, executionId);
-    // oxlint-disable-next-line react-doctor/async-await-in-loop -- corrections mutate the same ordered op list; serial lookup preserves event order and lets later completions observe earlier replacements.
-    if (matched == null) matched = await readInferredActivityRow(sql, executionId);
-    if (matched == null) continue;
-    const { activity, localIndex } = matched;
-
+  async #findPrunedActivityCorrection(
+    event: StreamEvent,
+    executionId: string,
+  ): Promise<FeedOp | null> {
+    const pending = findInferredActivityRow(
+      new Map(
+        [...this.#pendingActivityRows].map(([localIndex, row]) => [localIndex, row.activity]),
+      ),
+      executionId,
+    );
+    const matched = pending ?? (await readInferredActivityRow(this.deps.sql, executionId));
+    if (matched === null) return null;
     const start = initialAgentUiState();
     const reduced = reduceAgentUi(
-      {
-        ...start,
-        provisionalActivities: { [activity.id]: activity },
-      },
+      { ...start, provisionalActivities: { [matched.activity.id]: matched.activity } },
       event as unknown as Parameters<typeof reduceAgentUi>[1],
     );
     const corrected = reduced.items.find(
-      (item): item is AgentUiActivity => item.kind === "activity" && item.id === activity.id,
+      (item): item is AgentUiActivity =>
+        item.kind === "activity" && item.id === matched.activity.id,
     );
-    if (corrected == null) continue;
-
-    rows.set(localIndex, corrected);
-    alreadyCorrected.add(executionId);
-    ops.push({
+    if (corrected === undefined) return null;
+    return {
       kind: "replace",
-      localIndex,
-      itemKind: `${AGENT_KIND_PREFIX}${corrected.kind}`,
+      localIndex: matched.localIndex,
+      itemKind: `agent.${corrected.kind}`,
       lastOffset: event.offset,
       data: corrected,
-    });
+    };
   }
+}
+
+function activityHasDurableExecution(activity: AgentUiActivity, executionId: string): boolean {
+  return activity.steps.some(
+    (step) =>
+      step.kind === "code" && step.executionId === executionId && step.outcomeSource === "durable",
+  );
 }
 
 function findInferredActivityRow(
@@ -253,12 +318,16 @@ function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
   };
 }
 
-const ensureBrowserFeedSchema = createSchemaEnsurer({
+export const ensureBrowserFeedSchema = createSchemaEnsurer({
   run: async (sql) => {
+    // The rewind statements below reference processor_progress; make sure the
+    // progress schema exists before the reset transaction can touch it.
+    await ensureBrowserProcessorProgressSchema(sql);
     // No PRAGMA user_version here: feed_items shares the per-stream OPFS
     // database with the raw-events `events` table, which owns user_version.
     // Version resets ride the store's resetOnSchemaVersionChange lane
     // (mirror meta keyed by slug) instead.
+    //
     await sql.batch(
       [
         {

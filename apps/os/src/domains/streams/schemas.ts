@@ -66,8 +66,8 @@ export const StreamEventInput = z.object({
    * historical ephemeral rows are never replayed. The stream may EVICT their
    * rows in the future (memory pressure, DO startup sweeps), so nothing
    * durable may ever depend on one: use them for transient signals whose
-   * durable truth lands separately — LLM streaming chunks superseded by
-   * `output-added`.
+   * durable truth lands separately — LLM streaming chunks superseded by an
+   * assistant `agents/context-added` item.
    * `z.literal(true)`, not boolean: absent = durable, so committed rows stay
    * self-describing and `ephemeral: false` is a loud input error, not a
    * silent synonym for omitting the flag.

@@ -1,55 +1,66 @@
+import type { z } from "zod";
 import type {
   GetProcessorRuntimeState,
-  StreamEventBatch,
+  ProcessorSnapshot,
   StreamPingInput,
   StreamSubscriberPing,
 } from "./rpc-types.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 import type { SubscriberMetrics } from "./subscriber-metrics.ts";
-import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
+import type { ProcessorRuntimeContribution } from "./stream-processor.ts";
 
-/** The processor surface shared by Durable Object and browser hosts. */
+/**
+ * The processor surface shared by the Durable Object registry
+ * (stream-processor-registry.ts) and the browser host (stream-browser-store.ts):
+ * the contract description the wake handshake announces, the
+ * processor-contributed runtime bag, and the self-measured subscriber metrics.
+ * Deliberately NOT the drive surface — cursors, snapshots, and delivery live
+ * in the StreamProcessorRunner, which reaches the protected hooks through
+ * `StreamProcessor.runnerDriver`.
+ */
 export type AnyHostedProcessor = {
   contract: {
     slug: string;
     version: string;
     description: string;
+    stateSchema: z.ZodType;
     consumes: readonly string[];
     emits: readonly string[];
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
-  ingest(args: {
-    events: readonly StreamEventBatch["events"][number][];
-    streamMaxOffset: number;
-    /** Raw-log interval the transport scanned, including empty filtered ranges. */
-    scannedAfterOffset: number;
-    scannedThroughOffset: number;
-  }): Promise<void>;
-  snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
-  getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
-  currentState: unknown;
-  readonly isLoaded: boolean;
+  /** The processor-contributed runtime bag; the snapshot half comes from the runner. */
+  getRuntimeState(): Promise<ProcessorRuntimeContribution>;
   readonly subscriberMetrics: Pick<
     SubscriberMetrics,
     "report" | "notePingObserved" | "noteAppendCommitted" | "clearPendingAppends"
   >;
-  markLoaded(): void;
-  observeStateChanges(observer: (snapshot: StreamProcessorSnapshot<unknown>) => void): () => void;
 };
 
 /**
  * The two live capabilities every processor host hands the stream alongside
- * its sink, shared by the server host and browser runtime so they cannot drift.
+ * its sink, shared by the DO registry and browser runtime so they cannot
+ * drift. `getRuntimeState` assembles the published shape from its two honest
+ * sources: the SNAPSHOT from the runner (`opts.snapshot` — the cursor owner),
+ * the `runtime` bag from the processor, with the self-measured metrics merged
+ * in host-side so a subclass override cannot accidentally drop them.
  */
 export function hostRuntimeCapabilities(
   processor: AnyHostedProcessor,
-  opts: { now: () => number; oneWayEstimateMs?: () => number | undefined },
+  opts: {
+    now: () => number;
+    /** The driving runner's committed snapshot (`() => runner.snapshot()`). */
+    snapshot: () => Promise<ProcessorSnapshot<unknown>>;
+    oneWayEstimateMs?: () => number | undefined;
+  },
 ): { getRuntimeState: GetProcessorRuntimeState; ping: StreamSubscriberPing } {
   return {
     getRuntimeState: async () => {
-      const state = await processor.getRuntimeState();
+      const contributed = await processor.getRuntimeState();
       const metrics = processor.subscriberMetrics.report();
-      return { ...state, runtime: { ...state.runtime, metrics } };
+      return {
+        snapshot: await opts.snapshot(),
+        runtime: { ...contributed.runtime, metrics },
+      };
     },
     ping: (input: StreamPingInput) => {
       const t1 = opts.now();

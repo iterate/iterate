@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { ItxExpressionStep } from "../../itx/expression.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
@@ -58,7 +62,7 @@ const CapabilityRevokedPayload = z.strictObject({
 }) satisfies z.ZodType<RevokeCapabilityInput, unknown>;
 
 /**
- * Absolute lifetime of a script-execution-requested obligation. Recovery can
+ * Absolute lifetime of a script-run-requested obligation. Recovery can
  * deliver the request arbitrarily late, and an already-started worker RPC can
  * hang indefinitely; both are settled at this deadline rather than running
  * or remaining busy without bound.
@@ -69,6 +73,10 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   version: "0.2.0",
   description: "A tiny dynamic capability table and script execution journal.",
+  // Brings the core `stream/*` lifecycle events into scope so the obligation
+  // reconcile can consume `stream/woken` / `subscriber-connected` as re-check
+  // signals (see `consumes`).
+  processorDeps: [CoreProcessorContract],
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
     /**
@@ -133,7 +141,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/capability-host/script-execution-requested": {
+    "events.iterate.com/capability-host/script-run-requested": {
       description:
         "A script should run in this capability scope. Before any attempt starts, the code is typechecked against the scope's capability types: a script with a PROVABLE error — a syntax error, or a near-miss typo where the compiler names the fix (\"Did you mean 'get'?\") — settles straight to an error completion carrying the compiler errors, without ever running (no started event). Everything less certain runs: capabilities are provided dynamically and declared types can lag the runtime, so bare property/argument mismatches, unknown/untyped capabilities, non-async block shapes, and checker failures all let the script run unchecked.",
       payloadSchema: z.strictObject({
@@ -153,7 +161,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/capability-host/script-execution-started": {
+    "events.iterate.com/capability-host/script-run-started": {
       description:
         "An attempt to run the script began. Appended BEFORE the script body executes, so requested-without-started provably never ran (safe to start late) while started-without-completed died mid-run (settled as failure, never re-run).",
       payloadSchema: z.looseObject({ executionId: z.string() }),
@@ -164,7 +172,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/capability-host/script-execution-completed": {
+    "events.iterate.com/capability-host/script-run-settled": {
       description:
         "The one durable settlement for a script obligation. Failures classify where execution stopped, whether script code may have run, and whether cancellation can prove external work ended.",
       payloadSchema: z.strictObject({
@@ -199,16 +207,32 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
-    "events.iterate.com/capability-host/script-execution-requested",
-    "events.iterate.com/capability-host/script-execution-started",
-    "events.iterate.com/capability-host/script-execution-completed",
+    "events.iterate.com/capability-host/script-run-requested",
+    "events.iterate.com/capability-host/script-run-started",
+    "events.iterate.com/capability-host/script-run-settled",
+    // Core lifecycle RE-CHECK signals (see the agent contract for the full
+    // rationale): neither folds into state, but their at-head delivery gives
+    // the script-obligation reconcile a guaranteed consumed-at-head turn —
+    // `stream/woken` on a stream (re)start, `subscriber-connected` on a runner
+    // (re)attach.
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): its ordinary delivery is
+    // the guaranteed at-head turn where the obligation reconcile
+    // (`processEvent` under `delivery.caughtUp`) re-drives open script
+    // obligations — fresh requested scripts start, orphaned started scripts
+    // settle as failures. Reduce ignores it, and it is absent from `emits`:
+    // the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
-    "events.iterate.com/capability-host/script-execution-requested",
-    "events.iterate.com/capability-host/script-execution-started",
-    "events.iterate.com/capability-host/script-execution-completed",
+    "events.iterate.com/capability-host/script-run-requested",
+    "events.iterate.com/capability-host/script-run-started",
+    "events.iterate.com/capability-host/script-run-settled",
   ],
 });
 

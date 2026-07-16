@@ -225,9 +225,11 @@ export async function processGithubReviewEvent(input: {
       },
     },
     {
-      type: "events.iterate.com/agents/message-received",
+      type: "events.iterate.com/agents/context-added",
       idempotencyKey: externalId,
       payload: {
+        role: "developer",
+        key: `github/review-task:${externalId}`,
         content: githubReviewTask({
           ...target,
           checkId: check.id,
@@ -239,7 +241,14 @@ export async function processGithubReviewEvent(input: {
           streamPath: input.event.path,
           timeoutScheduleKey,
         }),
-        from: { kind: "github" },
+        refs: [
+          {
+            type: "event",
+            streamPath: input.event.path,
+            offset: input.event.offset,
+            eventType: input.event.type,
+          },
+        ],
         llmRequestPolicy: { behaviour: "after-current-request" },
       },
     },

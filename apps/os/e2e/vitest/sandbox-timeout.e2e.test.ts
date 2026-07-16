@@ -131,7 +131,7 @@ test.skipIf(deployedBaseUrl() === null)(
         { pidFile, requestedTimeoutMs: 20 * 60 * 1_000, sandboxPath },
       );
       await agent.stream.append({
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: { code, executionId, expiresAt },
       });
 
@@ -139,7 +139,7 @@ test.skipIf(deployedBaseUrl() === null)(
       await waitForCondition(
         async () => {
           const completions = await agent.stream.getEvents({
-            eventTypes: ["events.iterate.com/capability-host/script-execution-completed"],
+            eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
             limit: 100,
           });
           const completion = completions.find(

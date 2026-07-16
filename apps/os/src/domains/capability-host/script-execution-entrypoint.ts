@@ -158,6 +158,13 @@ export function scriptWorkerRef(input: {
     function sandboxWithExecutionDeadline(sandbox) {
       return new Proxy(sandbox, {
         get(target, property) {
+          if (property === "execStream") {
+            return () => {
+              throw new Error(
+                "sandbox.execStream is unavailable inside scripts because the sandbox SDK cannot prove that cancelling its stream terminates the command process tree; use sandbox.exec instead",
+              );
+            };
+          }
           if (property !== "exec") return Reflect.get(target, property, target);
           return (command, options = {}) => {
             const timeout = sandboxExecTimeout({

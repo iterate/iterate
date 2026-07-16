@@ -35,7 +35,7 @@ describe("sandboxExecTimeout", () => {
 });
 
 describe("scriptWorkerRef", () => {
-  it("caps sandbox exec inside the absolute script deadline", () => {
+  it("caps sandbox exec and rejects unbounded streaming exec inside scripts", () => {
     const expiresAt = 1_783_012_500_000;
     const ref = scriptWorkerRef({
       code: "async (itx) => itx.sandboxes.get('/sandboxes/test')",
@@ -50,5 +50,7 @@ describe("scriptWorkerRef", () => {
     expect(main).toContain("const sandboxExecTimeout = ");
     expect(main).toContain("requestedTimeout: options.timeout");
     expect(main).toContain("return target.exec(command, { ...options, timeout })");
+    expect(main).toContain('if (property === "execStream")');
+    expect(main).toContain("sandbox.execStream is unavailable inside scripts");
   });
 });

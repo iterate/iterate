@@ -22,11 +22,16 @@ function event(offset: number, type: string, payload: unknown = { offset }): Str
 const CREATED = "events.iterate.com/stream/created";
 const WOKEN = "events.iterate.com/stream/woken";
 const DEBUG = "events.iterate.com/debug/random-event";
-const MESSAGE_RECEIVED = "events.iterate.com/agents/message-received";
+const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
 function userMessage(offset: number, text: string): StreamEvent {
-  return event(offset, MESSAGE_RECEIVED, { content: text, from: { kind: "user", origin: "web" } });
+  return event(offset, CONTEXT_ADDED, {
+    role: "user",
+    actor: { type: "user", origin: "web" },
+    content: text,
+    llmRequestPolicy: { behaviour: "after-current-request" },
+  });
 }
 
 const START = initialBrowserFeedState();
@@ -256,7 +261,7 @@ describe("browser-feed projector — one interleaved order", () => {
   });
 
   it("replaces an inferred script outcome when its durable settlement arrives late", () => {
-    const requested = event(1, "events.iterate.com/capability-host/script-execution-requested", {
+    const requested = event(1, "events.iterate.com/capability-host/script-run-requested", {
       executionId: "late-script",
       code: "async () => mutate()",
       expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
@@ -274,7 +279,7 @@ describe("browser-feed projector — one interleaved order", () => {
       "activity-1": inserted.localIndex,
     });
 
-    const completed = event(3, "events.iterate.com/capability-host/script-execution-completed", {
+    const completed = event(3, "events.iterate.com/capability-host/script-run-settled", {
       executionId: "late-script",
       settlement: { status: "succeeded", result: "committed" },
     });
@@ -312,7 +317,7 @@ describe("browser-feed projector — one interleaved order", () => {
     const events = Array.from({ length: 40 }, (_, index) => {
       const requestedOffset = index * 2 + 1;
       return [
-        event(requestedOffset, "events.iterate.com/capability-host/script-execution-requested", {
+        event(requestedOffset, "events.iterate.com/capability-host/script-run-requested", {
           executionId: `missing-${index}`,
           code: `async () => ${index}`,
           expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),

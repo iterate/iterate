@@ -142,7 +142,10 @@ from an ephemeral event"; the durable truth is always its own append:
 // per streamed token: live subscribers paint it; nothing durable ever sees it
 await stream.append({ type: ".../llm-response-chunk", ephemeral: true, payload: { chunk } });
 // once, when the turn settles: THE fact processors fold
-await stream.append({ type: ".../output-added", payload: { text } });
+await stream.append({
+  type: ".../agents/context-added",
+  payload: { role: "assistant", content: text, llmRequestOffset },
+});
 
 await stream.getEvents(); //                          durable events only
 await stream.getEvents({ includeEphemeral: true }); // + surviving ephemeral rows
@@ -166,7 +169,8 @@ copies live on in browser mirrors); and a post-sweep state rebuild counts
 only surviving rows (`eventCount` may decrease — never compare it to
 `maxOffset`). Use ephemeral events for transient signals whose durable truth
 lands separately: the canonical case is LLM streaming chunks
-(`agent/llm-response-chunk`), superseded by the durable `output-added`.
+(`agent/llm-response-chunk`), superseded by the durable assistant
+`agents/context-added` item.
 `stream/*` control facts cannot be ephemeral — config, presence, and park
 state may never be forgotten. One consequence worth naming: a durable
 subscription (cross-post, webhook) whose selector matches only ephemeral
@@ -341,20 +345,25 @@ to a **fixed canonical set of processors** — the raw-events cache
 do not choose processors; the set lives in `canonical-mirror-processors.ts`, and
 adding a browser projection is an edit there, not a per-view decision.
 
-**Fan-out is a composite, so the runtime stays single-processor.**
-`CompositeBrowserProcessor` implements the same `AnyHostedProcessor` surface the
-DO host drives, so the runtime's race-critical machinery (connection epochs,
+**Fan-out is a composite, so the runtime stays single-drive.**
+`CompositeMirrorDrive` (`composite-mirror-drive.ts`) holds one
+`StreamProcessorRunner` per member and answers the runtime's wake handshake as
+one unit, so the runtime's race-critical machinery (connection epochs,
 half-open transport eviction, liveness probe, ingest self-heal) never learns
-about processor lists. It ingests into each child **sequentially** (they share
-one SQLite connection — parallel transactions would interleave) and reports the
-**minimum** child checkpoint as the replay cursor, so catch-up covers the
-least-caught-up member. Over-delivery is free: every `StreamProcessor` skips
-events at or below its own checkpoint (`stream-processor.ts` `#ingest`), so a
-member that is already ahead cheaply no-ops.
+about processor lists. Its sink fans each frame to the members **sequentially**
+(they share one SQLite connection — parallel commit transactions would
+interleave) and it reports the **minimum** member checkpoint as the replay
+cursor, so catch-up covers the least-caught-up member. Over-delivery is free:
+every member's runner offset-dedupes delivered events against its own durable
+acknowledged cursor (`stream-processor-runner.ts`), so a member that is already
+ahead cheaply no-ops. Each member's projection writes and its two-cursor
+progress record commit in **one SQLite transaction** per frame
+(`processor-state-storage.ts`), so a member's mirror rows and resume cursor can
+never disagree.
 
 **Members stay independent where it matters.** Reconcile and mirror discard are
 per-member: each member keeps its own tables, schema version, and durable
-checkpoint row **keyed by its real slug** — so a member's schema bump rebuilds
+progress row **keyed by its real slug** — so a member's schema bump rebuilds
 only its tables, and unifying the download never invalidated an existing local
 cache. Only the _server subscription key_ and the _writer-lock name_ (versioned
 by a compatibility vector over all members) are mirror-level.

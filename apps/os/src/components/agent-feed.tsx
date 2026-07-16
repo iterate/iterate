@@ -643,14 +643,6 @@ export function AgentLiveActivity({
           : "Waiting for a response"
         : liveActivityLabel(phaseStep == null ? [] : [phaseStep]);
   const phaseStartedAtMs = live.phaseStartedAtMs ?? phaseStep?.startedAtMs ?? live.startedAtMs;
-  const phaseClock = useLivePhaseClock(
-    phaseStartedAtMs,
-    phaseStep?.kind === "code" ? phaseStep.expiresAtMs : null,
-    working,
-  );
-  const phaseLabel = phaseClock.deadlineExceeded ? "Code deadline exceeded" : basePhaseLabel;
-  const phaseElapsed = phaseClock.elapsedLabel;
-  const statusWithElapsed = `${phaseLabel}${phaseElapsed == null ? "" : ` ${phaseElapsed}`}`;
   const inspectCurrentPhase =
     phaseStep?.kind === "llm"
       ? onInspectLlmRequest == null
@@ -724,50 +716,74 @@ export function AgentLiveActivity({
           )}
         </div>
       ) : null}
-      {working ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={inspectCurrentPhase == null}
-          onClick={inspectCurrentPhase}
-          title={
-            phaseClock.deadlineExceeded
-              ? "The script has no durable settlement after its absolute deadline"
-              : inspectCurrentPhase == null
-                ? undefined
-                : "Open the current operation's trace"
-          }
-          className={cn(
-            "-ml-2.5 h-7 self-start px-2.5 text-primary disabled:opacity-100",
-            phaseClock.deadlineExceeded && "text-destructive",
-          )}
-          data-testid="agent-live-status"
-        >
-          {phaseClock.deadlineExceeded ? (
-            <CircleAlertIcon className="size-3 shrink-0 text-destructive" />
-          ) : (
-            <Spinner className="size-3 shrink-0 text-primary" />
-          )}
-          <span
-            className={cn(
-              "text-sm font-medium tabular-nums text-primary",
-              phaseClock.deadlineExceeded && "text-destructive",
-            )}
-          >
-            {statusWithElapsed}
-          </span>
-          {inspectCurrentPhase == null ? null : (
-            <ChevronRightIcon
-              className={cn(
-                "size-2.5 text-primary/60",
-                phaseClock.deadlineExceeded && "text-destructive/60",
-              )}
-              aria-hidden="true"
-            />
-          )}
-        </Button>
-      ) : null}
+      <AgentLiveStatus
+        label={basePhaseLabel}
+        startedAtMs={phaseStartedAtMs}
+        deadlineMs={phaseStep?.kind === "code" ? phaseStep.expiresAtMs : null}
+        onInspect={inspectCurrentPhase}
+      />
     </div>
+  );
+}
+
+/** The only subtree subscribed to the 100ms clock; grouped rows stay stable. */
+function AgentLiveStatus({
+  label,
+  startedAtMs,
+  deadlineMs,
+  onInspect,
+}: {
+  label: string;
+  startedAtMs: number | null;
+  deadlineMs: number | null;
+  onInspect: (() => void) | undefined;
+}) {
+  const phaseClock = useLivePhaseClock(startedAtMs, deadlineMs, true);
+  const phaseLabel = phaseClock.deadlineExceeded ? "Code deadline exceeded" : label;
+  const statusWithElapsed = `${phaseLabel}${phaseClock.elapsedLabel == null ? "" : ` ${phaseClock.elapsedLabel}`}`;
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      disabled={onInspect == null}
+      onClick={onInspect}
+      title={
+        phaseClock.deadlineExceeded
+          ? "The script has no durable settlement after its absolute deadline"
+          : onInspect == null
+            ? undefined
+            : "Open the current operation's trace"
+      }
+      className={cn(
+        "-ml-2.5 h-7 self-start px-2.5 text-primary disabled:opacity-100",
+        phaseClock.deadlineExceeded && "text-destructive",
+      )}
+      data-testid="agent-live-status"
+    >
+      {phaseClock.deadlineExceeded ? (
+        <CircleAlertIcon className="size-3 shrink-0 text-destructive" />
+      ) : (
+        <Spinner className="size-3 shrink-0 text-primary" />
+      )}
+      <span
+        className={cn(
+          "text-sm font-medium tabular-nums text-primary",
+          phaseClock.deadlineExceeded && "text-destructive",
+        )}
+      >
+        {statusWithElapsed}
+      </span>
+      {onInspect == null ? null : (
+        <ChevronRightIcon
+          className={cn(
+            "size-2.5 text-primary/60",
+            phaseClock.deadlineExceeded && "text-destructive/60",
+          )}
+          aria-hidden="true"
+        />
+      )}
+    </Button>
   );
 }
 

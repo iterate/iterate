@@ -48,8 +48,12 @@ describe("agent-ui reducer", () => {
   test("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "count the inputs",
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -98,8 +102,8 @@ describe("agent-ui reducer", () => {
   test("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "hi", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "hi" },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -107,7 +111,7 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: {
           executionId: "x1",
           code: "await stream.read()",
@@ -115,7 +119,7 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-run-settled",
         payload: { executionId: "x1", settlement: { status: "succeeded", result: 12 } },
       },
       {
@@ -159,7 +163,7 @@ describe("agent-ui reducer", () => {
   test("keeps running script source and start time in the live activity", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: {
           executionId: "x1",
           code: "await itx.repo.readFile({ path: 'README.md' })",
@@ -182,7 +186,7 @@ describe("agent-ui reducer", () => {
   test("does not guess which script a malformed completion belongs to", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: {
           executionId: "exact-id-required",
           code: "async () => mutate()",
@@ -190,7 +194,7 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-run-settled",
         payload: { settlement: { status: "succeeded", result: "wrong target" } },
       },
     ]);
@@ -203,7 +207,7 @@ describe("agent-ui reducer", () => {
   test("does not derive agent state or durations from a malformed event timestamp", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: {
           executionId: "valid-start",
           code: "async () => mutate()",
@@ -211,7 +215,7 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-run-settled",
         createdAt: "not-a-timestamp",
         payload: {
           executionId: "valid-start",
@@ -228,7 +232,7 @@ describe("agent-ui reducer", () => {
   test("rejects script requests that do not satisfy the current deadline contract", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: { executionId: "missing-deadline", code: "return 1" },
       },
     ]);
@@ -245,15 +249,16 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
       },
       {
-        type: "events.iterate.com/agent/output-added",
+        type: "events.iterate.com/agents/context-added",
         payload: {
+          role: "assistant",
           llmRequestOffset: 10,
           content:
             "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
         },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: {
           executionId: "agent-output:11",
           code: "async (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
@@ -283,7 +288,7 @@ describe("agent-ui reducer", () => {
     const completed = reduceAll([
       ...countdownEvents,
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-run-settled",
         payload: { executionId: "agent-output:11", settlement: { status: "succeeded" } },
       },
       {
@@ -352,7 +357,7 @@ describe("agent-ui reducer", () => {
                 description: "Drives the LLM loop.",
                 consumes: ["a"],
                 emits: ["b"],
-                ownedEvents: [{ type: "events.iterate.com/agent/input-added" }],
+                ownedEvents: [{ type: "events.iterate.com/agents/context-added" }],
               },
             },
           },
@@ -494,7 +499,7 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         payload: {
           executionId: "script-without-completion",
           code: "async () => mutateExternalState()",
@@ -528,7 +533,7 @@ describe("agent-ui reducer", () => {
   test("emits a same-id correction when a durable script settlement arrives after idle", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         offset: 10,
         payload: {
           executionId: "late-script",
@@ -541,7 +546,7 @@ describe("agent-ui reducer", () => {
         payload: { busy: false, sinceOffset: 10 },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-run-settled",
         payload: {
           executionId: "late-script",
           settlement: { status: "succeeded", result: { committed: true } },
@@ -577,7 +582,7 @@ describe("agent-ui reducer", () => {
   test("stores one provisional activity for a group with several unsettled scripts", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         offset: 10,
         payload: {
           executionId: "late-a",
@@ -586,7 +591,7 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-run-requested",
         offset: 11,
         payload: {
           executionId: "late-b",
@@ -599,7 +604,7 @@ describe("agent-ui reducer", () => {
         payload: { busy: false, sinceOffset: 11 },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-run-settled",
         payload: { executionId: "late-a", settlement: { status: "succeeded", result: "a" } },
       },
     ]);
@@ -622,7 +627,7 @@ describe("agent-ui reducer", () => {
       const requestedOffset = index * 2 + 1;
       return [
         {
-          type: "events.iterate.com/capability-host/script-execution-requested",
+          type: "events.iterate.com/capability-host/script-run-requested",
           offset: requestedOffset,
           createdAt: new Date(baseMs + requestedOffset * 1_000).toISOString(),
           payload: {
@@ -670,8 +675,12 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "also, one more thing",
+        },
       },
     ]);
 
@@ -694,8 +703,12 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "also, one more thing",
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
@@ -738,8 +751,12 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "oh this is taking too long", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "oh this is taking too long",
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-cancelled",
@@ -979,7 +996,7 @@ describe("agent-ui reducer", () => {
 
   test("shows only the attachments from the slack-agent's transcribed message", () => {
     // The slack message itself already rendered from the webhook event; the
-    // slack-agent processor's message-received yaml transcription exists for
+    // slack-agent processor's context-added yaml transcription exists for
     // the model, not the user — but its stored file attachments are the only
     // browser-renderable copy of shared files.
     const file = {
@@ -991,11 +1008,12 @@ describe("agent-ui reducer", () => {
     };
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
+        type: "events.iterate.com/agents/context-added",
         idempotencyKey: "slack-agent:webhook-to-agent-input:41",
         payload: {
           content: "```yaml\nbody: ...\n```",
-          from: { kind: "slack", userId: "U1" },
+          role: "developer",
+          actor: { type: "slack", userId: "U1" },
           files: [file],
         },
       },
@@ -1009,11 +1027,12 @@ describe("agent-ui reducer", () => {
   test("keeps email/github transcription text visible — they have no raw-event bubble", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
+        type: "events.iterate.com/agents/context-added",
         payload: {
+          role: "developer",
           content:
             "`events.iterate.com/email/received` event received\n\n```yaml\nsubject: hi\n```",
-          from: { kind: "email", address: "dana@example.com" },
+          actor: { type: "email", address: "dana@example.com" },
         },
       },
     ]);
@@ -1030,10 +1049,11 @@ describe("agent-ui reducer", () => {
   test("renders inter-agent mail as a labeled user bubble", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
+        type: "events.iterate.com/agents/context-added",
         payload: {
+          role: "developer",
           content: "Done. Findings attached below.",
-          from: { kind: "agent", path: "/agents/main/researcher" },
+          actor: { type: "agent", path: "/agents/main/researcher" },
         },
       },
     ]);
@@ -1125,7 +1145,7 @@ describe("agent-ui reducer", () => {
     expect(state.items).toHaveLength(0);
   });
 
-  test("a history-reset clears the context-fullness reading but keeps lifetime totals", () => {
+  test("a compaction context clears the context-fullness reading but keeps lifetime totals", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/token-usage-reported",
@@ -1138,11 +1158,12 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent/history-reset",
+        type: "events.iterate.com/agents/context-added",
+        offset: 5,
         payload: {
-          systemPrompt: "You are a helpful assistant.",
-          history: [{ role: "user", content: "[Compacted summary.]" }],
-          reason: "compaction@3",
+          role: "developer",
+          content: "[Compacted summary.]",
+          compaction: { replacesHistoryThrough: 3 },
         },
       },
     ]);

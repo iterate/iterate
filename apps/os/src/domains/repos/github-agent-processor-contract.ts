@@ -7,6 +7,10 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 
@@ -79,17 +83,25 @@ export const GithubAgentProcessorContract = defineProcessorContract({
       }),
     },
   },
-  processorDeps: [AgentProcessorContract, RepoProcessorContract],
+  // CoreProcessorContract brings the platform revival fact into scope (see
+  // `consumes`).
+  processorDeps: [AgentProcessorContract, RepoProcessorContract, CoreProcessorContract],
   consumes: [
     "events.iterate.com/github-agent/repository-collaborator-verified",
     "events.iterate.com/github-agent/route-configured",
     "events.iterate.com/github/webhook-received",
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): appended when an
+    // incarnation died owing work — a collaborator verification or turn
+    // append lost to a simultaneous Agent+Stream DO death — the append
+    // cold-boots the Stream DO so the unacknowledged frame redelivers and the
+    // blocking verification + turn append re-run. Never emitted by the
+    // processor: the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
-    // Route context stays a plain model-visible input; policy-triggered
-    // snapshots are inbound messages from their GitHub sender.
-    "events.iterate.com/agent/input-added",
-    "events.iterate.com/agents/message-received",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/github-agent/repository-collaborator-verified",
     "events.iterate.com/agent/status-changed",
   ],

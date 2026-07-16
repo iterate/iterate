@@ -10,6 +10,10 @@ export class RpcStub {}
 export class RpcPromise {}
 export class RpcProperty {}
 export class ServiceStub {}
+// Base classes some VALUE-imported modules extend at load time (e.g.
+// rpc-targets.ts pulls in egress.ts's WorkerEntrypoint subclass). Class
+// bodies never run in node tests — the subclasses just need a constructable
+// base so their module can evaluate.
 export class WorkerEntrypoint<Env = unknown, Props = unknown> {
   env!: Env;
   ctx!: {
@@ -18,6 +22,7 @@ export class WorkerEntrypoint<Env = unknown, Props = unknown> {
     waitUntil(promise: Promise<unknown>): void;
   };
 }
+export class DurableObject {}
 export const env = {};
 
 export type RecordedSpan = {

@@ -10,7 +10,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
-import { StreamOffsetConflictError } from "./rpc-types.ts";
+import { StreamOffsetConflictError, streamOffsetConflictMessage } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import {
@@ -285,7 +285,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
         throw new StreamOffsetConflictError(
-          `expected next offset ${expectedOffset}, found ${committed.offset}`,
+          streamOffsetConflictMessage(expectedOffset, committed.offset),
         );
       }
 
@@ -1304,6 +1304,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error(`replayAfterOffset must be a non-negative integer`);
     }
     if (
+      args.expectedIncarnation !== undefined &&
+      args.expectedIncarnation !== null &&
+      args.expectedIncarnation.trim().length === 0
+    ) {
+      throw new Error(`expectedIncarnation must be null or a non-empty string`);
+    }
+    if (
       args.maxReplayOffsetGap !== undefined &&
       (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
     ) {
@@ -1335,6 +1342,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriptionKey,
       sink: args.processEventBatch,
       replayAfterOffset: args.replayAfterOffset,
+      expectedIncarnation: args.expectedIncarnation,
       maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector,
       events: args.events,

@@ -105,18 +105,22 @@ export class EmailAgentProcessor extends StreamProcessor<
       );
     }
 
-    // Durable obligation: the agent input is the message's only path to the
+    // Durable obligation: the agent context item is the message's only path to the
     // LLM, so a failed append must hold the checkpoint and replay.
     blockProcessorWhile(async () => {
       // Door-stored attachments become signed AgentFileAttachments so images
       // are directly visible to the model and documents are itx.files
-      // readable. A failed resolution degrades to the plain transcription
-      // (the YAML already names the files) rather than wedging the processor.
+      // readable. Resolution can fail PERMANENTLY (the file may be gone from
+      // the bucket), so throwing would wedge this frame forever; instead the
+      // message goes through WITH an explicit loss note — never a silent
+      // drop — and the stored paths in the transcription still let the agent
+      // reach any surviving bytes via itx.files.get(path).
       const stored = (event.payload.message.attachments ?? []).filter(
         (attachment): attachment is StoredInboundAttachment & { size: number } =>
           typeof attachment.path === "string",
       );
       let files: AgentFileAttachment[] | undefined;
+      let attachmentFailureNote: string | undefined;
       if (stored.length > 0 && this.deps.resolveStoredAttachments != null) {
         try {
           files = await this.deps.resolveStoredAttachments(
@@ -129,22 +133,37 @@ export class EmailAgentProcessor extends StreamProcessor<
           );
         } catch (error) {
           console.error("[email-agent] failed to resolve stored attachments", { error });
+          attachmentFailureNote = `[${stored.length} attachment(s) could not be loaded: ${
+            error instanceof Error ? error.message : String(error)
+          }]`;
         }
       }
-      // The unified inbound message event: an email is a message FROM its
-      // sender, `from` carries the address facts.
+      // Normalized email is developer context; actor and refs retain the
+      // untrusted sender and exact raw source coordinate.
       const fromAddress = event.payload.message.from.address ?? event.payload.envelope.from;
       const fromName = event.payload.message.from.name;
       await append({
-        type: "events.iterate.com/agents/message-received",
-        idempotencyKey: this.idempotencyKey("received-to-agent-input", event),
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: this.idempotencyKey("received-to-agent-context", event),
         payload: {
-          content: inboundEmailAgentInput(event.payload),
-          from: {
-            kind: "email" as const,
+          role: "developer",
+          content:
+            attachmentFailureNote === undefined
+              ? inboundEmailAgentInput(event.payload)
+              : `${inboundEmailAgentInput(event.payload)}\n\n${attachmentFailureNote}`,
+          actor: {
+            type: "email" as const,
             ...(fromAddress == null ? {} : { address: fromAddress }),
             ...(fromName == null ? {} : { name: fromName }),
           },
+          refs: [
+            {
+              type: "event" as const,
+              streamPath: event.path,
+              offset: event.offset,
+              eventType: event.type,
+            },
+          ],
           ...(files == null || files.length === 0 ? {} : { files }),
           // Automated mail (Auto-Submitted, bulk precedence, mailer-daemon) is
           // recorded but never triggers a reply — the classic mail-loop guard.

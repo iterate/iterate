@@ -25,8 +25,8 @@
 
 import {
   initialAgentUiState,
+  isCurrentAgentUiState,
   reduceAgentUi,
-  type AgentUiActivity,
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -45,6 +45,7 @@ export const RAW_GROUP_KIND = "raw.group";
  * state (in particular, they may contain historical ephemeral activity).
  */
 export const BROWSER_FEED_SCHEMA_VERSION = 3;
+export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */
 function rawSingletonKind(type: string): string | null {
@@ -322,84 +323,6 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   );
 }
 
-function isCurrentAgentUiState(value: unknown): value is AgentUiState {
-  if (!isRecord(value)) return false;
-  const candidate = value as Partial<AgentUiState>;
-  return (
-    (candidate.live === null || isAgentActivity(candidate.live)) &&
-    Array.isArray(candidate.deferredAssistantMessages) &&
-    Array.isArray(candidate.queuedUserMessages) &&
-    isNonNegativeSafeInteger(candidate.eventCount) &&
-    Array.isArray(candidate.presence) &&
-    isTokenUsage(candidate.tokenUsage) &&
-    (candidate.statusSinceOffset === null ||
-      isNonNegativeSafeInteger(candidate.statusSinceOffset)) &&
-    isRecord(candidate.provisionalActivities) &&
-    Object.entries(candidate.provisionalActivities).every(
-      ([id, activity]) => id.length > 0 && isAgentActivity(activity) && activity.id === id,
-    )
-  );
-}
-
-export function isAgentActivity(value: unknown): value is AgentUiActivity {
-  if (!isRecord(value)) return false;
-  return (
-    value.kind === "activity" &&
-    typeof value.id === "string" &&
-    (value.status === "running" || value.status === "done") &&
-    Array.isArray(value.steps) &&
-    value.steps.every(isAgentStep) &&
-    isFiniteNumber(value.startedAtMs) &&
-    (value.endedAtMs === undefined || isFiniteNumber(value.endedAtMs)) &&
-    (value.phase === undefined || value.phase === "llm" || value.phase === "script") &&
-    (value.phaseStartedAtMs === undefined || isFiniteNumber(value.phaseStartedAtMs))
-  );
-}
-
-function isAgentStep(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (
-    typeof value.id !== "string" ||
-    (value.status !== "running" && value.status !== "done") ||
-    !isFiniteNumber(value.startedAtMs)
-  ) {
-    return false;
-  }
-  if (value.kind === "llm") {
-    return (
-      isNonNegativeSafeInteger(value.llmRequestOffset) &&
-      typeof value.thinkingText === "string" &&
-      typeof value.responseText === "string"
-    );
-  }
-  return (
-    value.kind === "code" &&
-    typeof value.executionId === "string" &&
-    typeof value.code === "string" &&
-    isFiniteNumber(value.expiresAtMs)
-  );
-}
-
-function isTokenUsage(value: unknown): value is AgentUiState["tokenUsage"] {
-  if (!isRecord(value)) return false;
-  if (
-    !isNonNegativeSafeInteger(value.totalInputTokens) ||
-    !isNonNegativeSafeInteger(value.totalOutputTokens) ||
-    !isNonNegativeSafeInteger(value.totalCachedInputTokens) ||
-    !isNonNegativeSafeInteger(value.totalReasoningOutputTokens)
-  ) {
-    return false;
-  }
-  if (value.lastReport === null) return true;
-  if (!isRecord(value.lastReport)) return false;
-  return (
-    typeof value.lastReport.model === "string" &&
-    isNonNegativeSafeInteger(value.lastReport.maxContextTokens) &&
-    isNonNegativeSafeInteger(value.lastReport.inputTokens) &&
-    isNonNegativeSafeInteger(value.lastReport.outputTokens)
-  );
-}
-
 function isOpenGroup(value: unknown): value is OpenGroup | null {
   if (value === null) return true;
   if (!isRecord(value)) return false;
@@ -437,10 +360,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function retainCurrentProvisionalIndexes(

@@ -45,8 +45,12 @@ function ProjectStreamDetailContent() {
 
   async function submitMessage(message: string) {
     const [event] = await itx.streams.get(streamPath).append({
-      type: "events.iterate.com/agents/message-received",
-      payload: { content: message, from: { kind: "user", origin: "web" } },
+      type: "events.iterate.com/agents/context-added",
+      payload: {
+        role: "user",
+        content: message,
+        actor: { type: "user", origin: "web" },
+      },
     });
     // Feeds the composer's consume-own-append metric (see StreamMessageComposer).
     return event;

@@ -180,6 +180,8 @@ type OpenConnectionArgs = {
   /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
   sink: RetainedProcessEventBatch;
   replayAfterOffset?: number;
+  /** Stable stream creation identity observed by the caller; null binds to an unborn stream. */
+  expectedIncarnation?: string | null;
   /** Reject the open if replay would exceed this many raw offsets. */
   maxReplayOffsetGap?: number;
   selector?: CompiledEventSelector;
@@ -380,6 +382,7 @@ export class StreamSubscribers {
     subscriptionKey: string;
     sink: ProcessEventBatch;
     replayAfterOffset?: number;
+    expectedIncarnation?: string | null;
     maxReplayOffsetGap?: number;
     selector?: CompiledEventSelector;
     events?: boolean;
@@ -396,6 +399,7 @@ export class StreamSubscribers {
       // subscriber's problem: explicit unsubscribe or best-effort onRpcBroken.
       sink: retainProcessEventBatch(args.sink),
       replayAfterOffset: args.replayAfterOffset,
+      expectedIncarnation: args.expectedIncarnation,
       maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector: args.selector,
       events: args.events,
@@ -1020,13 +1024,31 @@ export class StreamSubscribers {
     // This synchronous committed head is the subscription's atomic live
     // boundary. Ephemeral rows at/below it existed before the subscription
     // opened and are never replayed; rows above it are genuinely live.
-    const openedAtOffset = this.#hooks.coreState().maxOffset;
+    const coreState = this.#hooks.coreState();
+    const openedAtOffset = coreState.maxOffset;
     if (
       args.replayAfterOffset !== undefined &&
       (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
     ) {
       sink[Symbol.dispose]();
       throw new Error("replayAfterOffset must be a non-negative safe integer");
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      args.expectedIncarnation !== null &&
+      args.expectedIncarnation.trim().length === 0
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error("expectedIncarnation must be null or a non-empty string");
+    }
+    if (
+      args.expectedIncarnation !== undefined &&
+      (coreState.createdAt ?? null) !== args.expectedIncarnation
+    ) {
+      sink[Symbol.dispose]();
+      throw new Error(
+        `stream incarnation changed (${String(args.expectedIncarnation)} -> ${String(coreState.createdAt ?? null)})`,
+      );
     }
     if (
       args.maxReplayOffsetGap !== undefined &&

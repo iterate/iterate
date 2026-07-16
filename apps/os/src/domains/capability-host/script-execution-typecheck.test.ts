@@ -11,59 +11,80 @@ import { describe, expect, it, vi } from "vitest";
 import type { Project } from "../../itx-api.generated.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
+import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
   CapabilityHostProcessor,
   type ParentCapabilityHost,
 } from "./capability-host-processor-implementation.ts";
-import {
-  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-  type ScriptExecutionSettlement,
-} from "./capability-host-processor-contract.ts";
 
 const T = {
   provided: "events.iterate.com/capability-host/capability-provided",
-  requested: "events.iterate.com/capability-host/script-execution-requested",
-  started: "events.iterate.com/capability-host/script-execution-started",
-  completed: "events.iterate.com/capability-host/script-execution-completed",
+  requested: "events.iterate.com/capability-host/script-run-requested",
+  started: "events.iterate.com/capability-host/script-run-started",
+  completed: "events.iterate.com/capability-host/script-run-settled",
 } as const;
 
+type Harness = {
+  processor: CapabilityHostProcessor;
+  runner: StreamProcessorRunner<CapabilityHostProcessorContract>;
+};
+
+/** REAL runner drive (the production registry's driver): obligations launch
+ * from the runner's at-head `onCaughtUp` pass, fold reads ride the runner's
+ * committed progress — exactly as the hosting DO wires registry.reads(...). */
 function makeProcessor(options: {
   stream: MemoryStream;
-  run?: (code: string) => Promise<ScriptExecutionSettlement>;
+  run?: (code: string) => Promise<unknown>;
   parent?: ParentCapabilityHost;
   typecheckScript?: (input: {
     capabilities: CapabilityDescription[];
     code: string;
   }) => Promise<ScriptExecutionCheck>;
-}) {
-  return new CapabilityHostProcessor({
+}): Harness {
+  let runner!: Harness["runner"];
+  const processor = new CapabilityHostProcessor({
     stream: options.stream,
     itx: {} as Project,
     path: "/",
     projectId: null,
     parent: options.parent,
     scriptExecutionEntrypoint: {
-      run:
-        options.run ??
-        (() => {
-          throw new Error("must not run in this scenario");
-        }),
+      run: async (code) => {
+        const result = await (
+          options.run ??
+          (() => {
+            throw new Error("must not run in this scenario");
+          })
+        )(code);
+        return {
+          status: "succeeded" as const,
+          ...(result === undefined ? {} : { result }),
+        };
+      },
     },
     typecheckScript: options.typecheckScript,
+    reads: {
+      snapshot: () => runner.snapshot(),
+      waitUntilEvent: (input) =>
+        "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
+    },
   });
+  runner = new StreamProcessorRunner({ processor, stream: options.stream });
+  return { processor, runner };
 }
 
-async function requestScript(stream: MemoryStream, processor: CapabilityHostProcessor) {
-  const [requested] = await stream.append({
+async function requestScript(stream: MemoryStream, harness: Harness) {
+  await stream.append({
     type: T.requested,
     payload: {
       code: "async (itx) => itx.streams.gett('/')",
       executionId: "exec-1",
-      expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+      expiresAt: Date.now() + 60_000,
     },
   });
-  await ingestTestBatch(processor, { events: stream.events, streamMaxOffset: requested!.offset });
+  await harness.runner.catchUp();
 }
 
 function completion(stream: MemoryStream) {
@@ -73,14 +94,14 @@ function completion(stream: MemoryStream) {
 describe("script execution typecheck gate", () => {
   it("a problems verdict settles as an error completion — never started, never run", async () => {
     const stream = new MemoryStream();
-    const processor = makeProcessor({
+    const harness = makeProcessor({
       stream,
       typecheckScript: async () => ({
         verdict: "problems",
         problems: ["script:1:32 — Property 'gett' does not exist. Did you mean 'get'? (TS2551)"],
       }),
     });
-    await requestScript(stream, processor);
+    await requestScript(stream, harness);
 
     await vi.waitFor(() => {
       const completed = completion(stream);
@@ -99,7 +120,7 @@ describe("script execution typecheck gate", () => {
         "Did you mean 'get'",
       );
       // Shared with the run/settle lanes, so a race collapses to one completion.
-      expect(completed?.idempotencyKey).toBe("capability-host/script-execution-completed@exec-1");
+      expect(completed?.idempotencyKey).toBe("capability-host/script-run-settled@exec-1");
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(false);
   });
@@ -107,15 +128,15 @@ describe("script execution typecheck gate", () => {
   it("a clean verdict runs the script normally", async () => {
     const stream = new MemoryStream();
     const ran: string[] = [];
-    const processor = makeProcessor({
+    const harness = makeProcessor({
       stream,
       run: async (code) => {
         ran.push(code);
-        return { status: "succeeded", result: 42 };
+        return 42;
       },
       typecheckScript: async () => ({ verdict: "clean" }),
     });
-    await requestScript(stream, processor);
+    await requestScript(stream, harness);
 
     await vi.waitFor(() => {
       expect(completion(stream)?.payload).toMatchObject({
@@ -130,33 +151,36 @@ describe("script execution typecheck gate", () => {
   it("an unchecked verdict runs the script (permissive on unknowns)", async () => {
     const stream = new MemoryStream();
     const ran: string[] = [];
-    const processor = makeProcessor({
+    const harness = makeProcessor({
       stream,
       run: async (code) => {
         ran.push(code);
-        return { status: "succeeded", result: null };
+        return null;
       },
       typecheckScript: async () => ({ verdict: "unchecked", reason: "typechecker unavailable" }),
     });
-    await requestScript(stream, processor);
+    await requestScript(stream, harness);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
-    expect(completion(stream)?.payload).toMatchObject({ settlement: { status: "succeeded" } });
+    expect(completion(stream)?.payload).toMatchObject({
+      executionId: "exec-1",
+      settlement: { status: "succeeded", result: null },
+    });
     expect(ran).toHaveLength(1);
   });
 
   it("a THROWING checker runs the script — the gate must never fail a script for its own failure", async () => {
     const stream = new MemoryStream();
     const ran: string[] = [];
-    const processor = makeProcessor({
+    const harness = makeProcessor({
       stream,
       run: async (code) => {
         ran.push(code);
-        return { status: "succeeded", result: "ok" };
+        return "ok";
       },
       typecheckScript: () => Promise.reject(new Error("sidecar dial failed")),
     });
-    await requestScript(stream, processor);
+    await requestScript(stream, harness);
 
     await vi.waitFor(() => {
       expect(completion(stream)?.payload).toMatchObject({
@@ -170,14 +194,14 @@ describe("script execution typecheck gate", () => {
   it("no checker wired (node harness) runs the script", async () => {
     const stream = new MemoryStream();
     const ran: string[] = [];
-    const processor = makeProcessor({
+    const harness = makeProcessor({
       stream,
       run: async (code) => {
         ran.push(code);
-        return { status: "succeeded", result: "ok" };
+        return "ok";
       },
     });
-    await requestScript(stream, processor);
+    await requestScript(stream, harness);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(ran).toHaveLength(1);
@@ -192,9 +216,9 @@ describe("script execution typecheck gate", () => {
       type: "itx-expression",
       types: "export type Forecast = { forecast(): Promise<string> };",
     };
-    const processor = makeProcessor({
+    const harness = makeProcessor({
       stream,
-      run: async () => ({ status: "succeeded", result: null }),
+      run: async () => null,
       parent: {
         invokeCapability: () => Promise.reject(new Error("unused")),
         describeCapabilities: async () => [inherited],
@@ -208,7 +232,7 @@ describe("script execution typecheck gate", () => {
       type: T.provided,
       payload: { path: ["local"], type: "live", types: "export type Local = { ping(): void };" },
     });
-    await requestScript(stream, processor);
+    await requestScript(stream, harness);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(seen).toHaveLength(1);
@@ -219,19 +243,19 @@ describe("script execution typecheck gate", () => {
 
   it("a rejected execution deletes its obligation — the reconciler never re-runs it", async () => {
     const stream = new MemoryStream();
-    const processor = makeProcessor({
+    const harness = makeProcessor({
       stream,
       typecheckScript: async () => ({ verdict: "problems", problems: ["script:1 — nope (TS1)"] }),
     });
-    await requestScript(stream, processor);
+    await requestScript(stream, harness);
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
 
-    // Deliver everything again (a later batch after the completion): the fold
-    // holds no obligation, so nothing re-runs and no second completion lands.
-    const last = stream.events.at(-1)!;
-    await ingestTestBatch(processor, { events: stream.events, streamMaxOffset: last.offset });
+    // A fresh incarnation replays the WHOLE journal (run() throws if invoked):
+    // the fold re-creates and deletes the obligation in order, so nothing
+    // re-runs and no second completion lands.
+    const replay = makeProcessor({ stream });
+    await replay.runner.catchUp();
     expect(stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
-    expect(processor.state.scriptExecutions).toEqual({});
+    expect(replay.runner.currentState.scriptExecutions).toEqual({});
   });
 });
-import { ingestTestBatch } from "~/test/stream-delivery.ts";

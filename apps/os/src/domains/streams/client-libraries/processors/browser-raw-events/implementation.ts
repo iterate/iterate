@@ -1,11 +1,15 @@
 import { StreamProcessor } from "../../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
-import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
+import {
+  browserProcessorProgressRewindStatements,
+  ensureBrowserProcessorProgressSchema,
+} from "../../browser/processor-state-storage.ts";
+import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 6;
 
 /**
  * Tables this processor owns. Views pass this to the runtime so a mirror
@@ -18,9 +22,20 @@ export const BROWSER_RAW_EVENTS_TABLES = ["events", "event_type_counts"];
 export type BrowserRawEventsState = Record<string, never>;
 
 /**
- * Mirrors raw stream events into the browser's `events` SQLite table, one
- * transaction per delivered batch. Stateless apart from the checkpoint: the
- * table itself is the projection.
+ * Mirrors raw stream events into the browser's `events` SQLite table.
+ * Stateless apart from the resume cursor: the table itself is the projection.
+ *
+ * Driven by the StreamProcessorRunner: `processEvent` buffers one INSERT per
+ * event into {@link projectionBuffer}, and the browser progress store
+ * (processor-state-storage.ts) flushes the buffered inserts and the two-cursor
+ * progress record in ONE SQLite transaction per delivered frame — the mirror
+ * rows and the resume cursor can no longer disagree (the legacy path committed
+ * them separately). Schema creation and version resets, which the retired
+ * `prepare()` hook used to run, now land in {@link ensureProjectionSchema} —
+ * the progress store runs it before the first checkpoint read, preserving the
+ * reset-before-resume-cursor ordering (a stale offset memoized over a dropped
+ * table would skip historical replay and leave a silent hole the gap-tolerant
+ * trigger accepts).
  */
 export class BrowserRawEventsProcessor extends StreamProcessor<
   BrowserRawEventsContract,
@@ -28,42 +43,49 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
 > {
   readonly contract = BrowserRawEventsContract;
 
-  // The schema ensurer also handles version resets (drop table + clear checkpoint),
-  // so it must run before the checkpoint is first read — otherwise a stale offset
-  // gets memoized and reported to the server as the replay cursor, and the mirror
-  // silently rebuilds without the skipped prefix (the gap-tolerant trigger
-  // accepts the hole; nothing ever refetches it).
-  protected override async prepare(): Promise<void> {
-    await ensureBrowserRawEventsSchema(this.deps.sql);
+  /** Shared with the progress store — see the class doc. One per instance. */
+  readonly projectionBuffer = new BrowserProjectionWriteBuffer();
+
+  /** Projection schema/reset for the progress store's first-open (prepare() successor). */
+  ensureProjectionSchema(sql: SqlClient): Promise<void> {
+    return ensureBrowserRawEventsSchema(sql);
   }
 
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    await this.deps.sql.batch(
-      args.events.map((event) => ({
-        sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-        params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
-      })),
-      { transaction: true },
-    );
-    await super.processEventBatch(args);
+  protected override processEvent(
+    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEvent"]>[0],
+  ): undefined {
+    const event = args.event;
+    // Sparse offsets are expected: historical ephemerals are intentionally
+    // absent. The runner validates the enclosing scan envelope before this
+    // hook runs, so accepting a gap here means "proved omitted", not "lost".
+    this.projectionBuffer.append(event.offset, [
+      {
+        build: () => ({
+          sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
+          params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+        }),
+      },
+    ]);
   }
 }
 
 const ensureBrowserRawEventsSchema = createSchemaEnsurer({
   run: async (sql) => {
+    // The rewind statements below UPDATE processor_progress; make sure the
+    // progress schema exists before the reset transaction can reference it.
+    await ensureBrowserProcessorProgressSchema(sql);
     const [schemaVersion] = await sql.exec(`PRAGMA user_version`);
     if (Number(schemaVersion?.user_version ?? 0) !== BROWSER_RAW_EVENTS_SCHEMA_VERSION) {
-      // The resume checkpoint lives in processor_state, not in the events table,
-      // so it must be cleared together with the table. A stale checkpoint over an
-      // empty table would skip historical replay and silently rebuild the mirror
-      // without the skipped prefix (the gap-tolerant trigger accepts the hole).
-      // Deleted before the user_version write so a crash in between re-runs this
-      // reset on the next load.
-      await deleteBrowserProcessorState({ sql, processorSlug: BrowserRawEventsContract.slug });
+      // ONE transaction: the fenced cursor rewind (acknowledgement to 0 with a
+      // cursorRevision bump, staling any in-flight commit from an old-schema
+      // writer), the legacy checkpoint delete, the table drops, and the
+      // user_version stamp. All-or-nothing — no crash window can separate the
+      // dropped mirror from the rewound resume cursor (a stale checkpoint over
+      // an empty mirror would skip historical replay and silently rebuild
+      // without the skipped prefix; the gap-tolerant trigger accepts the hole).
       await sql.batch(
         [
+          ...browserProcessorProgressRewindStatements(BrowserRawEventsContract.slug),
           { sql: `DROP TRIGGER IF EXISTS events_before_insert` },
           { sql: `DROP TRIGGER IF EXISTS events_count_after_insert` },
           { sql: `DROP TABLE IF EXISTS events` },

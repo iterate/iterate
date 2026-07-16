@@ -2,7 +2,7 @@
  * Goal coverage: an agent uses itx tools. Deterministic version of the
  * Playwright chat spec — drive an agent over itx, instruct it to run a script
  * that appends a proof event, and assert the full codemode loop on the stream:
- * llm request → output → capability-host/script-execution-requested/completed → proof
+ * llm request → output → capability-host/script-run-requested/completed → proof
  * event on the target stream → visible web reply.
  */
 import { test } from "vitest";
@@ -59,8 +59,8 @@ test(
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     const types = agentEvents.map((event) => event.type.replace("events.iterate.com/", ""));
-    expect(types).toContain("capability-host/script-execution-requested");
-    expect(types).toContain("capability-host/script-execution-completed");
+    expect(types).toContain("capability-host/script-run-requested");
+    expect(types).toContain("capability-host/script-run-settled");
     expect(types).toContain("agents/web-message-sent");
   },
 );

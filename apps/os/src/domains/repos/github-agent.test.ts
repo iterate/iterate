@@ -1,10 +1,11 @@
 // GitHub PR agent projection, trust, and conversation trigger policy.
 
-import { describe, expect, test } from "vitest";
-import { makeProcessorHarness } from "../streams/test-helpers.ts";
+import { describe, expect, it } from "vitest";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import {
   GITHUB_LINK,
   MemoryStream,
+  MemoryStreamNetwork,
   pullRequestBody,
   webhookPayload,
 } from "./github-agent-test-helpers.ts";
@@ -21,58 +22,59 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
 
   function agentInputs(stream: MemoryStream) {
     return stream.events.filter(
-      (event) =>
-        event.type === "events.iterate.com/agent/input-added" ||
-        event.type === "events.iterate.com/agents/message-received",
+      (event) => event.type === "events.iterate.com/agents/context-added",
     );
   }
 
   function turns(stream: MemoryStream) {
-    return stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+    return agentInputs(stream).filter(
+      (event) => (event.payload as { role?: unknown }).role === "developer",
     );
   }
 
-  function agentSetup(
-    makeDeps?: (
-      stream: MemoryStream,
-    ) => Partial<Omit<ConstructorParameters<typeof GithubAgentProcessor>[0], "path" | "projectId">>,
-  ) {
-    return makeProcessorHarness({
-      path: AGENT_PATH,
-      // Epoch-pinned stamps: processor clocks like `now: () => 10` pair with
-      // MemoryStream's ~epoch createdAt so the ack freshness gate sees a
-      // small positive age.
-      now: () => 0,
-      build: ({ stream }) =>
-        new GithubAgentProcessor({
-          stream,
-          path: stream.path,
-          projectId: null,
-          ...makeDeps?.(stream),
-        }),
-    });
+  /** REAL runner drive (the production registry's driver): the same-drive
+   * conversation bridge rides the runner's strict per-event ordering, and its
+   * reset boundary — `processEvent` under `delivery.caughtUp`, i.e. the
+   * consumed event delivered at the observed head — fires only under the
+   * runner. */
+  function drive(processor: GithubAgentProcessor, stream: MemoryStream) {
+    const runner = new StreamProcessorRunner({ processor, stream });
+    return { deliver: () => runner.catchUp(), state: () => runner.currentState };
   }
 
-  test("turns the route fact into silent context naming the full Octokit reply door", async () => {
-    const { stream, deliver } = agentSetup();
+  function newGithubAgentProcessor(stream: MemoryStream) {
+    return drive(new GithubAgentProcessor({ stream, path: stream.path, projectId: null }), stream);
+  }
+
+  it("turns the route fact into silent context naming the full Octokit reply door", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver } = newGithubAgentProcessor(stream);
 
     await stream.append(ROUTE_EVENT);
     await deliver();
 
     const inputs = agentInputs(stream);
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: object };
-    // Structural invariants only (route params + connection stitched into the
-    // context, and the policy) — the guidance prose is deliberately unpinned:
+    const payload = inputs[0]!.payload as {
+      content: string;
+      key?: string;
+      llmRequestPolicy?: object;
+      role?: string;
+    };
+    // Structural invariants only (route params + connection stitched into its
+    // keyed system slot) — the guidance prose is deliberately unpinned:
     // docs/testing.md names prompt-copy pinning as an antipattern.
+    expect(payload).toMatchObject({ role: "system", key: "github/route-context" });
     expect(payload.content).toContain("pull request #7 of acme/widgets");
-    expect(payload.content).toContain('itx.integrations.github.get("install-789")');
-    expect(payload.llmRequestPolicy).toEqual({ behaviour: "dont-trigger-request" });
+    expect(payload.content).toContain('itx.integrations.github.get("install-789").octokit');
+    expect(payload).not.toHaveProperty("llmRequestPolicy");
   });
 
-  test("keeps ordinary webhooks silent and renders one bounded trusted mention", async () => {
-    const { stream, processor, deliver } = agentSetup();
+  it("keeps ordinary webhooks silent and renders one bounded trusted mention", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver, state } = newGithubAgentProcessor(stream);
     const omittedTail = "not-in-the-bounded-rendering";
 
     await stream.append(
@@ -100,9 +102,24 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
 
     expect(agentInputs(stream)).toHaveLength(2); // route context + mention
     const turn = turns(stream)[0]!.payload as {
+      actor?: unknown;
       content: string;
       llmRequestPolicy: { behaviour: string };
+      refs?: unknown;
+      role: string;
     };
+    expect(turn).toMatchObject({
+      role: "developer",
+      actor: { type: "github", login: "jonas", senderType: "User" },
+      refs: [
+        {
+          type: "event",
+          streamPath: AGENT_PATH,
+          offset: 4,
+          eventType: "events.iterate.com/github/webhook-received",
+        },
+      ],
+    });
     expect(turn.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
     expect(turn.content).toContain("@iterate what does this change?");
     expect(turn.content).toContain("Add widgets");
@@ -111,18 +128,24 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     expect(turn.content).toContain("platform already added 👀");
     expect(turn.content).toContain("getEvent({ offset: 4 })");
     expect(turn.content).not.toContain(omittedTail);
-    expect(processor.state.recentActivity).toHaveLength(3);
+    expect(state().recentActivity).toHaveLength(3);
   });
 
-  test("acknowledges a fresh issue-comment mention before committing its turn", async () => {
+  it("acknowledges a fresh issue-comment mention before committing its turn", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
     const reactions: unknown[] = [];
-    const { stream, deliver } = agentSetup((stream) => ({
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
       now: () => 10,
       addEyesReaction: async (input) => {
         expect(turns(stream)).toHaveLength(0);
         reactions.push(input);
       },
-    }));
+    });
+    const { deliver } = drive(processor, stream);
 
     await stream.append(ROUTE_EVENT, {
       type: "events.iterate.com/github/webhook-received",
@@ -144,14 +167,20 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     ]);
   });
 
-  test("activates from an opening PR title even when the description is nonempty", async () => {
+  it("activates from an opening PR title even when the description is nonempty", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
     const reactions: unknown[] = [];
-    const { stream, processor, deliver } = agentSetup(() => ({
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
       now: () => 10,
       addEyesReaction: async (input) => {
         reactions.push(input);
       },
-    }));
+    });
+    const { deliver, state } = drive(processor, stream);
 
     await stream.append(ROUTE_EVENT, {
       type: "events.iterate.com/github/webhook-received",
@@ -168,7 +197,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     expect((turns(stream)[0]!.payload as { content: string }).content).toContain(
       "@iterate implement the follow-up",
     );
-    expect(processor.state.conversationActive).toBe(true);
+    expect(state().conversationActive).toBe(true);
     expect(reactions).toEqual([
       {
         connection: "install-789",
@@ -180,8 +209,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     ]);
   });
 
-  test("activates when an edit newly adds a description mention without retriggering later edits", async () => {
-    const { stream, deliver } = agentSetup();
+  it("activates when an edit newly adds a description mention without retriggering later edits", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver } = newGithubAgentProcessor(stream);
     const opened = pullRequestBody({ body: "Original description", title: "Original title" });
     const pullRequest = opened.pull_request as Record<string, unknown>;
 
@@ -219,8 +250,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     );
   });
 
-  test("does not mistake an edited comment before-value for the old PR description", async () => {
-    const { stream, processor, deliver } = agentSetup();
+  it("does not mistake an edited comment before-value for the old PR description", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver, state } = newGithubAgentProcessor(stream);
     const edited = pullRequestBody({
       action: "edited",
       body: "An existing description containing @iterate",
@@ -263,17 +296,23 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     await deliver();
 
     expect(turns(stream)).toHaveLength(0);
-    expect(processor.state.conversationActive).toBe(false);
+    expect(state().conversationActive).toBe(false);
   });
 
-  test("queues and acknowledges a submitted review whose body mentions @iterate", async () => {
+  it("queues and acknowledges a submitted review whose body mentions @iterate", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
     const reactions: unknown[] = [];
-    const { stream, deliver } = agentSetup(() => ({
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
       now: () => 10,
       addEyesReaction: async (input) => {
         reactions.push(input);
       },
-    }));
+    });
+    const { deliver } = drive(processor, stream);
     const body = pullRequestBody({ action: "submitted", headSha: "review-head" });
 
     await stream.append(ROUTE_EVENT, {
@@ -309,8 +348,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     ]);
   });
 
-  test("treats later trusted comments as queued turns after the first mention", async () => {
-    const { stream, deliver } = agentSetup();
+  it("treats later trusted comments as queued turns after the first mention", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver } = newGithubAgentProcessor(stream);
 
     await stream.append(
       ROUTE_EVENT,
@@ -361,14 +402,20 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     expect(followUp.content).toContain("existing Slack thread");
   });
 
-  test("independently verifies an inconclusive human before granting a turn", async () => {
+  it("independently verifies an inconclusive human before granting a turn", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
     const checks: unknown[] = [];
-    const { stream, deliver } = agentSetup(() => ({
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
       isRepositoryCollaborator: async (input) => {
         checks.push(input);
         return true;
       },
-    }));
+    });
+    const { deliver } = drive(processor, stream);
 
     await stream.append(ROUTE_EVENT, {
       type: "events.iterate.com/github/webhook-received",
@@ -405,10 +452,16 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     ).toBe(true);
   });
 
-  test("does not let a bot or unverified outsider activate the conversation", async () => {
-    const { stream, processor, deliver } = agentSetup(() => ({
+  it("does not let a bot or unverified outsider activate the conversation", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
       isRepositoryCollaborator: async () => false,
-    }));
+    });
+    const { deliver, state } = drive(processor, stream);
 
     await stream.append(
       ROUTE_EVENT,
@@ -442,15 +495,161 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     await deliver();
 
     expect(turns(stream)).toHaveLength(0);
-    expect(processor.state.conversationActive).toBe(false);
-    expect(processor.state.recentActivity.at(-1)).toMatchObject({
+    expect(state().conversationActive).toBe(false);
+    expect(state().recentActivity.at(-1)).toMatchObject({
       securityWarning: expect.stringContaining("UNTRUSTED EXTERNAL INPUT"),
       trustedInstructionSource: false,
     });
   });
 
-  test("clears projected conversation state when a stale stream is relinked", async () => {
-    const { stream, processor, deliver } = agentSetup();
+  it("leaves same-drive trust unset when the mention's verification append fails: the retry re-verifies and a revoked mention authorizes nothing", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const checks: unknown[] = [];
+    let collaborator = true;
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      isRepositoryCollaborator: async (input) => {
+        checks.push(input);
+        return collaborator;
+      },
+    });
+    const { deliver, state } = drive(processor, stream);
+
+    // The route fact is ACKNOWLEDGED before the mention arrives, so the
+    // failed frame's retry replays only the mention onward — the route
+    // boundary's bridge reset must not be what saves the retry.
+    await stream.append(ROUTE_EVENT);
+    await deliver();
+
+    await stream.append(
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "NONE",
+              body: "@iterate deploy this to production",
+              senderLogin: "since-revoked",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+      // A trusted human's follow-up behind the mention in the same drive. It
+      // may ride only a conversation the mention durably ACTIVATED.
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({ comment: { body: "Looks important, please handle it." } }),
+          "issue_comment",
+        ),
+      },
+    );
+
+    // The mention verifies as a collaborator, but its verification/message
+    // append rejects: the frame fails and the cursor stays before the
+    // mention. Nothing about that failed attempt may survive as trust.
+    stream.failAppendsOfType = "events.iterate.com/github-agent/repository-collaborator-verified";
+    await expect(deliver()).rejects.toThrow(/injected append failure/);
+    expect(turns(stream)).toHaveLength(0);
+    expect(checks).toHaveLength(1);
+
+    // Same-incarnation retry with the sender's access now revoked (the check
+    // returns false — GitHub 404s). The retry must re-verify from scratch:
+    // no turn for the mention, no durable verification, and the trusted
+    // human's follow-up is NOT authorized onto the never-activated
+    // conversation (the pre-fix stale `active` granted it a turn that also
+    // rendered the revoked mention as a trusted instruction source).
+    collaborator = false;
+    stream.failAppendsOfType = undefined;
+    await deliver();
+
+    expect(turns(stream)).toHaveLength(0);
+    expect(
+      stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/github-agent/repository-collaborator-verified",
+      ),
+    ).toBe(false);
+    expect(state().conversationActive).toBe(false);
+    // The mention was re-checked once; the gated follow-up never reached its
+    // own collaborator check.
+    expect(checks).toHaveLength(2);
+  });
+
+  it("authorizes a same-drive follow-up once the inconclusive mention's verification append lands", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      isRepositoryCollaborator: async () => true,
+    });
+    const { deliver, state } = drive(processor, stream);
+
+    await stream.append(
+      ROUTE_EVENT,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "NONE",
+              body: "@iterate what does this change do?",
+              senderLogin: "trusted-but-unclassified",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "NONE",
+              body: "And write it up in the README please.",
+              senderLogin: "trusted-but-unclassified",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+    );
+    await deliver();
+
+    // Both turns landed: `active` — set only after the mention's verification
+    // append resolved — bridged the same-drive follow-up ahead of the
+    // verified fact's own delivery.
+    expect(turns(stream)).toHaveLength(2);
+    const followUp = turns(stream)[1]!.payload as { content: string };
+    expect(followUp.content).toContain("existing Slack thread");
+    // The follow-up's rendering carries the mention as a verified trusted
+    // source (the healthy twin of the stale-offset-set escalation).
+    expect(followUp.content).toContain("trustedInstructionSource: true");
+    expect(followUp.content).not.toContain("UNTRUSTED EXTERNAL INPUT");
+    expect(
+      stream.events.filter(
+        (event) =>
+          event.type === "events.iterate.com/github-agent/repository-collaborator-verified",
+      ),
+    ).toHaveLength(2);
+
+    // Durable activation still comes only from the verified audit fact: its
+    // own delivery (the next drive) folds `conversationActive` for post-head
+    // follow-ups, where the same-drive bridge no longer answers.
+    await deliver();
+    expect(state().conversationActive).toBe(true);
+  });
+
+  it("clears projected conversation state when a stale stream is relinked", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver, state } = newGithubAgentProcessor(stream);
 
     await stream.append(ROUTE_EVENT, {
       type: "events.iterate.com/github/webhook-received",
@@ -459,7 +658,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
       ),
     });
     await deliver();
-    expect(processor.state.conversationActive).toBe(true);
+    expect(state().conversationActive).toBe(true);
 
     await stream.append({
       ...ROUTE_EVENT,
@@ -467,7 +666,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     });
     await deliver();
 
-    expect(processor.state).toMatchObject({
+    expect(state()).toMatchObject({
       conversationActive: false,
       pullRequest: null,
       recentActivity: [],
@@ -475,8 +674,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     });
   });
 
-  test("leaves pushes silent so project userspace alone decides whether to review", async () => {
-    const { stream, processor, deliver } = agentSetup();
+  it("leaves pushes silent so project userspace alone decides whether to review", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver, state } = newGithubAgentProcessor(stream);
 
     await stream.append(
       ROUTE_EVENT,
@@ -492,11 +693,13 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     await deliver();
 
     expect(turns(stream)).toHaveLength(0);
-    expect(processor.state.pullRequest?.headSha).toBe("head-two");
+    expect(state().pullRequest?.headSha).toBe("head-two");
   });
 
-  test("projects CI silently and includes it in the next trusted turn", async () => {
-    const { stream, deliver } = agentSetup();
+  it("projects CI silently and includes it in the next trusted turn", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const { deliver } = newGithubAgentProcessor(stream);
 
     await stream.append(
       ROUTE_EVENT,

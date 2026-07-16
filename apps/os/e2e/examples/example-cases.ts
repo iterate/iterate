@@ -229,7 +229,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "run-script": {
     assert: (result, { projectId }, expect) => {
       expect(result).toEqual({
-        completedEventType: "events.iterate.com/capability-host/script-execution-completed",
+        completedEventType: "events.iterate.com/capability-host/script-run-settled",
         result: { projectId, sum: 42 },
       });
     },
@@ -423,8 +423,12 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     }),
     assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({
-        payload: { content: `hello ${marker}`, from: { kind: "user", origin: "web" } },
-        type: "events.iterate.com/agents/message-received",
+        payload: {
+          role: "user",
+          content: `hello ${marker}`,
+          actor: { type: "user", origin: "web" },
+        },
+        type: "events.iterate.com/agents/context-added",
       });
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },

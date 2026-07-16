@@ -455,8 +455,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     EmailProcessorContract,
   ],
   emits: [
-    "events.iterate.com/agent/config-updated",
-    "events.iterate.com/agent/input-added",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/agent/llm-provider-selected",
     // Seeded onto /integrations/email at project birth (the creator's email
     // becomes the sender allowlist's first entry).

@@ -1,3 +1,5 @@
+import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
+import { z } from "zod";
 import type { Event } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -145,8 +147,8 @@ export type AgentUiPresenceEntry = {
  * Token accounting folded from agent/token-usage-reported (the agent
  * processor's normalized per-request reports): lifetime totals plus the most
  * recent report, whose input+output against maxContextTokens is the context
- * fullness the next turn starts from. A history-reset clears the last report
- * — the conversation it measured is gone.
+ * fullness the next turn starts from. A compaction context clears the last
+ * report — the conversation it measured is gone.
  */
 export type AgentUiTokenUsage = {
   totalInputTokens: number;
@@ -192,6 +194,133 @@ export type AgentUiState = {
    */
   provisionalActivities: Record<string, AgentUiActivity>;
 };
+
+const AgentUiLlmStepSchema = z.strictObject({
+  kind: z.literal("llm"),
+  id: z.string(),
+  llmRequestOffset: z.number().int().nonnegative(),
+  status: z.enum(["running", "done"]),
+  model: z.string().optional(),
+  thinkingText: z.string(),
+  responseText: z.string(),
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
+  outcome: z.enum(["completed", "failed", "cancelled"]).optional(),
+  errorMessage: z.string().optional(),
+  startedAtMs: z.number().finite(),
+}) satisfies z.ZodType<AgentUiLlmStep>;
+
+const AgentUiCodeStepSchema = z.strictObject({
+  kind: z.literal("code"),
+  id: z.string(),
+  executionId: z.string(),
+  status: z.enum(["running", "done"]),
+  code: z.string(),
+  result: z.unknown().optional(),
+  errorMessage: z.string().optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
+  success: z.boolean().optional(),
+  outcomeSource: z.enum(["durable", "inferred"]).optional(),
+  startedAtMs: z.number().finite(),
+  expiresAtMs: z.number().finite(),
+}) satisfies z.ZodType<AgentUiCodeStep>;
+
+export const AgentUiActivitySchema = z.strictObject({
+  kind: z.literal("activity"),
+  id: z.string(),
+  status: z.enum(["running", "done"]),
+  steps: z.array(z.discriminatedUnion("kind", [AgentUiLlmStepSchema, AgentUiCodeStepSchema])),
+  startedAtMs: z.number().finite(),
+  endedAtMs: z.number().finite().optional(),
+  phase: z.enum(["llm", "script"]).optional(),
+  phaseStartedAtMs: z.number().finite().optional(),
+}) satisfies z.ZodType<AgentUiActivity>;
+
+const AgentUiFileAttachmentSchema = z.strictObject({
+  contentType: z.string(),
+  filename: z.string(),
+  path: z.string(),
+  size: z.number().finite().nonnegative(),
+  url: z.string(),
+}) satisfies z.ZodType<AgentUiFileAttachment>;
+
+const AgentUiMessageViaSchema = z.strictObject({
+  service: z.enum(["slack", "telegram", "agent", "email", "github"]),
+  sender: z.string().optional(),
+}) satisfies z.ZodType<AgentUiMessageVia>;
+
+const AgentUiMessageItemSchema = z.strictObject({
+  kind: z.enum(["user", "assistant"]),
+  id: z.string(),
+  text: z.string(),
+  timestampMs: z.number().finite(),
+  files: z.array(AgentUiFileAttachmentSchema).optional(),
+  via: AgentUiMessageViaSchema.optional(),
+}) satisfies z.ZodType<AgentUiMessageItem>;
+
+const AgentUiProcessorAnnouncementSchema = z.strictObject({
+  slug: z.string(),
+  version: z.string(),
+  description: z.string(),
+  consumes: z.array(z.string()),
+  emits: z.array(z.string()),
+  ownedEvents: z.array(z.strictObject({ type: z.string(), description: z.string().optional() })),
+}) satisfies z.ZodType<AgentUiProcessorAnnouncement>;
+
+const AgentUiPresenceEntrySchema = z.strictObject({
+  subscriptionKey: z.string(),
+  direction: z.enum(["inbound", "outbound"]),
+  connected: z.boolean(),
+  description: z.string().optional(),
+  processor: AgentUiProcessorAnnouncementSchema.optional(),
+}) satisfies z.ZodType<AgentUiPresenceEntry>;
+
+const AgentUiTokenUsageSchema = z.strictObject({
+  totalInputTokens: z.number().int().nonnegative(),
+  totalOutputTokens: z.number().int().nonnegative(),
+  totalCachedInputTokens: z.number().int().nonnegative(),
+  totalReasoningOutputTokens: z.number().int().nonnegative(),
+  lastReport: z
+    .strictObject({
+      model: z.string(),
+      maxContextTokens: z.number().int().nonnegative(),
+      inputTokens: z.number().int().nonnegative(),
+      outputTokens: z.number().int().nonnegative(),
+    })
+    .nullable(),
+}) satisfies z.ZodType<AgentUiTokenUsage>;
+
+export const AgentUiStateSchema = z
+  .strictObject({
+    live: AgentUiActivitySchema.nullable(),
+    deferredAssistantMessages: z.array(AgentUiMessageItemSchema),
+    queuedUserMessages: z.array(AgentUiMessageItemSchema),
+    eventCount: z.number().int().nonnegative(),
+    presence: z.array(AgentUiPresenceEntrySchema),
+    tokenUsage: AgentUiTokenUsageSchema,
+    statusSinceOffset: z.number().int().nonnegative().nullable(),
+    provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
+  })
+  .superRefine((state, context) => {
+    for (const [id, activity] of Object.entries(state.provisionalActivities)) {
+      if (id !== activity.id) {
+        context.addIssue({
+          code: "custom",
+          message: `provisional activity key ${JSON.stringify(id)} does not match its id`,
+          path: ["provisionalActivities", id, "id"],
+        });
+      }
+    }
+  }) satisfies z.ZodType<AgentUiState>;
+
+export function isAgentActivity(value: unknown): value is AgentUiActivity {
+  return AgentUiActivitySchema.safeParse(value).success;
+}
+
+export function isCurrentAgentUiState(value: unknown): value is AgentUiState {
+  return AgentUiStateSchema.safeParse(value).success;
+}
 
 /**
  * A durable completion normally follows its idle boundary immediately. Keep a
@@ -242,15 +371,13 @@ function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem):
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
-const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
-const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
+const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const AGENT_STATUS_CHANGED = "events.iterate.com/agent/status-changed";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
-const AGENT_HISTORY_RESET = "events.iterate.com/agent/history-reset";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
-const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-execution-requested";
-const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-execution-completed";
+const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
+const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-run-settled";
 const SLACK_WEBHOOK_RECEIVED = "events.iterate.com/slack/webhook-received";
 const TELEGRAM_WEBHOOK_RECEIVED = "events.iterate.com/telegram/webhook-received";
 const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
@@ -283,82 +410,81 @@ function reduceAgentUiEvent(
   if (!Number.isFinite(timestampMs)) return state;
 
   switch (event.type) {
-    // THE inbound message event, every source: `from.kind` picks the
-    // treatment. Users and agents render as chat bubbles (agents with a via
-    // label naming the sender path). Transcribed domain messages carry a
-    // model-facing YAML transcription as content; whether that text shows
-    // depends on whether the domain has a prettier bubble: slack and
-    // telegram render the RAW webhook event as the human-facing copy, so
-    // only their stored attachments surface here — email and github have no
-    // other bubble, so their transcription text stays visible.
-    case "events.iterate.com/agents/message-received": {
+    // The canonical model-visible context event. User context renders as a
+    // bubble; assistant context replaces the streamed LLM text; developer
+    // context from another human-facing integration renders with its source.
+    // Script-produced developer context is model input, not another bubble.
+    case AGENT_CONTEXT_ADDED: {
+      const role = readString(event, "role");
       const text = readString(event, "content");
       if (text == null) return state;
-      const from = readRecord(event, "from");
-      const kind = typeof from?.kind === "string" ? from.kind : "user";
+      let contextState = state;
+      const compaction = readRecord(event, "compaction");
+      if (
+        typeof compaction?.replacesHistoryThrough === "number" &&
+        compaction.replacesHistoryThrough < event.offset &&
+        state.tokenUsage.lastReport !== null
+      ) {
+        contextState = {
+          ...state,
+          tokenUsage: { ...state.tokenUsage, lastReport: null },
+        };
+      }
+
+      if (role === "assistant") {
+        const llmRequestOffset = readLlmRequestOffset(event);
+        if (llmRequestOffset == null) return contextState;
+        return updateLlmStep(contextState, llmRequestOffset, (step) =>
+          step.status === "running" ? { ...step, responseText: text } : step,
+        );
+      }
+      if (role === "system") return contextState;
+
+      const actor = readRecord(event, "actor");
+      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
       const files = readFileAttachments(event);
-      if (kind === "agent") {
-        const sender = typeof from?.path === "string" ? from.path : undefined;
-        return emitUserMessageItem(state, items, {
+      if (role === "user") {
+        return emitUserMessageItem(contextState, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: "agent", ...(sender === undefined ? {} : { sender }) },
         });
       }
-      if (kind === "slack" || kind === "telegram" || kind === "email" || kind === "github") {
-        const rendersFromRawEvent = kind === "slack" || kind === "telegram";
-        if (rendersFromRawEvent && files.length === 0) return state;
+      if (
+        actorType === "agent" ||
+        actorType === "slack" ||
+        actorType === "telegram" ||
+        actorType === "email" ||
+        actorType === "github"
+      ) {
+        const rendersFromRawEvent = actorType === "slack" || actorType === "telegram";
+        if (rendersFromRawEvent && files.length === 0) return contextState;
         const senderValue =
-          kind === "slack"
-            ? from?.userId
-            : kind === "telegram"
-              ? (from?.username ?? from?.userId)
-              : kind === "email"
-                ? from?.address
-                : from?.login;
+          actorType === "agent"
+            ? actor?.path
+            : actorType === "slack"
+              ? actor?.userId
+              : actorType === "telegram"
+                ? (actor?.username ?? actor?.userId)
+                : actorType === "email"
+                  ? actor?.address
+                  : actor?.login;
         const sender = typeof senderValue === "string" ? senderValue : undefined;
-        return emitUserMessageItem(state, items, {
+        return emitUserMessageItem(contextState, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text: rendersFromRawEvent ? "" : text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: kind, ...(sender === undefined ? {} : { sender }) },
+          via: { service: actorType, ...(sender === undefined ? {} : { sender }) },
         });
       }
-      return emitUserMessageItem(state, items, {
-        kind: "user",
-        id: `user-${event.offset}`,
-        text,
-        ...(files.length === 0 ? {} : { files }),
-        timestampMs,
-      });
+      return contextState;
     }
 
-    case AGENT_INPUT_ADDED: {
-      const text = readString(event, "content");
-      const files = readFileAttachments(event);
-      if (text == null || files.length === 0) return state;
-      // Reflections of the agent's own sent messages (the processor's
-      // "The assistant sent this visible web-chat message" inputs, keyed
-      // agent/render-web-response@<offset>) carry the SAME attachments the
-      // web-message-sent event already rendered as an assistant bubble —
-      // they exist for the model's eyes, not the user's.
-      if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
-      return emitUserMessageItem(state, items, {
-        kind: "user",
-        id: `user-file-${event.offset}`,
-        text,
-        files,
-        timestampMs,
-      });
-    }
-
-    case "events.iterate.com/agents/web-message-sent":
-    case "events.iterate.com/agents/tui-message-sent": {
+    case "events.iterate.com/agents/web-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
       const files = readFileAttachments(event);
@@ -415,17 +541,6 @@ function reduceAgentUiEvent(
         thinkingText:
           step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
       }));
-    }
-
-    case AGENT_OUTPUT_ADDED: {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      const content = readString(event, "content");
-      if (llmRequestOffset == null || content == null) return state;
-      // Authoritative full text: replaces whatever streamed in (or fills it
-      // in for providers that never streamed).
-      return updateLlmStep(state, llmRequestOffset, (step) =>
-        step.status === "running" ? { ...step, responseText: content } : step,
-      );
     }
 
     case AGENT_LLM_REQUEST_COMPLETED: {
@@ -569,14 +684,6 @@ function reduceAgentUiEvent(
           lastReport: { model, maxContextTokens, inputTokens, outputTokens },
         },
       };
-    }
-
-    case AGENT_HISTORY_RESET: {
-      // The last report measured a conversation that no longer exists; a
-      // stale red meter over a freshly compacted history would say the
-      // opposite of what just happened. Lifetime totals stay.
-      if (state.tokenUsage.lastReport === null) return state;
-      return { ...state, tokenUsage: { ...state.tokenUsage, lastReport: null } };
     }
 
     case SLACK_WEBHOOK_RECEIVED: {
@@ -1029,62 +1136,21 @@ export function extractCloudflareChunkDeltas(chunk: unknown): {
 }
 
 function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeStep> {
-  const settlement = isRecord(payload.settlement) ? payload.settlement : undefined;
-  if (
-    settlement?.status === "succeeded" &&
-    hasOnlyKeys(settlement, SCRIPT_SUCCESS_SETTLEMENT_KEYS)
-  ) {
+  const parsed = ScriptExecutionSettlement.safeParse(payload.settlement);
+  if (!parsed.success) {
+    return {
+      success: false,
+      errorMessage: "The durable script settlement is invalid.",
+    };
+  }
+  const settlement = parsed.data;
+  if (settlement.status === "succeeded") {
     return {
       success: true,
       ...(Object.hasOwn(settlement, "result") ? { result: settlement.result } : {}),
     };
   }
-  if (
-    settlement?.status === "failed" &&
-    typeof settlement.error === "string" &&
-    SCRIPT_FAILURE_KINDS.has(settlement.failureKind) &&
-    SCRIPT_FAILURE_PHASES.has(settlement.phase) &&
-    typeof settlement.executionMayHaveOccurred === "boolean" &&
-    SCRIPT_CANCELLATION_OUTCOMES.has(settlement.cancellation) &&
-    hasOnlyKeys(settlement, SCRIPT_FAILURE_SETTLEMENT_KEYS)
-  ) {
-    return { success: false, errorMessage: settlement.error };
-  }
-  return {
-    success: false,
-    errorMessage: "The durable script completion contained no valid settlement.",
-  };
-}
-
-const SCRIPT_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
-  "typecheck",
-  "runtime",
-  "deadline",
-  "expired",
-  "orphaned",
-]);
-const SCRIPT_FAILURE_PHASES: ReadonlySet<unknown> = new Set([
-  "typecheck",
-  "before-execution",
-  "execution",
-  "recovery",
-]);
-const SCRIPT_CANCELLATION_OUTCOMES: ReadonlySet<unknown> = new Set([
-  "not-applicable",
-  "external-work-may-continue",
-]);
-const SCRIPT_SUCCESS_SETTLEMENT_KEYS: ReadonlySet<string> = new Set(["status", "result"]);
-const SCRIPT_FAILURE_SETTLEMENT_KEYS: ReadonlySet<string> = new Set([
-  "status",
-  "error",
-  "failureKind",
-  "phase",
-  "executionMayHaveOccurred",
-  "cancellation",
-]);
-
-function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: ReadonlySet<string>): boolean {
-  return Object.keys(value).every((key) => allowedKeys.has(key));
+  return { success: false, errorMessage: settlement.error };
 }
 
 function readUsageTokens(usage: unknown): { input?: number; output?: number } {

@@ -16,10 +16,7 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
 import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
-import {
-  BROWSER_FEED_SCHEMA_VERSION,
-  isCurrentBrowserFeedState,
-} from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
+import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
@@ -689,7 +686,7 @@ function useAgentInterrupt(args: {
 
 /**
  * The browser-feed projector persists the durable `agent` slice to
- * `processor_state`. Genuinely live ephemeral chunks stay in the store's
+ * `processor_progress`. Genuinely live ephemeral chunks stay in the store's
  * in-memory tail; `liveRevision` makes those batches reactive without ever
  * writing or replaying them. Null until either source has produced state.
  */
@@ -700,14 +697,11 @@ function useAgentUiReducedState(
 ): AgentUiState | null {
   const result = useStreamQuery(
     database,
-    // subscription_key is part of the primary key, so concurrent browser
-    // profiles can leave several rows. Only the exact current-state contract
-    // is eligible; every other projection cache is disposable and rebuilt.
-    `SELECT reduced_state FROM processor_state
-     WHERE processor_slug = ?
-       AND json_extract(reduced_state, '$.schemaVersion') = ?
-     ORDER BY max_offset DESC LIMIT 1`,
-    [BrowserFeedContract.slug, BROWSER_FEED_SCHEMA_VERSION],
+    // subscription_key is part of the primary key, so multiple rows can exist
+    // for the slug (e.g. after a key-format change); read the most advanced one.
+    `SELECT reduced_state FROM processor_progress WHERE processor_slug = ?
+     ORDER BY acknowledged_through_offset DESC LIMIT 1`,
+    [BrowserFeedContract.slug],
   );
   return useMemo(() => {
     // Volatile live batches do not write SQLite; the revision is the reactive

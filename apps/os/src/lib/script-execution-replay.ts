@@ -5,11 +5,11 @@ import {
 } from "~/domains/capability-host/script-execution-settlement.ts";
 
 export const SCRIPT_EXECUTION_REQUESTED_EVENT_TYPE =
-  "events.iterate.com/capability-host/script-execution-requested";
+  "events.iterate.com/capability-host/script-run-requested";
 export const SCRIPT_EXECUTION_STARTED_EVENT_TYPE =
-  "events.iterate.com/capability-host/script-execution-started";
+  "events.iterate.com/capability-host/script-run-started";
 export const SCRIPT_EXECUTION_COMPLETED_EVENT_TYPE =
-  "events.iterate.com/capability-host/script-execution-completed";
+  "events.iterate.com/capability-host/script-run-settled";
 
 export const SCRIPT_EXECUTION_REPLAY_EVENT_TYPES = [
   SCRIPT_EXECUTION_REQUESTED_EVENT_TYPE,

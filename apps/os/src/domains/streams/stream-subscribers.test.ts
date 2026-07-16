@@ -148,6 +148,7 @@ type ConfiguredEntry = {
 function makeHarness() {
   let now = 0;
   let assignedMaxOffset = 0;
+  let streamCreatedAt: string | undefined = "stream-v1";
   const log: StreamEvent[] = [];
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
@@ -213,6 +214,7 @@ function makeHarness() {
         CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
           path: "/t",
+          createdAt: streamCreatedAt,
           maxOffset: assignedMaxOffset,
           configuredSubscribersByKey: configured,
         }),
@@ -274,6 +276,9 @@ function makeHarness() {
     now: () => now,
     advanceTo: (ms: number) => {
       now = ms;
+    },
+    setIncarnation: (createdAt: string | undefined) => {
+      streamCreatedAt = createdAt;
     },
     configure: (payload: SubscriptionConfiguredPayload, offset = 0) => {
       configured[payload.subscriptionKey] = {
@@ -1366,7 +1371,55 @@ describe("StreamSubscribers", () => {
     expect(h.subscribers.hasConnection("watcher")).toBe(true);
   });
 
-  it("z1b. rejects invalid replay coordinates before opening a connection", () => {
+  it("z1a. atomically rejects a changed stream incarnation before replacing a live connection", async () => {
+    const h = makeHarness();
+    const first = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: first.sink,
+      expectedIncarnation: "stream-v1",
+    });
+    await h.settle();
+
+    h.setIncarnation("stream-v2");
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink: makeSink().sink,
+        replayAfterOffset: 0,
+        expectedIncarnation: "stream-v1",
+      }),
+    ).toThrow(/stream incarnation changed \(stream-v1 -> stream-v2\)/);
+    expect(h.subscribers.hasConnection("watcher")).toBe(true);
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "new-stream-watcher",
+      sink: makeSink().sink,
+      expectedIncarnation: "stream-v2",
+    });
+    expect(h.subscribers.hasConnection("new-stream-watcher")).toBe(true);
+  });
+
+  it("z1b. distinguishes an uncreated stream from a newly-created incarnation", () => {
+    const h = makeHarness();
+    h.setIncarnation(undefined);
+    h.subscribers.openEphemeral({
+      subscriptionKey: "uncreated-watcher",
+      sink: makeSink().sink,
+      expectedIncarnation: null,
+    });
+
+    h.setIncarnation("stream-v1");
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "replacement",
+        sink: makeSink().sink,
+        expectedIncarnation: null,
+      }),
+    ).toThrow(/stream incarnation changed \(null -> stream-v1\)/);
+  });
+
+  it("z1c. rejects invalid replay coordinates before opening a connection", () => {
     const h = makeHarness();
 
     expect(() =>
@@ -1383,8 +1436,16 @@ describe("StreamSubscribers", () => {
         maxReplayOffsetGap: Number.NaN,
       }),
     ).toThrow(/maxReplayOffsetGap must be a non-negative safe integer/);
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "invalid-incarnation",
+        sink: makeSink().sink,
+        expectedIncarnation: "   ",
+      }),
+    ).toThrow(/expectedIncarnation must be null or a non-empty string/);
     expect(h.subscribers.hasConnection("negative-cursor")).toBe(false);
     expect(h.subscribers.hasConnection("invalid-gap")).toBe(false);
+    expect(h.subscribers.hasConnection("invalid-incarnation")).toBe(false);
   });
 
   it("z2. configured wake connections never receive ephemeral events; the pump advances over them", async () => {

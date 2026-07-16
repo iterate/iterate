@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
+/** The one logical system-context slot whose presence makes an agent ready. */
+export const AGENT_SYSTEM_PROMPT_CONTEXT_KEY = "agent/system-prompt";
 
 /**
  * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
@@ -37,9 +42,8 @@ export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
  * scheduling reconciler. Normally dead code: the obligation reconciler
  * settles every open request well before this (attempts self-cap at
  * DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS, crashed attempts cancel, expired
- * intents fail). It exists for folds the normal lifecycle didn't produce —
- * hand-seeded checkpoints, raw-append journals — and as insurance against
- * reconciliation bugs. If it ever races a still-running attempt the outcomes
+ * intents fail). It exists purely as insurance against reconciliation
+ * bugs. If it ever races a still-running attempt the outcomes
  * CONVERGE rather than conflict: the backstop failure and any late completion
  * carry idempotent keys, the reducer ignores completions for a request that
  * is no longer current, and the late attempt's output is gated on request
@@ -50,7 +54,7 @@ export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 /**
  * Compaction trigger: once a completed turn's reported context (input plus
  * output tokens) crosses this fraction of the model's window, the processor
- * summarizes the conversation into a history-reset. Halfway leaves room for
+ * summarizes the conversation into a compacted context item. Halfway leaves room for
  * many more turns before the window actually fills, so a slow or failed
  * summary attempt never races an imminent context overflow.
  */
@@ -60,7 +64,7 @@ export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
  * Trailing delay before the fold's busy→idle flip is announced as a
  * status-changed event. The fold passes through idle for one append
  * round-trip during every hand-off (llm-request-completed lands, THEN the
- * extracted script-execution-requested lands; script-execution-completed
+ * extracted script-run-requested lands; script-run-settled
  * lands, THEN the rendered result input lands), and announcing those blips
  * would flicker every "is thinking..." surface downstream. Busy flips
  * announce immediately — only idle waits.
@@ -94,13 +98,13 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "}",
   "```",
   "",
-  '- Talking to the user is itself a call: `await itx.chat.sendMessage("...")` inside your script (chat renders markdown). Nothing else reaches them — they never see your raw text or your code. After you send, a confirmation input "The assistant sent this visible web-chat message: …" lands in your history: that is your delivery receipt, not a user speaking.',
+  '- Talking to the user is itself a call: `await itx.chat.sendMessage("...")` inside your script (chat renders markdown). Nothing else reaches them — they never see your raw text or your code. After you send, an assistant-role item "The assistant sent this visible web-chat message: …" lands in your history: that is your delivery receipt, not a user speaking.',
   "- Whatever your function RETURNS (JSON-serializable) arrives as your next input, and you get another turn to act on it. A thrown error arrives the same way — read it and adapt. Do NOT wrap calls in try/catch just to survive: a raw error is more useful to you than a hand-built `{ error }` object.",
   "- Multi-step work is one script per response: each result comes back to you, and you write the next step having seen it. A response with more than one code block — or a block that does not start with `async` — is rejected with feedback and NOTHING runs; never queue future steps as extra blocks.",
   "- To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn. A response with no code block at all also ends your turn.",
   "- Each script runs fresh — no variable survives between scripts. Carry state by returning it, messaging it, or writing a file.",
   "",
-  "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. An input titled \"Platform context for this agent\" (usually your first, though a fast user message may precede it) carries your project id, agent path, and pointers for this scope.",
+  "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Platform context for this agent\" carries your project id, agent path, and pointers for this scope.",
   "",
   'THE CONFIG REPO — the code that governs this project, at "/repos/config":',
   "- `worker.ts` is the whole project worker. Its default export serves HTTP for the project's hosts (the homepage and website), routes each named-export app class to its own hostname, reacts to every committed event on every project stream through processEvent(event), and configures every new agent — system prompt, model, capability mounts — via its itx.agents.defaults.forPath reaction. AGENTS.md is durable notes for agents: read it early, write stable project knowledge back. npm dependencies in package.json install at build time; multi-file TypeScript works.",
@@ -226,7 +230,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 ].join("\n");
 
 /**
- * A file reference riding on an agent input: where the bytes live in project
+ * A file reference riding on an agent context item: where the bytes live in project
  * file storage plus the signed public URL minted when it was attached. The
  * URL is stored (not re-minted per read) so history stays deterministic;
  * links in old conversations expire with the signature (default 7 days).
@@ -238,22 +242,10 @@ export const AgentFileAttachment = z.object({
   size: z.number().int().nonnegative(),
   url: z.string(),
 });
-/** A file attached to an agent input: content type, filename, project
+/** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = z.infer<typeof AgentFileAttachment>;
-
-/**
- * One model-visible history item as the LLM turn receives it: a user or
- * assistant turn, plus any file attachments. `history-reset` payloads are
- * arrays of these, so a reset can rebuild any history shape — summary-only,
- * or summary plus recent turns kept verbatim.
- */
-const AgentInputItem = z.object({
-  role: z.enum(["user", "assistant"]),
-  content: z.string(),
-  files: z.array(AgentFileAttachment).optional(),
-});
 
 const LlmRequestPolicy = z
   .discriminatedUnion("behaviour", [
@@ -263,39 +255,160 @@ const LlmRequestPolicy = z
   ])
   .default({ behaviour: "after-current-request" });
 
-/**
- * WHO sent an inbound message — the discriminant every consumer keys on:
- * the reducer picks the trigger source ("agent" mail counts against the
- * autonomous turn budget instead of refilling it; humans refill it), the UI
- * picks the bubble label, and transcribers record the sender facts they
- * have in hand. One inbound message event for every source is the point:
- * web chat, MCP, another agent, and the domain transcribers all go through
- * the same door.
- */
-const AgentMessageFrom = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("user"), origin: z.enum(["web", "mcp"]) }),
-  z.object({ kind: z.literal("agent"), path: z.string() }),
+const AgentUserContextActor = z.object({
+  type: z.literal("user"),
+  origin: z.enum(["web", "mcp"]),
+});
+
+const AgentDeveloperContextActor = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("agent"), path: z.string() }),
+  z.object({ type: z.literal("script"), executionId: z.string() }),
   z.object({
-    kind: z.literal("slack"),
+    type: z.literal("slack"),
     userId: z.string().optional(),
     botName: z.string().optional(),
   }),
   z.object({
-    kind: z.literal("telegram"),
+    type: z.literal("telegram"),
     userId: z.string().optional(),
     username: z.string().optional(),
   }),
   z.object({
-    kind: z.literal("email"),
+    type: z.literal("email"),
     address: z.string().optional(),
     name: z.string().optional(),
   }),
   z.object({
-    kind: z.literal("github"),
+    type: z.literal("github"),
     login: z.string().optional(),
     senderType: z.string().optional(),
   }),
 ]);
+
+const AgentContextRef = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("event"),
+    streamPath: z.string(),
+    offset: z.number().int().positive(),
+    eventType: z.string().optional(),
+  }),
+  z.object({ type: z.literal("user"), userId: z.string() }),
+  z.object({ type: z.literal("file"), path: z.string() }),
+  z.object({
+    type: z.literal("git-commit"),
+    repoPath: z.string(),
+    commitOid: z.string(),
+  }),
+]);
+
+const AgentContextCommon = {
+  content: z.string(),
+  /** Stable logical identity within the system or history lane. */
+  key: z.string().min(1).optional(),
+  /** Files attached to this context item — see {@link AgentFileAttachment}. */
+  files: z.array(AgentFileAttachment).optional(),
+  /** Coordinates for retrieving richer source material on demand. */
+  refs: z.array(AgentContextRef).optional(),
+};
+
+/**
+ * The single source of truth for model-visible context. System items live in
+ * the compaction-immune prefix; every other role lives in chronological
+ * history. A keyed item may replace its current unpublished projection slot,
+ * but the journal remains append-only and an update after publication appends
+ * a new occurrence.
+ */
+export const AgentContextAddedPayload = z
+  .discriminatedUnion("role", [
+    z
+      .object({
+        ...AgentContextCommon,
+        role: z.literal("system"),
+      })
+      .strict(),
+    z
+      .object({
+        ...AgentContextCommon,
+        role: z.literal("developer"),
+        actor: AgentDeveloperContextActor.optional(),
+        llmRequestPolicy: LlmRequestPolicy,
+        /** Metadata for the structural history rewrite produced by compaction. */
+        compaction: z
+          .object({
+            /** Replace model-visible history through this stream offset with this item. */
+            replacesHistoryThrough: z.number().int().positive(),
+            /** Provider-reported usage for the summarization request, when available. */
+            usage: z
+              .object({
+                inputTokens: z.number().int().nonnegative(),
+                outputTokens: z.number().int().nonnegative(),
+                cachedInputTokens: z.number().int().nonnegative().optional(),
+                reasoningOutputTokens: z.number().int().nonnegative().optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...AgentContextCommon,
+        role: z.literal("user"),
+        actor: AgentUserContextActor,
+        llmRequestPolicy: LlmRequestPolicy,
+      })
+      .strict(),
+    z
+      .object({
+        ...AgentContextCommon,
+        role: z.literal("assistant"),
+        /** Offset of the llm-request-requested event this output answers. */
+        llmRequestOffset: z.number().int().positive().optional(),
+      })
+      .strict(),
+  ])
+  .superRefine((payload, ctx) => {
+    if (payload.role !== "developer" || payload.compaction === undefined) return;
+    if (payload.key !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["key"],
+        message: "compaction is a structural history rewrite and cannot be keyed",
+      });
+    }
+    if (payload.llmRequestPolicy.behaviour !== "dont-trigger-request") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["llmRequestPolicy", "behaviour"],
+        message: "compaction cannot trigger an LLM request",
+      });
+    }
+  });
+
+const AgentProjectedContextItem = z
+  .object({
+    /** The journal occurrence currently supplying this projected item. */
+    offset: z.number().int().positive(),
+    /** The last published occurrence this keyed value updates, if any. */
+    updatesOffset: z.number().int().positive().optional(),
+  })
+  .passthrough()
+  .transform((candidate, ctx) => {
+    const { offset, updatesOffset, ...payload } = candidate;
+    const parsed = AgentContextAddedPayload.safeParse(payload);
+    if (!parsed.success) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Invalid projected agent context payload",
+      });
+      return z.NEVER;
+    }
+    return {
+      ...parsed.data,
+      offset,
+      ...(updatesOffset === undefined ? {} : { updatesOffset }),
+    };
+  });
 
 const LlmRequestResult = z.discriminatedUnion("status", [
   z.object({
@@ -420,241 +533,197 @@ export function deriveAgentPhase(
 export function deriveAgentBusy(
   state: Pick<
     AgentProcessorState,
-    "activeScriptExecutionIds" | "currentRequest" | "llmRequests" | "pendingTriggerOffset"
+    | "activeScriptExecutionIds"
+    | "context"
+    | "currentRequest"
+    | "llmRequests"
+    | "pendingTriggerOffset"
   >,
 ): boolean {
+  // Birth policy and inbound input are independent distributed reactions. A
+  // trigger that raced ahead of the durable system prompt is queued, but it
+  // is not active work yet: reporting it as busy would paint "thinking"
+  // forever when configuration delivery is broken. The prompt's append makes
+  // this derivation true and the same reconcile pass schedules the request.
+  const pendingTriggerIsReady =
+    state.pendingTriggerOffset !== null &&
+    state.context.system.some((item) => item.key === AGENT_SYSTEM_PROMPT_CONTEXT_KEY);
   return (
     state.activeScriptExecutionIds.length > 0 ||
     state.currentRequest !== null ||
-    state.pendingTriggerOffset !== null ||
+    pendingTriggerIsReady ||
     Object.keys(state.llmRequests).length > 0
   );
 }
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.9.0",
+  version: "1.0.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
-  stateSchema: z.object({
-    systemPrompt: z.string().default(DEFAULT_AGENT_SYSTEM_PROMPT),
-    history: z.array(AgentInputItem).default([]),
-    llmConfig: z
-      .object({
-        model: z.string().min(1),
-      })
-      .default({ model: DEFAULT_AGENT_MODEL }),
-    llmConfigConfigured: z.boolean().default(false),
-    currentRequest: z
-      .discriminatedUnion("phase", [
-        z.object({
-          phase: z.literal("scheduled"),
-          requestId: z.string(),
-          scheduledOffset: z.number().int().positive(),
-        }),
-        z.object({
-          phase: z.literal("requested"),
-          /** The llm-request-requested event's own stream offset — the handle
-           * every later lifecycle event (started/chunk/completed/cancelled)
-           * carries. */
-          llmRequestOffset: z.number().int().positive(),
-          /** Epoch ms the requested event committed (its createdAt), driving
-           * the reconciler's backstop deadline. Optional: raw appends and
-           * pre-backstop checkpoints lack it, and the backstop then skips. */
-          requestedAt: z.number().int().positive().optional(),
-        }),
-      ])
-      .nullable()
-      .default(null),
-    pendingTriggerOffset: z.number().int().positive().nullable().default(null),
-    pendingTriggerSource: z.enum(["user", "agent-loop"]).nullable().default(null),
-    autonomousTurnCount: z.number().int().nonnegative().default(0),
-    /**
-     * Count of finished LLM request lifecycles (completed or cancelled).
-     * llm-request-scheduled idempotency is keyed on this, so every trigger
-     * derivation between two finishes — however delivery batches the inputs —
-     * collapses into one scheduled event at the stream's append dedup layer.
-     */
-    requestGeneration: z.number().int().nonnegative().default(0),
-    /**
-     * Failed llm-request-completed events since the last success. Governs
-     * whether a failure's error input auto-retries (below the cap) or sits in
-     * context untriggered (at the cap) — a persistent provider failure must
-     * not retry-loop forever.
-     */
-    consecutiveLlmFailures: z.number().int().nonnegative().default(0),
-    /**
-     * Whether the most recent LLM failure was the vendor's rate limit
-     * (Workers AI 3021). Rate limits are TIME-gated — quota refills on a
-     * per-minute window — so a REPEAT rate-limited failure jumps the retry
-     * backoff to the ladder cap instead of burning the last attempt inside
-     * the same hot minute. Cleared by any success (with
-     * consecutiveLlmFailures).
-     */
-    lastLlmFailureRateLimited: z.boolean().default(false),
-    /**
-     * Open LLM obligations: every request that has not reached a terminal
-     * event, keyed by the llm-request-requested event's offset (as a string).
-     * The reconcile pass compares this fold against the incarnation's live
-     * execution set. Entries carry model + expiresAt so recovery can START an
-     * attempt from state alone. Terminal events delete the entry (not mark
-     * completed).
-     */
-    llmRequests: z
-      .record(
-        z.string(),
-        z.object({
-          status: z.enum(["requested", "started"]),
+  stateSchema: z
+    .object({
+      context: z
+        .object({
+          system: z.array(AgentProjectedContextItem).default([]),
+          history: z.array(AgentProjectedContextItem).default([]),
+          /** Highest request offset that published the current projection. */
+          publishedThrough: z.number().int().nonnegative().default(0),
+        })
+        .prefault({}),
+      llmConfig: z
+        .object({
           model: z.string().min(1),
-          /** Epoch ms past which no attempt may START; stale intent settles
-           * as an expired failure instead. */
-          expiresAt: z.number().int().positive(),
-        }),
-      )
-      .default({}),
-    /**
-     * Scripts the agent's turns spawned that have not completed, folded from
-     * the capability host's request/completed lifecycle on this stream. The
-     * script OBLIGATION (code, expiry, recovery) belongs to the capability
-     * host processor; this fold exists so the agent's busy derivation
-     * (deriveAgentBusy) covers script execution too.
-     */
-    activeScriptExecutionIds: z.array(z.string()).default([]),
-    /**
-     * When the derived busy flag (deriveAgentBusy) last flipped: the consumed
-     * event that flipped it, by offset (the announcement's generation guard
-     * and idempotency key) and createdAt (the idle announcement debounce
-     * counts from it). The stored busy always equals the derived value —
-     * kept so the fold can stamp flips without re-deriving the previous
-     * value.
-     */
-    status: AgentStatusChange.optional(),
-    /**
-     * The merged status record as journaled, folded from the agent's own
-     * status-changed patches (mergeAgentStatusPatch): the platform's busy
-     * announcements plus the agent-authored title/note/shortStatus. The
-     * reconciler compares its busy against the derived flag and announces
-     * the difference; equality there is what makes the announcement loop
-     * terminate.
-     */
-    announcedStatus: AgentStatusRecord.optional(),
-    /**
-     * Lifetime token totals, folded from token-usage-reported. Cost/observability
-     * data, not loop-control state: nothing in the agent loop branches on it.
-     * The compaction trigger reads each report's own payload instead (the
-     * report carries `maxContextTokens` for exactly that).
-     */
-    tokenUsage: z
-      .object({
-        totalInputTokens: z.number().int().nonnegative().default(0),
-        totalOutputTokens: z.number().int().nonnegative().default(0),
-        totalCachedInputTokens: z.number().int().nonnegative().default(0),
-        totalReasoningOutputTokens: z.number().int().nonnegative().default(0),
-      })
-      .prefault({}),
-  }),
+        })
+        .default({ model: DEFAULT_AGENT_MODEL }),
+      llmConfigConfigured: z.boolean().default(false),
+      currentRequest: z
+        .discriminatedUnion("phase", [
+          z.object({
+            phase: z.literal("scheduled"),
+            requestId: z.string(),
+            scheduledOffset: z.number().int().positive(),
+          }),
+          z.object({
+            phase: z.literal("requested"),
+            /** The llm-request-requested event's own stream offset — the handle
+             * every later lifecycle event (started/chunk/completed/cancelled)
+             * carries. */
+            llmRequestOffset: z.number().int().positive(),
+            /** Epoch ms the requested event committed (its createdAt), driving
+             * the reconciler's backstop deadline. */
+            requestedAt: z.number().int().positive(),
+          }),
+        ])
+        .nullable()
+        .default(null),
+      pendingTriggerOffset: z.number().int().positive().nullable().default(null),
+      pendingTriggerSource: z.enum(["user", "agent-loop"]).nullable().default(null),
+      autonomousTurnCount: z.number().int().nonnegative().default(0),
+      /**
+       * Count of finished LLM request lifecycles (completed or cancelled).
+       * llm-request-scheduled idempotency is keyed on this, so every trigger
+       * derivation between two finishes — however delivery batches the inputs —
+       * collapses into one scheduled event at the stream's append dedup layer.
+       */
+      requestGeneration: z.number().int().nonnegative().default(0),
+      /**
+       * Failed llm-request-completed events since the last success. Governs
+       * whether a failure's error input auto-retries (below the cap) or sits in
+       * context untriggered (at the cap) — a persistent provider failure must
+       * not retry-loop forever.
+       */
+      consecutiveLlmFailures: z.number().int().nonnegative().default(0),
+      /**
+       * Whether the most recent LLM failure was the vendor's rate limit
+       * (Workers AI 3021). Rate limits are TIME-gated — quota refills on a
+       * per-minute window — so a REPEAT rate-limited failure jumps the retry
+       * backoff to the ladder cap instead of burning the last attempt inside
+       * the same hot minute. Cleared by any success (with
+       * consecutiveLlmFailures).
+       */
+      lastLlmFailureRateLimited: z.boolean().default(false),
+      /**
+       * Open LLM obligations: every request that has not reached a terminal
+       * event, keyed by the llm-request-requested event's offset (as a string).
+       * The reconcile pass compares this fold against the incarnation's live
+       * execution set. Entries carry model + expiresAt so recovery can START an
+       * attempt from state alone. Terminal events delete the entry (not mark
+       * completed).
+       */
+      llmRequests: z
+        .record(
+          z.string(),
+          z.object({
+            status: z.enum(["requested", "started"]),
+            model: z.string().min(1),
+            /** Epoch ms past which no attempt may START; stale intent settles
+             * as an expired failure instead. */
+            expiresAt: z.number().int().positive(),
+          }),
+        )
+        .default({}),
+      /**
+       * Scripts the agent's turns spawned that have not completed, folded from
+       * the capability host's request/completed lifecycle on this stream. The
+       * script OBLIGATION (code, expiry, recovery) belongs to the capability
+       * host processor; this fold exists so the agent's busy derivation
+       * (deriveAgentBusy) covers script execution too.
+       */
+      activeScriptExecutionIds: z.array(z.string()).default([]),
+      /**
+       * When the derived busy flag (deriveAgentBusy) last flipped: the consumed
+       * event that flipped it, by offset (the announcement's generation guard
+       * and idempotency key) and createdAt (the idle announcement debounce
+       * counts from it). The stored busy always equals the derived value —
+       * kept so the fold can stamp flips without re-deriving the previous
+       * value.
+       */
+      status: AgentStatusChange.optional(),
+      /**
+       * The merged status record as journaled, folded from the agent's own
+       * status-changed patches (mergeAgentStatusPatch): the platform's busy
+       * announcements plus the agent-authored title/note/shortStatus. The
+       * reconciler compares its busy against the derived flag and announces
+       * the difference; equality there is what makes the announcement loop
+       * terminate.
+       */
+      announcedStatus: AgentStatusRecord.optional(),
+      /**
+       * Lifetime token totals, folded from token-usage-reported. Cost/observability
+       * data, not loop-control state: nothing in the agent loop branches on it.
+       * The compaction trigger reads each report's own payload instead (the
+       * report carries `maxContextTokens` for exactly that).
+       */
+      tokenUsage: z
+        .object({
+          totalInputTokens: z.number().int().nonnegative().default(0),
+          totalOutputTokens: z.number().int().nonnegative().default(0),
+          totalCachedInputTokens: z.number().int().nonnegative().default(0),
+          totalReasoningOutputTokens: z.number().int().nonnegative().default(0),
+        })
+        .prefault({}),
+    })
+    .strict(),
   events: {
-    "events.iterate.com/agent/config-updated": {
-      description: "Project-authored agent setup/configuration.",
-      payloadSchema: z.object({
-        systemPrompt: z.string().optional(),
-      }),
+    "events.iterate.com/agents/context-added": {
+      description:
+        "Adds one provider-neutral model context item. System items form the compaction-immune prefix; developer, user, and assistant items form history. Repeated keyed values coalesce until an LLM request publishes them, then append as explicit updates so prompt-cache prefixes remain intact.",
+      payloadSchema: AgentContextAddedPayload,
       examples: [
         {
-          description: "A project configures the agent with a custom system prompt at setup time.",
+          description: "A project installs or replaces the unpublished system prompt.",
           payload: {
-            systemPrompt:
-              "You are the support agent for Acme Corp. Answer billing questions concisely and escalate refund requests to a human.",
-          },
-        },
-      ],
-    },
-    "events.iterate.com/agent/system-prompt-updated": {
-      description: "Updates the system prompt used for future LLM requests.",
-      payloadSchema: z.object({
-        systemPrompt: z.string(),
-      }),
-      examples: [
-        {
-          description: "The system prompt is replaced for every LLM request from here on.",
-          payload: {
-            systemPrompt:
+            role: "system",
+            key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+            content:
               "You are Acme's release manager. Track open pull requests and nag reviewers politely.",
           },
         },
-      ],
-    },
-    "events.iterate.com/agent/input-added": {
-      description: "A normalized model-visible input was added.",
-      payloadSchema: z.object({
-        content: z.string(),
-        /** Files attached to this input — see {@link AgentFileAttachment}. */
-        files: z.array(AgentFileAttachment).optional(),
-        llmRequestPolicy: LlmRequestPolicy,
-      }),
-      examples: [
-        {
-          description:
-            "A script result becomes a model-visible input; the next LLM turn starts once the current request (if any) finishes.",
-          payload: {
-            content: 'Script result:\n```json\n{ "unread": 4 }\n```',
-            llmRequestPolicy: { behaviour: "after-current-request" },
-          },
-        },
-        {
-          description:
-            "A file lands in the conversation as an attachment, recorded without triggering an LLM turn.",
-          payload: {
-            content: "[Files attached: report.pdf]",
-            files: [
-              {
-                contentType: "application/pdf",
-                filename: "report.pdf",
-                path: "/uploads/2026-07-09/report.pdf",
-                size: 482133,
-                url: "https://iterate-files--acme.iterate.app/uploads/2026-07-09/report.pdf?exp=1783555200&sig=8c1f2ab9d4e7c0a3",
-              },
-            ],
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          },
-        },
-      ],
-    },
-    "events.iterate.com/agents/message-received": {
-      description:
-        "A message reached the agent. THE inbound message event for every source — `from` says who sent it: a user (web UI or MCP client), another agent (delegation and reports ride exactly this), or a domain transcriber relaying a Slack/email/GitHub message. The reducer folds it straight into model-visible history; `llmRequestPolicy` carries the sender's trigger gating (e.g. mention-gated PR comments record without waking the agent).",
-      payloadSchema: z.object({
-        content: z.string(),
-        from: AgentMessageFrom,
-        /** Files attached to the message — see {@link AgentFileAttachment}. */
-        files: z.array(AgentFileAttachment).optional(),
-        llmRequestPolicy: LlmRequestPolicy,
-      }),
-      examples: [
         {
           description: "A user sends a chat message from the web UI.",
           payload: {
+            role: "user",
             content: "What's on my calendar today?",
-            from: { kind: "user", origin: "web" },
-            llmRequestPolicy: { behaviour: "after-current-request" },
-          },
-        },
-        {
-          description: "One agent sends work to another agent.",
-          payload: {
-            content:
-              "Find every place we retry failed webhook deliveries and summarize the backoff policy.",
-            from: { kind: "agent", path: "/agents/main" },
+            actor: { type: "user", origin: "web" },
             llmRequestPolicy: { behaviour: "after-current-request" },
           },
         },
         {
           description:
-            "The slack-agent transcriber relays a thread message; a reaction or join would carry dont-trigger-request instead.",
+            "A Slack transcriber adds a compact description and a coordinate for the raw webhook.",
           payload: {
-            content:
-              "`events.iterate.com/slack/webhook-received` event received\n\n```yaml\nevent:\n  type: message\n  text: what's our uptime this month?\n```",
-            from: { kind: "slack", userId: "U0788AB12CD" },
+            role: "developer",
+            content: "A Slack user asked: what's our uptime this month?",
+            actor: { type: "slack", userId: "U0788AB12CD" },
+            refs: [
+              {
+                type: "event",
+                streamPath: "/integrations/slack/acme",
+                offset: 81,
+                eventType: "events.iterate.com/slack/webhook-received",
+              },
+            ],
             llmRequestPolicy: { behaviour: "after-current-request" },
           },
         },
@@ -673,25 +742,6 @@ export const AgentProcessorContract = defineProcessorContract({
           payload: {
             message:
               "You have 4 unread emails. The two that look important are from Dana (contract renewal) and GitHub (a failing build on main).",
-          },
-        },
-      ],
-    },
-    "events.iterate.com/agent/output-added": {
-      description: "The LLM produced assistant output.",
-      payloadSchema: z.object({
-        content: z.string(),
-        /** Offset of the llm-request-requested event this output answers. */
-        llmRequestOffset: z.number().int().positive().optional(),
-      }),
-      examples: [
-        {
-          description:
-            "The model answered with a codemode script; llmRequestOffset is the offset of the llm-request-requested event it answers.",
-          payload: {
-            content:
-              '```ts\nasync (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}\n```',
-            llmRequestOffset: 57,
           },
         },
       ],
@@ -773,7 +823,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-response-chunk": {
       description:
-        "One streamed chunk received from the AI binding. Appended EPHEMERAL: it reaches ephemeral subscriptions (browser feed, TUI) but is excluded from default reads, never delivered to durable subscribers, and evictable — the durable truth is the output-added / llm-request-completed pair.",
+        "One streamed chunk received from the AI binding. Appended EPHEMERAL: it reaches ephemeral subscriptions (browser feed, TUI) but is excluded from default reads, never delivered to durable subscribers, and evictable — the durable truth is the assistant context item / llm-request-completed pair.",
       payloadSchema: z.object({
         chunk: z.unknown(),
         llmRequestOffset: z.number().int().positive(),
@@ -858,34 +908,6 @@ export const AgentProcessorContract = defineProcessorContract({
             outputTokens: 111,
             cachedInputTokens: 28416,
             reasoningOutputTokens: 0,
-          },
-        },
-      ],
-    },
-    "events.iterate.com/agent/history-reset": {
-      description:
-        "Replaces the agent's model-visible history and system prompt wholesale. The " +
-        "processor's compaction lane appends it when a turn's context crosses the window " +
-        "threshold; anything else may append one too (userspace history management).",
-      payloadSchema: z.object({
-        systemPrompt: z.string(),
-        history: z.array(AgentInputItem),
-        reason: z.string().optional(),
-      }),
-      examples: [
-        {
-          description:
-            "A userspace compaction reaction replaces a near-full history with a summary; the offset in the reason is the token-usage-reported event that triggered it.",
-          payload: {
-            systemPrompt: "You are a helpful assistant.",
-            history: [
-              {
-                role: "user",
-                content:
-                  "[Earlier conversation history was compacted. Summary:]\n\nThe user is debugging a failing deploy...",
-              },
-            ],
-            reason: "compaction@1042: ~180000 tokens > 136000",
           },
         },
       ],
@@ -1029,40 +1051,51 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   processorDeps: [CapabilityHostProcessorContract, CoreProcessorContract],
   consumes: [
-    "events.iterate.com/agent/config-updated",
-    "events.iterate.com/agent/system-prompt-updated",
-    "events.iterate.com/agent/input-added",
-    "events.iterate.com/agents/message-received",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/agents/web-message-sent",
-    "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/token-usage-reported",
-    "events.iterate.com/agent/history-reset",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/agent/status-changed",
-    "events.iterate.com/capability-host/script-execution-requested",
-    "events.iterate.com/capability-host/script-execution-completed",
+    "events.iterate.com/capability-host/script-run-requested",
+    "events.iterate.com/capability-host/script-run-settled",
+    // Core lifecycle RE-CHECK signals. Neither folds into state (reduce
+    // ignores them) — they are consumed so their at-head delivery gives the
+    // obligation reconcile (`processEvent` under `delivery.caughtUp`) a
+    // guaranteed consumed-at-head turn. `stream/woken` fires when the stream DO
+    // (re)starts — the revival/deploy case; `subscriber-connected` fires when a
+    // runner (re)attaches — closing the live race where an unconsumed presence
+    // fact would otherwise land at head just after an obligation was opened and
+    // strand it until the next domain event.
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): its ordinary delivery is
+    // the guaranteed at-head turn where the obligation reconcile
+    // (`processEvent` under `delivery.caughtUp`) re-drives the open LLM
+    // obligations — crash-cancel `started` attempts, re-fire lost debounces,
+    // settle expired intents. Reduce ignores it, and it is absent from
+    // `emits`: the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
-    "events.iterate.com/agent/system-prompt-updated",
-    "events.iterate.com/agent/input-added",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-response-chunk",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/token-usage-reported",
-    "events.iterate.com/agent/history-reset",
-    "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/agent/status-changed",
-    "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/capability-host/script-run-requested",
   ],
 });
 
