@@ -76,7 +76,7 @@ describe("config-repo GitHub structural reviews", () => {
       idempotencyKey: "github-review/task:head:head-b",
       payload: {
         actor: { type: "github" },
-        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
         refs: [
           {
             eventType: event.type,
@@ -117,7 +117,7 @@ describe("config-repo GitHub structural reviews", () => {
     ).toBe("github-review/task:request:13");
   });
 
-  it("interrupts obsolete review work when the PR is disabled", () => {
+  it("queues a live-state-checked cancellation when the PR is disabled", () => {
     const closed = task(webhook({ action: "closed", offset: 20 }));
     expect(closed.input.idempotencyKey).toBe("github-review/task:cancel:20");
     expect(closed.input.payload?.content).toContain("structural-review cancellation");

@@ -52,7 +52,10 @@ export function githubReviewDispatch(event: StreamEvent, config: GithubReviewCon
           eventType: event.type,
         },
       ],
-      llmRequestPolicy: { behaviour: "interrupt-current-request" },
+      // A webhook may arrive out of order. Queue behind the current turn so a
+      // stale delivery cannot cancel unrelated review or conversation work;
+      // the task rejects stale GitHub state before doing anything.
+      llmRequestPolicy: { behaviour: "after-current-request" },
       role: "developer",
     },
   } satisfies StreamEventInput;

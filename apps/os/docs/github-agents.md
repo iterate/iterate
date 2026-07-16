@@ -37,7 +37,7 @@ ordinary events whether or not they trigger an LLM turn.
 | Trusted PR edit that newly adds `@iterate` to title or description | Add 👀 to the PR and queue; later edits do not retrigger it |
 | Later trusted comment or submitted review after activation         | Queue like a message in an active Slack thread              |
 | Push, CI, unmentioned discussion before activation, bot input      | Record and project only                                     |
-| Project config worker appends a review task                        | Interrupt obsolete work on the same persistent PR stream    |
+| Project config worker appends a review task                        | Queue it on the same persistent PR stream after this turn   |
 
 A submitted review summary has no reaction endpoint of its own, so its 👀 is
 attached to the pull request. Inline review comments use their native reaction
@@ -105,12 +105,13 @@ repository—or leave the list empty—to turn them off. The worker reacts to
 `opened`, `ready_for_review`, and `synchronize` webhooks for open non-draft
 PRs. `iterate:skip-review` disables one PR and wins if both labels exist;
 `iterate:review` requests the current head explicitly, including a fresh run
-when that head was already reviewed. Adding `iterate:skip-review` immediately
-interrupts the current PR-agent request with a cancellation instruction;
-removing it reviews the current head. Closing the pull request or converting it
-to draft also interrupts with cancellation. The task revalidates live state
-before any publication, so an out-of-order cancellation becomes a no-op if the
-PR is eligible again. Label authorization is GitHub's normal repository
+when that head was already reviewed. Adding `iterate:skip-review` queues a
+cancellation instruction; removing it reviews the current head. Closing the
+pull request or converting it to draft also queues cancellation. Tasks run
+after the current turn so an out-of-order webhook cannot cancel unrelated
+review or conversation work, and each task revalidates live state before any
+publication. A stale cancellation therefore becomes a no-op if the PR is
+eligible again. Label authorization is GitHub's normal repository
 authorization.
 
 Each rule has a stable `id`, one or more `files` globs, and an `invariant`.
@@ -139,7 +140,7 @@ eligible routed webhook it:
    use the source stream offset.
 3. Appends one attributed, idempotent
    `events.iterate.com/agents/context-added` developer item to the webhook's
-   existing PR stream with `interrupt-current-request`.
+   existing PR stream with `after-current-request`.
 4. Lets that persistent agent fetch the live PR, inspect the complete diff and
    prior conversation, apply matching rules and suppressions, and revalidate
    the head immediately before publication.
@@ -147,9 +148,10 @@ eligible routed webhook it:
 The project worker makes exactly one stream append and does no GitHub or model
 work. If it fails before the append commits, its event
 checkpoint remains and delivery retries. If it fails afterwards, the append's
-idempotency key collapses the retry. A newer push adds a newer interrupt on the
-same ordered stream, so the agent can abandon obsolete work using its existing
-history rather than a second review-state store.
+idempotency key collapses the retry. A newer push queues a newer task on the
+same ordered stream. The current task rejects a stale head immediately before
+publication, and the later task reviews the new head without a second
+review-state store.
 
 ### Consolidated review result
 
