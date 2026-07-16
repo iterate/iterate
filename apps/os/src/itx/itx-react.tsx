@@ -12,16 +12,18 @@
  * ───────────────────────────────────────────────────────────────────────────
  *
  *   SESSION (the catalog authenticate() returned)
- *     useSession()            in render; suspends once on first connect
- *     connectSession()        imperative (handlers/closures); a Promise
+ *     useIterateSession()            in render; suspends once on first connect
+ *     connectIterateSession()        imperative (handlers/closures); a Promise
  *
  *   ITX (a project capability handle — session.projects.get(slug))
- *     useItx(slug?)           in render; slug from the arg or <ProjectScope>
+ *     useItx(slug?)           in render; slug (or prj_ id) from the arg or <ProjectScope>
  *     connectItx(slug)        imperative; a Promise
  *
- *   READ ONCE   useItxQuery({ key, query })            suspends until resolved
- *   SUBSCRIBE   useItxSubscription((itx) => handle, deps)   live server push
- *   LIVE STATE  useLiveState((itx) => itx.liveState, selector)  snapshot + diffs
+ *   READ ONCE   useItxQuery({ key, query })              project read; SUSPENDS
+ *               useIterateSessionQuery({ key, query })   session read; NON-suspending (shell)
+ *   LIVE STATE  useLiveState((itx) => itx.liveState, selector)  snapshot + diffs; never suspends
+ *   SUBSCRIBE   useItxSubscription((itx) => handle, deps)   raw event stream (escape hatch)
+ *   MOUNT       <ProjectScope slug>   ambient project + socket pre-warm (no provider)
  *
  *   ACTIONS (mutations) — imperative on the handle, no extra primitive:
  *     const itx = useItx();
@@ -40,7 +42,7 @@
  *
  *  • RECONNECT IS INVISIBLE. React reads an immutable {@link Snapshot} via
  *    `useSyncExternalStore`; `snapshot.session` holds the LAST live session and
- *    is kept across a transport gap. So `useSession()` suspends exactly once
+ *    is kept across a transport gap. So `useIterateSession()` suspends exactly once
  *    (first load, on `snapshot.connecting`) and never again: when the socket
  *    dies we keep showing the last session while a fresh generation dials in the
  *    background, then swap `snapshot.session` when it opens. A dropped socket
@@ -69,7 +71,7 @@
  *    close the shared socket themselves. Only two failed probes against the SAME
  *    generation retire it, and {@link reconnectIfCurrent} is a compare-and-swap
  *    on the generation id — a late verdict against a superseded generation can
- *    never close its healthy successor. {@link reconnectItx} is the separate,
+ *    never close its healthy successor. {@link reconnectIterateSession} is the separate,
  *    deliberate *semantic* reset (new claims after create/unlock).
  *
  *  • CONNECTING THROWS ON THE SERVER (never SSRs): a forever-pending `use()`
@@ -77,7 +79,7 @@
  *    `ssr: false` route or `<ClientOnly>` + `<Suspense>`.
  */
 
-// oxlint-disable react/only-export-components -- the itx hooks are colocated with ItxProvider by design (see module header); this file is the whole itx React surface, not a Fast Refresh component module.
+// oxlint-disable react/only-export-components -- the itx hooks are colocated with <ProjectScope> by design (see module header); this file is the whole itx React surface, not a Fast Refresh component module.
 import {
   createContext,
   Suspense,
@@ -94,7 +96,6 @@ import {
   useQuery,
   useSuspenseQuery,
   type QueryKey,
-  type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
@@ -112,7 +113,7 @@ import { createLiveStateStore } from "../lib/live-state/store.ts";
 type SessionStub = RpcStub<Session>;
 /** A project capability handle — `session.projects.get(slug)`. */
 type ProjectStub = RpcStub<Project>;
-export type { ProjectStub as ItxReactHandle };
+export type { ProjectStub as Itx };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The one socket: a single live WebSocket per tab, kept outside React.
@@ -219,10 +220,10 @@ const serverSnapshot = (): never => {
 
 /**
  * Ensure a live-or-connecting session and return its connecting promise. The
- * imperative sibling of {@link useSession}: for handlers, `mutationFn`s, and
+ * imperative sibling of {@link useIterateSession}: for handlers, `mutationFn`s, and
  * lazy closures that can't call a hook. Same one socket the hooks use.
  */
-export function connectSession(): Promise<SessionStub> {
+export function connectIterateSession(): Promise<SessionStub> {
   if (typeof window === "undefined") serverSnapshot();
   return (current ?? dial()).connecting;
 }
@@ -233,7 +234,7 @@ export function connectSession(): Promise<SessionStub> {
  * the session-owned cached stub, re-derived automatically after a reconnect.
  */
 export function connectItx(slug: string): Promise<ProjectStub> {
-  return connectSession().then((session) => projectStubFor(session, slug));
+  return connectIterateSession().then((session) => projectStubFor(session, slug));
 }
 
 function dial(): Generation {
@@ -242,7 +243,7 @@ function dial(): Generation {
   const id = ++generationCounter;
   const { promise, resolve, reject } = Promise.withResolvers<SessionStub>();
   // Keep an internal handler so a dial that rejects with no live awaiter never
-  // surfaces as an unhandledrejection — real `connectSession()` awaiters still observe it.
+  // surfaces as an unhandledrejection — real `connectIterateSession()` awaiters still observe it.
   void promise.catch(() => {});
   const generation: Generation = {
     id,
@@ -301,7 +302,7 @@ function dial(): Generation {
       }, LIVENESS_PROBE_INTERVAL_MS);
       // Retire the PREVIOUS published session — exactly once, now that its
       // successor is live. It was kept alive through the reconnect gap so
-      // useSession()/useItx() never handed out a disposed stub; dispose its
+      // useIterateSession()/useItx() never handed out a disposed stub; dispose its
       // project-stub cache + the stub itself only here.
       const priorSession = liveSession;
       liveSession = root;
@@ -328,7 +329,7 @@ function dial(): Generation {
         dial();
       }
       // Once a dial has resolved this is a no-op; a dial that closed BEFORE
-      // opening rejects so imperative `connectSession()` awaiters fail fast.
+      // opening rejects so imperative `connectIterateSession()` awaiters fail fast.
       reject(new Error("itx WebSocket closed before connecting"));
     });
   };
@@ -450,7 +451,7 @@ function reconnectIfCurrent(generation: Generation): void {
  * connect-time principal. Callers that need already-cached data refreshed should
  * also `invalidateQueries({ queryKey: ["itx"] })`.
  */
-export function reconnectItx(): void {
+export function reconnectIterateSession(): void {
   const generation = current;
   if (generation !== undefined) {
     current = undefined; // FIRST: the close retireGeneration triggers must not auto-redial
@@ -472,7 +473,7 @@ if (typeof document !== "undefined") {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. Connection: <ItxProvider> (session gate) + <ProjectScope> + useSession/useItx
+// 1. Connection: <ProjectScope> (ambient slug + pre-warm) + useIterateSession/useItx
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** The ambient project slug for `useItx()` / `useItxQuery()` — set by <ProjectScope>. */
@@ -483,7 +484,7 @@ const ProjectScopeContext = createContext<string | undefined>(undefined);
  * admin `streams`). Suspends exactly ONCE, on first connect; a later reconnect
  * keeps returning the last session (no re-suspend — see module header).
  */
-export function useSession(): SessionStub {
+export function useIterateSession(): SessionStub {
   const snap = useSyncExternalStore(subscribeSession, currentSnapshot, serverSnapshot);
   if (snap.session !== undefined) return snap.session;
   return use(snap.connecting);
@@ -508,39 +509,36 @@ export function useItx(explicitSlug?: string): ProjectStub {
       "useItx() needs a project: pass useItx(slug) or render under <ProjectScope slug>.",
     );
   }
-  return projectStubFor(useSession(), slug);
+  return projectStubFor(useIterateSession(), slug);
 }
 
 function SessionPrewarm() {
-  useSession();
+  useIterateSession();
   return null;
 }
 
 /**
- * The session auth gate. Dials the one socket and pre-warms it in a SIBLING
- * Suspense boundary, so children paint immediately and only components that
- * actually read through itx suspend (each into its own nearest boundary). Mount
- * it once, high in the CLIENT tree — it never SSRs (dialing throws on the
- * server), so keep it under an `ssr: false` route (or `<ClientOnly>`).
+ * Set the ambient project for a subtree AND pre-warm the one shared socket. It
+ * carries the URL slug so `useItx()` / `useItxQuery()` resolve without an
+ * explicit argument, and dials the socket in a SIBLING null-fallback boundary so
+ * children paint immediately (each component that reads through itx suspends into
+ * its own nearest boundary — usually the router's per-route `<Suspense>`).
+ *
+ * It never SSRs (dialing throws on the server), so mount it under an
+ * `ssr: false` route (or `<ClientOnly>`). No provider wraps it: the socket is
+ * module-global and every hook dials it lazily, so a component can use itx with
+ * no `<ProjectScope>` above it (the sidebar, ⌘K, admin) — the scope is only the
+ * ambient-slug convenience.
  */
-export function ItxProvider({ children }: { children: ReactNode }) {
+export function ProjectScope({ slug, children }: { slug: string; children: ReactNode }) {
   return (
-    <>
+    <ProjectScopeContext value={slug}>
       <Suspense fallback={null}>
         <SessionPrewarm />
       </Suspense>
       {children}
-    </>
+    </ProjectScopeContext>
   );
-}
-
-/**
- * Set the ambient project for a subtree so `useItx()` / `useItxQuery()` resolve
- * without an explicit slug. A plain value carrier (the URL slug) — NO socket of
- * its own; the one session socket is shared. Pass the route's `params.projectSlug`.
- */
-export function ProjectScope({ slug, children }: { slug: string; children: ReactNode }) {
-  return <ProjectScopeContext value={slug}>{children}</ProjectScopeContext>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -589,23 +587,18 @@ export function isItxTransportError(error: unknown): boolean {
 export function useItxQuery<T>({
   key,
   query,
-  slug: slugOverride,
 }: {
   key: QueryKey;
   query: (itx: ProjectStub) => Promise<T>;
-  slug?: string;
 }): T {
-  const scopedSlug = useContext(ProjectScopeContext);
-  const slug = slugOverride ?? scopedSlug;
+  const slug = useContext(ProjectScopeContext);
   if (slug === undefined) {
-    throw new Error(
-      "useItxQuery needs a project: pass { slug } or render under <ProjectScope slug>.",
-    );
+    throw new Error("useItxQuery needs a project: render it under <ProjectScope slug>.");
   }
-  const result = useSuspenseQuery({
-    queryKey: ["itx", ...(Array.isArray(key) ? key : [key])],
+  return useSuspenseQuery({
+    queryKey: ["itx", ...key],
     queryFn: async () => {
-      const session = await connectSession();
+      const session = await connectIterateSession();
       const itx = session.projects.get(slug);
       // `return await` is load-bearing: dispose only AFTER the RPC result has
       // fully resolved (the serialized result is already pulled, so disposing
@@ -618,13 +611,7 @@ export function useItxQuery<T>({
     },
     retry: (failureCount, error) => isItxTransportError(error) && failureCount < 3,
     retryDelay: (failureCount) => Math.min(250 * 2 ** failureCount, 2_000),
-  });
-  // A background-refetch failure (cached data still showing) doesn't throw —
-  // surface it so a silently-stale panel is at least visible in the console.
-  if (result.error && !result.isFetching) {
-    console.warn("useItxQuery: background refetch failed", key, result.error);
-  }
-  return result.data;
+  }).data;
 }
 
 /**
@@ -636,22 +623,26 @@ export function useItxQuery<T>({
  * `["itx", ...key]` namespace and the same transport-only retry as useItxQuery,
  * resolved per fetch (never a render-captured session stub).
  *
- *   const { data } = useSessionQuery({ key: ["projects"], query: (s) => s.projects.list() });
+ *   const { data } = useIterateSessionQuery({ key: ["projects"], query: (s) => s.projects.list() });
  */
-export function useSessionQuery<T>({
+export function useIterateSessionQuery<T>({
   key,
   query,
-  ...options
+  enabled,
+  staleTime,
 }: {
   key: QueryKey;
   query: (session: SessionStub) => Promise<T>;
-} & Omit<UseQueryOptions<T, Error, T, QueryKey>, "queryKey" | "queryFn">): UseQueryResult<T> {
+  enabled?: boolean;
+  staleTime?: number;
+}): UseQueryResult<T> {
   return useQuery({
-    queryKey: ["itx", ...(Array.isArray(key) ? key : [key])],
-    queryFn: () => connectSession().then(query),
+    queryKey: ["itx", ...key],
+    queryFn: () => connectIterateSession().then(query),
     retry: (failureCount, error) => isItxTransportError(error) && failureCount < 3,
     retryDelay: (failureCount) => Math.min(250 * 2 ** failureCount, 2_000),
-    ...options,
+    enabled,
+    staleTime,
   });
 }
 

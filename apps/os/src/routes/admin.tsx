@@ -33,7 +33,7 @@ import {
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { isItxTransportError, useSession } from "~/itx/itx-react.tsx";
+import { isItxTransportError, useIterateSession } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -89,7 +89,7 @@ function AdminGate() {
   // ~/itx/itx-react.tsx). Its global authority comes from the operator cookie on
   // the WebSocket handshake. The CLI redemption flow loads this page only after
   // installing that cookie, so this component never handles admin material.
-  const session = useSession();
+  const session = useIterateSession();
   const [authority, setAuthority] = useState<AdminAuthority>({ status: "checking" });
 
   useEffect(() => {
@@ -126,7 +126,7 @@ function AdminGate() {
 
   if (authority.status === "checking") return <AdminConnecting />;
   if (authority.status === "locked") return <AdminSessionRequired />;
-  // Children just call useSession() for the same one socket — no admin context
+  // Children just call useIterateSession() for the same one socket — no admin context
   // to thread, and they only render here, under the authorized gate. The ⌘K
   // stream switcher mounts here too: its admin tier reads the same session,
   // which only has authority once this gate has passed.

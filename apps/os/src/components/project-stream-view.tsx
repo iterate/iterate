@@ -33,7 +33,7 @@ import {
 import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
 import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItx, connectSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
+import { connectItx, connectIterateSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -119,14 +119,14 @@ export function ProjectStreamView({
   // feeds outlive the render — a captured capnweb stub pins whatever transport
   // it was born on, so after a suspend/resume killed that socket every reconnect
   // would ride the corpse and the feed would wedge until a reload (the repro in
-  // specs/stream-resume-after-suspend.spec.ts). `connectSession()` returns the
+  // specs/stream-resume-after-suspend.spec.ts). `connectIterateSession()` returns the
   // CURRENT generation each call.
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () =>
       streamSource ??
       (async (path) =>
         projectId == null
-          ? (await connectSession()).streams.get(path)
+          ? (await connectIterateSession()).streams.get(path)
           : (await connectItx(projectId)).streams.get(path)),
     [projectId, streamSource],
   );
@@ -144,7 +144,7 @@ export function ProjectStreamView({
     return async (input: { streamPath: string }) => {
       const stub =
         projectId == null
-          ? (await connectSession()).streams.get(input.streamPath)
+          ? (await connectIterateSession()).streams.get(input.streamPath)
           : (await connectItx(projectId)).streams.get(input.streamPath);
       return asBrowserStreamClient(
         stub,

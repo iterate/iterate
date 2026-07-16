@@ -22,7 +22,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
-import { connectSession, reconnectItx } from "~/itx/itx-react.tsx";
+import { connectIterateSession, reconnectIterateSession } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -45,7 +45,7 @@ export function CreateProjectForm() {
       // Straight through the itx session: create registers the project with
       // the auth worker (org grant -> claims) and runs the engine bootstrap
       // saga, then widens THIS socket's access to the new project.
-      const session = await connectSession();
+      const session = await connectIterateSession();
       // Fast path: resolve as soon as the project EXISTS — the bootstrap saga
       // keeps running behind the handle, and the project home page plays its
       // progress live from processor pushes until `state.created` flips.
@@ -78,17 +78,17 @@ export function CreateProjectForm() {
       });
       // Session catch-up runs BEHIND the navigation: refresh the browser auth
       // session so its claims carry the new project, reconnect the one itx
-      // socket so it re-dials with them (a semantic reset — see reconnectItx),
+      // socket so it re-dials with them (a semantic reset — see reconnectIterateSession),
       // and refresh the project list.
       void (async () => {
         await refresh({ force: true });
-        reconnectItx();
+        reconnectIterateSession();
         await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
         await router.invalidate();
         // Belt and braces: if the auth worker normalized the slug after all,
         // hop to the canonical URL (the checklist state is server-side, so
         // nothing is lost).
-        const session = await connectSession();
+        const session = await connectIterateSession();
         const entry = (await session.projects.list()).find(
           (candidate) => candidate.id === project.id,
         );

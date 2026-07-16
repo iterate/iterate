@@ -11,7 +11,11 @@ import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { projectsListQueryKey, projectsListStaleTime } from "~/lib/projects-query.ts";
-import { connectSession, reconnectItx, useSessionQuery } from "~/itx/itx-react.tsx";
+import {
+  connectIterateSession,
+  reconnectIterateSession,
+  useIterateSessionQuery,
+} from "~/itx/itx-react.tsx";
 
 type OrganizationSummary = {
   id: string;
@@ -56,7 +60,7 @@ function ProjectsIndexPage() {
   const queryClient = useQueryClient();
   // The list comes straight from the itx session (`session.projects.list()`),
   // shared with the app sidebar through the one projects cache entry.
-  const { data, isPending } = useSessionQuery({
+  const { data, isPending } = useIterateSessionQuery({
     key: ["projects"],
     query: (session) => session.projects.list(),
     staleTime: projectsListStaleTime,
@@ -79,7 +83,7 @@ function ProjectsIndexPage() {
   const recoverProject = useMutation({
     mutationFn: async (project: ProjectListEntry) => {
       const organizationSlug = organizationSlugFor(project);
-      const session = await connectSession();
+      const session = await connectIterateSession();
       await session.projects.create({
         projectId: project.id,
         slug: project.slug,
@@ -89,7 +93,7 @@ function ProjectsIndexPage() {
     onSuccess: async () => {
       // Drop the global socket BEFORE refetching so the list re-dials with
       // the widened access, then invalidate the shared cache entry.
-      reconnectItx();
+      reconnectIterateSession();
       await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
       toast.success("Project set up");
     },

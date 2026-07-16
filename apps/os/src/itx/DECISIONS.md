@@ -289,7 +289,7 @@ query })` is the one read — it wraps `useSuspenseQuery` (the QueryClient alrea
   opens its own. A component never disposes the root stub (capnweb closes the
   WebSocket when the root stub is disposed, killing the shared connection);
   per-component RPC objects (subscription stubs, callbacks) ARE component-owned
-  and disposed on unmount. The only deliberate root-dispose is **`reconnectItx()`**
+  and disposed on unmount. The only deliberate root-dispose is **`reconnectIterateSession()`**
   (evict + re-dial), used when the connect-time principal must change (creating a
   project; unlocking admin).
 - **No reconnect machinery.** Socket death drops the Map entry and wakes mounted
@@ -431,7 +431,7 @@ map + `connectionKey` + identity-bound eviction existed ONLY to keep those
 independent sockets from killing each other. Collapse to one:
 
 - **`authenticate()` is the top noun.** The provider/hook gives a **Session**
-  (`useSession()` / `connectSession()`); a project itx is derived from it —
+  (`useIterateSession()` / `connectIterateSession()`); a project itx is derived from it —
   `useItx(slug)` / `connectItx(slug)` = `session.projects.get(slug)`, and
   `projects.get` now accepts a **URL slug** (or `prj_` id), so the browser passes
   `params.projectSlug` straight through with no client-side slug→id hop.
@@ -439,7 +439,7 @@ independent sockets from killing each other. Collapse to one:
 slug>` carries the ambient slug — no socket of its own.
 - **Reconnect is invisible.** React reads an immutable `Snapshot`;
   `snapshot.session` keeps the last live session across a transport gap, so
-  `useSession()` suspends exactly once (first load) and reads are
+  `useIterateSession()` suspends exactly once (first load) and reads are
   stale-while-revalidate (TanStack keeps cached data; only in-flight reads retry,
   on a finite transport-only policy). A dropped socket always re-dials — with a
   session in hand invisibly, without one by re-pointing `use()` to a fresh
@@ -459,7 +459,7 @@ slug>` carries the ambient slug — no socket of its own.
   retires the socket; the mirror and subscription watchdog REPORT suspicion
   (`reportTransportSuspicion`) rather than evicting. A monotonic generation id is
   the compare-and-swap that stops a late verdict from closing a healthy
-  successor. `reconnectItx()` remains the deliberate SEMANTIC reset (new claims
+  successor. `reconnectIterateSession()` remains the deliberate SEMANTIC reset (new claims
   after create/unlock), distinct from transport recovery.
 - **Deleted:** the socket `Map`, `connectionKey`, `ItxAddress`,
   `evictItxSocket`/`evictItxSocketIfCurrent`, the `Session & Project` handle

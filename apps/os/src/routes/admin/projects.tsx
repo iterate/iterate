@@ -13,7 +13,7 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import type { ProjectListEntry } from "../../project-deployment-status.ts";
-import { useSessionQuery } from "~/itx/itx-react.tsx";
+import { useIterateSessionQuery } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin/projects")({
   component: AdminProjectsPage,
@@ -23,7 +23,7 @@ function AdminProjectsPage() {
   // This renders under the admin layout's AdminGate, so the global itx handle
   // carries admin authority: `projects.list({ scope: "deployment" })` returns
   // every deployment-known project (from the project directory), each with its engine status.
-  const projectsQuery = useSessionQuery({
+  const projectsQuery = useIterateSessionQuery({
     // NOT the shared ["projects"] entry: the admin list is the deployment-wide
     // view, the user list is claims-scoped — same socket, different results.
     key: ["admin-projects"],

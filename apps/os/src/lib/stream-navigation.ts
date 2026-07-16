@@ -7,7 +7,7 @@ import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
-import { connectItx, connectSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
+import { connectItx, connectIterateSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 
 /**
  * Where stream-tree nodes get their state: path → subscribable stream handle.
@@ -118,7 +118,7 @@ export function useAdminStreamSource(projectId: string) {
   const source = useMemo(
     () => async (streamPath: string) =>
       streamProjectId == null
-        ? (await connectSession()).streams.get(streamPath)
+        ? (await connectIterateSession()).streams.get(streamPath)
         : (await connectItx(streamProjectId)).streams.get(streamPath),
     [streamProjectId],
   );

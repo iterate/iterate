@@ -1,5 +1,4 @@
-import { Suspense } from "react";
-import { ClientOnly, createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { ConnectedItxRepl } from "~/routes/_app/itx-repl.tsx";
 import { ItxActivityTail } from "~/components/itx-activity-tail.tsx";
 const PROJECT_REPL_INITIAL_CODE = "await itx.__describe()";
@@ -10,12 +9,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repl")({
   },
   component: ProjectItxReplPage,
 });
-
-function TailConnecting() {
-  return (
-    <p className="border-t px-3 py-2 text-xs text-muted-foreground">Connecting itx activity...</p>
-  );
-}
 
 function ProjectItxReplPage() {
   const { project } = Route.useRouteContext();
@@ -32,12 +25,10 @@ function ProjectItxReplPage() {
           scope={{ projectId: project.id }}
         />
       </div>
+      {/* useItxSubscription never suspends, and the route is client-only, so the
+          activity tail needs no ClientOnly/Suspense wrapper. */}
       <div className="flex max-h-56 min-h-0 flex-col">
-        <ClientOnly fallback={<TailConnecting />}>
-          <Suspense fallback={<TailConnecting />}>
-            <ItxActivityTail projectId={project.id} />
-          </Suspense>
-        </ClientOnly>
+        <ItxActivityTail />
       </div>
     </div>
   );

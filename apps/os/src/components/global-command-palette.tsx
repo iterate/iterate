@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
-import { connectItx, connectSession, useSessionQuery } from "~/itx/itx-react.tsx";
+import { connectItx, connectIterateSession, useIterateSessionQuery } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
@@ -106,7 +106,7 @@ export function GlobalCommandPalette() {
           async subscribe(args) {
             const stream =
               adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
-                ? (await connectSession()).streams.get(path)
+                ? (await connectIterateSession()).streams.get(path)
                 : (await connectItx(adminStream.adminProjectId)).streams.get(path);
             return stream.subscribe(args);
           },
@@ -188,7 +188,7 @@ function ProjectPickerDialog({
   onPick: (project: { id: string; slug: string }) => void;
   open: boolean;
 }) {
-  const { data: projects } = useSessionQuery({
+  const { data: projects } = useIterateSessionQuery({
     key: ["projects"],
     query: (session) => session.projects.list(),
     enabled: open,

@@ -32,10 +32,9 @@ const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => s
   "events.iterate.com/capability-host/context-created": (p) => `context created: ${p.name ?? ""}`,
 };
 
-export function ItxActivityTail(_props: { projectId: string }) {
-  // The project layout route wraps this in <ItxProvider projectId={slug}>, so
-  // the subscription's injected handle is THIS project's shared socket — the
-  // projectId prop is no longer needed to address the connection.
+export function ItxActivityTail() {
+  // Renders under a <ProjectScope>, so the subscription resolves the ambient
+  // project's itx off the one shared socket — no projectId prop needed.
   const [raw, setRaw] = useState(false);
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
 

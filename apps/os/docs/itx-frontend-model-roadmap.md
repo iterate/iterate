@@ -1,8 +1,11 @@
 # itx frontend programming model — roadmap
 
 The end-state for apps/os's React/TanStack Start frontend, and the path there.
-PR #2048 (one WebSocket per tab) is step one. This doc captures the _further_
-refactors, reviewed by two survey subagents + codex (gpt-5.6-sol, max reasoning).
+PR #2048 (one WebSocket per tab) is step one and landed the whole hook surface;
+this doc captures the _further_ refactors, reviewed by two survey subagents +
+codex (gpt-5.6-sol, max reasoning). The day-to-day guide is
+[`docs/frontend-development.md`](../../../docs/frontend-development.md); this is
+the where-it's-going companion.
 
 ## The model we're converging on
 
@@ -15,25 +18,32 @@ The governing rule (the useful LiveView analogy — the server owns durable redu
 views; React renders + owns local interaction):
 
 - **Immutable / historical / versioned / paged / expensive** reads → a finite read
-  (`useItxQuery` today; `useRead({ from })` eventually).
+  (`useItxQuery` / `useIterateSessionQuery`).
 - **Mutable current server state** → a live projection pushed from the owning DO
-  (`useLiveState` today; `useLive()` eventually).
+  (`useLiveState`).
 - **Mutations** → direct capability calls; their result arrives back through the
   live projection — no caller-level invalidation.
 - **Ephemeral interaction state** (draft forms, open panels, URL state, optimistic
   pending markers) → stays in React.
 
-The end-state hook set is four thin hooks over a framework-free client:
-`useSession()` / `useItx(slug)` (capabilities + actions), `useRead()` (finite
-cached reads), `useLive()` (server-owned live projections) — plus the imperative
-`connectSession()` / `connectItx(slug)`. Everything else (generations, liveness,
-verification, stores, subscription recovery, query scoping) becomes an
-implementation detail of the narrow core.
+The public hook set is intentionally small and stacked on a framework-free core:
+`useIterateSession()` / `useItx(slug)` (capabilities + actions), the two read
+hooks `useItxQuery` / `useIterateSessionQuery` (finite cached reads — project vs
+session, suspending vs not), `useLiveState()` (server-owned live projections),
+plus imperative `connectIterateSession()` / `connectItx(slug)`. Everything else
+(generations, liveness, verification, stores, subscription recovery, query
+scoping) is an implementation detail of the narrow core.
+
+> We deliberately did **not** collapse the two read hooks into one
+> `useRead({ from })`. TanStack Query splits suspending (`useSuspenseQuery`) from
+> non-suspending (`useQuery`) reads, so a merged hook would need an option that
+> flips its return type — more confusing, not less. Two named hooks (project
+> read = suspends; session read = shell, non-suspending) is the honest surface.
 
 ## Where we already are (verified survey)
 
-The frontend is **~95% converged** already: no second socket, no `EventSource`,
-no oRPC client, no `useEffect`+`setState` fetch loops for server data. The five
+The frontend is **~95% converged** already: one socket, no `EventSource`, no oRPC
+client, no `useEffect`+`setState` fetch loops for server data. The five
 `createServerFn`s are all SSR/auth boundaries (run in `beforeLoad` before the
 client socket exists) and correctly stay server-side; the only two `fetch()`es
 set a cookie / hit external `$schema` hosts; the only `refetchInterval`/
@@ -42,56 +52,54 @@ remaining work is _completing_ the model, not undoing a parallel one.
 
 ## Done in PR #2048
 
-- **One WebSocket per tab** — Session gate + slug-addressed `useItx` + invisible
-  reconnect (DECISIONS.md D24).
-- **`useSessionQuery`** — the session-scoped sibling of `useItxQuery` (same
+- **One WebSocket per tab** — a module-global socket, a Session gate
+  (`useIterateSession`), slug-addressed `useItx`, and **invisible reconnect**
+  (last session kept across a transport gap; only in-flight reads retry). The full
+  model — generations, the half-open verifier, the semantic-vs-transport reset —
+  is in `itx-react.tsx`'s header and DECISIONS.md D24.
+- **`itx.projects.get(slug)`** — the collection resolves a slug _or_ a `prj_…` id
+  (`resolveProjectIdBySlug` in `rpc-targets.ts`), so `useItx("my-slug")` works
+  straight from a URL param.
+- **`useIterateSessionQuery`** — the session-scoped sibling of `useItxQuery` (same
   transport-only retry, non-suspending for the always-mounted shell). Folds the
-  4 hand-rolled `session.projects.list()` reads (sidebar, /projects, ⌘K picker,
+  hand-rolled `session.projects.list()` reads (sidebar, /projects, ⌘K picker,
   admin) onto one primitive and shrinks `lib/projects-query.ts` to a shared key.
-  _(Interim: codex wants this unified into `useRead({ from })` — see below.)_
-- Numbered the one-socket decision `D24` (it had collided with existing headings).
+- **Deleted `<ItxProvider>` and the 12 per-page `<ItxBoundary>` wrappers.** The
+  socket is module-global and every hook dials it lazily, so no provider is needed;
+  TanStack Router already wraps every route match in `<Suspense>` (its
+  `defaultPendingComponent`), so the per-page boundary was redundant. `ProjectScope`
+  now carries the ambient slug _and_ pre-warms the socket — the one mount.
+- **No public-boundary casts.** The old `as unknown as` casts are gone; the exported
+  surface types cleanly against `RpcStub<Session>` / `RpcStub<Project>`.
+- **The frontend guide** — `docs/frontend-development.md`, linked from the root
+  README, documents the whole model + the hook/component table.
 
 ## No-brainers (next, small + safe)
 
-- **Honest capnweb handle types.** Replace `type SessionStub = RpcStub<Session>` +
-  the `as unknown as` casts with types derived from the real RPC return chain, as
-  the mobile client already does (`apps/mobile/src/lib/itx-core.ts:16`):
-  ```ts
-  type SessionStub = Awaited<ReturnType<RpcStub<UnauthenticatedOs>["authenticate"]>>;
-  type ProjectStub = Awaited<ReturnType<SessionStub["projects"]["get"]>>;
-  ```
-  Add compile-time contract tests (authenticate → SessionHandle, projects.get →
-  ProjectHandle, nested calls callable, no public boundary needs a cast). Local
-  correction is a no-brainer; making the _generator_ emit distinct client handle
-  types (value DTOs vs returned capabilities) is a MEDIUM follow-up.
 - **`useProjectLiveState`** — hoist the `(itx) => itx.liveState` accessor repeated
   ~10× (`useLiveState((itx) => itx.liveState, sel, deps, opts)` →
   `useProjectLiveState(sel, deps, opts)`). Keep `useLiveState` for the non-root
   nodes (`itx.liveDemo.ticker`, `secrets.get(p).liveState`, …).
-- **Doc cleanup** — `itx/README.md` and `DECISIONS.md` still reference the deleted
-  `types.ts` and pre-migration files; replace README with the current browser
-  model and move historical material aside.
+- **Retire the historical `itx/README.md`.** It still describes the pre-itx-v4
+  kernel and deleted files; the current browser model now lives in
+  `docs/frontend-development.md`, so trim the README to a short pointer.
+
+### Considered and kept as-is
+
+- **`useItxEffect` stays a separate private hook.** Both reviews floated folding
+  it into `useItxSubscription` (its only caller). We evaluated and kept it split:
+  it isn't exported, so it's not public surface, and it cleanly isolates one
+  subtle concern — a _reconnect-aware itx effect_ (await the itx inside the effect
+  so mounting never suspends; re-run on the session generation so a reconnect
+  recovers; run late async cleanup even if you unmounted mid-await; route dial
+  errors out). `useItxSubscription` layers a different concern on top (the
+  connecting/live/error machine + the liveness watchdog + retry). Inlining would
+  merge two ~30/~90-line single-responsibility pieces into one dense function
+  mixing five concerns — harder to explain, not easier — and it's the seam future
+  subscription hooks will reuse.
 
 ## Medium
 
-- **Unify the read layer into one scope-aware `useRead({ from, key, read })`**
-  (codex #1) with central key factories that mechanically namespace by
-  `authorityEpoch` + (for project reads) slug — closing the D24 footgun that
-  cache correctness depends on every caller remembering the project in its key.
-  `useSessionQuery`/`useItxQuery` become migration aliases. Advance
-  `authorityEpoch` only on an authentication/authority reset, never on an ordinary
-  transport generation.
-- **Collapse the subscription surface** (codex #3, survey): keep `useRead()` +
-  `useLive()` + direct capability actions as the public set; move
-  `useItxSubscription` to a low-level escape hatch (its only genuine consumers are
-  the activity tail + the reactivity test-stream) and keep `useItxEffect` private
-  inside the live-resource engine.
-- **Make `<ItxProvider>` a real authority boundary** (codex #7, survey M1) — one
-  SSR-safe mount near the authenticated root that owns the client lifetime and
-  resets resources on authority change. Today it only renders an invisible
-  Suspense sibling; if it stays module-global, rename it `ItxPreconnect` (a fake
-  provider is misleading). Fold the `Suspense`+`ItxProvider`+`ProjectScope` trio
-  and the 14× per-page `<ItxBoundary>` triple into one route convention.
 - **integrations + scheduler → live state** (survey M2, codex #2 first target) —
   the two remaining read-then-invalidate lists. `integrations.list` is invalidated
   **5×** (per connect/disconnect) and `scheduler.list` **3×**; exposing them as
@@ -103,6 +111,10 @@ remaining work is _completing_ the model, not undoing a parallel one.
   `getProjectBySlugServerFn` + the broad `context.project` route object once
   project identity is a small live projection (routes carry the slug, mount
   `ProjectScope`, and the capability returns denied/not-found).
+- **Canonical scoped read keys.** Cache correctness currently depends on every
+  `useItxQuery` caller remembering to put the project id in its `key` (the D24
+  footgun). A central key factory that mechanically namespaces project reads by
+  slug — without changing the public hook signatures — closes it.
 
 ## Large (need design)
 
@@ -111,7 +123,7 @@ remaining work is _completing_ the model, not undoing a parallel one.
   `resetAuthority`/`reportTransportSuspicion`), split into e.g. `itx/socket.ts`
   (transport, generations, verification), `itx/live-resource.ts` (shared stores,
   subscription/revision recovery, watchdogs), `itx/read.ts` (scoped keys + TanStack
-  adapter), and `itx-react.tsx` (contexts + the four thin hooks). Move
+  adapter), and `itx-react.tsx` (contexts + the thin hooks). Move
   behavior-preservingly, keep the generation/disposal tests, don't combine with a
   reconnect rewrite. Makes the "very narrow core" literally a testable non-React
   unit with injected sockets/timers/failures.
@@ -128,10 +140,8 @@ repos.get(p)/agents.get(id).liveState`. Root `ProjectLiveState` stays a small
 
 ## Ordered roadmap
 
-1. **Immediate no-brainers** — honest handle types, `useProjectLiveState`, doc
-   cleanup, canonical scoped read keys. _(`useSessionQuery` landed in #2048.)_
-2. **Extract, don't redesign** — split the socket client from React; make
-   `<ItxProvider>` an explicit client/authority owner.
+1. **Immediate no-brainers** — `useProjectLiveState`, retire the historical README.
+2. **Extract, don't redesign** — split the non-React socket client from React.
 3. **Live-resource registry** — one subscription/store per logical capability,
    selector fan-out, typed lifecycle telemetry.
 4. **Prove the model on small mutable domains** — scheduler + integrations
@@ -141,10 +151,10 @@ repos.get(p)/agents.get(id).liveState`. Root `ProjectLiveState` stays a small
 6. **Remove the project server-function lookup** — slug scope + live identity.
 7. **The stream migration** — server live views + paged history; retire the
    browser mirror.
-8. **Delete the transitional surface** — migration-alias hooks, manual
-   invalidations, compat files, and historical active docs.
+8. **Delete the transitional surface** — manual invalidations and historical
+   active docs.
 
-Safe to do immediately: scoped reads + keying, honest remote types, doc cleanup,
-behavior-preserving core extraction. Needs deliberate design: shared live-resource
-identity, session-wide live project catalogs, cross-DO projection recovery, and
-especially the stream-mirror replacement.
+Safe to do immediately: `useProjectLiveState`, doc cleanup, behavior-preserving
+core extraction. Needs deliberate design: shared live-resource identity,
+session-wide live project catalogs, cross-DO projection recovery, and especially
+the stream-mirror replacement.

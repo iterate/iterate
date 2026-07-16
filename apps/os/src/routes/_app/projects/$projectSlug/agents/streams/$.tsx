@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ONBOARDING_AGENT_PATH, onboardingAgentCreateInput } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItx } from "~/itx/itx-react.tsx";
@@ -30,19 +29,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, params._splat),
     }),
-  component: ProjectAgentDetailPage,
+  component: ProjectAgentDetailContent,
 });
-
-function ProjectAgentDetailPage() {
-  // The boundary is only for the lazily-loaded stream-view chunk. The feed
-  // runtime dials itx imperatively, so a reconnect is handled inside the
-  // stream mirror without blanking the whole page.
-  return (
-    <ItxBoundary>
-      <ProjectAgentDetailContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();

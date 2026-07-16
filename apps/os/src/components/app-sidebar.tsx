@@ -69,7 +69,7 @@ import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";
-import { useSessionQuery } from "~/itx/itx-react.tsx";
+import { useIterateSessionQuery } from "~/itx/itx-react.tsx";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 
@@ -77,10 +77,10 @@ type PublicConfig = PublicAppConfig<AppConfig>;
 
 export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   // Client-only read through the itx session (itx never SSRs): the sidebar
-  // renders empty during SSR and populates after hydration. useSessionQuery is
+  // renders empty during SSR and populates after hydration. useIterateSessionQuery is
   // non-suspending (unlike useItxQuery) so the always-mounted shell never
   // suspends on the socket.
-  const { data } = useSessionQuery({
+  const { data } = useIterateSessionQuery({
     key: ["projects"],
     query: (session) => session.projects.list(),
     staleTime: projectsListStaleTime,

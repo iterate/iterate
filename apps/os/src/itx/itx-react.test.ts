@@ -75,10 +75,10 @@ async function openLatest() {
 }
 
 describe("itx session socket", () => {
-  test("ONE socket for the whole tab: connectSession returns the same promise and resolves to the Session", async () => {
-    const { connectSession } = await import("./itx-react.tsx");
-    const a = connectSession();
-    expect(connectSession()).toBe(a); // one dial, the stable promise use() needs
+  test("ONE socket for the whole tab: connectIterateSession returns the same promise and resolves to the Session", async () => {
+    const { connectIterateSession } = await import("./itx-react.tsx");
+    const a = connectIterateSession();
+    expect(connectIterateSession()).toBe(a); // one dial, the stable promise use() needs
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(onlySocket().url).toContain("/api");
     await openLatest();
@@ -86,8 +86,8 @@ describe("itx session socket", () => {
   });
 
   test("connectItx narrows the ONE session to a project stub — no second socket", async () => {
-    const { connectSession, connectItx } = await import("./itx-react.tsx");
-    const session = connectSession(); // dials the one socket
+    const { connectIterateSession, connectItx } = await import("./itx-react.tsx");
+    const session = connectIterateSession(); // dials the one socket
     await openLatest();
     const acme = await connectItx("acme");
     const other = await connectItx("prj_123");
@@ -99,62 +99,62 @@ describe("itx session socket", () => {
   });
 
   test("a dial that closes before opening rejects awaiters instead of hanging, then re-dials", async () => {
-    const { connectSession } = await import("./itx-react.tsx");
-    const first = connectSession();
+    const { connectIterateSession } = await import("./itx-react.tsx");
+    const first = connectIterateSession();
     onlySocket().fire("close"); // closed before it ever opened
     await expect(first).rejects.toThrow(/closed before connecting/);
     // The entry was dropped, so the next connect dials a fresh socket.
-    const second = connectSession();
+    const second = connectIterateSession();
     expect(second).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   test("INVISIBLE RECONNECT: a live session survives a transport gap and auto-redials", async () => {
-    const { connectSession } = await import("./itx-react.tsx");
-    const first = connectSession();
+    const { connectIterateSession } = await import("./itx-react.tsx");
+    const first = connectIterateSession();
     await openLatest();
     const session = await first;
 
     // Transport dies AFTER being live: the socket is auto-redialed and the last
-    // session stays available (no re-suspend) — connectSession hands out the new
+    // session stays available (no re-suspend) — connectIterateSession hands out the new
     // generation's promise, not the corpse.
     FakeWebSocket.instances[0]!.fire("close");
     expect(FakeWebSocket.instances).toHaveLength(2);
-    const second = connectSession();
+    const second = connectIterateSession();
     expect(second).not.toBe(first);
-    // The old session is RETAINED through the gap (so useSession/useItx never
+    // The old session is RETAINED through the gap (so useIterateSession/useItx never
     // hand out a disposed stub) — it is disposed only when its successor opens.
     expect(session[Symbol.dispose]).not.toHaveBeenCalled();
     await openLatest();
     expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
   });
 
-  test("reconnectItx (semantic reset) retires the old session only once its successor publishes", async () => {
-    const { connectSession, reconnectItx } = await import("./itx-react.tsx");
-    const first = connectSession();
+  test("reconnectIterateSession (semantic reset) retires the old session only once its successor publishes", async () => {
+    const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.tsx");
+    const first = connectIterateSession();
     await openLatest();
     const session = await first;
 
-    reconnectItx();
+    reconnectIterateSession();
     await vi.waitFor(() => {});
     // Retained until the successor publishes — no disposed stub during the gap.
     expect(session[Symbol.dispose]).not.toHaveBeenCalled();
-    expect(connectSession()).not.toBe(first);
+    expect(connectIterateSession()).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
     await openLatest();
     expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
   });
 
   test("a superseded generation's late open never publishes over the live one", async () => {
-    const { connectSession, reconnectItx } = await import("./itx-react.tsx");
-    connectSession();
-    reconnectItx(); // supersede the first dial before it ever opened
+    const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.tsx");
+    connectIterateSession();
+    reconnectIterateSession(); // supersede the first dial before it ever opened
     expect(FakeWebSocket.instances).toHaveLength(2);
-    const second = connectSession();
+    const second = connectIterateSession();
     // The stale first socket opens LATE: it must close itself, not publish.
     FakeWebSocket.instances[0]!.fire("open");
     await vi.waitFor(() => {});
-    expect(connectSession()).toBe(second); // still the successor, not the corpse
+    expect(connectIterateSession()).toBe(second); // still the successor, not the corpse
     // The successor opening is what actually publishes a session.
     FakeWebSocket.instances[1]!.fire("open");
     await expect(second).resolves.toMatchObject({ url: expect.stringContaining("/api") });
@@ -165,8 +165,8 @@ describe("itx session socket", () => {
     // is alive, so two 10s windows must NOT retire the socket.
     vi.useFakeTimers();
     try {
-      const { connectSession, reportTransportSuspicion } = await import("./itx-react.tsx");
-      const first = connectSession();
+      const { connectIterateSession, reportTransportSuspicion } = await import("./itx-react.tsx");
+      const first = connectIterateSession();
       FakeWebSocket.instances[0]!.fire("open");
       await vi.advanceTimersByTimeAsync(0);
       await first;
@@ -175,7 +175,7 @@ describe("itx session socket", () => {
       reportTransportSuspicion();
       await vi.advanceTimersByTimeAsync(20_000);
       expect(FakeWebSocket.instances).toHaveLength(1);
-      expect(connectSession()).toBe(first);
+      expect(connectIterateSession()).toBe(first);
     } finally {
       vi.useRealTimers();
     }
@@ -184,13 +184,13 @@ describe("itx session socket", () => {
   test("repeated closed-before-open dials get backoff from the SECOND consecutive failure", async () => {
     vi.useFakeTimers();
     try {
-      const { connectSession } = await import("./itx-react.tsx");
-      connectSession();
+      const { connectIterateSession } = await import("./itx-react.tsx");
+      connectIterateSession();
       FakeWebSocket.instances[0]!.fire("close"); // failure 1
-      connectSession(); // first retry is immediate
+      connectIterateSession(); // first retry is immediate
       expect(FakeWebSocket.instances).toHaveLength(2);
       FakeWebSocket.instances[1]!.fire("close"); // failure 2
-      connectSession(); // now paced: no socket yet
+      connectIterateSession(); // now paced: no socket yet
       expect(FakeWebSocket.instances).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(250);
       expect(FakeWebSocket.instances).toHaveLength(3);
@@ -200,8 +200,8 @@ describe("itx session socket", () => {
   });
 
   test("reportTransportSuspicion leaves a HEALTHY socket alone (no false-positive reconnect)", async () => {
-    const { connectSession, reportTransportSuspicion } = await import("./itx-react.tsx");
-    const first = connectSession();
+    const { connectIterateSession, reportTransportSuspicion } = await import("./itx-react.tsx");
+    const first = connectIterateSession();
     await openLatest();
     await first;
     // The auth probe answers immediately (alive), so two-strike verification
@@ -209,14 +209,14 @@ describe("itx session socket", () => {
     reportTransportSuspicion();
     await vi.waitFor(() => {});
     expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(connectSession()).toBe(first);
+    expect(connectIterateSession()).toBe(first);
   });
 
   test("reportTransportSuspicion re-dials a genuinely half-open socket after two strikes", async () => {
     vi.useFakeTimers();
     try {
-      const { connectSession, reportTransportSuspicion } = await import("./itx-react.tsx");
-      const first = connectSession();
+      const { connectIterateSession, reportTransportSuspicion } = await import("./itx-react.tsx");
+      const first = connectIterateSession();
       FakeWebSocket.instances[0]!.fire("open");
       await vi.advanceTimersByTimeAsync(0);
       await first;
@@ -228,7 +228,7 @@ describe("itx session socket", () => {
       expect(FakeWebSocket.instances).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_000); // strike two → reconnect
       expect(FakeWebSocket.instances).toHaveLength(2);
-      expect(connectSession()).not.toBe(first);
+      expect(connectIterateSession()).not.toBe(first);
     } finally {
       vi.useRealTimers();
     }

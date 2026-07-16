@@ -62,7 +62,6 @@ import {
 } from "lucide-react";
 import { z } from "zod";
 import type { Project } from "../../../../itx-api.generated.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -127,16 +126,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, "/integrations"),
     }),
-  component: ProjectIntegrationsPage,
+  component: ProjectIntegrationsContent,
 });
-
-function ProjectIntegrationsPage() {
-  return (
-    <ItxBoundary>
-      <ProjectIntegrationsContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectIntegrationsContent() {
   const search = Route.useSearch();

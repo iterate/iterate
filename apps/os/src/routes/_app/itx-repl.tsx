@@ -5,7 +5,7 @@
 // dynamic worker — and the browser can PROVIDE live capabilities too (see the
 // examples).
 //
-// The REPL rides the ONE browser itx session — useSession (~/itx/itx-react.tsx).
+// The REPL rides the ONE browser itx session — useIterateSession (~/itx/itx-react.tsx).
 // It does NOT open its own socket: the tab has a single itx socket, and the
 // global repl uses the Session while a project repl narrows it via
 // session.projects.get(id); neither owns the connection. ConnectedItxRepl is
@@ -23,7 +23,7 @@ import {
 } from "~/itx/browser-repl.ts";
 import type { Project, Session } from "~/itx-api.generated.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
-import { useItx, useSession } from "~/itx/itx-react.tsx";
+import { useItx, useIterateSession } from "~/itx/itx-react.tsx";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
 /** The REPL holds EITHER the Session (global repl) or a project itx — the
@@ -48,7 +48,7 @@ function ItxReplConnecting() {
 }
 
 /**
- * The one connect wrapper both repls share. `useSession` never SSRs and suspends
+ * The one connect wrapper both repls share. `useIterateSession` never SSRs and suspends
  * until connected, so this gates it behind ClientOnly (the route still SSRs its
  * shell) + Suspense, then renders the repl against the live handle. `poolContext`
  * is a project id/slug to narrow to, or undefined for the global session. It also
@@ -110,13 +110,13 @@ function ItxReplConnected({
   );
 }
 
-// oxlint-disable-next-line iterate/no-single-use-helpers -- isolates the single useSession() call to the global branch; inlining into ItxReplConnected's conditional would be a rules-of-hooks violation.
+// oxlint-disable-next-line iterate/no-single-use-helpers -- isolates the single useIterateSession() call to the global branch; inlining into ItxReplConnected's conditional would be a rules-of-hooks violation.
 function SessionReplConnected(props: {
   context?: "session" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
-  return <ItxReplPage itx={useSession()} {...props} />;
+  return <ItxReplPage itx={useIterateSession()} {...props} />;
 }
 
 // oxlint-disable-next-line iterate/no-single-use-helpers -- isolates the single useItx(poolContext) call to the project branch; inlining into ItxReplConnected's conditional would be a rules-of-hooks violation.
