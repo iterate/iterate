@@ -8,6 +8,7 @@ import { router, Stack } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { SignInRequiredError, signOut } from "../lib/auth.ts";
 import { getItxSession, resetItxSession } from "../lib/itx.ts";
+import { stopAllApprovals } from "../lib/live-approvals.ts";
 import { stopAllThreads } from "../lib/live-thread.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl, setLastProject } from "../lib/storage.ts";
@@ -25,14 +26,13 @@ export default function ProjectsScreen() {
         return { baseUrl, list };
       } catch (error) {
         resetItxSession();
+        // Redirect from the async failure, not render: render-time
+        // navigation re-fires on every re-render while the error persists.
+        if (error instanceof SignInRequiredError) router.replace("/");
         throw error;
       }
     },
   });
-
-  if (projects.error instanceof SignInRequiredError) {
-    router.replace("/");
-  }
 
   const openProject = async (project: { id: string; slug: string }) => {
     const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
@@ -54,6 +54,7 @@ export default function ProjectsScreen() {
                 const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
                 await signOut(baseUrl);
                 stopAllThreads();
+                stopAllApprovals();
                 resetItxSession();
                 queryClient.clear();
                 router.replace("/");

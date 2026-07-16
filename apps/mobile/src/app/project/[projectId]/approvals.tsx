@@ -87,12 +87,18 @@ export default function ApprovalsScreen() {
         await reject(stream, input.request.offset);
         return;
       }
+      // Always sign: an unsigned grant that a keyed project's egress door
+      // ignores would still show as "submitted" (a grant landed) and strand
+      // the hold with no visible way to retry. Requiring enrollment first
+      // means every grant this app sends is real, whether or not other
+      // devices have keys.
+      if (!key.data) throw new Error("Enroll this device before approving.");
       await grant({
         stream,
         projectId,
         offset: input.request.offset,
         payload: input.request.payload,
-        sign: key.data ? (message) => signWithApproverKey(projectId, message) : null,
+        sign: (message) => signWithApproverKey(projectId, message),
       });
     },
   });
@@ -118,6 +124,7 @@ export default function ApprovalsScreen() {
         </View>
       ) : null}
       {enroll.isError ? <Text style={styles.error}>{String(enroll.error.message)}</Text> : null}
+      {respond.isError ? <Text style={styles.error}>{String(respond.error.message)}</Text> : null}
 
       {events.isPending ? (
         <View style={styles.center}>
@@ -172,12 +179,16 @@ export default function ApprovalsScreen() {
                       <Text style={styles.rejectText}>Reject</Text>
                     </Pressable>
                     <Pressable
-                      style={[styles.button, styles.approve]}
-                      disabled={pending}
+                      style={[styles.button, styles.approve, !key.data && styles.buttonDisabled]}
+                      disabled={pending || !key.data}
                       onPress={() => respond.mutate({ request, decision: "grant" })}
                     >
                       <Text style={styles.approveText}>
-                        {pending ? "Signing…" : key.data ? "Approve (Face ID)" : "Approve"}
+                        {pending
+                          ? "Signing…"
+                          : key.data
+                            ? "Approve (Face ID)"
+                            : "Enroll to approve"}
                       </Text>
                     </Pressable>
                   </View>
@@ -248,6 +259,7 @@ const styles = StyleSheet.create({
   reject: { borderColor: colors.danger, borderWidth: 1 },
   rejectText: { color: colors.danger, fontSize: 14, fontWeight: "600" },
   approve: { backgroundColor: colors.accent },
+  buttonDisabled: { opacity: 0.4 },
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   recent: { marginTop: spacing.lg, gap: 2 },
   recentTitle: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },

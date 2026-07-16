@@ -73,6 +73,9 @@ export default function ChatScreen() {
         return await loadAndFollowThread(baseUrl!, projectId, path);
       } catch (error) {
         resetItxSession();
+        // Redirect from the async failure, not render: render-time
+        // navigation re-fires on every re-render while the error persists.
+        if (error instanceof SignInRequiredError) router.replace("/");
         throw error;
       }
     },
@@ -113,10 +116,6 @@ export default function ChatScreen() {
       setAttachments(input.files);
     },
   });
-
-  if (events.error instanceof SignInRequiredError) {
-    router.replace("/");
-  }
 
   const feed = reduceFeed(path, events.data || []);
   const insets = useSafeAreaInsets();
