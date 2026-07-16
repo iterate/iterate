@@ -17,8 +17,8 @@ import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerRef,
   ItxBinding,
-  StreamEventBatch,
   StreamEvent,
+  StreamPushEventBatch,
 } from "./itx-api.generated";
 
 // Extensionless on purpose: this specifier lands verbatim in the published
@@ -147,7 +147,7 @@ export class IterateWorkerEntrypoint<
   /** Platform entry point for event delivery (see the class docstring for
    * the delivery contract). Override `processEvent`, not this, unless you
    * need whole-batch atomicity. */
-  async processEventBatch(batch: StreamEventBatch): Promise<void> {
+  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     for (const event of batch.events) await this.processEvent(event);
   }
 
@@ -184,7 +184,7 @@ export class IterateDurableObject<
 
   /** Platform entry point for event delivery — see
    * `IterateWorkerEntrypoint.processEventBatch`. */
-  async processEventBatch(batch: StreamEventBatch): Promise<void> {
+  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     for (const event of batch.events) await this.processEvent(event);
   }
 

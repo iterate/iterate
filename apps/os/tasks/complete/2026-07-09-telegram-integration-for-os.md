@@ -483,7 +483,7 @@ gate, not authz.
     (mirrors the Slack non-message lane).
   - Typing action: sent right after the agent context commits (receipt ack —
     Telegram has no reaction primitive) and re-sent on llm-request-requested /
-    script-execution-requested (the indicator auto-expires after ~5s).
+    script-run-requested (the indicator auto-expires after ~5s).
   - Chat ids are used verbatim in paths (`chat--100123` for supergroups): the
     sign is significant and digits/minus are safe path chars, so no
     sanitization — deliberate difference from Slack's sanitized segments.

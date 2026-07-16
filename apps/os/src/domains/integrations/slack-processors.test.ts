@@ -818,7 +818,7 @@ describe("SlackAgentProcessor", () => {
     await deliver();
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain("await itx.whoami()");
@@ -1341,7 +1341,7 @@ describe("SlackAgentProcessor", () => {
     await deliver();
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({
@@ -1564,7 +1564,7 @@ describe("SlackAgentProcessor", () => {
 
     const scripts = stream.events.filter(
       (streamEvent) =>
-        streamEvent.type === "events.iterate.com/capability-host/script-execution-requested",
+        streamEvent.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain(
@@ -1592,7 +1592,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-run-requested";
       }),
     ).toHaveLength(0);
     expect(
@@ -1622,7 +1622,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-run-requested";
       }),
     ).toHaveLength(0);
     expect(

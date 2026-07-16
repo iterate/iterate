@@ -229,7 +229,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "run-script": {
     assert: (result, { projectId }, expect) => {
       expect(result).toEqual({
-        completedEventType: "events.iterate.com/capability-host/script-execution-completed",
+        completedEventType: "events.iterate.com/capability-host/script-run-settled",
         result: { projectId, sum: 42 },
       });
     },

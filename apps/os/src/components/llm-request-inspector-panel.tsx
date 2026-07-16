@@ -5,12 +5,12 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
+import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { formatDateTime, formatSeconds, looksLikeCode } from "~/lib/feed-format.ts";
 import {
   LLM_REPLAY_EVENT_TYPES,
-  LLM_RESPONSE_CHUNK_EVENT_TYPE,
   replayLlmRequest,
   type LlmRequestReplay,
   type LlmRequestReplayMessage,
@@ -24,11 +24,11 @@ import {
  * history per attempt — so this panel runs the same pure fold (see
  * ~/lib/llm-request-replay.ts) over the same events and shows the resulting
  * messages verbatim, including the flattened attachment hint lines. The
- * response side comes from the same journal: the committed output when the
- * turn settled, re-assembled streamed chunks (reasoning included) when it
- * didn't — which also makes an in-flight request's trace grow live as chunk
- * events land. Works retroactively for every request in the journal, at zero
- * storage cost.
+ * response side uses the committed output once the turn settles. While the
+ * request is active, the in-memory live tail overlays transient reasoning and
+ * response text; reconnecting intentionally drops it because ephemeral chunks
+ * are never stored or replayed. Durable trace data works retroactively for
+ * every request in the journal, at zero extra storage cost.
  *
  * Fidelity caveat: the request replay is exact as long as the deployed fold
  * semantics match the ones that built the original request — the trade we
@@ -36,83 +36,88 @@ import {
  */
 export function LlmRequestInspectorPanel({
   database,
+  liveStep,
   llmRequestOffset,
   onClose,
 }: {
   /** The raw-event mirror (the `events` table), NOT the feed-items database. */
   database: StreamBrowserDatabase;
+  /** Live-only reasoning/response text. Ephemeral chunks never enter SQLite. */
+  liveStep?: AgentUiLlmStep;
   /** The llm-request-requested event's offset — the request's identity. */
   llmRequestOffset: number;
   onClose: () => void;
 }) {
-  // The whole consumed subset, unbounded above: the fold self-filters to
-  // offsets ≤ llmRequestOffset, and the request's outcome (completed /
-  // cancelled) lands ABOVE it. Bulk emitted-only types (response chunks)
-  // stay out of this transfer — the query below fetches only THIS request's.
+  // Prompt construction needs consumed history through the request offset.
+  // Later lifecycle facts are request-scoped, so avoid reading every unrelated
+  // future event from a long-lived stream. Ephemeral response chunks
+  // intentionally never enter SQLite.
   const eventsResult = useStreamQuery(
     database,
     `SELECT json(raw_jsonb) AS raw_json FROM events
      WHERE type IN (${LLM_REPLAY_EVENT_TYPES.map(() => "?").join(", ")})
+       AND (
+         offset <= ?
+         OR json_extract(raw_jsonb, '$.payload.llmRequestOffset') = ?
+       )
      ORDER BY offset ASC`,
-    [...LLM_REPLAY_EVENT_TYPES],
+    [...LLM_REPLAY_EVENT_TYPES, llmRequestOffset, llmRequestOffset],
   );
-  // This request's streamed chunks: reasoning text lives only here, and for a
-  // request that never settled with an output (cancelled / failed / still in
-  // flight) the re-assembled deltas are the only copy of the response.
-  const chunksResult = useStreamQuery(
-    database,
-    `SELECT json(raw_jsonb) AS raw_json FROM events
-     WHERE type = ? AND json_extract(raw_jsonb, '$.payload.llmRequestOffset') = ?
-     ORDER BY offset ASC`,
-    [LLM_RESPONSE_CHUNK_EVENT_TYPE, llmRequestOffset],
-  );
-  // BOTH queries must resolve before replaying: chunks-still-pending is not
-  // "no chunks", and for a trace whose only response lives in chunks
-  // (cancelled / failed / in flight) rendering early would flash "the model
-  // returned no text" over a response that is about to appear.
-  const loaded = eventsResult.status === "ok" && chunksResult.status === "ok";
+  const loaded = eventsResult.status === "ok";
   const replay = useMemo(
     () =>
       loaded
         ? replayLlmRequest({
             rawEventJsons: eventsResult.data.map((sqlRow) => String(sqlRow.raw_json)),
-            chunkEventJsons: chunksResult.data.map((sqlRow) => String(sqlRow.raw_json)),
             llmRequestOffset,
           })
         : null,
-    [loaded, eventsResult.data, chunksResult.data, llmRequestOffset],
+    [loaded, eventsResult.data, llmRequestOffset],
+  );
+  const displayedReplay = useMemo(
+    () => withLiveResponse(replay, liveStep, llmRequestOffset),
+    [liveStep, llmRequestOffset, replay],
   );
 
   const [renderMode, setRenderMode] = useState<"markdown" | "plain">("markdown");
   const [copied, setCopied] = useState(false);
-  const totalChars = replay?.messages.reduce((sum, message) => sum + message.content.length, 0);
+  const totalChars = displayedReplay?.messages.reduce(
+    (sum, message) => sum + message.content.length,
+    0,
+  );
 
   return (
     <aside
-      className="absolute inset-y-0 right-0 z-30 flex w-full flex-col rounded-tl-2xl bg-background shadow-2xl md:w-1/2"
+      className="absolute inset-y-0 right-0 z-30 flex w-full flex-col rounded-tl-2xl border-l bg-background shadow-2xl sm:w-[min(92vw,72rem)]"
       data-testid="llm-request-inspector"
     >
       <div className="flex shrink-0 items-start gap-2 px-5 pb-2 pt-4">
         <div className="min-w-0 flex-1">
           <div className="truncate font-mono text-sm font-semibold">
             LLM trace #{llmRequestOffset}
-            {replay == null ? "" : ` · ${replay.model}`}
+            {displayedReplay == null ? "" : ` · ${displayedReplay.model}`}
           </div>
           <div className="text-xs text-muted-foreground">
-            {replay == null ? (
+            {displayedReplay == null ? (
               "The exact request sent to the model, and its response"
             ) : (
               <>
-                {formatDateTime(Date.parse(replay.requestedAt))} ·{" "}
-                {replay.messages.length.toLocaleString()} messages ·{" "}
+                {formatDateTime(Date.parse(displayedReplay.requestedAt))} ·{" "}
+                {displayedReplay.messages.length.toLocaleString()} messages ·{" "}
                 {(totalChars ?? 0).toLocaleString()} chars
-                <OutcomeBadge outcome={replay.outcome} />
+                <OutcomeBadge outcome={displayedReplay.outcome} />
               </>
             )}
           </div>
         </div>
-        <Button variant="ghost" size="icon" title="Close" onClick={onClose}>
-          <XIcon className="size-4" />
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Close"
+          aria-label="Close LLM request inspector"
+          onClick={onClose}
+        >
+          <XIcon className="size-4" aria-hidden="true" />
         </Button>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pb-3">
@@ -128,14 +133,17 @@ export function LlmRequestInspectorPanel({
         <Button
           size="sm"
           variant="outline"
-          disabled={replay == null}
+          disabled={displayedReplay == null}
           title="Copy the request's messages as JSON"
           onClick={async () => {
-            if (replay == null) return;
+            if (displayedReplay == null) return;
             try {
               // The wire shape only: `id` is this panel's row identity, not
               // part of what the model received.
-              const messages = replay.messages.map(({ role, content }) => ({ role, content }));
+              const messages = displayedReplay.messages.map(({ role, content }) => ({
+                role,
+                content,
+              }));
               await navigator.clipboard.writeText(JSON.stringify({ messages }, null, 2));
               setCopied(true);
               window.setTimeout(() => setCopied(false), 2_000);
@@ -148,24 +156,23 @@ export function LlmRequestInspectorPanel({
           Copy JSON
         </Button>
         <span className="ml-auto text-[10px] text-muted-foreground/70">
-          replayed from the local event mirror
+          durable replay + live transient tail
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto border-t">
-        {replay != null ? (
+        {displayedReplay != null ? (
           <div className="flex flex-col">
-            {replay.messages.map((message) => (
+            {displayedReplay.messages.map((message) => (
               <ReplayMessageSection key={message.id} message={message} renderMode={renderMode} />
             ))}
-            <ReplayResponseSection replay={replay} renderMode={renderMode} />
-            <ReplayMetricsSection stats={replay.stats} />
+            <ReplayResponseSection replay={displayedReplay} renderMode={renderMode} />
+            <ReplayMetricsSection stats={displayedReplay.stats} />
           </div>
-        ) : eventsResult.status === "error" || chunksResult.status === "error" ? (
+        ) : eventsResult.status === "error" ? (
           // An errored query never resolves on its own — say so instead of
           // presenting a permanent "opening" state as progress.
           <p className="px-5 py-3 text-sm text-destructive">
-            Reading the local event mirror failed:{" "}
-            {(eventsResult.error ?? chunksResult.error)?.message ?? "unknown error"}
+            Reading the local event mirror failed: {eventsResult.error?.message ?? "unknown error"}
           </p>
         ) : !loaded ? (
           <p className="px-5 py-3 text-sm text-muted-foreground">Opening local SQLite mirror…</p>
@@ -178,6 +185,32 @@ export function LlmRequestInspectorPanel({
       </div>
     </aside>
   );
+}
+
+/** Overlay the active in-memory response on the durable replay. This text is
+ * deliberately transient: reconnecting drops it, so old ephemeral chunks can
+ * never play through when someone opens an existing stream. */
+function withLiveResponse(
+  replay: LlmRequestReplay | null,
+  liveStep: AgentUiLlmStep | undefined,
+  llmRequestOffset: number,
+): LlmRequestReplay | null {
+  if (
+    replay == null ||
+    replay.outcome != null ||
+    liveStep?.llmRequestOffset !== llmRequestOffset ||
+    (liveStep.responseText === "" && liveStep.thinkingText === "")
+  ) {
+    return replay;
+  }
+  return {
+    ...replay,
+    response: {
+      text: liveStep.responseText,
+      thinkingText: liveStep.thinkingText,
+      source: "chunks",
+    },
+  };
 }
 
 function OutcomeBadge({ outcome }: { outcome: LlmRequestReplay["outcome"] }) {
@@ -353,6 +386,10 @@ const ReplayResponseSection = memo(
  */
 function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
   const { tokens } = stats;
+  const rawResponseText = useMemo(
+    () => (stats.rawResponse == null ? null : stringifyRawResponse(stats.rawResponse)),
+    [stats.rawResponse],
+  );
   const hasAnything =
     tokens != null ||
     stats.chunkCount > 0 ||
@@ -427,13 +464,13 @@ function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
           </>
         )}
       </dl>
-      {stats.rawResponse == null ? null : (
+      {rawResponseText == null ? null : (
         <details className="mt-2">
           <summary className="cursor-pointer font-mono text-xs text-muted-foreground/70 hover:text-foreground">
             raw completion payload
           </summary>
           <pre className="mt-2 overflow-x-auto rounded-xl bg-muted/50 px-4 py-2.5 font-mono text-xs leading-relaxed text-muted-foreground">
-            {stringifyRawResponse(stats.rawResponse)}
+            {rawResponseText}
           </pre>
         </details>
       )}

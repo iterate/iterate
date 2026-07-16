@@ -47,14 +47,12 @@ export function RawEventInspectorPanel({
     `SELECT offset, created_at FROM events WHERE offset > ? ORDER BY offset ASC LIMIT 1`,
     [offset],
   );
-  // Offsets are dense (local_index = offset - 1 is a table CHECK), so the
-  // selected event's 1-based position IS its offset; the total comes from the
-  // trigger-maintained counts. The old COUNT(*) range scan re-ran on every
-  // delivered batch while the panel was open and rescanned the mirror.
-  const positionResult = useStreamQuery(
+  // The mirror deliberately omits historical ephemeral events, so stream
+  // offsets can contain permanent gaps and are not row positions. Show the
+  // trigger-maintained durable-row total without a COUNT(*) range scan.
+  const totalResult = useStreamQuery(
     database,
-    `SELECT ? AS position, (SELECT COALESCE(SUM(n), 0) FROM event_type_counts) AS total`,
-    [offset],
+    `SELECT COALESCE(SUM(n), 0) AS total FROM event_type_counts`,
   );
 
   const selected = selectedResult.data[0] ?? null;
@@ -107,11 +105,7 @@ export function RawEventInspectorPanel({
     selectedTimestamp,
     parseTimestamp(nextResult.data[0]?.created_at),
   );
-  // Position is a count of rows at-or-before the offset — meaningless when the
-  // offset itself isn't mirrored (it would claim "event N of N" next to the
-  // not-in-mirror copy below).
-  const position = selected == null ? null : asNumber(positionResult.data[0]?.position);
-  const total = selected == null ? null : asNumber(positionResult.data[0]?.total);
+  const total = asNumber(totalResult.data[0]?.total);
 
   return (
     <aside
@@ -128,12 +122,18 @@ export function RawEventInspectorPanel({
           </div>
           <div className="text-xs text-muted-foreground">
             #{offset}
-            {position != null && total != null ? ` · event ${position} of ${total}` : null}
+            {total == null ? null : ` · ${total} mirrored events`}
             {typeof selected?.created_at === "string" ? ` · ${selected.created_at}` : null}
           </div>
         </div>
-        <Button variant="ghost" size="icon" title="Close" onClick={onClose}>
-          <XIcon className="size-4" />
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Close"
+          aria-label="Close event inspector"
+          onClick={onClose}
+        >
+          <XIcon aria-hidden="true" className="size-4" />
         </Button>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pb-3">

@@ -391,7 +391,12 @@ describe("durableObjectRecovery", () => {
       recovery: fixture.build(),
     });
     const opened = await runner1.openDelivery();
-    await opened.sink({ events: journal.rows.slice(), streamMaxOffset: 1 });
+    await opened.sink({
+      events: journal.rows.slice(),
+      scannedAfterOffset: opened.checkpointOffset,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 1,
+    });
     // The frame checkpointed — no lag left — but the alarm is armed: "died
     // owing work" must equal "alarm armed".
     expect(fixture.readRecord()?.armedAtMs).not.toBeNull();
@@ -422,7 +427,12 @@ describe("durableObjectRecovery", () => {
     const reopened = await runner2.openDelivery();
     expect(reopened.checkpointOffset).toBe(1);
     const pending = journal.rows.filter((row) => row.offset > reopened.checkpointOffset);
-    await reopened.sink({ events: pending, streamMaxOffset: journal.head() });
+    await reopened.sink({
+      events: pending,
+      scannedAfterOffset: reopened.checkpointOffset,
+      scannedThroughOffset: journal.head(),
+      streamMaxOffset: journal.head(),
+    });
     expect(processedTypes).toEqual([REVIVED]);
     await expect(runner2.snapshot()).resolves.toEqual({ offset: 2, state: { ids: ["a"] } });
   });

@@ -144,6 +144,8 @@ function makeHarness() {
           projectId: PROJECT_ID,
           path: HOME,
           events,
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
           state: null,
         });
@@ -218,6 +220,8 @@ describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)
       projectId: PROJECT_ID,
       path: HOME,
       events: [requested!],
+      scannedAfterOffset: woken.checkpointOffset,
+      scannedThroughOffset: requested!.offset,
       streamMaxOffset: 2,
       state: null,
     });
@@ -279,6 +283,8 @@ describe("eviction recovery end to end", () => {
         projectId: PROJECT_ID,
         path: HOME,
         events: h.stream.events.filter((event) => event.offset > woken.checkpointOffset),
+        scannedAfterOffset: woken.checkpointOffset,
+        scannedThroughOffset: h.head(),
         streamMaxOffset: h.head(),
         state: null,
       }),

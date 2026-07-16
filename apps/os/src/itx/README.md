@@ -286,8 +286,8 @@ coordinate** — `{ projectId, path }`, written as the REF `<projectId>:<path>`
   freely with whatever else lives on the stream (an agent's conversation,
   a session's record): the fold ignores foreign types.
 - **Scripts ride the same stream.** The synchronous door (`run.ts`,
-  `POST /api/itx/run`) records `script-execution-requested` /
-  `script-execution-completed` around an inline run. Appending a requested
+  `POST /api/itx/run`) records `script-run-requested` /
+  `script-run-settled` around an inline run. Appending a requested
   event with `enqueued: true` IS requesting work: the context's own
   processor runs it (`Itx.processEventBatch` → the host's runner) and
   appends the completed event — at-least-once reruns stay detectable via the

@@ -1,5 +1,12 @@
 import type { OutboundHandler } from "@cloudflare/containers";
-import { Sandbox, type DirectoryBackup } from "@cloudflare/sandbox";
+import {
+  type DirectoryBackup,
+  type ExecEvent,
+  type ExecOptions,
+  type ExecResult,
+  parseSSEStream,
+  Sandbox,
+} from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
@@ -72,6 +79,20 @@ type SandboxRecord = {
 
 const SANDBOX_SESSION_SETUP_REDIAL_DELAYS_MS = [1_500, 3_000, 7_500, 15_000] as const;
 
+// `@cloudflare/sandbox` 0.12.3's default-session `exec` timeout only stops
+// waiting for the command. Its sessionless stream exposes the detached Linux
+// process-group leader, which lets this class own a verified TERM/KILL cleanup
+// before returning exit 124. This is the SDK's reserved token used by
+// getSandbox({ enableDefaultSession: false }); direct Durable Object stubs do
+// not pass through getSandbox, so select that execution policy explicitly.
+const SANDBOX_SESSIONLESS_EXECUTION_TOKEN = "__DISABLE_SESSION__";
+const SANDBOX_TIMEOUT_EXIT_CODE = 124;
+const SANDBOX_PROCESS_GROUP_TERM_GRACE_SECONDS = "0.5";
+const SANDBOX_PROCESS_GROUP_KILL_ATTEMPTS = 20;
+const SANDBOX_PROCESS_GROUP_POLL_SECONDS = "0.05";
+const SANDBOX_PROCESS_GROUP_CLEANUP_TIMEOUT_MS = 5_000;
+const SANDBOX_TERMINATED_STREAM_DRAIN_TIMEOUT_MS = 5_000;
+
 /**
  * The durable sandbox env-var map, as stored. The SDK's `setEnvVars` input
  * shape (`Record<string, string | undefined>`, undefined unsets) is the write
@@ -89,6 +110,48 @@ function definedEnvEntries(
   return Object.fromEntries(
     Object.entries(env).map(([key, value]) => [key, value === undefined ? null : value]),
   );
+}
+
+/**
+ * Shell executed in a fresh sessionless process group to terminate a DIFFERENT
+ * group. `ps`, rather than the group leader alone, is the source of truth: a
+ * cooperative leader may exit on TERM while one of its descendants ignores
+ * the signal. Zombies are already terminated and cannot execute code, so they
+ * do not keep cleanup open while PID 1 gets a chance to reap them.
+ */
+function sandboxProcessGroupCleanupCommand(processGroupId: number): string {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) {
+    throw new Error(`Invalid sandbox process-group id: ${String(processGroupId)}`);
+  }
+
+  return [
+    "set -u",
+    `pgid=${processGroupId}`,
+    "group_has_active_processes() {",
+    "  ps -eo pgid=,stat= | awk -v wanted=\"$pgid\" '$1 == wanted && $2 !~ /^Z/ { found=1 } END { exit(found ? 0 : 1) }'",
+    "}",
+    "wait_for_group_exit() {",
+    "  attempts=$1",
+    "  while group_has_active_processes; do",
+    '    if test "$attempts" -le 0; then return 1; fi',
+    `    sleep ${SANDBOX_PROCESS_GROUP_POLL_SECONDS}`,
+    "    attempts=$((attempts - 1))",
+    "  done",
+    "}",
+    'kill -TERM -- -"$pgid" 2>/dev/null || true',
+    `sleep ${SANDBOX_PROCESS_GROUP_TERM_GRACE_SECONDS}`,
+    "if ! group_has_active_processes; then exit 0; fi",
+    'kill -KILL -- -"$pgid" 2>/dev/null || true',
+    `if wait_for_group_exit ${SANDBOX_PROCESS_GROUP_KILL_ATTEMPTS}; then exit 0; fi`,
+    "printf 'sandbox process group %s survived TERM and KILL\\n' \"$pgid\" >&2",
+    "ps -eo pid=,ppid=,pgid=,stat=,args= | awk -v wanted=\"$pgid\" '$3 == wanted { print }' >&2",
+    "exit 70",
+  ].join("\n");
+}
+
+function appendSandboxTimeoutMessage(stderr: string, timeoutMs: number): string {
+  const separator = stderr.length === 0 || stderr.endsWith("\n") ? "" : "\n";
+  return `${stderr}${separator}Command timed out after ${timeoutMs}ms`;
 }
 
 // The two `readFile` result types (`ReadFileResult`, and the `encoding: "none"`
@@ -943,9 +1006,226 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     }
   }
 
+  /**
+   * Execute a timed command through the SDK's sessionless STREAM door so the
+   * start event gives us the real detached process-group leader. The stock
+   * 0.12.3 timeout watches only that leader: if TERM kills the leader while a
+   * child ignores it, the SDK can return 124 with the child still running (or
+   * wait forever while that child holds an output pipe). We therefore own the
+   * deadline, verify the entire group with `ps`, escalate TERM to KILL, and
+   * synthesize 124 only after cleanup and stream drain both finish.
+   */
+  async #execSessionlessWithVerifiedTimeout(
+    command: string,
+    options: ExecOptions & { timeout: number },
+  ): Promise<ExecResult> {
+    const timeoutMs = options.timeout;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+      throw new Error(`Sandbox exec timeout must be between 1 and 2147483647ms: ${timeoutMs}`);
+    }
+    if (options.signal?.aborted === true) throw new Error("Operation was aborted");
+
+    const startedAt = Date.now();
+    const deadlineAt = startedAt + timeoutMs;
+    const timestamp = new Date(startedAt).toISOString();
+    const stream = await this.#redialOnInterruptedSessionSetup(() =>
+      super.execStreamWithSessionToken(command, SANDBOX_SESSIONLESS_EXECUTION_TOKEN, {
+        cwd: options.cwd,
+        env: options.env,
+      }),
+    );
+
+    let stdout = "";
+    let stderr = "";
+    let sawStart = false;
+    let resolveStarted!: (pid: number) => void;
+    let rejectStarted!: (error: unknown) => void;
+    const started = new Promise<number>((resolve, reject) => {
+      resolveStarted = resolve;
+      rejectStarted = reject;
+    });
+
+    const completion = (async (): Promise<number> => {
+      try {
+        for await (const event of parseSSEStream<ExecEvent>(stream)) {
+          switch (event.type) {
+            case "start": {
+              if (sawStart)
+                throw new Error("Sandbox exec stream emitted more than one start event");
+              if (!Number.isSafeInteger(event.pid) || (event.pid ?? 0) <= 1) {
+                throw new Error(
+                  `Sandbox exec stream emitted an invalid process-group id: ${String(event.pid)}`,
+                );
+              }
+              sawStart = true;
+              resolveStarted(event.pid!);
+              break;
+            }
+            case "stdout":
+            case "stderr": {
+              const data = event.data ?? "";
+              if (event.type === "stdout") stdout += data;
+              else stderr += data;
+              if (options.stream === true) options.onOutput?.(event.type, data);
+              break;
+            }
+            case "complete": {
+              const exitCode = event.exitCode ?? event.result?.exitCode;
+              if (!Number.isInteger(exitCode)) {
+                throw new Error("Sandbox exec stream completed without an exit code");
+              }
+              return exitCode!;
+            }
+            case "error":
+              throw new Error(event.error ?? "Sandbox exec stream failed without an error message");
+          }
+        }
+        throw new Error("Sandbox exec stream ended without a completion event");
+      } catch (error) {
+        if (!sawStart) rejectStarted(error);
+        throw error;
+      }
+    })();
+
+    const processGroupId = await Promise.race([
+      started,
+      completion.then(() => {
+        throw new Error("Sandbox exec stream completed before its start event");
+      }),
+    ]);
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let abortListener: (() => void) | undefined;
+    const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+      // Session setup and delivery of the start event consume the caller's
+      // budget too. We still wait for the start event before enforcing an
+      // expired deadline because it is the only safe way to learn which
+      // process group must be terminated.
+      timeoutId = setTimeout(
+        () => resolve({ kind: "timeout" }),
+        Math.max(0, deadlineAt - Date.now()),
+      );
+    });
+    const aborted = new Promise<{ kind: "aborted" }>((resolve) => {
+      if (options.signal === undefined) return;
+      abortListener = () => resolve({ kind: "aborted" });
+      if (options.signal.aborted) abortListener();
+      else options.signal.addEventListener("abort", abortListener, { once: true });
+    });
+
+    let outcome:
+      | { exitCode: number; kind: "completed" }
+      | { kind: "timeout" }
+      | { kind: "aborted" };
+    try {
+      outcome = await Promise.race([
+        completion.then((exitCode) => ({ exitCode, kind: "completed" }) as const),
+        timeout,
+        aborted,
+      ]);
+    } catch (error) {
+      try {
+        await this.#terminateSandboxProcessGroup(processGroupId);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Sandbox exec stream failed and process-group ${processGroupId} cleanup also failed`,
+        );
+      }
+      throw error;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (abortListener !== undefined) options.signal?.removeEventListener("abort", abortListener);
+    }
+
+    if (outcome.kind === "completed") {
+      const result: ExecResult = {
+        command,
+        duration: Date.now() - startedAt,
+        exitCode: outcome.exitCode,
+        stderr,
+        stdout,
+        success: outcome.exitCode === 0,
+        timestamp,
+      };
+      options.onComplete?.(result);
+      return result;
+    }
+
+    await this.#terminateSandboxProcessGroup(processGroupId);
+    await this.#waitForTerminatedSandboxStream(completion, processGroupId);
+
+    if (outcome.kind === "aborted") throw new Error("Operation was aborted");
+
+    const result: ExecResult = {
+      command,
+      duration: Date.now() - startedAt,
+      exitCode: SANDBOX_TIMEOUT_EXIT_CODE,
+      stderr: appendSandboxTimeoutMessage(stderr, timeoutMs),
+      stdout,
+      success: false,
+      timestamp,
+    };
+    options.onComplete?.(result);
+    return result;
+  }
+
+  async #terminateSandboxProcessGroup(processGroupId: number): Promise<void> {
+    const cleanup = await this.#redialOnInterruptedSessionSetup(() =>
+      super.execWithSessionToken(
+        sandboxProcessGroupCleanupCommand(processGroupId),
+        SANDBOX_SESSIONLESS_EXECUTION_TOKEN,
+        { origin: "internal", timeout: SANDBOX_PROCESS_GROUP_CLEANUP_TIMEOUT_MS },
+      ),
+    );
+    if (cleanup.exitCode === 0) return;
+    throw new Error(
+      `Sandbox process-group ${processGroupId} cleanup failed with exit ${cleanup.exitCode}: ${cleanup.stderr || cleanup.stdout}`,
+    );
+  }
+
+  async #waitForTerminatedSandboxStream(
+    completion: Promise<number>,
+    processGroupId: number,
+  ): Promise<void> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        completion,
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Sandbox process-group ${processGroupId} was terminated but its exec stream did not settle`,
+                ),
+              ),
+            SANDBOX_TERMINATED_STREAM_DRAIN_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+  }
+
   override async exec(...args: Parameters<Sandbox<Env>["exec"]>) {
     await this.#ensureReady();
-    return this.#redialOnInterruptedSessionSetup(() => super.exec(...args));
+    const [command, options] = args;
+    if (options?.timeout !== undefined) {
+      try {
+        return await this.#execSessionlessWithVerifiedTimeout(command, {
+          ...options,
+          timeout: options.timeout,
+        });
+      } catch (error) {
+        if (error instanceof Error) options.onError?.(error);
+        throw error;
+      }
+    }
+    return this.#redialOnInterruptedSessionSetup(() =>
+      super.execWithSessionToken(command, SANDBOX_SESSIONLESS_EXECUTION_TOKEN, options),
+    );
   }
 
   override async execStream(...args: Parameters<Sandbox<Env>["execStream"]>) {

@@ -14,7 +14,14 @@ export class ServiceStub {}
 // rpc-targets.ts pulls in egress.ts's WorkerEntrypoint subclass). Class
 // bodies never run in node tests — the subclasses just need a constructable
 // base so their module can evaluate.
-export class WorkerEntrypoint {}
+export class WorkerEntrypoint<Env = unknown, Props = unknown> {
+  env!: Env;
+  ctx!: {
+    props: Props;
+    exports: Record<string, unknown>;
+    waitUntil(promise: Promise<unknown>): void;
+  };
+}
 export class DurableObject {}
 export const env = {};
 
