@@ -1,16 +1,77 @@
 import { expect, test } from "vitest";
-import { appendEvents } from "../test-support/append-events.ts";
-import { itxScript } from "../test-support/itx-script-builder.ts";
+import type {
+  Agent,
+  AgentChat,
+  AgentCreateInput,
+  CapabilityHost,
+} from "../../src/itx-api.generated.ts";
+import { agentCreationForPath } from "../../src/domains/agents/agent-defaults.ts";
+import { appendedEvents } from "../../src/domains/streams/rpc-types.ts";
+import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
-  AGENT_OUTPUT_ADDED_TYPE,
+  AGENT_CONTEXT_ADDED_TYPE,
   AGENT_WEB_MESSAGE_SENT_TYPE,
+  appendSyntheticProviderOutput,
   fencedAgentScript,
   inlineJsSource,
 } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // These are hand written tests - they MUST pass
+test("agent create folds startup events and is idempotent only for the same birth", async () => {
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+
+  using project = itx.projects.create({ slug: `agent-create-${crypto.randomUUID()}` });
+  using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
+  await expect(
+    agent.create({
+      initialEvents: [{ type: "test/unkeyed-startup", payload: {} }],
+    } as unknown as AgentCreateInput),
+  ).rejects.toThrow("agent create initialEvents must have idempotency keys");
+  await expect(
+    agent.create({
+      initialEvents: [
+        {
+          type: "test/ephemeral-startup",
+          idempotencyKey: "test/ephemeral-startup",
+          ephemeral: true,
+          payload: {},
+        },
+      ],
+    } as unknown as AgentCreateInput),
+  ).rejects.toThrow("agent create initialEvents must be durable");
+  const createInput = {
+    systemPrompt: "original prompt",
+    initialEvents: [
+      {
+        type: AGENT_CONTEXT_ADDED_TYPE,
+        idempotencyKey: `agent-create-startup-${crypto.randomUUID()}`,
+        payload: {
+          role: "system",
+          key: "test/create-startup",
+          content: "startup event was folded before create returned",
+        },
+      },
+    ],
+  };
+  await agent.create(createInput);
+  expect((await agent.processor.snapshot()).state.context.system).toContainEqual(
+    expect.objectContaining({
+      key: "test/create-startup",
+      content: "startup event was folded before create returned",
+    }),
+  );
+  await expect(agent.create(createInput)).resolves.toBeUndefined();
+  await expect(agent.create({ systemPrompt: "different prompt" })).rejects.toThrow(
+    /idempotency key .* already names a different event/,
+  );
+});
+
 test("Agent scripts update their own status record via itx.agent.setStatus", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
@@ -21,6 +82,7 @@ test("Agent scripts update their own status record via itx.agent.setStatus", asy
   using project = itx.projects.create({ slug: "agent-set-status" });
   const agentPath = `/agents/set-status-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   const statusPatch = agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/agent/status-changed"],
@@ -29,20 +91,18 @@ test("Agent scripts update their own status record via itx.agent.setStatus", asy
     timeoutMs: 30_000,
   });
 
-  await agent.stream.append({
-    type: AGENT_OUTPUT_ADDED_TYPE,
-    payload: {
-      content: fencedAgentScript(`
-        async (itx) => {
-          await itx.agent.setStatus({
-            title: "Lisbon trip",
-            note: "Planning a 3-day Lisbon trip.",
-            shortStatus: "comparing flights",
-          });
-        }
-      `),
-    },
-  });
+  await appendSyntheticProviderOutput(
+    agent.stream,
+    fencedAgentScript(
+      defineItxScript<{ agent: Agent }>(async (itx) => {
+        await itx.agent.setStatus({
+          title: "Lisbon trip",
+          note: "Planning a 3-day Lisbon trip.",
+          shortStatus: "comparing flights",
+        });
+      }).code,
+    ),
+  );
 
   expect(await statusPatch).toMatchObject({
     type: "events.iterate.com/agent/status-changed",
@@ -76,6 +136,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   using project = itx.projects.create({ slug: "agent-project-tool" });
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   using _projectToolProvision = await project.provideCapability({
     path: ["projectTool"],
@@ -97,26 +158,23 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     predicate: (event) => event.payload?.message === "string form with files",
     timeoutMs: 30_000,
   });
-  const scriptCompleted = agent.stream.waitForEvent({
-    eventTypes: ["events.iterate.com/capability-host/script-execution-completed"],
-    timeoutMs: 30_000,
-  });
 
-  await agent.stream.append({
-    type: AGENT_OUTPUT_ADDED_TYPE,
-    payload: {
-      content: fencedAgentScript(`
-          async (itx) => {
-            const message = await itx.projectTool.format({ text: "project-capability" });
-            await itx.chat.sendMessage(message);
-            // The way to attach files: the options second argument.
-            await itx.chat.sendMessage("string form with files", {
-              files: [{ filename: "note.txt", contentType: "text/plain", data: "aGVsbG8=" }],
-            });
-          }
-        `),
-    },
-  });
+  const { llmRequestOffset } = await appendSyntheticProviderOutput(
+    agent.stream,
+    fencedAgentScript(
+      defineItxScript<{
+        projectTool: { format(input: { text: string }): Promise<string> };
+        chat: AgentChat;
+      }>(async (itx) => {
+        const message = await itx.projectTool.format({ text: "project-capability" });
+        await itx.chat.sendMessage(message);
+        // The way to attach files: the options second argument.
+        await itx.chat.sendMessage("string form with files", {
+          files: [{ filename: "note.txt", contentType: "text/plain", data: "aGVsbG8=" }],
+        });
+      }).code,
+    ),
+  );
 
   expect(await projectToolReply).toMatchObject({
     type: AGENT_WEB_MESSAGE_SENT_TYPE,
@@ -129,21 +187,39 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
       files: [{ contentType: "text/plain", filename: "note.txt", size: 5 }],
     },
   });
-  await scriptCompleted;
 
   const events = await agent.stream.getEvents();
-  expect(events.map((event) => event.type)).toEqual(
+  expect(events).toEqual(
     expect.arrayContaining([
-      AGENT_OUTPUT_ADDED_TYPE,
-      "events.iterate.com/capability-host/script-execution-requested",
-      "events.iterate.com/capability-host/script-execution-completed",
-      AGENT_WEB_MESSAGE_SENT_TYPE,
-      "events.iterate.com/agent/input-added",
+      expect.objectContaining({
+        type: AGENT_CONTEXT_ADDED_TYPE,
+        payload: expect.objectContaining({
+          role: "assistant",
+          llmRequestOffset,
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/capability-host/script-execution-requested",
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/capability-host/script-execution-completed",
+      }),
+      expect.objectContaining({ type: AGENT_WEB_MESSAGE_SENT_TYPE }),
     ]),
   );
+
+  const reflectedFilesReply = events.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE &&
+      event.payload?.role === "assistant" &&
+      event.payload.content ===
+        "The assistant sent this visible web-chat message: string form with files",
+  );
+  expect(reflectedFilesReply?.payload).toMatchObject({ role: "assistant" });
+  expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
 });
 
-test("New agent streams install processors and replay existing child events", async () => {
+test("Late agent subscriptions replay history after an earlier birth certificate", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
@@ -152,40 +228,56 @@ test("New agent streams install processors and replay existing child events", as
 
   const marker = `agent-auto-bootstrap-${crypto.randomUUID()}`;
   using project = itx.projects.create({ slug: `agent-auto-bootstrap-${marker}` });
+  const { projectId } = await project.__describe();
   const agentPath = `/agents/auto-bootstrap-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
-  const content = fencedAgentScript(`
-      async (itx) => {
-        await itx.chat.sendMessage(${JSON.stringify(marker)});
-      }
-    `);
-  const [historicalOutput] = await appendEvents(agent.stream, {
-    type: AGENT_OUTPUT_ADDED_TYPE,
-    payload: { content },
-  });
+  // Birth is the first domain event. Stage the immutable creation events
+  // without the processor subscriptions or directory-derived boot context,
+  // then install those through public create() after history exists. This is
+  // the supported late-subscription case: history may precede the
+  // subscription, but it never precedes the birth certificate.
+  const creation = agentCreationForPath({ agentPath, projectId });
+  const bootContextKey = `agent/boot-system-context:${projectId}:${agentPath}`;
+  await agent.stream.append(
+    ...creation.events.filter(
+      (event) =>
+        event.type !== "events.iterate.com/stream/subscription-configured" &&
+        event.idempotencyKey !== bootContextKey,
+    ),
+  );
 
-  const providerSelected = agent.stream.waitForEvent({
-    afterOffset: historicalOutput.offset,
-    eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
-    timeoutMs: 30_000,
-  });
-  const replayedReply = await agent.stream.waitForEvent({
-    afterOffset: historicalOutput.offset,
+  const content = fencedAgentScript(
+    defineItxScript<{ chat: AgentChat }, { marker: string }>(
+      async (itx, vars) => {
+        await itx.chat.sendMessage(vars.marker);
+      },
+      { marker },
+    ).code,
+  );
+  const { assistantContext: historicalAssistantContext, llmRequestOffset } =
+    await appendSyntheticProviderOutput(agent.stream, content);
+
+  const replayedReply = agent.stream.waitForEvent({
+    afterOffset: historicalAssistantContext.offset,
     eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
     predicate: (event) => event.payload?.message === marker,
     timeoutMs: 30_000,
   });
+  await agent.create({});
 
-  expect(replayedReply).toMatchObject({
+  expect(await replayedReply).toMatchObject({
     type: AGENT_WEB_MESSAGE_SENT_TYPE,
     payload: { message: marker },
   });
-  await providerSelected;
 
   const events = await agent.stream.getEvents({ afterOffset: 0 });
-  const outputOffset = events.find(
-    (event) => event.type === AGENT_OUTPUT_ADDED_TYPE && event.payload?.content === content,
+  const assistantContextOffset = events.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE &&
+      event.payload?.role === "assistant" &&
+      event.payload?.llmRequestOffset === llmRequestOffset &&
+      event.payload?.content === content,
   )?.offset;
   // Processor subscriptions are wake-mode deliveries addressed by itx
   // expression over the ordinary domain surface: { delivery: { mode:
@@ -212,14 +304,14 @@ test("New agent streams install processors and replay existing child events", as
   const scriptRequestedOffset = events.find(
     (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
   )?.offset;
-  const modelSelectionOffset = events.find(
-    (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
+  const birthCertificateOffset = events.find(
+    (event) => event.type === "events.iterate.com/agent/created",
   )?.offset;
 
-  expect(outputOffset).toBe(historicalOutput.offset);
-  expect(agentSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
-  expect(itxSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
-  expect(modelSelectionOffset).toBeGreaterThan(historicalOutput.offset);
+  expect(assistantContextOffset).toBe(historicalAssistantContext.offset);
+  expect(agentSubscriptionOffset).toBeGreaterThan(historicalAssistantContext.offset);
+  expect(itxSubscriptionOffset).toBeGreaterThan(historicalAssistantContext.offset);
+  expect(birthCertificateOffset).toBeLessThan(historicalAssistantContext.offset);
   expect(scriptRequestedOffset).toBeGreaterThan(agentSubscriptionOffset!);
 });
 
@@ -234,6 +326,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
   const durableWorkerKey = `agent-counter-${crypto.randomUUID()}`;
 
   using _agentProbeProvision = await agent.provideCapability({
@@ -303,29 +396,44 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
     timeoutMs: 30_000,
   });
 
-  await agent.stream.append({
-    type: AGENT_OUTPUT_ADDED_TYPE,
-    payload: {
-      content: fencedAgentScript(`
-          async (itx) => {
-            // Agent-scope capabilities: itx.<cap> is the canonical spelling in
-            // your own scope; itx.agent.capabilityHost.<cap> is the explicit
-            // handle door; itx.agent.<cap> also works via the handle's
-            // prototype-chain fallback. All three dispatch identically —
-            // exercise one of each.
-            const probe = await itx.agentProbe.inspect("agent-only");
-            const first = await itx.agent.agentCounter.increment();
-            const current = await itx.agent.capabilityHost.agentCounter.current();
-            await itx.chat.sendMessage(JSON.stringify({
-              durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
+  await appendSyntheticProviderOutput(
+    agent.stream,
+    fencedAgentScript(
+      defineItxScript<
+        {
+          agentProbe: {
+            inspect(input: string): Promise<{ input: string; projectId: string; whoami: string }>;
+          };
+          agent: Agent & {
+            agentCounter: { increment(): Promise<number> };
+            capabilityHost: CapabilityHost & { agentCounter: { current(): Promise<number> } };
+          };
+          chat: AgentChat;
+        },
+        { durableWorkerKey: string }
+      >(
+        async (itx, vars) => {
+          // Agent-scope capabilities: itx.<cap> is the canonical spelling in
+          // your own scope; itx.agent.capabilityHost.<cap> is the explicit
+          // handle door; itx.agent.<cap> also works via the handle's
+          // prototype-chain fallback. All three dispatch identically —
+          // exercise one of each.
+          const probe = await itx.agentProbe.inspect("agent-only");
+          const first = await itx.agent.agentCounter.increment();
+          const current = await itx.agent.capabilityHost.agentCounter.current();
+          await itx.chat.sendMessage(
+            JSON.stringify({
+              durableWorkerKey: vars.durableWorkerKey,
               current,
               first,
               probe,
-            }));
-          }
-        `),
-    },
-  });
+            }),
+          );
+        },
+        { durableWorkerKey },
+      ).code,
+    ),
+  );
 
   const event = await scriptReply;
   const message = JSON.parse(String(event.payload?.message)) as {
@@ -357,6 +465,7 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
   const scopeProbeWorkerRef = (path: string) => ({
     entrypoint: "ScopeProbeEntrypoint",
     path,
@@ -415,6 +524,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   // The provide runs INSIDE the agent scope: the script's `itx` fronts the
   // agent's own capability host and mounts on the project root by addressing
@@ -451,7 +561,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   });
 });
 
-test("Project worker births agents: policy from itx.agents.defaults, appended by the seeded template", async () => {
+test("agents.get(path).create explicitly appends and processes the complete birth batch", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
@@ -462,50 +572,36 @@ test("Project worker births agents: policy from itx.agents.defaults, appended by
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 
-  // Wait for the policy BEFORE materializing the stream, so the birth
-  // reaction (worker sees child-stream-created on "/") races nothing.
-  const config = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/config-updated"],
-    timeoutMs: 60_000,
-  });
-  const providerSelected = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
+  // A scope may already have an explicitly created capability host. Its
+  // birth and subscription are old idempotency hits at the end of the agent
+  // create input batch; create() must still wait through the batch's NEWEST
+  // offset, not merely the last returned item.
+  await project.capabilityHosts.get(agentPath).create();
+
+  const birth = agentStream.waitForEvent({
+    eventTypes: ["events.iterate.com/agent/created"],
     timeoutMs: 60_000,
   });
   const workspaceMount = agentStream.waitForEvent({
     eventTypes: ["events.iterate.com/capability-host/capability-provided"],
     timeoutMs: 60_000,
   });
-  // Policy (worker) and mechanics (project processor) are appended by two
-  // INDEPENDENT reactors to the same child-stream-created announcement —
-  // policy arriving says nothing about the mechanics batch. Await the batch
-  // itself: it is one atomic append, so its capability-host member visible
-  // means all four are.
-  const mechanics = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/stream/subscription-configured"],
-    predicate: (event) => event.idempotencyKey?.endsWith("#capability-host") ?? false,
-    timeoutMs: 60_000,
-  });
+  await project.agents.get(agentPath).create({});
 
-  // Any append materializes the agent stream; the platform announces it on
-  // the root stream, the project worker reacts with the defaults batch.
-  await agentStream.append({
-    type: "events.iterate.test/agent-policy-probe",
-    payload: {},
-  });
+  expect(await project.agents.list()).toEqual(
+    expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
+  );
 
-  const configEvent = await config;
-  expect(configEvent.payload?.systemPrompt).toContain("async (itx)");
-  expect((await providerSelected).payload).toMatchObject({ ifUnset: true });
+  const birthEvent = await birth;
+  expect(
+    (birthEvent.payload as { config?: { systemPrompt?: string } } | undefined)?.config
+      ?.systemPrompt,
+  ).toContain("async (itx)");
   expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
-  await mechanics;
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the
-  // Workers AI call — no separate LLM provider processors. The mechanics come
-  // from the project processor's serialized lane (queued behind the worker
-  // probe), so they can land AFTER the pump-delivered policy above — wait
-  // for them instead of snapshotting the instant policy arrives.
+  // Workers AI call — no separate LLM provider processors.
   const mechanicsDeadline = Date.now() + 60_000;
   let subscriptionCount = 0;
   let processorSlugs: string[] = [];
@@ -592,11 +688,16 @@ test("Project worker processEventBatch receives events from every project stream
     timeoutMs: 30_000,
   });
 
-  const [sourceEvent] = await appendEvents(project.streams.get(sourcePath), {
-    type: "events.iterate.com/test/source",
-    metadata: { crossPostMarker: marker },
-    payload: { text: "hello from a child stream" },
-  });
+  const [sourceEvent] = appendedEvents(
+    await project.streams.get(sourcePath).append(
+      { return: "events" },
+      {
+        type: "events.iterate.com/test/source",
+        metadata: { crossPostMarker: marker },
+        payload: { text: "hello from a child stream" },
+      },
+    ),
+  );
 
   const copiedEvent = await copied;
   expect(copiedEvent.metadata).toMatchObject({

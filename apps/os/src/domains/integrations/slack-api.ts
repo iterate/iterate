@@ -21,7 +21,7 @@ import {
   sanitizeFileFilename,
 } from "../files/project-files.ts";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
-import { latestStreamEvent } from "./integration-streams.ts";
+import { latestStreamEventOfTypes } from "./integration-streams.ts";
 import {
   integrationConnectionStreamPath,
   readRecord,
@@ -346,7 +346,7 @@ async function connectedSlackTeamId(input: {
   connection: string;
   projectId: string;
 }): Promise<string | null> {
-  const event = await latestStreamEvent(
+  const event = await latestStreamEventOfTypes(
     input.projectId,
     integrationConnectionStreamPath("slack", input.connection),
     [SLACK_CONNECTED_EVENT_TYPE, SLACK_DISCONNECTED_EVENT_TYPE],
@@ -366,7 +366,7 @@ async function isSlackCredentialFailure(response: Response): Promise<boolean> {
 
 /**
  * Materializes Slack-shared files into project file storage under the
- * agent's path and returns the attachments for the agent input event. Paths
+ * agent's path and returns attachments for its context event. Paths
  * derive from the caller's stable `storageKey` (the webhook event offset), so
  * a replayed processor batch overwrites the same objects instead of
  * duplicating them.

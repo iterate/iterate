@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { appendedEvents } from "~/domains/streams/rpc-types.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -9,7 +10,6 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { appendedEvents } from "~/domains/streams/rpc-types.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
   staticData: streamPageStaticData(),
@@ -45,14 +45,19 @@ function ProjectStreamDetailContent() {
   const itx = useItx();
 
   async function submitMessage(message: string) {
-    const result = await itx.streams.get(streamPath).append(
-      { return: "events" },
-      {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: message, from: { kind: "user", origin: "web" } },
-      },
+    const [event] = appendedEvents(
+      await itx.streams.get(streamPath).append(
+        { return: "events" },
+        {
+          type: "events.iterate.com/agents/context-added",
+          payload: {
+            role: "user",
+            content: message,
+            actor: { type: "user", origin: "web" },
+          },
+        },
+      ),
     );
-    const [event] = appendedEvents(result);
     // Feeds the composer's consume-own-append metric (see StreamMessageComposer).
     return event;
   }

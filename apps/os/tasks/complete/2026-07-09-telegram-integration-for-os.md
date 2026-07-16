@@ -39,7 +39,7 @@ Add a `telegram` built-in integration mirroring the Slack integration shape:
   deployment-wide connection directory, and appended to
   `/integrations/telegram/<connection>`.
 - A router processor forwards each chat's updates to a per-chat agent stream;
-  an agent processor transcribes messages into agent inputs and the agent
+  an agent processor transcribes messages into agent context and the agent
   replies via the bot API.
 - Agents and itx scripts get `itx.integrations.telegram.get("<connection>")` for
   arbitrary Bot API calls (`sendMessage`, `sendChatAction`, …), token
@@ -106,7 +106,7 @@ seam — it's small, generic, and keeps the write-only-material invariant.)**
   **(assumption: skip the Slack 👀-equivalent for v1; `sendChatAction`
   "typing" from the agent processor covers acknowledgement)**.
 - `TelegramAgentProcessor` on the routed stream: transcribes update payloads
-  (`message.text`, sender, chat title) into `agent/input-added`, sends
+  (`message.text`, sender, chat title) into `agents/context-added`, sends
   `sendChatAction: typing` while the agent LLM is working, and instructs the
   agent (system prompt in `project-processor-implementation.ts`, alongside the
   Slack one) to reply with
@@ -157,7 +157,7 @@ and outbound calls at a fake Bot API server (follow whatever pattern
       `telegram-agent-processor-contract.ts` / `-implementation.ts`; register
       on the project + agent Durable Objects next to the Slack pair — _router
       is stateless (chat id is a pure function of the update, unlike Slack's
-      route table); agent processor transcribes updates to YAML agent input
+      route table); agent processor transcribes updates to YAML agent context
       with `[photo]`-style media placeholder notes, ignores bot-authored
       updates, sends `sendChatAction: typing` after input commit and on
       llm-request/script-execution events_
@@ -481,7 +481,7 @@ gate, not authz.
   - `message` and `callback_query` updates trigger the LLM; edits/channel
     posts/membership updates are recorded as `dont-trigger-request` inputs
     (mirrors the Slack non-message lane).
-  - Typing action: sent right after the agent input commits (receipt ack —
+  - Typing action: sent right after the agent context commits (receipt ack —
     Telegram has no reaction primitive) and re-sent on llm-request-requested /
     script-execution-requested (the indicator auto-expires after ~5s).
   - Chat ids are used verbatim in paths (`chat--100123` for supergroups): the

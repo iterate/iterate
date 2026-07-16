@@ -3,23 +3,14 @@
 // and idempotency keys are stable wire formats.
 
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import type { EmittedInput } from "../streams/processor-contracts.ts";
+import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { readRecord, telegramChatStreamPath } from "./utils.ts";
 import {
   TelegramProcessorContract,
   type TelegramProcessorState,
 } from "./telegram-processor-contract.ts";
-
-type TelegramProcessorDeps = {
-  /**
-   * The named connection this router serves — a projection of the host DO's
-   * own name (`/integrations/telegram/{connection}`), not folded state, so it
-   * is total from the first webhook and independent of event ordering. Null
-   * when the host is not a connection stream — reachable only if a telegram
-   * subscription is mis-armed on some other stream, which processEvent treats
-   * as a loud error rather than a silent drop (the Slack 2026-06-15 lesson).
-   */
-  connection: string | null;
-};
 
 /** The forwarded-payload annotation for an update that replies to an earlier
  * message: which thread that message belongs to, and how we know. The agent
@@ -29,10 +20,7 @@ type TelegramReplyHint = {
   sessionPath: string;
 };
 
-export class TelegramProcessor extends StreamProcessor<
-  TelegramProcessorContract,
-  TelegramProcessorDeps
-> {
+export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract> {
   readonly contract = TelegramProcessorContract;
 
   protected override reduce({
@@ -40,13 +28,19 @@ export class TelegramProcessor extends StreamProcessor<
     state,
   }: Parameters<StreamProcessor<TelegramProcessorContract>["reduce"]>[0]): TelegramProcessorState {
     switch (event.type) {
+      case "events.iterate.com/telegram/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("Telegram processor received more than one telegram/created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/telegram/webhook-received": {
         // `/new` starts a session: fold it straight off the webhook — the
         // webhook event itself is the session-start fact, so replay rebuilds
         // the exact same thread model with no extra event type.
-        if (this.deps.connection === null) return state;
+        const connection = state.birthCertificate?.config.connection;
+        if (connection === undefined) return state;
         const sessionStart = telegramSessionStartFromUpdate(event.payload.body, {
-          connection: this.deps.connection,
+          connection,
         });
         if (sessionStart === null) return state;
         const existing = state.sessionsByChat[sessionStart.chatKey] ?? [];
@@ -101,18 +95,11 @@ export class TelegramProcessor extends StreamProcessor<
     event,
     state,
   }: Parameters<StreamProcessor<TelegramProcessorContract>["processEvent"]>[0]): undefined {
+    if (event === null) return;
+    if (event.type === "events.iterate.com/telegram/created") return;
+    const connection = state.birthCertificate?.config.connection;
+    if (connection === undefined) return;
     if (event.type !== "events.iterate.com/telegram/webhook-received") return;
-
-    if (this.deps.connection === null) {
-      // A telegram subscription armed on a non-connection stream is a
-      // misconfiguration, not a routable state: throwing holds the checkpoint
-      // and keeps the webhook replayable instead of silently dropping the
-      // only copy of the message.
-      throw new Error(
-        "telegram router woke on a stream whose path carries no connection; expected /integrations/telegram/{connection}",
-      );
-    }
-    const connection = this.deps.connection;
 
     // The router deliberately does not decide whether an update is meaningful
     // to the agent. Its only job is: which chat does this update belong to?
@@ -151,13 +138,62 @@ export class TelegramProcessor extends StreamProcessor<
     // it lands; the idempotency key derives from the source event, so the
     // replay dedupes instead of double-forwarding.
     blockProcessorWhile(async () => {
-      await appendTo(streamPath, {
-        type: "events.iterate.com/telegram/webhook-received",
-        idempotencyKey: `telegram:forward-webhook:${event.offset}`,
-        payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },
-      });
+      if (this.projectId === null) {
+        throw new Error("Telegram router cannot create a project agent without a project id");
+      }
+      await appendTo(
+        streamPath,
+        ...telegramAgentCreationEvents({
+          chatId: target.chatId,
+          connection,
+          messageThreadId: target.messageThreadId,
+          path: streamPath,
+          projectId: this.projectId,
+        }),
+        {
+          type: "events.iterate.com/telegram/webhook-received",
+          idempotencyKey: `telegram:forward-webhook:${event.offset}`,
+          payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },
+        },
+      );
     });
   }
+}
+
+function telegramAgentCreationEvents(input: {
+  chatId: string;
+  connection: string;
+  messageThreadId?: string;
+  path: string;
+  projectId: string;
+}): EmittedInput<TelegramProcessorContract>[] {
+  return agentCreationForPath({
+    agentPath: input.path,
+    projectId: input.projectId,
+    overrides: {
+      systemPrompt: telegramAgentSystemPrompt({
+        agentPath: input.path,
+        chatId: input.chatId,
+        connection: input.connection,
+      }),
+    },
+    sibling: {
+      birthCertificate: TelegramAgentProcessorContract.buildEvent({
+        type: "events.iterate.com/telegram-agent/created",
+        idempotencyKey: `telegram-agent/created:${input.projectId}:${input.path}`,
+        payload: {
+          config: {
+            chatId: input.chatId,
+            connection: input.connection,
+            ...(input.messageThreadId === undefined
+              ? {}
+              : { messageThreadId: input.messageThreadId }),
+          },
+        },
+      }),
+      processorSlug: TelegramAgentProcessorContract.slug,
+    },
+  }).events satisfies EmittedInput<TelegramProcessorContract>[];
 }
 
 /** The chat-scoped part of a routed stream path (`chat-{id}` or

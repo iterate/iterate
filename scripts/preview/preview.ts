@@ -15,7 +15,10 @@ import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annota
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
-import { OS_PREVIEW_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import {
+  OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
+  OS_PREVIEW_LANE_TIMEOUT_SECS,
+} from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -1289,6 +1292,13 @@ export type CloudflarePreviewApp = {
   previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
+  /**
+   * Require the readiness route to report wrangler's newly deployed Worker
+   * version continuously before tests start. Cloudflare can serve the new
+   * edge Worker while Durable Objects are still rolling from the previous
+   * version; this barrier keeps that reset window out of the test phase.
+   */
+  previewReadyWorkerVersion?: { stableForMs: number };
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
@@ -1335,6 +1345,9 @@ export type PreviewRetrySummary = {
  * (marathon loops) can't leak stale telemetry.
  */
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+/** Same contract for the streams-example-app lane's vitest sub-lane. */
+const streamsExampleVitestRetryTelemetryFile =
+  "/tmp/os-preview-streams-example-vitest-retries.json";
 
 /** Reads the JSON written by RetryTelemetryReporter (vitest sub-lane). */
 async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetrySummary["retried"]> {
@@ -1357,12 +1370,14 @@ async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetryS
 }
 
 /**
- * Reads Playwright's JSON report (already written by the root
- * playwright.config.ts json reporter). A retried spec has more than one
- * result attempt; Playwright reports "flaky" for passed-after-retry.
+ * Reads Playwright's JSON report (written by a config's json reporter — the
+ * root playwright.config.ts for the os specs, the app-local config for the
+ * streams example app). A retried spec has more than one result attempt;
+ * Playwright reports "flaky" for passed-after-retry.
  */
 async function readPlaywrightRetryTelemetry(
   filePath: string,
+  lane = "specs",
 ): Promise<PreviewRetrySummary["retried"]> {
   /** The subset of Playwright's JSON-reporter suite tree we walk. */
   type PlaywrightJsonSuite = {
@@ -1382,7 +1397,7 @@ async function readPlaywrightRetryTelemetry(
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
         if (retryCount > 0) {
           retried.push({
-            lane: "specs",
+            lane,
             name: spec.title ?? "(unknown spec)",
             retryCount,
             passedAfterRetry: test.status === "flaky",
@@ -1503,6 +1518,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
+    // A 2xx alone is not a deployment barrier: Cloudflare can still be
+    // propagating the new code to Durable Object nodes after wrangler exits.
+    // Hold the exact deployed version steady at the edge before creating any
+    // projects, otherwise the first object calls can be reset mid-saga.
+    previewReadyWorkerVersion: { stableForMs: 10_000 },
     paths: [
       "apps/os/**",
       "apps/auth/**",
@@ -1552,8 +1572,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // treating symptoms of zombie routes (routes dead at the edge →
         // 522s) — structurally gone now that deploys never delete workers
         // (routes are declared in wrangler config; DNS is create-only).
-        "pnpm exec tsx e2e/vitest/onboarding-smoke.ts > /tmp/os-preview-smoke.log 2>&1 & SMOKE_PID=$!",
-        'wait "$SMOKE_PID" || { cat /tmp/os-preview-smoke.log; exit 1; }',
+        // Keep the gate visible and separately bounded. Before this watchdog,
+        // an RPC wedge before waitForEvent's 90s greeting timeout produced no
+        // suite output and survived until Depot killed the entire 10m job.
+        `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
         // The e2e vitest lane and the Playwright specs hit the same slot but
         // provision independent projects, so they run concurrently: the vitest
         // lane in the background, the specs in the foreground. The vitest log
@@ -1617,7 +1639,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // targets prd and leaks through into this nested env — never the right
     // credential for a preview slot. Unsetting it makes the e2e forge-mint a
     // slot-scoped admin token instead (scripts/auth/semaphore-token.ts).
-    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e:preview"],
+    //
+    // Full `test:e2e` (both files, sequential, well under a minute), not a
+    // preview-only subset: live.e2e.test.ts uniquely covers blocking waitMs
+    // acquire, holder + force acquire/release, and least-recently-released
+    // handout order — the exact semantics this preview machinery's own slot
+    // leasing depends on — and was previously invoked by NOTHING
+    // (docs/testing.md#lanes).
+    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e"],
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -1635,11 +1664,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
     previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-    previewTestCommandArgs: [
-      "bash",
-      "-c",
-      'curl -fsS "$AUTH_BASE_URL/api/auth/.well-known/openid-configuration" | grep -q \'"authorization_endpoint"\'',
-    ],
+    // The OAuth2/OIDC provider e2e (apps/auth/e2e): discovery-vs-origin,
+    // dynamic registration, authorize → consent → code → token exchange with
+    // RFC 8707 resource validation, against the live worker — the lane that
+    // would have caught the 2026-07-11 streams.iterate.com stale-registration
+    // incident (a bare discovery curl used to be all that ran here). The
+    // doppler wrap supplies APP_CONFIG_SERVICE_AUTH_TOKEN for the internal.*
+    // seeding procedures; preview auth bakes the fixed test OTP the suite
+    // signs in with.
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
   "streams-example-app": {
     slug: "streams-example-app",
@@ -1650,24 +1683,53 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "streams-example-app",
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewTestBaseUrlEnvVar: "WORKER_URL",
+    // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
+    // a tagged subset: a title-tag filter here once silently reduced CI to 3
+    // of ~37 tests while the rest rotted (docs/testing.md#lanes). Two
+    // sub-lanes run concurrently, each under its own watchdog `timeout`
+    // (fail, never retry — docs/testing.md#retries-and-timeouts); the
+    // Playwright config runs 4 parallel workers in CI so the browser suite
+    // fits its watchdog.
     previewTestCommandArgs: [
       "bash",
       "-c",
       [
+        "set -euo pipefail",
+        // Stale telemetry/report files from a previous run on the same
+        // machine (marathon loops) must not be reported against this one.
+        `rm -f ${streamsExampleVitestRetryTelemetryFile} test-results/playwright-results.json`,
         // Deployed playgrounds are admin-only: the node vitest lane rides a
         // forge-minted admin bearer (e2e/auth.ts); Playwright signs itself in
         // via its global setup.
         'export STREAMS_PLAYGROUND_TOKEN="$(pnpm exec tsx e2e/auth.ts)"',
-        "pnpm exec playwright install chromium & install_pid=$!",
-        "STREAM_STAGING_E2E=true pnpm vitest -t @preview & vitest_pid=$!",
-        "install_status=0",
-        "vitest_status=0",
-        'wait "$install_pid" || install_status=$?',
-        'wait "$vitest_pid" || vitest_status=$?',
-        'if [ "$install_status" -ne 0 ] || [ "$vitest_status" -ne 0 ]; then exit 1; fi',
-        "pnpm playwright --grep @preview --reporter=list",
+        "pnpm exec playwright install chromium > /tmp/os-preview-streams-example-pw-install.log 2>&1 & install_pid=$!",
+        `E2E_RETRY_TELEMETRY_FILE=${streamsExampleVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm vitest > /tmp/os-preview-streams-example-vitest.log 2>&1 & vitest_pid=$!`,
+        'wait "$install_pid" || { cat /tmp/os-preview-streams-example-pw-install.log; exit 1; }',
+        // Capture Playwright's exit without aborting (set -e) so the vitest
+        // sub-lane always finishes and its log is replayed.
+        `PW_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
+        'VITEST_OK=0; wait "$vitest_pid" || VITEST_OK=$?',
+        "cat /tmp/os-preview-streams-example-vitest.log",
+        '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',
       ].join("; "),
     ],
+    collectRetryTelemetry: async ({ repositoryRoot }) => {
+      const [vitest, playwright] = await Promise.all([
+        readRetryTelemetryLane("streams-example-app vitest lane", () =>
+          readVitestRetryTelemetry(streamsExampleVitestRetryTelemetryFile),
+        ),
+        readRetryTelemetryLane("streams-example-app playwright lane", () =>
+          readPlaywrightRetryTelemetry(
+            resolve(
+              repositoryRoot,
+              "apps/streams-example-app/test-results/playwright-results.json",
+            ),
+            "playwright",
+          ),
+        ),
+      ]);
+      return { retried: [...vitest, ...playwright] };
+    },
   },
   "dummy-petshop": {
     slug: "dummy-petshop",
@@ -3334,11 +3396,31 @@ async function deployPreviewApp(input: {
     });
   }
 
+  const deployedWorkerVersion = input.app.previewReadyWorkerVersion
+    ? parseLastDeployedWorkerVersionId(`${deployResult.stdout}\n${deployResult.stderr}`)
+    : null;
+  if (input.app.previewReadyWorkerVersion && !deployedWorkerVersion) {
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      ...sizeFields,
+      message:
+        "Preview deployment succeeded, but wrangler did not report the deployed Worker version required by the readiness barrier.",
+      status: "deploy-failed",
+    });
+  }
+
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
+    workerVersion:
+      deployedWorkerVersion && input.app.previewReadyWorkerVersion
+        ? {
+            expected: deployedWorkerVersion,
+            stableForMs: input.app.previewReadyWorkerVersion.stableForMs,
+          }
+        : undefined,
   });
   if (!readiness.ok) {
     return CloudflarePreviewAppEntry.parse({
@@ -4451,7 +4533,7 @@ const previewServingProbeTimeoutMs = 15_000;
 /** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
 async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
   try {
-    const status = await fetchReadinessStatus(
+    const { status } = await fetchReadinessResponse(
       url,
       AbortSignal.timeout(previewServingProbeTimeoutMs),
     );
@@ -4706,6 +4788,7 @@ async function waitForPreviewAppReadiness(params: {
   readyUrlPath?: string;
   signal?: AbortSignal;
   timeoutMs: number;
+  workerVersion?: { expected: string; stableForMs: number };
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
@@ -4717,6 +4800,7 @@ async function waitForPreviewAppReadiness(params: {
       signal: params.signal,
       timeoutMs: params.timeoutMs,
       url,
+      workerVersion: params.workerVersion,
     });
     if (!readiness.ok) return readiness;
   }
@@ -4734,19 +4818,60 @@ function resolvePreviewReadinessUrls(params: {
   return [new URL(params.readyUrlPath ?? defaultPreviewReadyUrlPath, params.publicUrl)];
 }
 
-async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: number; url: URL }) {
+const workerVersionReadinessHeader = "x-iterate-worker-version";
+const deployedWorkerVersionPattern =
+  /Current Version ID:\s*([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})/gi;
+
+/**
+ * Wrangler prints one version id per uploaded Worker. The OS deploy uploads
+ * its sidecars first and the main Worker last, so the final id is the one its
+ * public readiness route must report.
+ */
+function parseLastDeployedWorkerVersionId(output: string): string | null {
+  return [...stripAnsi(output).matchAll(deployedWorkerVersionPattern)].at(-1)?.[1] ?? null;
+}
+
+async function waitForHttpReadiness(params: {
+  signal?: AbortSignal;
+  timeoutMs: number;
+  url: URL;
+  workerVersion?: { expected: string; stableForMs: number };
+}) {
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "No response received yet.";
+  let matchingWorkerVersionSince: number | null = null;
 
   while (Date.now() < deadline) {
     try {
-      const status = await fetchReadinessStatus(params.url, params.signal);
-      if (status >= 200 && status < 300) {
-        return { ok: true as const };
-      }
+      const response = await fetchReadinessResponse(params.url, params.signal);
+      if (response.status >= 200 && response.status < 300) {
+        if (!params.workerVersion) {
+          return { ok: true as const };
+        }
 
-      lastFailure = `Readiness check returned ${status} for ${params.url.toString()}.`;
+        if (response.workerVersion === params.workerVersion.expected) {
+          const now = Date.now();
+          matchingWorkerVersionSince ??= now;
+          const stableForMs = now - matchingWorkerVersionSince;
+          if (stableForMs >= params.workerVersion.stableForMs) {
+            return { ok: true as const };
+          }
+
+          lastFailure =
+            `Readiness check reported Worker version ${params.workerVersion.expected}, ` +
+            `but it has only remained stable for ${stableForMs}ms of the required ${params.workerVersion.stableForMs}ms.`;
+        } else {
+          matchingWorkerVersionSince = null;
+          lastFailure =
+            `Readiness check reported Worker version ${response.workerVersion ?? "<missing>"}; ` +
+            `expected ${params.workerVersion.expected}.`;
+        }
+      } else {
+        matchingWorkerVersionSince = null;
+        lastFailure = `Readiness check returned ${response.status} for ${params.url.toString()}.`;
+      }
     } catch (error) {
+      matchingWorkerVersionSince = null;
       lastFailure = formatPreviewErrorMessage(error);
     }
 
@@ -4759,24 +4884,31 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
   };
 }
 
-async function fetchReadinessStatus(url: URL, signal: AbortSignal | undefined): Promise<number> {
+async function fetchReadinessResponse(
+  url: URL,
+  signal: AbortSignal | undefined,
+): Promise<{ status: number; workerVersion: string | null }> {
   try {
     const response = await fetch(url, {
+      cache: "no-store",
       method: "GET",
       redirect: "follow",
       signal,
     });
-    return response.status;
+    return {
+      status: response.status,
+      workerVersion: response.headers.get(workerVersionReadinessHeader),
+    };
   } catch (error) {
     if (!isDnsLookupError(error)) {
       throw error;
     }
 
-    return await requestStatusWithDnsResolve(url, signal);
+    return await requestReadinessWithDnsResolve(url, signal);
   }
 }
 
-async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
+async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
   }
@@ -4791,7 +4923,7 @@ async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undef
   const resolvedUrl = new URL(url);
   resolvedUrl.hostname = address;
 
-  return await new Promise<number>((resolve, reject) => {
+  return await new Promise<{ status: number; workerVersion: string | null }>((resolve, reject) => {
     const req = request(
       resolvedUrl,
       {
@@ -4802,8 +4934,12 @@ async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undef
       },
       (response) => {
         const statusCode = response.statusCode ?? 0;
+        const rawWorkerVersion = response.headers[workerVersionReadinessHeader];
+        const workerVersion = Array.isArray(rawWorkerVersion)
+          ? (rawWorkerVersion[0] ?? null)
+          : (rawWorkerVersion ?? null);
         response.resume();
-        response.on("end", () => resolve(statusCode));
+        response.on("end", () => resolve({ status: statusCode, workerVersion }));
       },
     );
     req.on("error", reject);
@@ -4886,6 +5022,7 @@ export const previewInternals = {
   selectExpiredLeasesForGc,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
+  parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPlaywrightRetryTelemetry,
@@ -4903,6 +5040,7 @@ export const previewInternals = {
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
   syncPreviewInventory,
+  waitForHttpReadiness,
 };
 
 function matchesPreviewPath(filename: string, patterns: readonly string[]) {

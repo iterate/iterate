@@ -1,4 +1,4 @@
-import { DurableObject, tracing } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
@@ -10,7 +10,6 @@ import {
 } from "./acknowledged-idempotency-offset-cache.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { parseStreamAppendInput } from "./stream-event-validation.ts";
-import type { ProcessorEvent } from "./processor-contracts.ts";
 import {
   appendOrdinaryEventToRun,
   foldOrdinaryEventRun,
@@ -26,6 +25,16 @@ import type {
 } from "./rpc-types.ts";
 import { StreamOffsetConflictError, StreamReceiverUnavailableError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import {
+  assertValidStreamRecoveryLog,
+  STREAM_RECOVERY_FORMAT,
+  STREAM_RECOVERY_VERSION,
+  StreamRecoveryRestoreInput as StreamRecoveryRestoreInputSchema,
+  type StreamRecoveryExportPage,
+  type StreamRecoveryExportSink,
+  type StreamRecoveryExportSummary,
+  type StreamRecoveryRestoreInput,
+} from "./recovery.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
@@ -52,6 +61,10 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+/** Keep recovery callback frames far below Cap'n Web's 32 MiB value limit. */
+const RECOVERY_EXPORT_PAGE_BYTE_LIMIT = 1024 * 1024;
+/** Bound CPU per RPC; the client continues the same fixed export window. */
+const RECOVERY_EXPORT_SESSION_PAGE_LIMIT = 32;
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -195,23 +208,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.append(...wakeInputs);
   }
 
-  /** The DO alarm: the spine's durable retry timer. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return tracing.enterSpan("alarm stream subscription retry", async (span) => {
-      span.setAttribute("iterate.alarm.kind", "stream_subscription_retry");
-      if (alarmInfo !== undefined) {
-        span.setAttribute("iterate.alarm.is_retry", alarmInfo.isRetry);
-        span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);
-      }
-      this.#alarmArmedForMs = null;
-      // The constructor's `woken` append already ran `#subscribers.wake()` via
-      // post-commit fan-out; this call re-arms the alarm for the next due retry
-      // (wake() itself only attempts rows whose backoff has elapsed).
-      this.#subscribers.onAlarm();
-      this.#subscriptionCursorStore.flushPending("all");
-      this.#flushCoreProcessorState();
-      span.setAttribute("iterate.alarm.action", "redrive_scheduled");
-    });
+  /** Use Cloudflare's native alarm invocation as the trace root. */
+  alarm(): void {
+    this.#alarmArmedForMs = null;
+    // The constructor's `woken` append already ran `#subscribers.wake()` via
+    // post-commit fan-out; this call re-arms the alarm for the next due retry
+    // (wake() itself only attempts rows whose backoff has elapsed).
+    this.#subscribers.onAlarm();
+    this.#subscriptionCursorStore.flushPending("all");
+    this.#flushCoreProcessorState();
   }
 
   /**
@@ -565,6 +570,189 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** Export one byte- and count-bounded page from a fixed offset window. */
+  exportForRecovery(
+    args: { afterOffset?: number; limit?: number; throughOffset?: number } = {},
+  ): StreamRecoveryExportPage {
+    const afterOffset = args.afterOffset ?? 0;
+    const limit = args.limit ?? MAX_GET_EVENTS_LIMIT;
+    if (!Number.isInteger(afterOffset) || afterOffset < 0) {
+      throw new Error("recovery export afterOffset must be a non-negative integer");
+    }
+    if (!Number.isInteger(limit) || limit <= 0 || limit > MAX_GET_EVENTS_LIMIT) {
+      throw new Error(`recovery export limit must be an integer from 1 to ${MAX_GET_EVENTS_LIMIT}`);
+    }
+    const currentHighestAssignedOffset = this.#log.highestAssignedOffset();
+    const throughOffset = args.throughOffset ?? currentHighestAssignedOffset;
+    if (
+      !Number.isInteger(throughOffset) ||
+      throughOffset < 0 ||
+      throughOffset > currentHighestAssignedOffset
+    ) {
+      throw new Error(
+        `recovery export throughOffset must be an integer from 0 to ${currentHighestAssignedOffset}`,
+      );
+    }
+    const sizes = this.#log.getRangeSizes({
+      afterOffset,
+      beforeOffset: throughOffset + 1,
+      limit,
+      includeEphemeral: true,
+    });
+    let pageLength = sizes.length;
+    let pageBytes = 0;
+    for (let index = 0; index < sizes.length; index += 1) {
+      pageBytes += sizes[index]!.byteLength;
+      // A single event may exceed the soft cap, but is still the smallest
+      // possible recovery unit. Ordinary stream events are already RPC-sized.
+      if (pageBytes > RECOVERY_EXPORT_PAGE_BYTE_LIMIT && index > 0) {
+        pageLength = index;
+        break;
+      }
+    }
+    const events = this.#log.getRange({
+      afterOffset,
+      beforeOffset: throughOffset + 1,
+      limit: pageLength,
+      includeEphemeral: true,
+    });
+    const truncatedByBytes = pageLength < sizes.length;
+    return {
+      format: STREAM_RECOVERY_FORMAT,
+      version: STREAM_RECOVERY_VERSION,
+      stream: { projectId: this.name.projectId, path: this.name.path },
+      events,
+      throughOffset,
+      complete:
+        !truncatedByBytes && (sizes.length < limit || events.at(-1)?.offset === throughOffset),
+    };
+  }
+
+  /** Export part of a fixed recovery window through one acknowledged callback session. */
+  async exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    maxPages?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary> {
+    const maxPages = args.maxPages ?? RECOVERY_EXPORT_SESSION_PAGE_LIMIT;
+    if (
+      !Number.isInteger(maxPages) ||
+      maxPages <= 0 ||
+      maxPages > RECOVERY_EXPORT_SESSION_PAGE_LIMIT
+    ) {
+      throw new Error(
+        `recovery export maxPages must be an integer from 1 to ${RECOVERY_EXPORT_SESSION_PAGE_LIMIT}`,
+      );
+    }
+    const throughOffset = args.throughOffset ?? this.#log.highestAssignedOffset();
+    let afterOffset = args.afterOffset ?? 0;
+    let exportedEventCount = 0;
+    let pageCount = 0;
+    let complete = false;
+
+    for (;;) {
+      const page = this.exportForRecovery({ afterOffset, limit: args.limit, throughOffset });
+      await args.sink.write(page);
+      pageCount += 1;
+      exportedEventCount += page.events.length;
+      const nextOffset = page.events.at(-1)?.offset;
+      if (nextOffset !== undefined && nextOffset <= afterOffset) {
+        throw new Error("recovery export produced a non-advancing page");
+      }
+      if (nextOffset !== undefined) afterOffset = nextOffset;
+      if (page.complete) {
+        complete = true;
+        break;
+      }
+      if (nextOffset === undefined) {
+        throw new Error("recovery export produced an empty incomplete page");
+      }
+      if (pageCount >= maxPages) break;
+    }
+
+    return {
+      format: STREAM_RECOVERY_FORMAT,
+      version: STREAM_RECOVERY_VERSION,
+      stream: { projectId: this.name.projectId, path: this.name.path },
+      throughOffset,
+      exportedEventCount,
+      pageCount,
+      lastExportedOffset: afterOffset,
+      complete,
+    };
+  }
+
+  /** Replace this stream with a validated exact-offset recovery log. */
+  restoreFromRecovery(input: StreamRecoveryRestoreInput): {
+    restoredEventCount: number;
+    lastImportedOffset: number;
+    currentMaxOffset: number;
+  } {
+    const parsed = StreamRecoveryRestoreInputSchema.parse(input);
+    assertValidStreamRecoveryLog(parsed, this.name);
+    const recoveredCoreState = this.#foldRecoveryCoreProcessorState(parsed);
+
+    this.#log.replaceAll(parsed.events, parsed.highestAssignedOffset, this.ctx.storage, () => {
+      this.ctx.storage.sql.exec("delete from subscriptions");
+      this.ctx.storage.kv.put("coreState", {
+        version: CORE_STATE_VERSION,
+        state: recoveredCoreState,
+      } satisfies CoreProcessorCheckpoint);
+    });
+
+    // Only sever the old runtime after the storage transaction succeeds.
+    this.#subscribers.resetForRecovery();
+    this.#subscriptionCursorStore.resetForRecovery();
+    this.#acknowledgedIdempotencyOffsets = undefined;
+    this.#acknowledgedCrossPostDeliveries = undefined;
+    this.#alarmArmedForMs = null;
+    this.#coreProcessorState = recoveredCoreState;
+    this.#coreCheckpointSchedule.didWrite(Date.now());
+
+    // Live connections from the imported incarnation are gone. The fresh fact
+    // clears their folded roster and reconciles all recovered desired state.
+    const [woken] = this.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: crypto.randomUUID() },
+    });
+    return {
+      restoredEventCount: parsed.events.length,
+      lastImportedOffset: parsed.events.at(-1)!.offset,
+      currentMaxOffset: woken!.offset,
+    };
+  }
+
+  /** Validate and fold the import completely before mutating live or durable state. */
+  #foldRecoveryCoreProcessorState(input: StreamRecoveryRestoreInput): CoreProcessorState {
+    let next = CoreProcessorContract.stateSchema.parse({});
+    for (const event of input.events) {
+      try {
+        if (
+          event.source?.crossPostedFrom === undefined &&
+          event.type === "events.iterate.com/stream/subscription-configured"
+        ) {
+          const configured = CoreProcessorContract.parseEvent(
+            "events.iterate.com/stream/subscription-configured",
+            event,
+          );
+          this.#validateSubscriptionConfiguration(configured.payload);
+        }
+        next = this.#reduceCore({ event, state: next });
+      } catch (error) {
+        throw new Error(
+          `recovery event at offset ${event.offset} (${event.type}) is incompatible with the current stream contract`,
+          { cause: error },
+        );
+      }
+    }
+    if (input.highestAssignedOffset > next.maxOffset) {
+      next = { ...next, maxOffset: input.highestAssignedOffset };
+    }
+    return next;
+  }
+
   // ===========================================================================
   // The core processor.
   //
@@ -615,14 +803,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         "events.iterate.com/stream/subscription-configured",
         args.event,
       );
-      if (event.payload.delivery.mode === "webhook" && this.name.projectId === null) {
-        // Webhook POSTs ride the project egress lane (attribution +
-        // interception); a global stream has no project to attribute them to.
-        throw new Error("webhook subscriptions require a project-scoped stream");
-      }
-      // An unparseable selector condition must be rejected before it commits,
-      // not discovered as a per-event error forever after. (compile throws.)
-      compileEventSelector(event.payload.selector);
+      this.#validateSubscriptionConfiguration(event.payload);
     }
 
     if (!args.state.paused) return;
@@ -649,6 +830,17 @@ export class StreamDurableObject extends DurableObject<Env> {
           `stream paused: ${args.state.pauseReason ?? "unknown reason"}`,
         );
     }
+  }
+
+  #validateSubscriptionConfiguration(payload: SubscriptionConfiguredPayload): void {
+    if (payload.delivery.mode === "webhook" && this.name.projectId === null) {
+      // Webhook POSTs ride the project egress lane (attribution +
+      // interception); a global stream has no project to attribute them to.
+      throw new Error("webhook subscriptions require a project-scoped stream");
+    }
+    // An unparseable selector condition must be rejected before it commits,
+    // not discovered as a per-event error forever after. (compile throws.)
+    compileEventSelector(payload.selector);
   }
 
   // Pure fold of one committed event into the next core state. Runs per event
@@ -967,10 +1159,10 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       // #reduceCore parsed this exact first-hand event before it was retained
       // for post-commit effects; avoid repeating the schema walk here.
-      const cursorSet = event as ProcessorEvent<
-        CoreProcessorContract,
-        "events.iterate.com/stream/subscription-cursor-set"
-      >;
+      const cursorSet = CoreProcessorContract.parseEvent(
+        "events.iterate.com/stream/subscription-cursor-set",
+        event,
+      );
       (cursorSets ??= []).push({
         subscriptionKey: cursorSet.payload.subscriptionKey,
         ackedOffset: cursorSet.payload.afterOffset,
@@ -1407,6 +1599,60 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriptionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
     });
+  }
+
+  /** One-shot ephemeral replay/live subscription resolved by the first matching event. */
+  async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): Promise<StreamEvent> {
+    if (args.eventTypes === undefined && args.predicate === undefined) {
+      throw new Error("waitForEvent requires eventTypes or predicate.");
+    }
+    if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+      throw new Error("waitForEvent timeoutMs must be a positive number.");
+    }
+    if (
+      args.afterOffset !== undefined &&
+      (!Number.isInteger(args.afterOffset) || args.afterOffset < 0)
+    ) {
+      throw new Error("waitForEvent afterOffset must be a non-negative integer.");
+    }
+
+    const predicate = args.predicate ?? (() => true);
+    const found = Promise.withResolvers<StreamEvent>();
+    let seenCount = 0;
+    const recentTypes: string[] = [];
+    let scan: Promise<void> = Promise.resolve();
+    const handle = this.subscribe({
+      eventTypes: args.eventTypes,
+      replayAfterOffset: args.afterOffset,
+      subscriber: { description: "waitForEvent" },
+      processEventBatch: ({ events }) => {
+        scan = scan.then(async () => {
+          for (const event of events) {
+            seenCount += 1;
+            recentTypes.push(event.type);
+            if (recentTypes.length > 20) recentTypes.shift();
+            if (await predicate(event)) found.resolve(event);
+          }
+        });
+        void scan.catch((error: unknown) => found.reject(error));
+      },
+    });
+
+    const timer = setTimeout(() => {
+      found.reject(
+        new Error(
+          `Timed out waiting for stream event after ${args.timeoutMs}ms ` +
+            `(saw ${seenCount} events; recent types: ${recentTypes.join(", ") || "none"}).`,
+        ),
+      );
+    }, args.timeoutMs);
+
+    try {
+      return await found.promise;
+    } finally {
+      clearTimeout(timer);
+      handle.unsubscribe();
+    }
   }
 
   getProcessorRuntimeState(args: {

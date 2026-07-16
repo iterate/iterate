@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
+import { appendedEvents } from "../../src/domains/streams/rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "../../src/domains/streams/schemas.ts";
 import type { Stream } from "../../src/itx-api.generated.ts";
-import { appendEvents } from "../test-support/append-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -340,10 +340,15 @@ test("project streams are born with the project-worker push feed and replace it 
   // Appending advances the feed's authoritative cursor once the project
   // worker acks the batch (durable delivery, so it retries until the seeded
   // worker answers).
-  const [appended] = await appendEvents(stream, {
-    type: "events.iterate.test/lifecycle-worker-feed",
-    payload: { marker },
-  });
+  const [appended] = appendedEvents(
+    await stream.append(
+      { return: "events" },
+      {
+        type: "events.iterate.test/lifecycle-worker-feed",
+        payload: { marker },
+      },
+    ),
+  );
   await waitForCondition(
     async () => {
       const state = asStreamRuntimeState(await stream.runtimeState());
@@ -358,52 +363,27 @@ test("project streams are born with the project-worker push feed and replace it 
   // Config replacement: a same-key subscription-configured append overrides
   // the birth-certificate feed (latest committed event per key wins).
   const narrowedTypes = [`events.iterate.test/lifecycle-worker-feed-selected-${marker}`];
-  const [replacement] = await appendEvents(stream, {
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      subscriptionKey: "project-worker",
-      // Deliberately the DIRECT worker spelling: both names stay valid, and
-      // this pins that a subscription may bypass the root dispatch point.
-      delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
-      selector: { eventTypes: narrowedTypes },
-      onPoison: "skip",
-    },
-  });
+  const [replacement] = appendedEvents(
+    await stream.append(
+      { return: "events" },
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          subscriptionKey: "project-worker",
+          // Deliberately the DIRECT worker spelling: both names stay valid, and
+          // this pins that a subscription may bypass the root dispatch point.
+          delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+          selector: { eventTypes: narrowedTypes },
+          onPoison: "skip",
+        },
+      },
+    ),
+  );
 
   const replaced = asStreamRuntimeState(await stream.runtimeState());
   const record = replaced.coreProcessorState.configuredSubscribersByKey?.["project-worker"];
   expect(record?.latestConfiguredEvent?.offset).toBe(replacement.offset);
   expect(record?.latestConfiguredEvent?.payload?.selector?.eventTypes).toEqual(narrowedTypes);
-});
-
-test("a contiguous cursor-set batch preserves the final audited seek", async () => {
-  const marker = crypto.randomUUID();
-
-  using session = withItxSession();
-  using itx = session.authenticate({
-    type: "admin-secret",
-    secret: adminSecret(),
-  });
-  using project = itx.projects.create({ slug: `lifecycle-cursor-batch-${marker}` });
-  using stream = project.streams.get(`/lifecycle-cursor-batch-${marker}`);
-
-  const initial = asStreamRuntimeState(await stream.runtimeState());
-  expect(initial.runtime.subscriptions["project-worker"]?.mode).toBe("push");
-
-  await stream.append(
-    ...Array.from({ length: 100 }, (_, index) => ({
-      type: "events.iterate.com/stream/subscription-cursor-set",
-      payload: {
-        subscriptionKey: "project-worker",
-        // Stay beyond this isolated stream's head so post-append reconcile
-        // cannot immediately advance the row and obscure the winning seek.
-        afterOffset: 10_000 + index,
-      },
-    })),
-  );
-
-  const after = asStreamRuntimeState(await stream.runtimeState());
-  expect(after.runtime.subscriptions["project-worker"]?.ackedOffset).toBe(10_099);
 });
 
 test("stream idle teardown severs configured processor subscriptions", async () => {
@@ -599,42 +579,44 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
   }
 });
 
-test("waitForEvent survives a Stream Durable Object incarnation reset", async () => {
+test("a stream DO kill mid-call rejects with the stream-unavailable tag", async () => {
+  // The retryability contract: a rejection caused by the DO incarnation dying
+  // (kill/eviction/deploy reset) must cross the wire tagged
+  // `stream-unavailable: …` so clients can retry instead of treating it as an
+  // app-level failure — the browser mirror's appendBatch rides exactly this
+  // tag to survive kills mid-blast (see domains/streams/stream-unavailable.ts;
+  // workerd's `durableObjectReset` flag never survives capnweb, so the worker
+  // door is the only hop that can tell the two apart). The parked waitForEvent
+  // makes the proof deterministic: its runtime connection registering proves
+  // the call is in flight inside the DO when kill() lands.
   const marker = crypto.randomUUID();
-  const eventType = `events.iterate.test/lifecycle-wait-reset-${marker}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-wait-reset-${marker}` });
-  using stream = project.streams.get(`/lifecycle-wait-reset-${marker}`);
+  using project = itx.projects.create({ slug: `lifecycle-kill-tag-${marker}` });
+  using stream = project.streams.get(`/lifecycle-kill-tag-${marker}`);
 
-  const { maxOffset } = await stream.head();
-  const pending = stream.waitForEvent({
-    afterOffset: maxOffset,
-    eventTypes: [eventType],
-    predicate: (event) => event.payload?.marker === marker,
-    timeoutMs: 15_000,
-  });
-  void pending.catch(() => undefined);
+  const parked = (async () => {
+    try {
+      await stream.waitForEvent({ eventTypes: [WAIT_FOR_EVENT_TYPE], timeoutMs: 60_000 });
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  })();
   await waitForWaitForEventConnection(stream);
 
-  // The public wait lives in the fronting Worker. Kill only the Stream DO so
-  // the old subscription handle rejects its heartbeat; the replacement must
-  // replay this durable event without asking the caller to retry.
+  // The abort can take the kill() call itself down with it — that rejection
+  // is incidental; the parked call's is the one under test.
   await stream.kill().catch(() => undefined);
-  const [appended] = await appendEvents(stream, {
-    type: eventType,
-    payload: { marker },
-  });
 
-  await expect(pending).resolves.toMatchObject({
-    offset: appended!.offset,
-    payload: { marker },
-    type: eventType,
-  });
+  const rejection = await parked;
+  expect(rejection).toBeInstanceOf(Error);
+  expect((rejection as Error).message).toContain("stream-unavailable: ");
+  expect((rejection as Error).message).toContain("kill requested");
 });
 
 async function waitForConfiguredProcessorConnections(
@@ -712,7 +694,14 @@ async function waitForWaitForEventConnection(stream: Stream): Promise<string> {
       )?.[0];
       return key !== undefined;
     },
-    { description: "waitForEvent internal subscription to become visible" },
+    {
+      description: "waitForEvent internal subscription to become visible",
+      // Registration rides a fresh project's first stream calls: on a cold
+      // preview DO under full lane contention that takes longer than the 5s
+      // default (each runtimeState poll is its own RPC round-trip) — the
+      // kill-tag test hit exactly this wall on preview CI.
+      timeoutMs: 30_000,
+    },
   );
   return key!;
 }

@@ -1273,9 +1273,7 @@ test.skipIf(!ENABLED || !FOCUS_WAKE_SELECTOR)(
     await project.__describe();
     const agentPath = `/agents/wake-selector-${runId}`;
     using agent = project.agents.get(agentPath);
-    const defaults = await project.agents.defaults.forPath(agentPath);
-    await agent.stream.append(...defaults.events);
-    await agent.processor.snapshot();
+    await agent.create({});
 
     const metrics: Record<string, Metric> = {};
     for (const density of ["sparse", "dense"] as const) {
@@ -1304,7 +1302,7 @@ test.skipIf(!ENABLED || !FOCUS_WAKE_SELECTOR)(
           `wake selector append ${density} iteration ${iteration}`,
         );
         await withHostTimeout(
-          iterationAgent.processor.waitUntilEvent({
+          iterationAgent.processor.waitUntilProcessed({
             offset: initialHead + WAKE_SELECTOR_EVENTS,
             timeoutMs: 30_000,
           }),
@@ -2608,7 +2606,7 @@ async function measureProcessorCatchup(projectId: string, samples: number): Prom
       ),
     );
     const expectedOffset = initialHead + PROCESSOR_CATCHUP_EVENTS;
-    await project.processor.waitUntilEvent({ offset: expectedOffset, timeoutMs: 30_000 });
+    await project.processor.waitUntilProcessed({ offset: expectedOffset, timeoutMs: 30_000 });
     if (iteration >= 0) measured.push(performance.now() - startedAt);
   }
   return measured;

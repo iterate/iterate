@@ -19,6 +19,7 @@
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "routes:generate": "tsx ./scripts/generate-route-tree.ts",
     "generate:itx-api": "tsx ./scripts/generate-itx-api.ts",
+    "generate:itx-examples": "tsx ./scripts/generate-itx-examples.ts",
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",
     "typecheck": "pnpm routes:check && pnpm gen:wrangler && tsc --noEmit",
     "test": "pnpm test:unit",

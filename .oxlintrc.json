@@ -257,6 +257,12 @@
       }
     },
     {
+      "files": ["apps/os/e2e/**"],
+      "rules": {
+        "iterate/itx-script-fn-self-contained": "error"
+      }
+    },
+    {
       "files": ["specs/**/*.ts"],
       "rules": {
         "iterate/spec-restricted-syntax": "error",

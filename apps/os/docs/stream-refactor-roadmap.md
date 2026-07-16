@@ -65,49 +65,36 @@ These are the only incremental experiments worth considering before the
 replacement. Each change must remain independently revertible and must not add
 another long-lived state machine.
 
-### 1. Scanned-through frames in `StreamProcessorRunner`
+### 1. Measure the integrated scanned-through runner
 
-Explicit domain-object birth makes append-to-processor-readiness a common
-latency path. Project creation waits for four sibling processors in parallel,
-so this path is no longer obscure.
+The semantic #2002/#2038 merge has implemented the compact private frame:
+selected events, `deliveryThroughOffset`, and `streamMaxOffset`. A successful
+frame durably advances both progress cursors through scanned selector gaps. An
+empty or filtered frame that reaches head runs the event-less reconciliation
+pass required to keep obligations live. Main's acknowledged-cursor fast return
+also remains, so an already-covered readiness barrier makes no Stream RPC.
 
-Main's #2002 runner already implements the important warm fast path:
-`waitUntilEvent({ offset })` loads progress and returns immediately when the
-acknowledged cursor already covers the target. Keep that implementation; do
-not add a second barrier state machine or an ignored final snapshot.
+Do not delete the runner's remaining self-pull indiscriminately. It now serves
+explicit read-your-writes waits and cold registry catch-up when no delivery
+frame exists; those are availability and recovery paths. The duplicate work
+that has been removed is the pull that merely rediscovered a scanned-through
+boundary already supplied by a frame.
 
-The integration gap is the private frame contract. This branch's Stream pump
-advances a configured connection across selector gaps and sends:
+The first post-merge task is to measure this implementation before changing it.
+Cover warm and cold agent, capability-host, repo, scheduler, secret, and full
+project births from a Node host, plus sparse selected frames, an empty
+head-reaching frame, continuous writers, forced kills, and receiver failure.
+Record Stream reads/RPC turns as well as end-to-end readiness. This determines
+whether the compact frame earns a measurable birth/sparse-delivery win and
+establishes the exact-main baseline for all later work.
 
-- selected events,
-- `deliveryThroughOffset`, the highest contiguous raw offset scanned, and
-- `streamMaxOffset`, the immutable head observed for that frame.
-
-The pre-merge runner receives only selected events plus the raw head. Whenever
-its acknowledged cursor remains below that head it compensates with a trailing
-type-unfiltered self-pull, re-reading and hydrating journal rows the Stream just
-scanned. That is avoidable RPC, SQLite, parsing, and payload work on sparse
-processors and birth barriers.
-
-Port `deliveryThroughOffset` into `StreamProcessorRunner`. A successful frame
-must reduce/process selected events, durably advance both progress cursors
-through the scanned offset, and treat `deliveryThroughOffset >=
-streamMaxOffset` as at-head. If no consumed event carries the at-head pass, run
-the event-less reconciliation that production proved necessary; otherwise an
-obligation can strand forever behind an unconsumed tail. Only after those
-invariants are green may the trailing unfiltered self-pull be removed.
-
-Then compare cold barriers that scan to the captured head with a target-bounded
-variant. A target-bounded fold must not report a false head or run at-head
-reconciliation while later events exist, and deferred reconciliation must be
-provably re-driven. Agent and repo reconciliation has consequential side
-effects, so a smaller read is not worth ambiguous liveness.
-
-Measure warm and cold agent, capability-host, repo, scheduler, secret, and full
-project births from a Node host, including continuous writers and forced kills.
+Only then compare cold barriers that scan to the captured head with a
+target-bounded variant. A target-bounded fold must not report a false head or
+run at-head reconciliation while later events exist, and deferred
+reconciliation must be provably re-driven. Agent and repo reconciliation has
+consequential side effects, so a smaller read is not worth ambiguous liveness.
 Require at least 5% p50 and mean improvement with no greater than 2% p95/p99
-regression. This remains the first experiment because the common case can
-remove all Stream RPCs and the cold case can remove RPC turns.
+regression for any additional mechanism.
 
 ### 2. Packed activation record
 
@@ -139,36 +126,32 @@ ABBA pairs, fresh projects, and Node-host end-to-end timing. Require at least
 5% paired p50/capacity improvement, no more than 2% p95/p99 regression, exact
 recovery, and no source-DO duration or hibernation regression.
 
-## Post-2038 Integration Gates
+## Post-2038 Integration Result
 
-The merge is semantic, not a choice of conflict sides:
+The merge met the semantic gates:
 
-- Keep main's `StreamProcessorRunner`, registry, two-cursor progress model,
-  and deletion of `StreamProcessorHost`; do not resurrect the old host to make
-  conflicts easier.
-- Port the compact `deliveryThroughOffset` frame into the runner and retain
-  event-less at-head reconciliation before deleting its fallback self-pull.
-- Keep one public `append`; explicit births request offsets-only results and do
-  not reintroduce default full-event responses or a public `appendAck`.
-- Do not publish overloads or a conditional generic `append`: Cap'n Web proxy
-  projection cannot preserve either result-selection shape. Keep the wire
-  union and put any type-narrow convenience in generated client code.
-- Reimplement recovery through schema-v8's chunk-aware journal APIs. Recovery
-  must preserve oversized rows, `evicted_offset_floor`, explicit offset
-  assignment, and the packed `coreState` checkpoint envelope; it must not port
-  `AUTOINCREMENT`, `sqlite_sequence`, or the older checkpoint keys.
-- Invalidate the subscription cursor store's cached rows and staged progress
-  after atomic replacement. A restored subscription must not silently reuse a
-  deleted row or update zero rows.
-- Fence every poke, push, claim, timer, retained frame, and cursor completion
-  with a recovery generation. A stale `finally` must not delete a new same-key
-  reservation, and recovery closes sessions without appending disconnect facts
-  into the replacement journal.
-- Give segmented exports a journal-incarnation token. An export paused in
-  `sink.write()` must abort if restore replaces the journal rather than emit an
-  old prefix followed by a new suffix.
-- Regenerate the OS and package ITX artifacts from the resolved source; never
-  hand-merge generated API files.
+- Main's `StreamProcessorRunner`, registry, two-cursor progress model, and
+  deletion of `StreamProcessorHost` remain authoritative.
+- The runner consumes the compact `deliveryThroughOffset` frame and retains
+  event-less at-head reconciliation. Its remaining self-pull is limited to
+  explicit read-your-writes/cold catch-up, not duplicate frame scanning.
+- There is one public `append`; explicit births request offsets-only results.
+  Default full-event responses and public `appendAck` do not exist.
+- The wire exposes one append union because Cap'n Web proxy projection cannot
+  preserve overloads or a conditional generic. Shared helpers narrow an
+  explicitly requested projection.
+- Recovery uses schema-v8's chunk-aware journal APIs and preserves oversized
+  rows, `evicted_offset_floor`, explicit offset assignment, and the packed
+  `coreState` checkpoint envelope. Old `AUTOINCREMENT`, `sqlite_sequence`, and
+  checkpoint formats were not revived.
+- Atomic replacement invalidates cursor caches/staged progress, and recovery
+  generation fences remain around pokes, pushes, claims, timers, retained
+  frames, cursor completion, and segmented exports.
+- OS/package ITX API graphs and examples were regenerated from resolved source.
+
+OS typecheck and 502 focused tests pass at the integration snapshot. Full
+repository checks, the exact-main cumulative run, and deployed birth/Worker
+consumer gates are still required before this tree is a shipping candidate.
 
 ## Replacement Architecture
 
@@ -235,17 +218,20 @@ boundaries.
 ## Collapse Budget
 
 Before #2002, the implementation had about 5,085 delivery-coordination lines,
-88 private members, and 13 semi-independent state machines. #2002 deletes the
-old host but adds the runner, registry, two-cursor durability, and keepalive
-adapters. Recount the integrated tree before approving a replacement; do not
-claim the old total as the post-merge baseline. The feature-complete target
-remains:
+88 private members, and 13 semi-independent state machines. The integrated
+eight-file journal/delivery/runner set now totals 8,239 lines, including 1,087
+journal lines and 1,706 runner/registry lines. That is a reproducible file-set
+count, not a claim that every line is coordination. Establish one similarly
+reproducible private-member/state-machine count before approving a replacement;
+do not use the old totals as the post-merge baseline. The feature-complete
+target remains:
 
-| Measure                 | Pre-#2002 estimate |  Replacement gate |
-| ----------------------- | -----------------: | ----------------: |
-| Delivery coordination   |  about 5,085 lines | 3,300-3,600 lines |
-| Private members         |           about 88 |        at most 45 |
-| Explicit state machines |           about 13 |         at most 8 |
+| Measure                 | Integrated evidence       |   Replacement gate |
+| ----------------------- | ------------------------- | -----------------: |
+| Eight core files        | 8,239 lines               | materially smaller |
+| Delivery coordination   | old estimate: about 5,085 |  3,300-3,600 lines |
+| Private members         | old estimate: about 88    |         at most 45 |
+| Explicit state machines | old estimate: about 13    |          at most 8 |
 
 The old kernel is deleted in the same cutover. A dispatcher between old and new
 kernels, schema migration, dual writes, compatibility aliases, or a hidden
@@ -255,11 +241,14 @@ fallback fails the collapse goal even if benchmarks are green.
 
 ### Phase 0: Freeze the oracle
 
-1. Merge current main and explicit-birth behavior into the measured branch.
-2. Run all Stream, processor, domain-object birth, and recovery tests.
-3. Capture one exact-main cumulative baseline and deployed birth-to-ready
-   baseline with immutable revisions and raw logs.
-4. Freeze the public API, benchmark corpus, and correctness matrix.
+1. Completed: merge current main and explicit-birth behavior into the measured
+   branch without reviving `StreamProcessorHost`.
+2. In progress: 502 focused tests and OS typecheck pass; finish full repository
+   checks and the complete birth/recovery matrix.
+3. Pending: capture one exact-main cumulative baseline and deployed
+   birth-to-ready baseline with immutable revisions and raw logs.
+4. Pending: freeze the public API, benchmark corpus, and correctness matrix at
+   those revisions.
 
 ### Phase 1: Build one feature-complete vertical slice
 
@@ -331,10 +320,11 @@ Correctness must prove:
 
 ## Decision Order
 
-1. Integrate current main and establish the post-birth baseline.
-2. Port scanned-through frames into the runner, remove the duplicate self-pull,
-   and measure birth plus sparse-delivery latency; accept target-bounded folding
-   only with reconciliation proof.
+1. Finish full checks and establish the post-birth exact-main baseline for the
+   already integrated scanned-through runner.
+2. Measure birth plus sparse-delivery latency and verify the expected reduction
+   in Stream reads/RPC turns; accept target-bounded folding only with
+   reconciliation proof.
 3. Decide whether the small packed-activation change is worth shipping.
 4. Measure the keyed homogeneous insert on end-to-end large batches.
 5. Build the replacement vertical slice and compare it against the frozen

@@ -151,7 +151,7 @@ describe("Depot validation capacity", () => {
       file: ".depot/workflows/test.yml",
       group: "test-${{ github.head_ref || github.ref_name || github.run_id }}",
       jobId: "test",
-      size: "8x32",
+      size: "4x16",
       timeoutMinutes: 20,
     },
     {

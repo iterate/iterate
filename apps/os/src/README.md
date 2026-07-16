@@ -197,19 +197,21 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 
 `session.projects.create({ slug })` registers the project with the auth worker
 (the project directory — OS has no database of its own), primes the KV cache,
-then appends the create-request onto the project's root stream. The project
-processor seeds the config repo at `/repos/config` (an ordinary repo on its
-own stream — `itx.repo` is the shorthand) from the template folder at
+then appends the `project/created` birth certificate and explicit Project
+processor subscription onto the project's root stream. The Project processor
+creates the root capability host, scheduler, email router, and config repo at
+`/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
+shorthand). The config repo is seeded from the template folder at
 `apps/os/config-repo-template` (ONE TypeScript `worker.ts` — the router as
 its default export plus the example apps as named exports — and `package.json`
 — platform types come from its `iterate` devDependency's `iterate/sdk` export
 — `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
 `domains/repos/config-repo-template.generated.ts` in sync), builds and loads
-the seeded project worker through the worker build pipeline, boots the
-onboarding agent,
-and only then emits `events.iterate.com/project/created`. The config repo's
-stream carries a `cross-post:/` subscription from birth, so every config-repo
-event (the saga's `repo/created` included) is copied onto the project stream
+the seeded project worker through the worker build pipeline, and then emits
+`project/ready`. The onboarding agent is created separately and explicitly
+when its dashboard chat opens; its path alone never creates it. The config
+repo's stream carries a `cross-post:/` subscription from birth, so every
+config-repo event (including `repo/created`) is copied onto the project stream
 `/` with provenance. Streams are the coordination layer for all of this —
 bootstrap is events and processors, not a setup RPC.
 
@@ -301,8 +303,9 @@ loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 default repo's `worker.ts`.
 
 Note: method-returned itx surfaces pipeline on every transport, including
-script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`
-and `await itx.agents.get(path).message(...)` work as one expression (the
+script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`,
+`await itx.agents.get(path).create({})`, and (after birth)
+`await itx.agents.get(path).message(...)` work as one expression (the
 dynamic-capability fallback lives on the classes' prototype chains, so the
 returned instances are genuine RpcTargets; see
 `installPrototypeInvokeCapabilityFallback`). For several calls on one
@@ -311,6 +314,7 @@ pattern:
 
 ```ts
 using agent = itx.agents.get(path); // no await
+await agent.create({});
 const [sent, description] = await Promise.all([agent.message("hello"), agent.__describe()]);
 ```
 
@@ -319,21 +323,26 @@ Await a handle itself only when you truly need the settled stub.
 ## Agents
 
 An agent is a stream (`/agents/<name>`) plus processors. `agent.message()`
-appends `events.iterate.com/agents/message-received`; the single agent
-processor renders inputs into history, applies the input policy, debounces,
-and appends `events.iterate.com/agent/llm-request-requested` — **by
-reference**: no prompt body, the offset is the `llmRequestId`. That same
-processor rebuilds the request by reducing committed history up to that
-offset, runs it through the Cloudflare AI binding (`env.AI`), and appends
-started/chunk/output/completed events. The agent contract: respond with
-exactly one fenced TypeScript block containing a single
-`async (itx) => { … }`, which the itx processor executes; replies reach the
-user via `itx.chat.sendMessage(message)`
-(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
-calls: a returned value (or thrown error) renders back into history as the
-next input and triggers another turn, while a script that returns `undefined`
-ends the loop — the completion event then carries no `result` key.
-`agent.ask({ message })` is the send-and-wait convenience.
+appends `events.iterate.com/agents/context-added`: a user-role item for an
+external caller, or a developer-role item with an agent actor for agent-to-agent
+messages. The single agent processor folds all model-visible context into a
+provider-neutral projection with a compaction-immune system lane and a history
+lane, applies user/developer request policies, debounces, and appends
+`events.iterate.com/agent/llm-request-requested` — **by reference**: no prompt
+body, and the event offset is the `llmRequestId`. That same processor rebuilds
+the request by reducing committed events through that offset, runs it through
+the Cloudflare AI binding (`env.AI`), and journals the request lifecycle plus
+the assistant context item. See [Agent context and turns](../docs/agents.md)
+for projection, key publication, provider-role, and compaction semantics.
+
+The agent contract is to respond with exactly one fenced TypeScript block
+containing a single `async (itx) => { … }`, which the capability-host processor
+executes. Replies reach the user via `itx.chat.sendMessage(message)`
+(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool calls:
+a returned value (or thrown error) becomes a developer context item and
+triggers another turn, while a script that returns `undefined` ends the loop —
+the completion event then carries no `result` key. `agent.ask({ message })` is
+the send-and-wait convenience.
 
 ## Stream processor hosting
 

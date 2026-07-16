@@ -6,6 +6,7 @@ let nextOffset = 1;
 const event = (type: string, payload: Record<string, unknown>): StreamEvent => ({
   type,
   payload,
+  path: "/agents/test",
   offset: nextOffset++,
   createdAt: new Date(1700000000000 + nextOffset * 1000).toISOString(),
 });
@@ -15,9 +16,11 @@ describe("createAgentFeedModel", () => {
     const model = createAgentFeedModel();
 
     const changed = model.applyEvents([
-      event("events.iterate.com/agents/message-received", {
+      event("events.iterate.com/agents/context-added", {
+        role: "user",
         content: "hello agent",
-        from: { kind: "user", origin: "web" },
+        actor: { type: "user", origin: "web" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
       }),
       event("events.iterate.com/agent/llm-request-requested", { model: "gpt-test" }),
     ]);
@@ -70,9 +73,11 @@ describe("createAgentFeedModel", () => {
 
   test("ignores replayed events at or below the folded offset", () => {
     const model = createAgentFeedModel();
-    const first = event("events.iterate.com/agents/message-received", {
+    const first = event("events.iterate.com/agents/context-added", {
+      role: "user",
       content: "one",
-      from: { kind: "user", origin: "web" },
+      actor: { type: "user", origin: "web" },
+      llmRequestPolicy: { behaviour: "after-current-request" },
     });
     model.applyEvents([first]);
     expect(model.snapshot().lastOffset).toBe(first.offset);

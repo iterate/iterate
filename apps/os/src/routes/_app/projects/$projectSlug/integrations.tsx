@@ -772,10 +772,10 @@ function AccountConnectionsItem() {
   const createConnection = useMutation({
     mutationFn: async (input: z.infer<typeof AccountConnectionForm>) => {
       const path = `/secrets/integrations/${input.slug}/${input.connection}/session`;
-      // One update births the whole connection: credential material, the
+      // One create births the whole connection: credential material, the
       // egress pin (the login URL's origin), and the session-login refresh
       // strategy. The password is write-only from here on.
-      await itx.secrets.get(path).update({
+      await itx.secrets.get(path).create({
         egress: { urls: [new URL(input.loginUrl).origin] },
         material: { password: input.password, username: input.username },
         refresh: { graphqlUrl: input.loginUrl, kind: "waitrose-session" },

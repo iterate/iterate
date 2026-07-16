@@ -32,14 +32,15 @@ describe("event docs catalog", () => {
     expect(getEventDocByType("events.iterate.com/stream/created")).toBe(event);
   });
 
-  it("keeps events whose public path does not start with the processor slug under the processor", () => {
-    const event = getEventDocByPath("agents/message-received");
+  it("uses the event namespace as the agent processor's public docs path", () => {
+    const event = getEventDocByPath("agents/context-added");
 
-    expect(event?.processor.slug).toBe("agent");
-    expect(event?.href).toBe("/docs/streams/processors/agent/events/agents/message-received");
+    expect(event?.processor.slug).toBe("agents");
+    expect(event?.processor.contractSlug).toBe("agent");
+    expect(event?.href).toBe("/docs/streams/processors/agents/events/context-added");
     expect(event?.routeParams).toEqual({
-      processorSlug: "agent",
-      _splat: "agents/message-received",
+      processorSlug: "agents",
+      _splat: "context-added",
     });
   });
 
@@ -47,7 +48,7 @@ describe("event docs catalog", () => {
     expect(
       getEventDocByProcessorRoute({
         processorSlug: "stream",
-        eventPath: "agents/message-received",
+        eventPath: "agents/context-added",
       }),
     ).toBeUndefined();
   });
@@ -158,10 +159,10 @@ describe("event docs cross-references", () => {
       "events.iterate.com/stream/subscription-configured",
     );
     const foreignEmit = processor?.emits.find(
-      (event) => event.type === "events.iterate.com/repo/create-requested",
+      (event) => event.type === "events.iterate.com/repo/created",
     );
     expect(foreignEmit?.ownerContractSlug).toBe("repo");
-    expect(foreignEmit?.href).toBe("/docs/streams/processors/repo/events/create-requested");
+    expect(foreignEmit?.href).toBe("/docs/streams/processors/repo/events/created");
   });
 
   it("links processor dependencies in both directions", () => {

@@ -72,8 +72,10 @@ One TTL governs it: **3 hours** (`PREVIEW_DISPOSABLE_TTL_SECONDS` in
   goes quiet stops costing us within ~3h instead of a full day.
 - **R2 lifecycle** on the preview `-search-index`, `-files`, and `-sandboxes`
   (`backups/`) buckets: objects are deleted 3h after they're written.
-  `ensure-resources` installs these rules for preview slots only; prd keeps its
-  data (sandbox backups 90 days, corpus + files forever).
+  `ensure-resources` installs these rules for preview slots only, and
+  `erase-data` re-installs all three on every acquire/cleanup so existing slots
+  self-heal without a manual `ensure-resources` run (CI never runs that). Prd
+  keeps its data (sandbox backups 90 days, corpus + files forever).
 - **Sandboxes**: containers already sleep after ~10 min idle
   (`onActivityExpired` snapshots then destroys the container). The 3h backup
   expiry finishes the job — a preview sandbox not used for 3h loses its backup,

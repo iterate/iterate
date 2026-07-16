@@ -275,6 +275,22 @@ export const StreamSubscriberDescriptor = z.object({
 /** Serializable subscriber identity carried on presence facts and the runtime connection table. */
 export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
 
+/**
+ * The ONE platform revival fact for every recovery-wired stream processor.
+ * Appended by the platform keepalive (`durableObjectRecovery` in
+ * durable-object-processor-durability.ts) when a processor is revived after
+ * its incarnation died owing background work — never emitted by a processor.
+ * Per-processor identity rides the payload's `processorSlug` and the
+ * `processor-revived:<slug>@...` idempotency key, not the type string.
+ * Recovery-wired contracts CONSUME it (the runner's construction check
+ * requires that): its ordinary delivery is the guaranteed turn that lands at
+ * the stream head, where `processEvent`'s at-head reconcile
+ * (`delivery.caughtUp`) re-drives the processor's open obligations. Reduce
+ * ignores it — the at-head reconcile its delivery guarantees is the whole
+ * point.
+ */
+export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
+
 export const StreamSubscriberDisconnectReason = z.enum([
   /** A new connection for the same subscriptionKey replaced this one. */
   "replaced",
@@ -581,22 +597,21 @@ export const CoreProcessorContract = defineProcessorContract({
               processor: {
                 announcement: {
                   slug: "agent",
-                  version: "0.4.0",
+                  version: "1.0.0",
                   description:
-                    "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
+                    "Maintains provider-neutral model context and requests LLM work from a provider processor.",
                   consumes: [
-                    "events.iterate.com/agent/input-added",
-                    "events.iterate.com/agents/message-received",
+                    "events.iterate.com/agents/context-added",
                     "events.iterate.com/agent/llm-request-completed",
                   ],
                   emits: [
-                    "events.iterate.com/agent/input-added",
+                    "events.iterate.com/agents/context-added",
                     "events.iterate.com/agent/llm-request-scheduled",
                   ],
                   ownedEvents: [
                     {
-                      type: "events.iterate.com/agent/input-added",
-                      description: "A normalized model-visible input was added.",
+                      type: "events.iterate.com/agents/context-added",
+                      description: "A provider-neutral model context item was added.",
                     },
                     { type: "events.iterate.com/agent/llm-request-scheduled" },
                   ],
@@ -641,6 +656,25 @@ export const CoreProcessorContract = defineProcessorContract({
         },
       ],
     },
+    [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
+      description:
+        "A recovery-wired stream processor was revived after its incarnation died owing background work (in-flight obligations lost to an eviction). Appended by the platform's recovery keepalive, never emitted by a processor; the payload's processorSlug names which processor was revived (the type string is shared by every recovery-wired processor). Recovery-wired contracts consume it so its ordinary delivery guarantees an at-head reconcile turn (processEvent under delivery.caughtUp) that re-drives the processor's open obligations.",
+      // Loose ON PURPOSE: the payload is authored by the shared recovery
+      // adapter (durableObjectRecovery.appendRevived), and future fields it
+      // grows must not turn historical revivals into parse failures.
+      payloadSchema: z.looseObject({
+        processorSlug: z.string(),
+        revivals: z.number(),
+        version: z.string(),
+      }),
+      examples: [
+        {
+          description:
+            "The keepalive alarm revived an agent processor after a deploy took an in-flight LLM turn.",
+          payload: { processorSlug: "agent", revivals: 1, version: "2026-07-14.1" },
+        },
+      ],
+    },
     "events.iterate.com/stream/error-occurred": {
       description: "Records a structured stream or processor runner error.",
       payloadSchema: z.object({
@@ -668,7 +702,7 @@ export const CoreProcessorContract = defineProcessorContract({
             "A processor skipped an event that fails its contract's schema, with the structured cause attached.",
           payload: {
             message:
-              'stream processor "agent" skipped event at offset 42 ("events.iterate.com/agent/input-added"): it fails the contract\'s schema',
+              'stream processor "agent" skipped event at offset 42 ("events.iterate.com/agents/context-added"): it fails the contract\'s schema',
             error: {
               name: "ZodError",
               message: 'Invalid input: expected string, received number at "content"',
@@ -731,7 +765,7 @@ export const CoreProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<CoreProcessorContract>`,
- * `ConsumedEvent<CoreProcessorContract>`, `ProcessorEvent<CoreProcessorContract, T>`.
+ * `ConsumedEvent<CoreProcessorContract>`.
  */
 export type CoreProcessorContract = typeof CoreProcessorContract;
 

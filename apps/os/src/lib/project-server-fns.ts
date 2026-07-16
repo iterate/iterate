@@ -61,7 +61,7 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
  *
  * A brand-new auth signup creates the user/org/project records in auth before
  * OS has a project stream. When that single auth-known project is still
- * missing, this starts the OS bootstrap with `waitUntilCreated: false`. Single
+ * missing, this starts the OS bootstrap with `waitUntilReady: false`. Single
  * project users then route straight to the onboarding agent stream; that page
  * can render immediately while stream processors catch up.
  *
@@ -122,7 +122,7 @@ export const getRootProjectRedirectServerFn: (input?: {
           await projects.create({
             projectId: decision.project.id,
             slug: decision.project.slug,
-            waitUntilCreated: false,
+            waitUntilReady: false,
             ...organizationSlugForProject(context, decision.project),
           });
         } catch {

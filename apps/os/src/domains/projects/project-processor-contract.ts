@@ -4,6 +4,9 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { StreamListItem } from "../streams/schemas.ts";
 import {
   EgressRule,
@@ -59,20 +62,24 @@ export type ProjectCustomDomainCloudflareSnapshot = z.output<
 /** One custom domain as reduced onto project processor state. */
 export type ProjectCustomDomain = z.output<typeof ProjectCustomDomain>;
 
+const ProjectBirthCertificate = z.object({
+  config: z.object({
+    slug: z.string(),
+    onboardingActive: z.boolean().optional(),
+    /** The creating user's login email, when known. Seeds owner-scoped
+     * project state such as the inbound email sender allowlist. */
+    creatorEmail: z.string().optional(),
+  }),
+});
+
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
   version: "0.1.0",
   description:
     "Project projection: bootstrap the default repo/project worker and manage custom-domain routing.",
   stateSchema: z.object({
-    createRequest: z
-      .object({
-        projectId: z.string(),
-        slug: z.string(),
-      })
-      .nullable()
-      .default(null),
-    created: z.boolean().default(false),
+    birthCertificate: ProjectBirthCertificate.nullable().default(null),
+    ready: z.boolean().default(false),
     onboardingActive: z.boolean().default(false),
     onboardingCompletedAt: z.string().nullable().default(null),
     agents: z.array(StreamListItem).default([]),
@@ -86,51 +93,38 @@ export const ProjectProcessorContract = defineProcessorContract({
     humanApprovalKeys: z.array(HumanApprovalKey).default([]),
   }),
   events: {
-    "events.iterate.com/project/create-requested": {
-      description: "A project creation was requested.",
-      payloadSchema: z.object({
-        onboardingActive: z.boolean().optional(),
-        projectId: z.string(),
-        slug: z.string(),
-        /** The creating user's login email, when known. Seeds owner-scoped
-         * project state (e.g. the inbound email sender allowlist). */
-        creatorEmail: z.string().optional(),
-      }),
+    "events.iterate.com/project/created": {
+      description: "Birth certificate for this project processor.",
+      payloadSchema: ProjectBirthCertificate,
       examples: [
         {
           description:
             "A dashboard signup created the project: onboarding starts and the creator's email seeds the inbound-email sender allowlist.",
           payload: {
-            onboardingActive: true,
-            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-            slug: "acme-inc",
-            creatorEmail: "jane@acme-inc.com",
+            config: {
+              onboardingActive: true,
+              slug: "acme-inc",
+              creatorEmail: "jane@acme-inc.com",
+            },
           },
         },
         {
           description:
             "An admin/CLI create: no creating user, so no onboarding and no allowlist seed.",
           payload: {
-            projectId: "prj_01jzq8t2m5xcnd4w9e6b3vf7kp",
-            slug: "acme-staging",
+            config: { slug: "acme-staging" },
           },
         },
       ],
     },
-    "events.iterate.com/project/created": {
-      description: "The project root was created.",
-      payloadSchema: z.object({
-        projectId: z.string(),
-        slug: z.string(),
-      }),
+    "events.iterate.com/project/ready": {
+      description: "The project bootstrap saga completed and its default worker is ready.",
+      payloadSchema: z.object({}),
       examples: [
         {
           description:
             "The bootstrap saga finished: the root repo exists and the project worker answered its probe.",
-          payload: {
-            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-            slug: "acme-inc",
-          },
+          payload: {},
         },
       ],
     },
@@ -443,8 +437,11 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/onboarding-completed",
     "events.iterate.com/project/created",
-    "events.iterate.com/project/create-requested",
+    "events.iterate.com/project/ready",
+    "events.iterate.com/agent/created",
     "events.iterate.com/repo/created",
+    "events.iterate.com/repo/ready",
+    "events.iterate.com/secret/created",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
   ],
@@ -453,19 +450,22 @@ export const ProjectProcessorContract = defineProcessorContract({
     RepoProcessorContract,
     AgentProcessorContract,
     EmailProcessorContract,
+    SecretProcessorContract,
+    CapabilityHostProcessorContract,
+    SchedulerProcessorContract,
   ],
   emits: [
-    "events.iterate.com/agent/config-updated",
-    "events.iterate.com/agent/input-added",
-    "events.iterate.com/agent/llm-provider-selected",
     // Seeded onto /integrations/email at project birth (the creator's email
     // becomes the sender allowlist's first entry).
     "events.iterate.com/email/sender-allowed",
+    "events.iterate.com/email/created",
+    "events.iterate.com/capability-host/created",
+    "events.iterate.com/scheduler/created",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-removed",
-    "events.iterate.com/project/created",
-    "events.iterate.com/repo/create-requested",
+    "events.iterate.com/project/ready",
+    "events.iterate.com/repo/created",
     "events.iterate.com/stream/subscription-configured",
   ],
 });
@@ -473,13 +473,13 @@ export const ProjectProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<ProjectProcessorContract>`,
- * `ConsumedEvent<ProjectProcessorContract>`, `ProcessorEvent<ProjectProcessorContract, T>`.
+ * `ConsumedEvent<ProjectProcessorContract>`.
  */
 export type ProjectProcessorContract = typeof ProjectProcessorContract;
 
 /**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `created` flips when the
+ * `stateSchema` — the one definition of the shape. `ready` flips when the
  * bootstrap saga lands; the list fields are what the collection `list()`
  * methods read.
  */

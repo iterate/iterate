@@ -184,6 +184,8 @@ export type SubscriptionCursorStore = {
   /** Apply a contiguous run of explicit seeks with bounded multi-row SQL updates. */
   setCursors(cursors: readonly SubscriptionCursorSet[]): void;
   delete(subscriptionKey: string): void;
+  /** Drop all in-memory rows and staged progress after direct journal replacement. */
+  resetForRecovery(): void;
   /** Earliest backoff or in-flight recovery deadline, for arming the DO alarm. */
   minNextAttemptAt(): number | null;
 };
@@ -516,6 +518,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#sql.exec(DELETE_SUBSCRIPTION_CURSOR, subscriptionKey);
     this.#deletePendingProgress(subscriptionKey);
     rows.delete(subscriptionKey);
+  }
+
+  resetForRecovery(): void {
+    this.#cachedRows = undefined;
+    this.#pendingProgress.clear();
+    this.#dueProgressRows = 0;
   }
 
   minNextAttemptAt(): number | null {

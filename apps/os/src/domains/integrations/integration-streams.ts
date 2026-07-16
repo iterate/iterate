@@ -6,15 +6,13 @@
 // authority; caller-facing confinement stays in rpc-targets.ts.
 
 import { itxEnv } from "../../env.ts";
-import type { ItxExpression } from "../../itx/expression.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,
+  INTEGRATION_DIRECTORY_STREAM_PATH,
   integrationConnectionStreamPath,
-  integrationDirectoryStreamPath,
 } from "./utils.ts";
 
 export function integrationStreamStub(projectId: string | null, path: string) {
@@ -36,48 +34,58 @@ async function readAllStreamEvents(projectId: string | null, path: string): Prom
   }
 }
 
+const FILTERED_PAGE_SIZE = 500;
+
 /**
- * The newest accepted event of the requested types. The ordinary path reads
- * one row; only a rejected newest row falls back to bounded backward pages.
+ * The latest event matching any of the requested types.
+ *
+ * Integration journals grow forever (one webhook per GitHub or Slack event),
+ * while lifecycle questions only need connected/disconnected facts. Filtering
+ * in Stream storage keeps unrelated event chunks and one-RPC-per-tail-page
+ * round trips out of the status path. Page forward in the unlikely case a
+ * connection has more than 500 lifecycle transitions so latest still wins.
  */
-export async function latestStreamEvent(
+export async function latestStreamEventOfTypes(
   projectId: string | null,
   path: string,
   eventTypes: readonly string[],
-  accepts?: (event: StreamEvent) => boolean,
-): Promise<StreamEvent | undefined> {
+): Promise<StreamEvent | null> {
   const stream = integrationStreamStub(projectId, path);
-  const newest = (await stream.getEvents({ eventTypes, limit: 1, order: "desc" }))[0];
-  if (newest === undefined || accepts === undefined || accepts(newest)) return newest;
-
-  let beforeOffset = newest.offset;
+  let afterOffset = 0;
+  let latest: StreamEvent | null = null;
   for (;;) {
-    const page = await stream.getEvents({
-      beforeOffset,
-      eventTypes,
-      limit: 500,
-      order: "desc",
-    });
-    const accepted = page.find(accepts);
-    if (accepted !== undefined || page.length < 500) return accepted;
-    beforeOffset = page.at(-1)!.offset;
+    const page = await stream.getEvents({ afterOffset, eventTypes, limit: FILTERED_PAGE_SIZE });
+    if (page.length === 0) return latest;
+    latest = page.at(-1)!;
+    if (page.length < FILTERED_PAGE_SIZE) return latest;
+    afterOffset = latest.offset;
   }
 }
 
 /** One project+connection that owns a provider-side external id. */
 type ConnectionClaim = { connection: string; projectId: string };
 
+/** Directory key: `(slug, externalId)` flattened. The external id is only
+ * unique WITHIN a provider (a Slack team id and a GitHub installation id could
+ * collide as bare strings), so the slug is part of the key. */
+function directoryKey(slug: string, externalId: string): string {
+  return `${slug} ${externalId}`;
+}
+
 /**
- * Folds one claim from its integration-directory bucket. The first live
- * project owner wins, but that project may update the connection name. An
- * unclaim clears the owner only when BOTH project and connection match, so a
- * stale connection's disconnect cannot tear down a newer connection.
+ * Folds the deployment-wide integration directory: for each `(slug,
+ * externalId)`, the first live project owner wins. That project may update the
+ * connection name; another project can claim the id only after a matching
+ * unclaim clears it. Requiring BOTH the project and connection on an unclaim
+ * also prevents a stale connection's disconnect from tearing down the claim a
+ * newer connection now owns. This is the provider-agnostic generalization of
+ * the old Slack team directory (D4): the same fold serves Slack team ids,
+ * GitHub installation ids, and any future provider.
  */
-export function foldConnectionClaim(
+export function foldConnectionDirectory(
   events: readonly StreamEvent[],
-  key: { externalId: string; slug: string },
-): ConnectionClaim | null {
-  let claim: ConnectionClaim | null = null;
+): Map<string, ConnectionClaim> {
+  const claims = new Map<string, ConnectionClaim>();
   for (const event of events) {
     const payload = event.payload as {
       connection?: unknown;
@@ -86,26 +94,28 @@ export function foldConnectionClaim(
       slug?: unknown;
     };
     if (
-      payload?.slug !== key.slug ||
-      payload.externalId !== key.externalId ||
-      typeof payload.projectId !== "string"
+      typeof payload?.slug !== "string" ||
+      typeof payload?.externalId !== "string" ||
+      typeof payload?.projectId !== "string"
     ) {
       continue;
     }
+    const key = directoryKey(payload.slug, payload.externalId);
     if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
       if (typeof payload.connection !== "string") continue;
-      if (claim === null || claim.projectId === payload.projectId) {
-        claim = { connection: payload.connection, projectId: payload.projectId };
+      const existingClaim = claims.get(key);
+      if (existingClaim === undefined || existingClaim.projectId === payload.projectId) {
+        claims.set(key, { connection: payload.connection, projectId: payload.projectId });
       }
     } else if (
       event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
-      claim?.projectId === payload.projectId &&
-      claim.connection === payload.connection
+      claims.get(key)?.projectId === payload.projectId &&
+      claims.get(key)?.connection === payload.connection
     ) {
-      claim = null;
+      claims.delete(key);
     }
   }
-  return claim;
+  return claims;
 }
 
 /** Resolve which project+connection a validly-signed webhook belongs to, by
@@ -114,46 +124,8 @@ export async function lookupConnectionClaim(
   slug: string,
   externalId: string,
 ): Promise<ConnectionClaim | null> {
-  const events = await readAllStreamEvents(null, integrationDirectoryStreamPath(slug, externalId));
-  return foldConnectionClaim(events, { externalId, slug });
-}
-
-/**
- * The desired durable subscription from an integration connection journal to
- * its router processor. Both connect and ingress use this one builder: connect
- * arms a fresh stream, while every webhook idempotently reconciles connections
- * that predate the current itx expression shape.
- *
- * The idempotency key fingerprints the persisted capability name itself. A
- * future expression or processor-slug change therefore appends one replacement
- * configuration per connection automatically, without a hand-written data
- * migration. The key is stream-local, so it needs no project/path prefix.
- */
-export function buildIntegrationRouterSubscriptionConfiguredEvent(input: {
-  connection: string;
-  processorSlug: string;
-  projectId: string;
-  slug: string;
-}) {
-  const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
-  const processor = [
-    "integrations",
-    input.slug,
-    ["get", input.connection],
-    "processor",
-  ] satisfies ItxExpression;
-  return buildDurableObjectProcessorSubscriptionConfiguredEvent({
-    durableObjectName: DurableObjectNameCodec.stringify({
-      projectId: input.projectId,
-      path: streamPath,
-    }),
-    idempotencyKey: `integration-router-subscription:${JSON.stringify({
-      processor,
-      processorSlug: input.processorSlug,
-    })}`,
-    processor,
-    processorSlug: input.processorSlug,
-  });
+  const events = await readAllStreamEvents(null, INTEGRATION_DIRECTORY_STREAM_PATH);
+  return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
 }
 
 /** The outcome of routing one inbound webhook: delivered to a connection, or
@@ -166,42 +138,45 @@ type RouteIntegrationWebhookResult =
 /**
  * Route one validly-signed webhook to the project + connection that claimed its
  * `(slug, externalId)`, by appending a provider-shaped event to that
- * connection's stream. Providers with a connection-stream router also supply
- * its processor slug: the same append then reconciles the desired durable
- * subscription BEFORE the webhook fact, so old parked connections repair on
- * their next delivery. `ignored` (no live claim) lets the door ACK-and-drop.
- * This is the generic core of the webhook door (D4): per-provider code does
- * only the signature verify, external-id extract, and event shaping; routing is
- * one function for every integration.
+ * connection's stream. This function deliberately appends ONLY the ingress
+ * fact: connection setup owns any router birth and subscription. `ignored` (no
+ * live claim) lets the door ACK-and-drop. This is the generic core of the
+ * webhook door (D4): per-provider code does only the signature verify,
+ * external-id extract, and event shaping; routing is one function for every
+ * integration.
  */
 export async function routeIntegrationWebhook(input: {
   event: { idempotencyKey: string; payload: Record<string, unknown>; type: string };
   externalId: string;
-  routerProcessorSlug?: string;
+  /**
+   * Birth certificate that must already exist on the claimed connection
+   * stream. Webhook routers pass this so ingress can never commit work before
+   * the processor has been explicitly created. Providers without an inbound
+   * stream processor (currently GitHub) omit it.
+   */
+  routerCreatedEventType?: string;
   slug: string;
 }): Promise<RouteIntegrationWebhookResult> {
   const claim = await lookupConnectionClaim(input.slug, input.externalId);
   if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
   const streamPath = integrationConnectionStreamPath(input.slug, claim.connection);
-  await integrationStreamStub(claim.projectId, streamPath).appendAck(
-    ...(input.routerProcessorSlug === undefined
-      ? []
-      : [
-          buildIntegrationRouterSubscriptionConfiguredEvent({
-            connection: claim.connection,
-            processorSlug: input.routerProcessorSlug,
-            projectId: claim.projectId,
-            slug: input.slug,
-          }),
-        ]),
-    {
-      ...input.event,
-      // Preserve the trusted routing decision on the durable fact. Downstream
-      // userspace can select the exact account that received the webhook
-      // instead of accidentally acting through the project's first connection.
-      payload: { ...input.event.payload, connection: claim.connection },
-    },
-  );
+  if (
+    input.routerCreatedEventType !== undefined &&
+    (await latestStreamEventOfTypes(claim.projectId, streamPath, [
+      input.routerCreatedEventType,
+    ])) === null
+  ) {
+    throw new Error(
+      `${input.slug} router ${claim.connection} for project ${claim.projectId} has not been created`,
+    );
+  }
+  await integrationStreamStub(claim.projectId, streamPath).append({
+    ...input.event,
+    // Preserve the trusted routing decision on the durable fact. Downstream
+    // userspace can select the exact account that received the webhook
+    // instead of accidentally acting through the project's first connection.
+    payload: { ...input.event.payload, connection: claim.connection },
+  });
   return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }
 
@@ -238,15 +213,7 @@ export async function appendConnectionDirectoryEvents(
     slug: string;
   }[],
 ): Promise<void> {
-  const first = inputs[0];
-  if (first === undefined) return;
-  if (inputs.some((input) => input.slug !== first.slug || input.externalId !== first.externalId)) {
-    throw new Error("One directory append cannot span integration external ids.");
-  }
-  await integrationStreamStub(
-    null,
-    integrationDirectoryStreamPath(first.slug, first.externalId),
-  ).appendAck(
+  await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).append(
     ...inputs.map((input) => ({
       type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
       payload: {

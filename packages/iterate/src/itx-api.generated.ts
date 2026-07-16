@@ -64,6 +64,8 @@ export interface Session {
   streams: StreamCollection;
   /** Deployment-wide repos (admin only; projectId: null). */
   repos: RepoCollection;
+  /** Admin-only exact-offset Stream Durable Object recovery. */
+  streamRecovery: StreamRecoveryCollection;
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
   projects: ProjectCollection;
 }
@@ -91,7 +93,7 @@ export interface Project {
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
+  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<ProjectLiveState>;
@@ -101,7 +103,7 @@ export interface Project {
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
   browser: CfBrowserCapability;
-  /** THIS agent's control surface — present only on an agent-scoped itx (path under `/agents/`). */
+  /** This scope's agent control handle, when its address is under `/agents/`. */
   agent?: Agent;
   /** THIS agent's web-chat door — present only on an agent-scoped itx. */
   chat?: AgentChat;
@@ -190,10 +192,15 @@ export interface StreamCollection {
 /** Repo catalog for either a project or the deployment-wide global scope. */
 export interface RepoCollection {
   __describe(): Promise<Description>;
-  /** Create the repo at a path; resolves once `repo/created` lands. */
+  /** Create the repo at a path; resolves once its backing artifact is `repo/ready`. */
   create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
+}
+
+/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
+export interface StreamRecoveryCollection {
+  get(input: { projectId: string | null; path: string }): StreamRecovery;
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
@@ -203,12 +210,13 @@ export interface ProjectCollection {
   get(projectId: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/created` — convenient for scripts
+   * bootstrap saga has committed `project/ready` — convenient for scripts
    * and tests that use the project immediately. Pass
-   * `waitUntilCreated: false` to resolve as soon as the project EXISTS
+   * `waitUntilReady: false` to resolve once the `project/created` birth
+   * certificate has been processed
    * (identity registered, directory primed, bootstrap events appended): the
    * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.created` flips when bootstrap
+   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
    * lands). The dashboard uses the fast path to redirect into the project
    * instantly and play creation progress from pushes.
    */
@@ -216,12 +224,12 @@ export interface ProjectCollection {
     organizationSlug?: string;
     projectId?: string;
     slug: string;
-    waitUntilCreated?: boolean;
+    waitUntilReady?: boolean;
   }): Promise<Project>;
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
-   * engine probe (`state.created` on each project's processor snapshot). A
+   * engine probe (`state.ready` on each project's processor snapshot). A
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
@@ -269,16 +277,24 @@ export interface Ai {
   /** List the Workers AI model catalog. */
   models(): Promise<unknown>;
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
-   * The optional third argument is the binding's own options object — e.g.
-   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
-   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
-  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
-  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
+   * Outputs are model-shaped: instantiate `run<T>` with the response shape you
+   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
+   * `unknown`. The optional third argument is the binding's own options object
+   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
+  /** Calling with no arguments lists the file formats the converter accepts. */
+  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
+  /** Convert one document (`{ name, blob }`) to Markdown. */
   toMarkdown(
-    ...args: CfMarkdownConversionArgs
-  ): Promise<
-    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
-  >;
+    document: CfMarkdownDocument,
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult>;
+  /** Convert a batch of documents to Markdown; results come back in input order. */
+  toMarkdown(
+    documents: CfMarkdownDocument[],
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult[]>;
 }
 
 /** Cloudflare Browser Run binding exposed through itx. */
@@ -303,8 +319,9 @@ export interface CfBrowserCapability {
 }
 
 /**
- * One agent: message loops and agent-local dynamic tools. Chain calls
- * directly off `get` — `await itx.agents.get("researcher").message(task)`.
+ * One agent: message loops and agent-local dynamic tools. For an
+ * already-created agent, chain calls directly off `get` —
+ * `await itx.agents.get("researcher").message(task)`.
  * Unknown members dispatch through the agent scope's capability host, so
  * `agents.get(path).someTool(args)` and
  * `agents.get(path).capabilityHost.someTool(args)` are equivalent; inside
@@ -332,14 +349,21 @@ export interface Agent {
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
+   * Create the agent on this stream. The birth certificate contains only the
+   * processor-owned config; this method also creates the universally paired
+   * capability host, installs both subscriptions, appends any durable
+   * `initialEvents` in the same batch, and returns only after both processors
+   * have durably processed the complete batch.
+   */
+  create(input: AgentCreateInput): Promise<void>;
+  /**
    * Send a message to this agent — THE inbound door for every caller. The
-   * event's `from` derives from the calling scope: inside an agent script
+   * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
-   * `{ kind: "agent", path }` and does NOT refill the receiver's autonomous
+   * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
-   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
-   * never existed births the agent: the first append creates the stream and
-   * the platform applies birth mechanics + default policy. Optional files
+   * (web UI, CLI, MCP session) it is a user message. The agent must already
+   * have been created explicitly. Optional files
    * are stored in project file storage and ride the message as attachments
    * (images stay visible to vision-capable models).
    */
@@ -352,22 +376,10 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Set THIS agent's policy: system prompt and/or model. Works on an agent
-   * that already ran (a plain last-write-wins update) AND on a path that has
-   * never existed — the append births the agent with the full default policy
-   * plus these overrides, and the batch claims the same idempotency keys the
-   * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
-   * platform prompt wholesale — including the codemode contract that tells
-   * the agent how to act. For delegation, prefer putting instructions in the
-   * message itself and leaving the prompt alone.
-   */
-  configure(input: AgentDefaultsOverrides): Promise<void>;
-  /**
    * Update this agent's status record — the title, note, and shortStatus that
    * project surfaces (the agents list, the Slack thread status) show for it.
    * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * busy/idle flag (and what you are doing — waiting for a response vs running code)
    * into the same record on its own. `shortStatus` completes the sentence
    * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
    * while the agent works — update it as your work moves through phases.
@@ -413,8 +425,8 @@ export interface Agent {
    * Store files AND make them part of this agent's conversation in one call.
    * The bytes land in project file storage under the agent's own path
    * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all
-   * attachments (each with a signed public `url`) is appended to the agent
-   * stream — so the files show up as a single conversation message, and
+   * attachments (each with a signed public `url`) is appended as one context
+   * item — so the files show up as a single conversation message, and
    * images become visible to vision-capable models on following turns. Pass
    * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files
    * WITHOUT starting an LLM turn (the right choice for files the agent
@@ -469,6 +481,8 @@ export interface CapabilityHost {
   /** This scope's capability-host stream processor (snapshot/state). A real
    * member, so it also claims the name: mounts cannot shadow `processor`. */
   processor: WakeableStreamProcessorRpc;
+  /** Create this capability host and return only after it has processed its birth batch. */
+  create(): Promise<void>;
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
@@ -534,16 +548,14 @@ export interface AgentCollection {
    * the calling scope — `".."` climbs). The returned handle is a plain,
    * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
    * `itx.agents.get(path).message(text)` or `.someTool(args)` in one
-   * expression — over workerd RPC (the script lane); dynamic members resolve
-   * through the prototype-chain fallback. See Agent's class comment
-   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the
-   * guard.
+   * expression for an already-created agent — over workerd RPC (the script
+   * lane); dynamic members resolve through the prototype-chain fallback. See
+   * Agent's class comment for the mechanism and
+   * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
    */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
-  /** The platform's default agent policy, as data. */
-  defaults: AgentDefaults;
 }
 
 /**
@@ -556,7 +568,7 @@ export interface AgentCollection {
 export interface ProjectEgress {
   __describe(): Promise<Description>;
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response>;
+  fetch(request: Request): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -1058,6 +1070,8 @@ export interface Scheduler {
   __describe(): Promise<Description>;
   /** The scheduler stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
+  /** Create this Scheduler and return only after it has processed the complete birth batch. */
+  create(): Promise<void>;
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
@@ -1102,7 +1116,7 @@ export interface SecretCollection {
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 export interface Repo {
   __describe(): Promise<Description>;
-  /** Create the repo if it does not exist yet; resolves once `repo/created` lands. */
+  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */
   create(): Promise<Repo>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
@@ -1401,35 +1415,38 @@ export interface Stream {
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
 }
 
+/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
+export interface StreamRecovery {
+  exportForRecovery(args?: {
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportPage>;
+  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
+  exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    maxPages?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary>;
+  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
+    restoredEventCount: number;
+    lastImportedOffset: number;
+    currentMaxOffset: number;
+  }>;
+}
+
 /**
  * The read-side RPC surface every stream processor node exposes: inspect
  * runtime state (snapshot plus a processor-specific runtime bag), take an
- * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to
- * block until the processor has folded a given offset.
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
+ * block until the processor has durably folded through a given offset.
  */
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
-}
-
-/**
- * The `itx.agents.defaults` built-in: default agent POLICY as data. The
- * project worker owns applying it — the seeded template reacts to
- * `stream/child-stream-created` for `/agents/**` by appending
- * `forPath(path).events` to the new agent stream (and edits the result to
- * customize agents). The platform appends only mechanics (processor
- * subscriptions); an agent nobody configures runs on stock defaults.
- */
-export interface AgentDefaults {
-  __describe(): Promise<Description>;
-  /**
-   * The default policy for one agent path: the named pieces plus the exact
-   * event batch that applies them. Events are idempotency-keyed on
-   * (projectId, path), so appending them twice — or racing a redelivery — is
-   * a no-op.
-   */
-  forPath(path: string, overrides?: AgentDefaultsOverrides): Promise<AgentDefaultPolicy>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1493,6 +1510,8 @@ export interface Secret {
   fetch(request: Request): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
+  /** Create this secret and wait until its processor has folded the birth certificate. */
+  create(input: SecretCreateInput): Promise<StreamEvent>;
   /** Set secret material, its egress allowlist, and/or refresh strategy.
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
@@ -1740,13 +1759,19 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
 
 /**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `created` flips when the
+ * `stateSchema` — the one definition of the shape. `ready` flips when the
  * bootstrap saga lands; the list fields are what the collection `list()`
  * methods read.
  */
 export type ProjectProcessorState = {
-  createRequest: { projectId: string; slug: string } | null;
-  created: boolean;
+  birthCertificate: {
+    config: {
+      slug: string;
+      onboardingActive?: boolean | undefined;
+      creatorEmail?: string | undefined;
+    };
+  } | null;
+  ready: boolean;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   agents: { createdAt: string; path: string }[];
@@ -2049,18 +2074,37 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
-/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;
- * otherwise one document (or an array) plus optional conversion options
- * converts to markdown. */
-export type CfMarkdownConversionArgs =
-  | []
-  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
-
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
 export type CfMarkdownSupportedFormat = {
   extension: string;
   mimeType: string;
+};
+
+/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
+ * a filename plus the raw bytes as a Blob. */
+export type CfMarkdownDocument = {
+  /** Filename including the extension; Cloudflare uses it to choose the converter. */
+  name: string;
+  blob: Blob;
+};
+
+/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+ * hostname for relative links), image description language, PDF metadata
+ * exclusion. */
+export type CfMarkdownConversionOptions = {
+  conversionOptions?: {
+    html?: {
+      cssSelector?: string;
+      hostname?: string;
+    };
+    image?: {
+      descriptionLanguage?: string;
+    };
+    pdf?: {
+      excludeMetadata?: boolean;
+    };
+  };
 };
 
 /** One converted document from `ai.toMarkdown`: `format` is "markdown" with
@@ -2101,19 +2145,264 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
  * `stateSchema`.
  */
 export type AgentProcessorState = {
-  systemPrompt: string;
-  history: {
-    role: "assistant" | "user";
-    content: string;
-    files?:
-      | { contentType: string; filename: string; path: string; size: number; url: string }[]
-      | undefined;
-  }[];
-  llmConfig: { model: string };
-  llmConfigConfigured: boolean;
+  birthCertificate: { config: { systemPrompt: string; llm: { model: string } } } | null;
+  config: { systemPrompt: string; llm: { model: string } } | null;
+  context: {
+    system: (
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "system";
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "developer";
+          actor?:
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "user";
+          actor: { type: "user"; origin: "mcp" | "web" };
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "assistant";
+          llmRequestOffset?: number | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+    )[];
+    history: (
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "system";
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "developer";
+          actor?:
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "user";
+          actor: { type: "user"; origin: "mcp" | "web" };
+          llmRequestPolicy:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" };
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "assistant";
+          llmRequestOffset?: number | undefined;
+          offset: number;
+          updatesOffset?: number | undefined;
+        }
+    )[];
+    publishedThrough: number;
+  };
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }
+    | { phase: "requested"; llmRequestOffset: number; requestedAt: number }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -2147,6 +2436,15 @@ export type AgentProcessorState = {
     totalCachedInputTokens: number;
     totalReasoningOutputTokens: number;
   };
+};
+
+/** Public agent-creation input. Durable, idempotency-keyed startup inputs
+ * commit in the same append as the birth certificates and subscriptions,
+ * before create waits for the processors to catch up. */
+export type AgentCreateInput = AgentDefaultsOverrides & {
+  initialEvents?: Array<
+    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
+  >;
 };
 
 /**
@@ -2194,15 +2492,7 @@ export type StreamEvent = {
   path: string;
 };
 
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the path's platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
-};
-
-/** A file attached to an agent input: content type, filename, project
+/** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = {
@@ -2224,6 +2514,23 @@ export type ItxExpression = ItxExpressionStep[];
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
+
+/**
+ * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
+ * to `Promise<unknown>` ahead of the ambient signature. Pinned because the
+ * ambient resolution is a compiler-settings artifact — which `lib`/`types` a
+ * consumer compiles with decides whether `await response.json()` is `any`
+ * (DOM lib alone), `unknown` (the current DOM + workers-types merge), or the
+ * useless `Promise<{}>` (older merges, where workers-types'
+ * `json<T>(): Promise<T>` inferred `{}`). The first-position member makes
+ * every consumer see the same honest `unknown`: narrow or cast it to the
+ * shape you expect, or `JSON.parse(await response.text())` in plain-JS
+ * scripts that read the body dynamically.
+ */
+export type EgressResponse = {
+  /** The parsed JSON body — honestly `unknown`; the caller supplies the shape. */
+  json(): Promise<unknown>;
+} & Response;
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
@@ -2266,10 +2573,15 @@ export type SlackConnection = Record<string, any> & {
   processor: WakeableStreamProcessorRpc;
 };
 
-/** The Gmail REST API connection exposed by a connected Google account. */
+/** The Gmail REST API connection exposed by a connected Google account.
+ * `data` is whatever the addressed REST resource returns — the caller
+ * supplies the expected shape via `request<T>` (no invented Gmail schemas
+ * here); it defaults to the honest `unknown` when uninstantiated. */
 export type GmailConnection = {
-  request(input: GmailRequestInput): Promise<{
-    data: unknown;
+  request<T = unknown>(
+    input: GmailRequestInput,
+  ): Promise<{
+    data: T;
     headers: Record<string, string>;
     status: number;
     statusText: string;
@@ -2491,10 +2803,11 @@ export type SandboxInstanceType =
  * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
  * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
- * contract deliberately does not re-declare that surface (same stance as
- * `McpClientRpc`); https://developers.cloudflare.com/sandbox/api/ is
- * the authoritative reference. The image is the stock Cloudflare sandbox
+ * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
+ * contract re-declares only the everyday command door, `exec` (the rest
+ * stays undeclared, same stance as `McpClientRpc`, so new SDK methods need
+ * no forwarding code here); https://developers.cloudflare.com/sandbox/api/
+ * is the authoritative reference. The image is the stock Cloudflare sandbox
  * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
  * you need at runtime.
  *
@@ -2520,6 +2833,34 @@ export type SandboxInstanceType =
  *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object & {
+  /** Run one shell command to completion and return its captured output —
+   * the SDK's `exec`, declared with the data fields that travel over every
+   * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —
+   * exist at runtime but are transport-dependent, so they stay out of this
+   * contract). `env` values override the session's for this one command;
+   * `timeout` is milliseconds. */
+  exec(
+    command: string,
+    options?: {
+      cwd?: string;
+      encoding?: string;
+      env?: Record<string, string | undefined>;
+      timeout?: number;
+    },
+  ): Promise<{
+    /** Whether the command succeeded (`exitCode === 0`). */
+    success: boolean;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    /** The command that was executed. */
+    command: string;
+    /** Execution duration in milliseconds. */
+    duration: number;
+    /** ISO timestamp of when the command started. */
+    timestamp: string;
+    sessionId?: string;
+  }>;
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
 };
@@ -2542,6 +2883,7 @@ export type SearchAnswerResult = SearchQueryResult & {
 
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
 export type SchedulerProcessorState = {
+  birthCertificate: { config: Record<string, never> } | null;
   pendingTriggers: Record<
     string,
     {
@@ -2559,7 +2901,7 @@ export type SchedulerProcessorState = {
       action: { [x: string]: unknown; kind: "itx-script"; script: string };
       definedAtOffset: number;
       metadata?: Record<string, unknown> | undefined;
-      path?: string | undefined;
+      path: string;
       nextTriggerAt: number | null;
       recurrence:
         | { [x: string]: unknown; at: string }
@@ -2718,9 +3060,9 @@ export type GithubResetResult = {
  * `stateSchema` — the one definition of the shape.
  */
 export type RepoProcessorState = {
+  birthCertificate: { config: Record<string, never> } | null;
   artifactName: string | null;
-  createRequested: boolean;
-  created: boolean;
+  ready: boolean;
   defaultBranch: string | null;
   github: { connection: string; installationId: string; owner: string; repo: string } | null;
   githubImport: {
@@ -2918,10 +3260,108 @@ export type StreamSubscriptionHandle = Disposable & {
   unsubscribe(): void;
 };
 
+/** One bounded page of a stream's storage-level recovery export. */
+export type StreamRecoveryExportPage = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  events: {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          crossPostedFrom?:
+            | {
+                subscriptionKey: string;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  }[];
+  throughOffset: number;
+  complete: boolean;
+};
+
+/** Acknowledged page sink used by one long-running recovery export RPC. */
+export type StreamRecoveryExportSink = {
+  write(page: StreamRecoveryExportPage): Promise<void>;
+};
+
+/** Small result returned after every exported page has been acknowledged. */
+export type StreamRecoveryExportSummary = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  throughOffset: number;
+  exportedEventCount: number;
+  pageCount: number;
+  lastExportedOffset: number;
+  complete: boolean;
+};
+
+/** A complete normalized stream log accepted by storage-level recovery restore. */
+export type StreamRecoveryRestoreInput = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  events: {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          crossPostedFrom?:
+            | {
+                subscriptionKey: string;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  }[];
+  highestAssignedOffset: number;
+};
+
 /**
  * Whether a project the directory knows about actually exists in THIS
  * deployment's engine:
- * - `ready` — the project stream's bootstrap saga ran (`state.created`).
+ * - `ready` — the project stream's bootstrap saga ran (`state.ready`).
  * - `missing` — the engine has no state for it (e.g. the deployment was reset
  *   while the auth worker kept its rows); it can be set up again.
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
@@ -2964,30 +3404,49 @@ export type AgentStatusRecord = {
   icon?: string | undefined;
 };
 
-/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
-export type CfMarkdownDocument = {
-  /** Filename including the extension; Cloudflare uses it to choose the converter. */
-  name: string;
-  blob: Blob;
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the generic platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  model?: string;
 };
 
-/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
- * hostname for relative links), image description language, PDF metadata
- * exclusion. */
-export type CfMarkdownConversionOptions = {
-  conversionOptions?: {
-    html?: {
-      cssSelector?: string;
-      hostname?: string;
-    };
-    image?: {
-      descriptionLanguage?: string;
-    };
-    pdf?: {
-      excludeMetadata?: boolean;
-    };
-  };
+/** Append input for `Stream.append`: event type, JSON payload, optional
+ * metadata, provenance source, and idempotency key — everything before the
+ * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
+ * second-class row: excluded from range reads unless `includeEphemeral`,
+ * never delivered to durable subscribers (wake/push/webhook), and evictable —
+ * for transient signals (LLM streaming chunks) whose durable truth lands as
+ * its own event. */
+export type StreamEventInput = {
+  type: string;
+  payload?: Record<string, unknown> | undefined;
+  metadata?: Record<string, unknown> | undefined;
+  source?:
+    | {
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
+        crossPostedFrom?:
+          | {
+              subscriptionKey: string;
+              createdAt: string;
+              offset: number;
+              path: string;
+              projectId: string | null;
+              type: string;
+            }[]
+          | undefined;
+      }
+    | undefined;
+  idempotencyKey?: string | undefined;
+  ephemeral?: true | undefined;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
@@ -2999,14 +3458,6 @@ export type FlattenedCapabilityInvocation = {
 
 /** One step of an {@link ItxExpression}: a property read, or a `[method, ...args]` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
-
-/** The default policy for one agent path: the named pieces plus the exact
- * event batch that applies them (idempotency-keyed, safe to re-append). */
-export type AgentDefaultPolicy = {
-  systemPrompt: string;
-  model: string;
-  events: AgentPolicyEventInput[];
-};
 
 /** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
 export type ProjectFileMetadata = {
@@ -3106,6 +3557,8 @@ export type SecretDescription = {
     usedCount: number;
   };
   egress: { urls: string[] };
+  /** Whether the secret processor has folded its birth certificate. */
+  created: boolean;
   hasMaterial: boolean;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
@@ -3118,6 +3571,16 @@ export type SecretDescription = {
  * processor facade projects it away (write-only material) before anything
  * crosses the RPC boundary.
  */
+export type SecretCreateInput = {
+  /** Complete egress policy established by the birth certificate. */
+  egress: { urls: string[] };
+  /** Optional initial write-only material. */
+  material?: unknown;
+  /** Optional initial refresh strategy; omitted means no refresh. */
+  refresh?: SecretRefresh | null;
+};
+
+/** Input for replacing secret material or changing its egress and refresh policy. */
 export type SecretUpdateInput =
   | {
       /** Replacement material must name its complete egress policy in the same
@@ -3270,43 +3733,6 @@ export type WorkspaceFileInfo = {
   updatedAt: number;
 };
 
-/** Append input for `Stream.append`: event type, JSON payload, optional
- * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
- * second-class row: excluded from range reads unless `includeEphemeral`,
- * never delivered to durable subscribers (wake/push/webhook), and evictable —
- * for transient signals (LLM streaming chunks) whose durable truth lands as
- * its own event. */
-export type StreamEventInput = {
-  type: string;
-  payload?: Record<string, unknown> | undefined;
-  metadata?: Record<string, unknown> | undefined;
-  source?:
-    | {
-        processor?:
-          | {
-              slug: string;
-              version: string;
-              stream: { path: string; projectId: string | null };
-              whileProcessing?: { offset: number; type: string } | undefined;
-            }
-          | undefined;
-        crossPostedFrom?:
-          | {
-              subscriptionKey: string;
-              createdAt: string;
-              offset: number;
-              path: string;
-              projectId: string | null;
-              type: string;
-            }[]
-          | undefined;
-      }
-    | undefined;
-  idempotencyKey?: string | undefined;
-  ephemeral?: true | undefined;
-};
-
 /**
  * Optional result projection for `Stream.append`.
  *
@@ -3410,15 +3836,6 @@ export type StreamProcessorEventBatch = {
   events: StreamEvent[];
   deliveryThroughOffset: number;
   streamMaxOffset: number;
-};
-
-/** The policy events an agent is born with, as append inputs. Typed
- * structurally (not against the full event catalog) so the SDK projection
- * stays self-contained. */
-export type AgentPolicyEventInput = {
-  type: string;
-  idempotencyKey: string;
-  payload: Record<string, unknown>;
 };
 
 /** Input to the Images capability's `transform`: the source image stream,

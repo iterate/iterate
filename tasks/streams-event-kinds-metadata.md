@@ -15,9 +15,10 @@ Explicitly deferred — parked here so it isn't lost.
 
 Three kinds of events fall out of the audit's unification:
 
-1. **Configuration facts** — desired state: `subscription-configured`,
-   `system-prompt-updated`, `llm-config-updated`, `tool-provider-registered`,
-   jsonata rules. Reducers fold these into "what should be true".
+1. **Configuration facts** — desired state: `subscription-configured`, keyed
+   system-role `agents/context-added`, `agent/configured`,
+   `tool-provider-registered`, jsonata rules. Reducers fold these into "what
+   should be true".
 2. **Presence facts** — incarnation observations: created/woken/connected.
    Never change desired state; signal "somebody's runtime state reset".
 3. **Domain facts** — messages, requests, outputs; the actual conversation.

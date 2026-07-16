@@ -167,6 +167,30 @@ To confirm membership / reactions from the CI actor:
 # reactions.get / conversations.replies on the message ts
 ```
 
+### Post-recreation proof
+
+After recreating production, use a real human `@iterate` mention and retain its
+permalink. A product-bot reply in the same thread proves signed webhook ingress,
+the global workspace-to-project claim, the restored project connection and bot
+token, agent routing, and outbound Slack delivery.
+
+Read the thread back through the restored project connection as a second check.
+Convert the permalink's final `p...` value back to Slack's dotted timestamp and
+use the recorded connection explicitly:
+
+```bash
+# from apps/os; do not print any token
+doppler run --config prd -- pnpm cli itx run \
+  --context <iterate-project-id> \
+  --vars '{"connection":"t0675psn873","channel":"C...","ts":"178...123456"}' \
+  -e 'return await itx.integrations.slack.get(vars.connection).conversations.replies({ channel: vars.channel, ts: vars.ts })'
+```
+
+Require `ok: true`, the human root message, and a reply whose user is the
+recorded product-bot user. Save the permalink, timestamps, and reply text in
+the cutover evidence. A pre-cutover thread is only a baseline; repeat this
+after restore.
+
 ## Manual preview smoke test
 
 1. Create or repair the preview Slack app with the preview manifest.

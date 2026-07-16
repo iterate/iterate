@@ -2,6 +2,10 @@ import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { SandboxInstanceType } from "./instance-types.ts";
 
+const SandboxBirthCertificate = z.object({
+  config: z.object({ instanceType: SandboxInstanceType }),
+});
+
 /**
  * The event catalog, spelled out as a const so
  * {@link SandboxLifecycleEventInput} can be derived from it — the contract
@@ -48,11 +52,11 @@ const SANDBOX_EVENTS = {
   "events.iterate.com/sandbox/created": {
     description:
       "The sandbox exists: identity and configuration are durably stored and itx.sandboxes.get(path) resolves it. No container is running yet — the first command (or start()) boots one.",
-    payloadSchema: z.object({ instanceType: SandboxInstanceType }),
+    payloadSchema: SandboxBirthCertificate,
     examples: [
       {
         description: "A basic sandbox finished setup and is ready to boot on the first command.",
-        payload: { instanceType: "basic" },
+        payload: { config: { instanceType: "basic" } },
       },
     ],
   },
@@ -203,11 +207,9 @@ export const SandboxProcessorContract = defineProcessorContract({
   description:
     "Sandbox lifecycle: explicit create/start/sleep/destroy commands and their completions, workspace snapshot/restore persistence, and configuration changes.",
   stateSchema: z.object({
-    /** Where the sandbox is in its life. Default "created": state only exists
-     * once events do, and the first event is the create. */
-    status: SandboxStatus.default("created"),
-    /** The sandbox's Cloudflare instance type — fixed at create. */
-    instanceType: SandboxInstanceType.nullable().default(null),
+    birthCertificate: SandboxBirthCertificate.nullable().default(null),
+    /** Null until the birth certificate is reduced. */
+    status: SandboxStatus.nullable().default(null),
     /** The newest workspace snapshot — what the next container start restores. */
     lastBackupId: z.string().nullable().default(null),
     /** The sandbox's configured env-var map (key → getSecret placeholder /

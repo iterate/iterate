@@ -218,7 +218,7 @@ describe("StreamEventLog.getRange", () => {
     expect(read(log, { afterOffset: 0, eventTypes: [], limit: 3 })).toEqual([]);
   });
 
-  it("insert reports serialized byte lengths and getRangeSized reads the same sizes back", () => {
+  it("insert and range metadata report the stored serialized byte lengths", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     const committedEvents = [
       event(1, "events.iterate.com/test/sized"),
@@ -244,6 +244,17 @@ describe("StreamEventLog.getRange", () => {
     });
     expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
+
+    expect(
+      log.getRangeSizes({
+        afterOffset: 0,
+        beforeOffset: Number.MAX_SAFE_INTEGER,
+        limit: 10,
+      }),
+    ).toEqual([
+      { offset: 1, byteLength: insertedByteLengths[0] },
+      { offset: 2, byteLength: insertedByteLengths[1] },
+    ]);
   });
 
   it("scans exact raw progress while materializing only selected event types", () => {
@@ -1527,6 +1538,26 @@ describe("StreamEventLog.getRange", () => {
     expect(() => log.evictEphemeralThrough(1.5, runner)).toThrow(
       "Invalid ephemeral eviction offset: 1.5",
     );
+  });
+
+  it("replaces the complete log and continues allocating after the imported offset", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([event(1, "events.iterate.com/test/replaced")]);
+    const imported = [
+      event(1, "events.iterate.com/stream/created"),
+      event(9, "events.iterate.com/test/imported"),
+    ];
+
+    log.replaceAll(imported, 12, transactionRunner(db));
+
+    expect(offsets(read(log, { afterOffset: 0, limit: 20, includeEphemeral: true }))).toEqual([
+      1, 9,
+    ]);
+    expect(log.highestAssignedOffset()).toBe(12);
+    expect(() => log.insert([event(9, "events.iterate.com/test/collision")])).toThrow();
+    log.insert([event(13, "events.iterate.com/test/next")]);
+    expect(log.highestAssignedOffset()).toBe(13);
   });
 });
 

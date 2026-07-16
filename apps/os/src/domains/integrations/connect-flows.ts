@@ -16,7 +16,7 @@
 //                     the Secret DO's own trusted code.
 //   - Facts:          `/integrations/<slug>/<connection>` project stream
 //                     (connected/disconnected + inbound webhook events).
-//   - Routing:        the bucketed deployment-wide `(slug, externalId)` directory
+//   - Routing:        the deployment-wide `(slug, externalId)` directory
 //                     (integration-streams.ts) — claimed at connect, folded by
 //                     the webhook door to route inbound events.
 //
@@ -25,7 +25,12 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { SecretRefresh } from "../secrets/types.ts";
+import type {
+  SecretCreateInput,
+  SecretDescription,
+  SecretRefresh,
+  SecretUpdateInput,
+} from "../secrets/types.ts";
 import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
@@ -42,11 +47,14 @@ import {
 import {
   appendConnectionDirectoryEvent,
   appendConnectionDirectoryEvents,
-  buildIntegrationRouterSubscriptionConfiguredEvent,
   integrationStreamStub,
-  latestStreamEvent,
+  latestStreamEventOfTypes,
   lookupConnectionClaim,
 } from "./integration-streams.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "./integration-router-events.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";
@@ -266,6 +274,12 @@ async function gateConnectState(input: {
   return { callbackUrl, ok: true, stateData };
 }
 
+type IntegrationSecretStub = {
+  create(input: SecretCreateInput): Promise<unknown>;
+  describe(): Promise<SecretDescription>;
+  update(input: SecretUpdateInput): Promise<unknown>;
+};
+
 /**
  * The provider-invariant storage half of a connect, shared by every provider's
  * exchange half and by admin/e2e seeding (which has a token but no OAuth
@@ -294,7 +308,7 @@ async function recordConnection(input: {
   processorSubscription?: {
     processorSlug: string;
   };
-  /** Claim this connection's external id in the deployment-wide directory bucket
+  /** Claim this connection's external id in the deployment-wide directory
    * (providers with first-party webhook ingress). The generic door folds it to
    * route inbound events (D4). `unclaimFirst` names a claim being MOVED from
    * (telegram's steal): its unclaim commits in the SAME directory append as
@@ -307,17 +321,24 @@ async function recordConnection(input: {
 }): Promise<void> {
   const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
   for (const secret of input.secrets) {
-    await itxEnv.SECRET.getByName(
+    const secretStub = itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({ projectId: input.projectId, path: secret.path }),
-    ).update({
+    ) as unknown as IntegrationSecretStub;
+    const secretInput = {
       egress: { urls: [...secret.egressUrls] },
       material: secret.material,
       ...(secret.refresh ? { refresh: secret.refresh } : {}),
-    });
+    };
+    if ((await secretStub.describe()).created) await secretStub.update(secretInput);
+    else await secretStub.create(secretInput);
   }
-  await integrationStreamStub(input.projectId, streamPath).appendAck(
+  await integrationStreamStub(input.projectId, streamPath).append(
     ...(input.processorSubscription
       ? [
+          buildIntegrationRouterCreatedEvent({
+            connection: input.connection,
+            slug: input.slug,
+          }),
           buildIntegrationRouterSubscriptionConfiguredEvent({
             connection: input.connection,
             projectId: input.projectId,
@@ -1036,11 +1057,11 @@ async function latestLifecycleFact(input: {
   slug: string;
 }): Promise<{ connected: boolean; payload: Record<string, unknown> } | null> {
   const path = integrationConnectionStreamPath(input.slug, input.connection);
-  const event = await latestStreamEvent(input.projectId, path, [
+  const event = await latestStreamEventOfTypes(input.projectId, path, [
     input.connectedType,
     input.disconnectedType,
   ]);
-  return event === undefined
+  return event === null
     ? null
     : {
         connected: event.type === input.connectedType,
@@ -1232,7 +1253,7 @@ async function recordDisconnection(input: {
   await integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath(input.slug, input.connection),
-  ).appendAck(input.disconnectedEvent);
+  ).append(input.disconnectedEvent);
   if (input.unclaimExternalId) {
     await appendConnectionDirectoryEvent({
       claimed: false,

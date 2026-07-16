@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
 import type { ItxExample, ItxExampleRuntime } from "../../src/itx/examples.ts";
+import { runExample } from "../test-support/run-example.ts";
 import { baseUrl, connectProject } from "./e2e-env.ts";
 
 export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
@@ -27,7 +28,7 @@ const AsyncFunction = async function () {}.constructor as new (
 
 export async function runExampleCode(
   runtime: MatrixRuntime,
-  input: { code: string; id?: string; projectId: string; vars: Record<string, unknown> },
+  input: { code: string; id: string; projectId: string; vars: Record<string, unknown> },
 ): Promise<unknown> {
   // Exactly one attempt: transient absorption is the vitest CI retry's job
   // (E2E_CI_RETRIES, docs/testing.md#retries-and-timeouts). A retry wrapper
@@ -89,18 +90,17 @@ async function runInNode(input: {
 }
 
 async function runInRunScript(input: {
-  code: string;
+  id: string;
   projectId: string;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   using project = connectProject(input.projectId);
-  // runScript takes an async arrow function source string (see itx
-  // CapabilityHost contract); the example body becomes its body, with the
-  // case's vars serialized inline.
-  const execution = await project.capabilityHost.runScript(
-    `async (itx) => {\nconst vars = ${JSON.stringify(input.vars)};\n${input.code}\n}`,
-  );
-  return execution.result;
+  // The shared by-id door (test-support/run-example.ts) IS this runtime:
+  // the matrix proves the exact envelope any e2e test gets from runExample.
+  return await runExample(input.id, {
+    capabilityHost: project.capabilityHost,
+    vars: input.vars,
+  });
 }
 
 async function runInProjectWorker(input: {

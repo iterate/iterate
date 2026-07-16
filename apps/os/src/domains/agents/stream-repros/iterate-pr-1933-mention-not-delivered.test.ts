@@ -3,7 +3,8 @@ import { GithubAgentProcessor } from "../../repos/github-agent-processor-impleme
 import { githubAgentPath } from "../../repos/github-agent-utils.ts";
 import { RepoProcessor } from "../../repos/repo-processor-implementation.ts";
 import type { StreamEvent } from "../../streams/schemas.ts";
-import { deliverNewEvents, MemoryStreamNetwork } from "../../streams/test-helpers.ts";
+import { MemoryStreamNetwork } from "../../streams/test-helpers.ts";
+import { StreamProcessorRunner } from "../../streams/stream-processor-runner.ts";
 import fixture from "./iterate-pr-1933-mention-not-delivered.json";
 
 describe("production stream repro: iterate PR 1933 mention was never delivered", () => {
@@ -19,10 +20,32 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
     const agent = network.get(agentPath);
     repo.events = [
       {
+        type: "events.iterate.com/repo/created",
+        payload: { config: {} },
+        idempotencyKey: "fixture/repo-created",
+        offset: 1,
+        createdAt: "2026-07-13T13:41:58.000Z",
+        path: fixture.repoPath,
+      },
+      {
+        type: "events.iterate.com/repo/ready",
+        payload: {
+          artifactName: "fixture-repo",
+          defaultBranch: "main",
+          path: fixture.repoPath,
+          projectId: fixture.projectId,
+          remote: "https://example.invalid/fixture-repo.git",
+        },
+        idempotencyKey: "fixture/repo-ready",
+        offset: 2,
+        createdAt: "2026-07-13T13:41:59.000Z",
+        path: fixture.repoPath,
+      },
+      {
         type: "events.iterate.com/repo/github-link-configured",
         payload: fixture.githubLink,
         idempotencyKey: "fixture/github-link",
-        offset: 1,
+        offset: 3,
         createdAt: "2026-07-13T13:42:00.000Z",
         path: fixture.repoPath,
       },
@@ -39,10 +62,10 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
       projectId: fixture.projectId,
       stream: repo,
     });
-    await deliverNewEvents({ processor, stream: repo, cursors: new Map() });
+    await new StreamProcessorRunner({ processor, stream: repo }).catchUp();
 
-    const currentRoute = agent.events.find(
-      (event) => event.type === "events.iterate.com/github-agent/route-configured",
+    const currentBirth = agent.events.find(
+      (event) => event.type === "events.iterate.com/github-agent/created",
     );
     const currentSubscription = agent.events.find((event) => {
       const payload = event.payload as { delivery?: { processorSlug?: unknown } };
@@ -59,11 +82,11 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
       );
     });
 
-    expect(currentRoute?.idempotencyKey).not.toBe(
+    expect(currentBirth?.idempotencyKey).not.toBe(
       "repo/pr-route:install-115079265:iterate/iterate:1933",
     );
     expect(currentSubscription?.payload?.subscriptionKey).toMatch(/#github-agent$/);
-    expect(currentRoute!.offset).toBeLessThan(currentSubscription!.offset);
+    expect(currentBirth!.offset).toBeLessThan(currentSubscription!.offset);
     expect(currentSubscription!.offset).toBeLessThan(forwardedMention!.offset);
 
     const reactions: unknown[] = [];
@@ -75,16 +98,24 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
       projectId: fixture.projectId,
       stream: agent,
     });
-    await deliverNewEvents({ processor: githubAgent, stream: agent, cursors: new Map() });
+    await new StreamProcessorRunner({ processor: githubAgent, stream: agent }).catchUp();
 
     const turn = agent.events.find(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        (event.payload as { role?: unknown }).role === "developer",
     );
     expect(turn).toBeDefined();
     const turnPayload = turn!.payload as {
+      role: "developer";
+      actor: { type: "github"; login?: string };
       content: string;
       llmRequestPolicy: { behaviour: string };
     };
+    expect(turnPayload).toMatchObject({
+      role: "developer",
+      actor: { type: "github", login: "jonastemplestein" },
+    });
     expect(turnPayload.content).toContain("@iterate can you see this?");
     expect(turnPayload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
     expect(reactions).toEqual([

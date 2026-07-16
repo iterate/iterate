@@ -95,6 +95,7 @@ export function processCustomDomainEvent({
   projectId: string;
   state: ProjectProcessEventArgs["state"];
 }): boolean {
+  if (event === null) return false;
   switch (event.type) {
     case "events.iterate.com/project/custom-domain-add-requested":
     case "events.iterate.com/project/custom-domain-refresh-requested": {
@@ -168,10 +169,10 @@ function assertCustomDomainProvisioner(
 }
 
 function projectRecordFromState(
-  state: { createRequest: { projectId: string; slug: string } | null },
+  state: { birthCertificate: { config: { slug: string } } | null },
   projectId: string,
 ): ProjectDirectoryRecord {
-  const slug = state.createRequest?.slug ?? projectId;
+  const slug = state.birthCertificate?.config.slug ?? projectId;
   return { id: projectId, slug, organizationId: null, name: slug };
 }
 

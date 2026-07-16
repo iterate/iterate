@@ -21,18 +21,18 @@ test("public secret events can change egress but copied ciphertext cannot follow
   using project = itx.projects.create({ slug: `secret-stream-forgery-${crypto.randomUUID()}` });
   const secretPath = `/secrets/stream-forgery/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
-  await secret.update({
+  await secret.create({
     egress: { urls: [original.url] },
     material: "user-submitted-material",
   });
 
   const stream = project.streams.get(secretPath);
-  const originalUpdate = (await stream.getEvents()).find(
-    (event) => event.type === "events.iterate.com/secret/updated",
+  const birthCertificate = (await stream.getEvents()).find(
+    (event) => event.type === "events.iterate.com/secret/created",
   );
-  const encryptedMaterial = (originalUpdate?.payload as Record<string, unknown> | undefined)?.[
-    "encryptedMaterial"
-  ];
+  const encryptedMaterial = (
+    birthCertificate?.payload as { config?: Record<string, unknown> } | undefined
+  )?.config?.["encryptedMaterial"];
   expect(encryptedMaterial).toBeDefined();
 
   await stream.append({
@@ -70,7 +70,7 @@ test("every egress-only update clears retained secret material", async () => {
   using project = itx.projects.create({ slug: `secret-repin-${crypto.randomUUID()}` });
   using secret = project.secrets.get(`/secrets/repin/${crypto.randomUUID()}`);
 
-  await secret.update({
+  await secret.create({
     egress: { urls: [original.url] },
     material: "user-submitted-material",
   });
@@ -145,7 +145,7 @@ test("an in-flight refresh cannot resurrect material after an egress event", asy
   using project = itx.projects.create({ slug: `secret-refresh-race-${crypto.randomUUID()}` });
   const secretPath = `/secrets/refresh-race/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
-  await secret.update({
+  await secret.create({
     egress: { urls: [provider.url] },
     material: {
       accessToken: "stale-access-token",
@@ -214,7 +214,7 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
     kind: "oauth-refresh-token",
     tokenEndpoint: `${provider.url}/oauth/token`,
   } as const;
-  await secret.update({
+  await secret.create({
     egress: { urls: [provider.url] },
     material: {
       accessToken: "stale-access-token",
@@ -268,7 +268,7 @@ test("secret egress rejects a cross-origin redirect without forwarding material"
   const secretPath = `/secrets/redirect/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
 
-  await secret.update({
+  await secret.create({
     egress: { urls: [allowed.url] },
     material: "redirect-exfiltration-proof",
   });
@@ -300,7 +300,7 @@ test("URL-path secret material is not returned in Response metadata", async () =
   const material = `url-secret-${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
 
-  await secret.update({
+  await secret.create({
     egress: { urls: [endpoint.url] },
     material,
   });
@@ -329,19 +329,17 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     using project = itx.projects.create({ slug: `project-egress-${crypto.randomUUID()}` });
     const secretPath = `/secrets/egress-proof/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [echo.url] },
       material: "actual-secret-material",
     });
 
     const agentPath = `/agents/list-proof/${crypto.randomUUID()}`;
     const repoPath = `/repos/list-proof/${crypto.randomUUID()}`;
-    await project.streams.get(agentPath).append({
-      type: "events.iterate.test/list-agent",
-    });
-    await project.streams.get(repoPath).append({
-      type: "events.iterate.test/list-repo",
-    });
+    await Promise.all([
+      project.agents.get(agentPath).create({}),
+      project.repos.get(repoPath).create(),
+    ]);
     await waitForCondition(
       async () => (await project.secrets.list()).some((item) => item.path === secretPath),
       { description: "secret stream to appear in project processor list" },
@@ -435,25 +433,36 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     );
     expect((await project.repos.list()).some((item) => item.path === "/repos/config")).toBe(true);
     expect((await project.repos.list()).some((item) => item.path.startsWith("/repos/"))).toBe(true);
-    // Birth now seeds one boot-context input item (platform context: project
-    // id, agent path, repo layout) with dont-trigger-request — so history has
-    // exactly that item and no LLM turn ran. Ingest is async: wait for the
-    // processor to fold the birth events before asserting (cold slots under
-    // CI load have been seen to lag).
+    // Birth seeds keyed boot context in the system lane (platform context:
+    // project id, agent path, repo layout), so no LLM turn runs. Ingest is
+    // async: wait for the processor to fold the birth events before asserting
+    // (cold slots under CI load have been seen to lag).
     const agentProcessor = project.agents.get(agentPath).processor;
-    await waitForCondition(async () => (await agentProcessor.snapshot()).state.history.length > 0, {
-      description: "agent boot-context input to fold into history",
-      timeoutMs: 30_000,
-    });
+    await waitForCondition(
+      async () =>
+        (await agentProcessor.snapshot()).state.context.system.some(
+          (item) => item.key === "agent/boot-context",
+        ),
+      {
+        description: "agent boot context to fold into system context",
+        timeoutMs: 30_000,
+      },
+    );
     expect((await agentProcessor.snapshot()).state).toMatchObject({
-      history: [
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
-        }),
-      ],
+      context: {
+        system: expect.arrayContaining([
+          expect.objectContaining({
+            role: "system",
+            key: "agent/boot-context",
+            content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
+          }),
+        ]),
+      },
     });
-    expect((await project.repo.processor.snapshot()).state).toMatchObject({ created: true });
+    expect((await project.repo.processor.snapshot()).state).toMatchObject({
+      birthCertificate: { config: {} },
+      ready: true,
+    });
     // oxlint-disable-next-line iterate/prefer-object-property-match -- toEqual pins the exact egress config; a subset match would tolerate extra keys
     expect((await secret.processor.snapshot()).state.egress).toEqual({ urls: [echo.url] });
   } finally {
@@ -475,7 +484,7 @@ test("Project egress intercept catches explicit and worker fetches before secret
     });
     const secretPath = `/secrets/egress-intercept/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [echo.url] },
       material: "intercept-secret-material",
     });

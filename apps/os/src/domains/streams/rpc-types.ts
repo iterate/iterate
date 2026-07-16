@@ -24,6 +24,13 @@ export type StreamAppendArguments =
 /** The optional result projection returned by append. */
 export type StreamAppendResult = StreamEvent[] | number[] | void;
 
+export function isStreamAppendResultOptions(value: unknown): value is StreamAppendResultOptions {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if ("type" in value) return false;
+  const result = (value as { return?: unknown }).return;
+  return result === "events" || result === "offsets";
+}
+
 export function appendedEvents(result: StreamAppendResult): StreamEvent[] {
   if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
     throw new Error("append did not return committed events");
@@ -98,13 +105,13 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
 /**
  * The read-side RPC surface every stream processor node exposes: inspect
  * runtime state (snapshot plus a processor-specific runtime bag), take an
- * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to
- * block until the processor has folded a given offset.
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
+ * block until the processor has durably folded through a given offset.
  */
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /**
@@ -236,9 +243,28 @@ export class StreamOffsetConflictError extends Error {
   override readonly name = StreamOffsetConflictError.NAME;
 }
 
-/** Match by name because Durable Object RPC preserves names, not prototypes. */
+/** Canonical compare-and-append conflict text, including across RPC hops that
+ * normalize the custom error name to `Error`. */
+export function streamOffsetConflictMessage(expectedOffset: number, actualOffset: number): string {
+  return `expected next offset ${expectedOffset}, found ${actualOffset}`;
+}
+
+const STREAM_OFFSET_CONFLICT_MESSAGE = /^expected next offset \d+, found \d+$/;
+
+/**
+ * Match by name because Durable Object RPC preserves names, not prototypes.
+ * CapnWeb's public itx boundary currently normalizes custom error names to
+ * `Error`, so retain an exact message fallback for that hop. Keep this
+ * deliberately narrow: callers use the result to retry a compare-and-append.
+ */
 export function isStreamOffsetConflictError(error: unknown): boolean {
-  return (error as { name?: string } | null)?.name === StreamOffsetConflictError.NAME;
+  const candidate = error as { message?: unknown; name?: unknown } | null;
+  return (
+    candidate?.name === StreamOffsetConflictError.NAME ||
+    (candidate?.name === "Error" &&
+      typeof candidate.message === "string" &&
+      STREAM_OFFSET_CONFLICT_MESSAGE.test(candidate.message))
+  );
 }
 
 export function isStreamReceiverUnavailableError(error: unknown): boolean {

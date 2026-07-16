@@ -1,7 +1,7 @@
 // The in-memory itxEnv seam shared by the connect-flow / connection-status /
 // repo-link unit suites: STREAM as a map of append-only journals (idempotency
 // keys honored, per-CALL append batches recorded so atomicity is assertable)
-// and SECRET as a map of merge-updated records. Tests mock `../../env.ts`
+// and SECRET as a map of explicitly created, merge-updated records. Tests mock `../../env.ts`
 // with these bindings via vi.hoisted:
 //
 //   const network = await vi.hoisted(async () => {
@@ -66,8 +66,18 @@ export function createFakeItxEnv(options?: {
     SECRET: {
       getByName(name: string) {
         return {
+          async create(input: FakeSecretRecord) {
+            await secretUpdateHooks.shift()?.();
+            if (!secrets.has(name)) secrets.set(name, input);
+          },
+          async describe() {
+            return { created: secrets.has(name) };
+          },
           async update(input: FakeSecretRecord) {
             await secretUpdateHooks.shift()?.();
+            if (!secrets.has(name)) {
+              throw new Error(`secret has not been created: ${name}`);
+            }
             // Merge, like the Secret DO: material/egress/refresh are separate
             // fields and an egress-only brick must not erase the material.
             secrets.set(name, { ...secrets.get(name), ...input });

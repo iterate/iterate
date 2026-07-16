@@ -3,13 +3,14 @@
  * No LLM involved — the codemode "tool result" event is synthesized directly
  * on the agent stream, exactly as the capability host journals it for an
  * agent-requested script (executionId prefix "agent-output:"). The agent
- * processor must render an input that references a workspace file holding the
- * FULL result; before the spill landed it hard-sliced at 30k chars and the
- * rest of the data was gone.
+ * processor must render developer context that references a workspace file
+ * holding the FULL result; before the spill landed it hard-sliced at 30k chars
+ * and the rest of the data was gone.
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 
 const AGENT_PATH = "/agents/e2e-script-spill";
 
@@ -20,6 +21,7 @@ test(
     await using handle = await createTestProject({ slugPrefix: "script-spill" });
     using agent = handle.agent(AGENT_PATH);
     using itx = handle.itx();
+    await agent.create({});
 
     // The spill writes into the agent's workspace, whose first use clones the
     // project repo — and the repo seeds asynchronously after project creation.
@@ -47,24 +49,26 @@ test(
       payload: { executionId: "agent-output:1", result },
     });
 
-    // The agent processor wakes on the append and renders the tool-result
-    // input; with the spill it names the workspace file instead of only the
+    // The agent processor wakes on the append and renders developer context
+    // for the tool result; with the spill it names the workspace file instead of only the
     // "return less" hint. On pre-spill deployments this poll times out.
     let content = "";
     await waitForCondition(
       async () => {
         // Type-filtered so the poll never re-downloads the 10MB completion event.
         const events = await agent.stream.getEvents({
-          eventTypes: ["events.iterate.com/agent/input-added"],
+          eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
           limit: 500,
         });
-        const input = events.find((event) =>
-          String(event.payload?.content ?? "").includes("saved in your workspace"),
+        const context = events.find(
+          (event) =>
+            event.payload?.role === "developer" &&
+            String(event.payload.content ?? "").includes("saved in your workspace"),
         );
-        content = String(input?.payload?.content ?? "");
+        content = String(context?.payload?.content ?? "");
         return content !== "";
       },
-      { description: "spill-referencing agent input", intervalMs: 1_000, timeoutMs: 90_000 },
+      { description: "spill-referencing developer context", intervalMs: 1_000, timeoutMs: 90_000 },
     );
 
     const referencedPath = /saved in your workspace at "([^"]+)"/.exec(content)?.[1];

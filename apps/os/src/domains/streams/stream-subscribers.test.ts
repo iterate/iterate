@@ -203,6 +203,10 @@ class FakeCursorStore implements SubscriptionCursorStore {
     this.rows.delete(subscriptionKey);
   }
 
+  resetForRecovery(): void {
+    this.rows.clear();
+  }
+
   minNextAttemptAt(): number | null {
     let min: number | null = null;
     for (const row of this.rows.values()) {

@@ -5,6 +5,9 @@
 
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import type { EmittedInput } from "../streams/processor-contracts.ts";
+import { agentCreationForPath, slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { SlackAgentProcessorContract } from "./slack-agent-processor-contract.ts";
 import { readRecord, readString, slackThreadStreamPath, webhookAckIsFresh } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
 
@@ -17,18 +20,9 @@ type SlackProcessorDeps = {
    * deserve an ack) and delivery; the router only reports "this webhook is
    * being forwarded". Best-effort: failures must not affect routing.
    */
-  acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
+  acknowledgeRoutedWebhook?(input: { connection: string; payload: unknown }): Promise<void> | void;
   /** Injectable clock for the acknowledgement freshness gate. */
   now?: () => number;
-  /**
-   * The named connection this router serves — a projection of the host DO's
-   * own name (`/integrations/slack/{connection}`), not folded state, so it is
-   * total from the first webhook and independent of event ordering. Null when
-   * the host is not a connection stream — reachable only if a slack
-   * subscription is mis-armed on some other stream, which processEvent treats
-   * as a loud error rather than a silent drop.
-   */
-  connection: string | null;
 };
 
 export class SlackProcessor extends StreamProcessor<SlackProcessorContract, SlackProcessorDeps> {
@@ -39,6 +33,11 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     state,
   }: Parameters<StreamProcessor<SlackProcessorContract>["reduce"]>[0]): SlackProcessorState {
     switch (event.type) {
+      case "events.iterate.com/slack/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("Slack processor received more than one slack/created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/slack/thread-route-configured":
         return {
           ...state,
@@ -62,17 +61,11 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     runInBackground,
     state,
   }: Parameters<StreamProcessor<SlackProcessorContract>["processEvent"]>[0]): undefined {
+    if (event === null) return;
+    if (event.type === "events.iterate.com/slack/created") return;
+    const connection = state.birthCertificate?.config.connection;
+    if (connection === undefined) return;
     if (event.type !== "events.iterate.com/slack/webhook-received") return;
-
-    if (this.deps.connection === null) {
-      // A slack subscription armed on a non-connection stream is a
-      // misconfiguration, not a routable state: throwing holds the checkpoint
-      // and keeps the webhook replayable instead of silently dropping the
-      // only copy of the message (the 2026-06-15 lesson).
-      throw new Error(
-        "slack router woke on a stream whose path carries no connection; expected /integrations/slack/{connection}",
-      );
-    }
 
     /**
      * The router deliberately does not decide whether a Slack webhook is
@@ -81,7 +74,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
      * that Slack thread should be forwarded? The named connection (from the
      * host DO's own name) qualifies newly created thread paths.
      */
-    const route = slackRouteFromWebhookBody(event.payload.body, this.deps.connection);
+    const route = slackRouteFromWebhookBody(event.payload.body, connection);
     if (route == null) return;
 
     const streamPath = state.routes[route.key] ?? route.streamPath;
@@ -96,7 +89,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     // obligations whose replays dedupe at the append layer.
     if (webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) {
       runInBackground(async () => {
-        await this.deps.acknowledgeRoutedWebhook?.({ payload: event.payload });
+        await this.deps.acknowledgeRoutedWebhook?.({ connection, payload: event.payload });
       });
     }
 
@@ -131,7 +124,21 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
       // double-forwarding.
       blockProcessorWhile(async () => {
         await append(routeEvent);
-        await appendTo(streamPath, routeEvent, forwardedWebhookEvent);
+        if (this.projectId === null) {
+          throw new Error("Slack router cannot create a project agent without a project id");
+        }
+        await appendTo(
+          streamPath,
+          ...slackAgentCreationEvents({
+            channel: route.channel,
+            connection,
+            path: streamPath,
+            projectId: this.projectId,
+            threadTs: route.threadTs,
+          }),
+          routeEvent,
+          forwardedWebhookEvent,
+        );
       });
       return;
     }
@@ -140,7 +147,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
      * The routed stream receives the original Slack webhook unchanged.
      * The downstream `slack-agent` processor owns interpretation: it can
      * turn messages, app mentions, reactions, edits, or future Slack event
-     * shapes into agent input without this router needing to understand
+     * shapes into agent context without this router needing to understand
      * agent semantics.
      */
     // Durable obligation — same reasoning as the route-creation forward above.
@@ -148,6 +155,34 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
       await appendTo(streamPath, forwardedWebhookEvent);
     });
   }
+}
+
+function slackAgentCreationEvents(input: {
+  channel: string;
+  connection: string;
+  path: string;
+  projectId: string;
+  threadTs: string;
+}): EmittedInput<SlackProcessorContract>[] {
+  return agentCreationForPath({
+    agentPath: input.path,
+    projectId: input.projectId,
+    overrides: { systemPrompt: slackAgentSystemPrompt(input.connection) },
+    sibling: {
+      birthCertificate: SlackAgentProcessorContract.buildEvent({
+        type: "events.iterate.com/slack-agent/created",
+        idempotencyKey: `slack-agent/created:${input.projectId}:${input.path}`,
+        payload: {
+          config: {
+            channel: input.channel,
+            connection: input.connection,
+            threadTs: input.threadTs,
+          },
+        },
+      }),
+      processorSlug: SlackAgentProcessorContract.slug,
+    },
+  }).events satisfies EmittedInput<SlackProcessorContract>[];
 }
 
 type SlackRoute = {

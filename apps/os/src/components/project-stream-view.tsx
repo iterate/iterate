@@ -652,7 +652,7 @@ function useAgentInterrupt(args: {
 /**
  * The browser-feed projector persists its reduced state — whose `agent` slice
  * holds the live activity with streaming text and the presence roster — to
- * `processor_state` on every checkpoint; reading it reactively is how the
+ * `processor_progress` on every checkpoint; reading it reactively is how the
  * live tail re-renders per delta batch. Null until the projector's first
  * checkpoint lands.
  */
@@ -661,8 +661,8 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
     database,
     // subscription_key is part of the primary key, so multiple rows can exist
     // for the slug (e.g. after a key-format change); read the most advanced one.
-    `SELECT reduced_state FROM processor_state WHERE processor_slug = ?
-     ORDER BY max_offset DESC LIMIT 1`,
+    `SELECT reduced_state FROM processor_progress WHERE processor_slug = ?
+     ORDER BY acknowledged_through_offset DESC LIMIT 1`,
     [BrowserFeedContract.slug],
   );
   return useMemo(() => {

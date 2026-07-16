@@ -339,15 +339,18 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       instanceType: input.instanceType,
     };
     this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, record);
+    // The domain birth is the first fact on the sandbox's own stream. Unlike
+    // later lifecycle telemetry, creation awaits this append: callers must
+    // never observe a usable sandbox whose processor history has no birth.
+    await this.#appendLifecycleEvent({
+      type: "events.iterate.com/sandbox/created",
+      payload: { config: { instanceType: input.instanceType } },
+    });
     if (input.sleepAfter !== undefined) await this.setSleepAfter(input.sleepAfter);
     if (input.keepAlive !== undefined) await this.setKeepAlive(input.keepAlive);
     if (input.env !== undefined && Object.keys(input.env).length > 0) {
       await this.setEnvVars(input.env);
     }
-    this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/created",
-      payload: { instanceType: input.instanceType },
-    });
     return {
       createdAt: record.createdAt,
       instanceType: record.instanceType,
@@ -1140,19 +1143,21 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    */
   #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
     try {
-      const event = SandboxProcessorContract.buildEvent(input);
-      const { projectId, path } = this.#identity();
-      const stream = this.env.STREAM.getByName(
-        DurableObjectNameCodec.stringify({ projectId, path }),
-      );
       this.ctx.waitUntil(
-        Promise.resolve(stream.appendAck(event)).catch((error: unknown) =>
+        this.#appendLifecycleEvent(input).catch((error: unknown) =>
           console.warn(`sandbox lifecycle event append failed (${input.type})`, error),
         ),
       );
     } catch (error) {
       console.warn(`sandbox lifecycle event skipped (${input.type})`, error);
     }
+  }
+
+  async #appendLifecycleEvent(input: SandboxLifecycleEventInput): Promise<void> {
+    const event = SandboxProcessorContract.buildEvent(input);
+    const { projectId, path } = this.#identity();
+    const stream = this.env.STREAM.getByName(DurableObjectNameCodec.stringify({ projectId, path }));
+    await stream.append(event);
   }
 }
 

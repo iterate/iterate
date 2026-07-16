@@ -246,11 +246,14 @@ freshness:
   Auth + OS gets 45 minutes because its bounded worst case includes both
   deployments, JWKS propagation, and four sequential smoke probes.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
-  on `8x32`; Auth + OS deploy uses `4x16`; short deploy, notification, and
-  autofix jobs use `2x8`. Re-check with `depot ci metrics --run <run-id>` before
-  increasing a size.
+  on `8x32` (parallel oxlint/typecheck/knip). Unit tests use `4x16` — measured
+  peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
+  lint is the common trigger for no-log `Sandbox terminated before worker
+reported completion` on main. Auth + OS deploy uses `4x16`; short deploy,
+  notification, and autofix jobs use `2x8`. Re-check with
+  `depot ci metrics --run <run-id>` before increasing a size.
 
-These defaults keep a normal all-app main push to 32 requested vCPUs before
+These defaults keep a normal all-app main push to 28 requested vCPUs before
 notification jobs, down from 72, without reducing the parallel lint lane that
 uses the larger machine. Path filters avoid deploying iterate.com for unrelated
 monorepo changes.

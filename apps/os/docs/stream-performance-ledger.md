@@ -4627,3 +4627,80 @@ The decision-oriented architecture, measurement summary, rejected directions,
 artifact inventory, and second-opinion reading brief are now captured in the
 [Stream performance handoff](./stream-performance-handoff.md). Production
 remains untouched.
+
+## 2026-07-16: Post-#2038 Semantic Integration
+
+Draft PR #1902 integrated `origin/main` through `44fd772b8`. That revision
+contains #2002's `StreamProcessorRunner` and registry replacement, #2038's
+explicit processor births, #2040's native retry-alarm trace roots, and the
+deletion of the old `StreamProcessorHost`. The integration resolved 40 files
+and 193 conflict regions by preserving ownership and invariants rather than
+choosing one textual side.
+
+The resulting processor path keeps main's runner, registry, two durable
+progress cursors, and explicit target-offset birth barriers. Stream delivery
+now gives the runner a compact frame containing selected events,
+`deliveryThroughOffset`, and `streamMaxOffset`. A frame can durably advance
+across selector gaps without re-reading rows that the Stream already scanned.
+If a frame reaches head without a consumed event, the runner performs an
+event-less at-head reconciliation pass; this preserves the production-proven
+case where an obligation would otherwise strand behind an unconsumed tail. The
+runner's explicit read-your-writes and cold-start `catchUp()` self-pulls remain
+because they are recovery/availability mechanisms, not duplicate discovery of
+an already delivered scanned-through boundary.
+
+The public RPC surface still has one append operation. `append(...events)` is
+acknowledgement-only by default, while an optional first
+`{ return: "events" | "offsets" }` argument requests an input-aligned
+projection. Processor-internal appends request offsets for readiness barriers.
+Cap'n Web proxy generation collapses TypeScript overloads to the final
+signature and cannot retain a conditional generic keyed by the options object;
+the exported RPC signature therefore uses one union result plus explicit
+`appendedEvents`/`appendedOffsets` narrowing helpers. No public `appendAck`
+alias or compatibility dispatcher survives.
+
+OS typecheck passes after regenerating the OS/package API graphs and examples.
+Two focused waves pass 502 tests across 25 Stream, runner, processor, recovery,
+agent, project, repo, integration, scheduler, secret, email, and
+capability-host files. The first failures were useful: custom test Streams
+returned committed events for every append and therefore hid the new
+production-accurate acknowledgement-only default. Those fakes now honor the
+same projection contract as production. Full repository lint/test and deployed
+preview gates remain to be run after the merge commit.
+
+No new cumulative performance claim is made. Checkpoint 15 remains the latest
+exact paired measurement: 39.619%/32.229%/37.648% p50/p95/mean improvement
+under conservative substitution and 34.518%/33.336%/34.818% for the unmodified
+suite. Those numbers compare immutable candidate `c00545e81` with immutable
+main `b560198aa`; they do not measure the integrated #2038 tree. The next gate
+is an exact-current-main cumulative run plus focused Node-host timing of warm
+and cold explicit births, sparse scanned-through delivery, empty at-head
+frames, continuous writers, eviction, and receiver retry.
+
+Against integrated main `44fd772b8`, the working tree currently differs by 138
+files and `+22,035/-3,141` lines. The Stream domain's 25 changed non-test
+production files account for `+4,510/-1,271`, net +3,239. The eight largest
+runtime journal/delivery/runner files now total 8,239 lines, so the old
+pre-#2002 6,343-line total is obsolete. Runtime topology still collapses to one
+Stream Durable Object, one SQLite database, Workers RPC, and Durable Object
+alarms; there is no additional service or consistency boundary. Source
+complexity is nevertheless material. A replacement should delete the old
+kernel in the same change and target roughly 3,300-3,600 coordination lines and
+at most eight state machines while using this branch as the correctness and
+performance oracle.
+
+The `processEvent` conclusion is unchanged and intentionally precise. User
+code needs only singular `processEvent(event)` for durable and ephemeral
+subscriptions. The sender does not make one Workers RPC call per event: it
+still sends a bounded private batch, and the receiver invokes the singular
+callback locally with a synchronous fast loop and one ordered continuation only
+if a callback returns a Promise. Deployed Node -> source Stream DO -> Project
+Worker -> output Stream DO -> Node measurements established central parity for
+1,000 x 640-byte PCM frames. Earlier deployed one-RPC-per-event transport was
+up to 13x slower and remains rejected.
+
+All elapsed-time gates remain Node-host measurements around actual network/RPC
+work or host-observed completion. Cloudflare can freeze isolate clocks without
+network I/O, so Worker-local wall-clock deltas are neither benchmark evidence
+nor timeout correctness. Production was not deployed, erased, or otherwise
+changed.

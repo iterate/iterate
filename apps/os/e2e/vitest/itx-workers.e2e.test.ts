@@ -516,6 +516,7 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
   const { projectId } = await project.__describe();
   const agentPath = `/agents/worker-capability-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   await project.repo.commitFiles({
     changes: [

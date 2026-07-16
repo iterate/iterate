@@ -1,24 +1,18 @@
 // In-memory test doubles for the stream substrate — the ONE MemoryStream
 // (plus MemoryStreamNetwork for router suites observing cross-stream
-// forwards and deliverNewEvents for cursor-based pull delivery) — plus the
-// processor-host harness: REAL host code (createStreamProcessorHost —
-// keepalive, alarm slices, revival, catch-up) and REAL processors running in
-// plain node against a fake DurableObjectState, an in-memory journal, and a
-// mutable clock. Lifecycle failure is a first-class operator: `crash()`
-// kills the incarnation exactly the way an eviction does — in-memory state
-// and in-flight work die, the journal, KV, and the durable alarm survive.
-//
-// Runtime state is produced by LIFECYCLE, never by field injection: an empty
-// live-execution set IS "crashed mid-attempt", reached by crashing; a
-// populated one IS "attempt in flight", reached by handing a processor a
-// vendor fake that hasn't resolved yet. Every state a test exercises is
-// therefore a reachable state, and the test doubles as the existence proof.
+// forwards) — and `driveProcessor`, REAL runner drive over the in-memory
+// journal: the shared form of the cutover suites' local `drive()` helpers.
+// Registry-level harnesses (fake DurableObjectState, virtual clock, alarm
+// cell, crash-as-eviction) live inline in the suites that need them
+// (stream-processor-registry.test.ts, the per-domain *-recovery tests).
 
 import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamAppendArguments, StreamAppendResult } from "./rpc-types.ts";
+import { isStreamAppendResultOptions } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import type { StreamAppendResultOptions } from "./rpc-types.ts";
-import type { AnyHostedProcessor } from "./processor-host-capabilities.ts";
-import { createStreamProcessorHost, type StreamProcessorHost } from "./stream-processor-host.ts";
+import type { ProcessorState } from "./processor-contracts.ts";
+import type { StreamProcessor, StreamProcessorContract } from "./stream-processor.ts";
+import { StreamProcessorRunner } from "./stream-processor-runner.ts";
 
 function emptyThroughputReport() {
   return {
@@ -46,34 +40,6 @@ function emptyStreamRuntimeState() {
   };
 }
 
-function createMemoryStreamAppend(
-  commit: (...inputs: StreamEventInput[]) => StreamEvent[] | Promise<StreamEvent[]>,
-): Stream["append"] {
-  return async (...args) => {
-    const first = args[0];
-    const options: StreamAppendResultOptions | undefined =
-      typeof first === "object" && first !== null && !("type" in first) && "return" in first
-        ? first
-        : undefined;
-    const inputs = (options === undefined ? args : args.slice(1)) as StreamEventInput[];
-    const events = await commit(...inputs);
-    if (options?.return === "events") return events;
-    if (options?.return === "offsets") return events.map((event) => event.offset);
-    return undefined;
-  };
-}
-
-export async function appendTestEvents(
-  stream: Pick<Stream, "append">,
-  ...events: StreamEventInput[]
-): Promise<StreamEvent[]> {
-  const result = await stream.append({ return: "events" }, ...events);
-  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
-    throw new Error("append did not return events");
-  }
-  return result as StreamEvent[];
-}
-
 export class MemoryStream implements Stream {
   events: StreamEvent[] = [];
   /** Injectable clock for createdAt stamps; harnesses point it at virtual time. */
@@ -91,9 +57,13 @@ export class MemoryStream implements Stream {
 
   async kill(): Promise<void> {}
 
-  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
-
-  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+  append(options: { return: "events" }, ...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  append(options: { return: "offsets" }, ...events: StreamEventInput[]): Promise<number[]>;
+  append(...events: StreamEventInput[]): Promise<void>;
+  async append(...args: StreamAppendArguments): Promise<StreamAppendResult> {
+    const first = args[0];
+    const options = isStreamAppendResultOptions(first) ? first : undefined;
+    const inputs = (options === undefined ? args : args.slice(1)) as StreamEventInput[];
     const appended = inputs.map((input) => {
       if (input.type === this.failAppendsOfType) {
         throw new Error(`injected append failure for ${input.type}`);
@@ -118,7 +88,8 @@ export class MemoryStream implements Stream {
       this.events.push(event);
       return event;
     });
-    return appended;
+    if (options?.return === "events") return appended;
+    if (options?.return === "offsets") return appended.map((event) => event.offset);
   }
 
   at(path?: string): Stream {
@@ -130,6 +101,10 @@ export class MemoryStream implements Stream {
   ): Promise<StreamEvent | undefined> {
     if ("offset" in input) return this.events.find((event) => event.offset === input.offset);
     return this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
+  }
+
+  async head() {
+    return { maxOffset: this.events.at(-1)?.offset ?? 0 };
   }
 
   async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
@@ -182,13 +157,6 @@ export class MemoryStream implements Stream {
     return null;
   }
 
-  async head() {
-    return {
-      createdAt: this.events[0]?.createdAt,
-      maxOffset: this.events.at(-1)?.offset ?? 0,
-    };
-  }
-
   async runtimeState() {
     return emptyStreamRuntimeState();
   }
@@ -239,49 +207,39 @@ export class MemoryStreamNetwork {
   }
 }
 
-type ProcessorLike = {
-  ingest(input: { events: StreamEvent[]; streamMaxOffset: number }): Promise<void>;
+/** What {@link driveProcessor} returns: REAL runner drive for one processor. */
+type ProcessorDriver<Contract extends StreamProcessorContract> = {
+  /** The driving runner, for tests that need its full surface. */
+  runner: StreamProcessorRunner<Contract>;
+  /** One catch-up pass to the journal's current head — the production
+   * delivery cadence. Failures RETHROW with the cursor held, so a retry
+   * redelivers the failed events exactly like the transport would. */
+  deliver(): Promise<void>;
+  /** The runner's committed fold (schema default until the first pass). */
+  readonly state: ProcessorState<Contract>;
+  /** One consistent read of the fold, pinned to its offset. */
+  snapshot(): Promise<{ offset: number; state: ProcessorState<Contract> }>;
 };
 
-/** Cursor-based pull delivery mirroring production subscription semantics. */
-export async function deliverNewEvents(input: {
-  processor: ProcessorLike;
-  stream: MemoryStream;
-  cursors: Map<object, number>;
-}) {
-  const cursor = input.cursors.get(input.processor) ?? 0;
-  const events = input.stream.events.slice(cursor);
-  input.cursors.set(input.processor, input.stream.events.length);
-  if (events.length === 0) return;
-  const streamMaxOffset = input.stream.events.at(-1)?.offset ?? 0;
-  await input.processor.ingest({ events, streamMaxOffset });
-}
-
 /**
- * The standard processor-suite preamble in one call: a MemoryStreamNetwork
- * (pass `now` to pin the virtual clock), the stream at `path`, the processor
- * built over that stream, one cursors map, and `deliver()` — cursor-based
- * pull delivery mirroring production subscription semantics. Refold tests
- * hand the replacement processor to `deliver(refolded)`: a fresh processor
- * has no cursor yet, so it replays the whole journal.
+ * REAL runner drive over an in-memory journal — the shared form of the
+ * cutover suites' local `drive()` helpers: one StreamProcessorRunner per
+ * processor (in-memory progress; a fresh driver over the same journal
+ * replays from scratch, which is the refold recipe). The processor instance
+ * holds no fold of its own — read `driver.state` / `driver.snapshot()`.
  */
-export function makeProcessorHarness<Processor extends ProcessorLike>(options: {
-  build: (ctx: { network: MemoryStreamNetwork; stream: MemoryStream }) => Processor;
-  path?: string;
-  now?: () => number;
-}) {
-  const network = new MemoryStreamNetwork(options.now);
-  const stream = network.get(options.path ?? "/agents/test");
-  const processor = options.build({ network, stream });
-  const cursors = new Map<object, number>();
+export function driveProcessor<Contract extends StreamProcessorContract, Deps extends object>(
+  processor: StreamProcessor<Contract, Deps>,
+  stream: MemoryStream,
+): ProcessorDriver<Contract> {
+  const runner = new StreamProcessorRunner({ processor, stream });
   return {
-    cursors,
-    network,
-    processor,
-    stream,
-    deliver(target: ProcessorLike = processor) {
-      return deliverNewEvents({ cursors, processor: target, stream });
+    runner,
+    deliver: () => runner.catchUp(),
+    get state() {
+      return runner.currentState;
     },
+    snapshot: () => runner.snapshot(),
   };
 }
 
@@ -289,161 +247,4 @@ export function makeProcessorHarness<Processor extends ProcessorLike>(options: {
 export function eventsOfType(source: MemoryStream | StreamEvent[], type: string): StreamEvent[] {
   const events = Array.isArray(source) ? source : source.events;
   return events.filter((event) => event.type === type);
-}
-
-/** The durable substrate an eviction does NOT destroy. */
-export type FakeDurableStore = {
-  kv: Map<string, unknown>;
-  alarm: { at: number | null };
-  /** waitUntil'd work of the CURRENT incarnation; crash() abandons it. */
-  pending: Promise<unknown>[];
-};
-
-/** The slice of DurableObjectState the processor host touches, over an
- * in-memory store. Reads/writes are synchronous like production DO KV. */
-function fakeDurableObjectState(store: FakeDurableStore): DurableObjectState {
-  return {
-    storage: {
-      kv: {
-        get: (key: string) => store.kv.get(key),
-        put: (key: string, value: unknown) => {
-          store.kv.set(key, value);
-        },
-      },
-      getAlarm: async () => store.alarm.at,
-      setAlarm: async (at: number | Date) => {
-        store.alarm.at = typeof at === "number" ? at : at.getTime();
-      },
-      deleteAlarm: async () => {
-        store.alarm.at = null;
-      },
-    },
-    waitUntil: (promise: Promise<unknown>) => {
-      store.pending.push(promise.catch(() => undefined));
-    },
-  } as unknown as DurableObjectState;
-}
-
-export type ProcessorHostHarness<Processors> = {
-  stream: MemoryStream;
-  /** Mutable virtual clock (epoch ms) driving the host, expiry, and backoff. */
-  clock: { now: number };
-  store: FakeDurableStore;
-  readonly host: StreamProcessorHost;
-  readonly processors: Processors;
-  /** Which incarnation is live (1-based). */
-  readonly incarnation: number;
-  /**
-   * Evict the incarnation: host, processors, live executions, timers, and
-   * pending waitUntil work die (stray closures that fire later hit a fenced
-   * stream and fail); the journal, KV checkpoints, and the durable alarm
-   * survive. The next property access serves the fresh incarnation.
-   */
-  crash(): void;
-  /** Pull-deliver pending events to every processor (real host catchUp). */
-  deliverAll(): Promise<void>;
-  /**
-   * Advance virtual time, firing the durable alarm through the REAL
-   * handleAlarm path whenever it comes due within the window — the whole
-   * keepalive/revival/breaker machinery runs live.
-   */
-  advance(ms: number): Promise<void>;
-};
-
-/** What the per-incarnation `build` callback receives alongside the host. */
-type HarnessBuildContext = {
-  incarnation: number;
-  /** The harness's virtual clock — wire it into processor `now` deps. */
-  clock: { now: number };
-  /** The incarnation-FENCED stream — wire it into deps like readStreamEvents
-   * so a dead incarnation's stray reads fail exactly like its writes. */
-  stream: Stream;
-};
-
-/**
- * Boot REAL host + REAL processors over fake substrates. `build` runs once
- * per incarnation and must register every processor on the given host; vary
- * vendor fakes by incarnation via the context it receives.
- */
-export function createProcessorHostHarness<
-  Processors extends Record<string, AnyHostedProcessor>,
->(options: {
-  build: (host: StreamProcessorHost, ctx: HarnessBuildContext) => Processors;
-  path?: string;
-  version?: string | (() => string);
-  /** Shrink the catch-up page size to exercise mid-catch-up batches. */
-  catchUpPageSize?: number;
-}): ProcessorHostHarness<Processors> {
-  const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
-  const stream = new MemoryStream(options.path ?? "/agents/test");
-  stream.now = () => clock.now;
-  const store: FakeDurableStore = { kv: new Map(), alarm: { at: null }, pending: [] };
-
-  let incarnation = 0;
-  let host: StreamProcessorHost;
-  let processors: Processors;
-  const boot = () => {
-    incarnation += 1;
-    const mine = incarnation;
-    // The fence: a dead incarnation's stray closures (a debounce timer, a
-    // hung vendor call resolving late) must not reach the journal — exactly
-    // as an evicted isolate cannot. Reads and writes both throw once a newer
-    // incarnation booted.
-    const fencedStream = new Proxy(stream, {
-      get(target, prop) {
-        const value = Reflect.get(target, prop) as unknown;
-        if (typeof value !== "function") return value;
-        return (...args: unknown[]) => {
-          if (incarnation !== mine) {
-            throw new Error(`stream call from evicted incarnation ${mine}`);
-          }
-          return (value as (...a: unknown[]) => unknown).apply(target, args);
-        };
-      },
-    }) as unknown as Stream;
-    host = createStreamProcessorHost(fakeDurableObjectState(store), {
-      stream: fencedStream,
-      path: stream.path,
-      projectId: null,
-      version:
-        (typeof options.version === "function" ? options.version() : options.version) ?? "v-test",
-      now: () => clock.now,
-      catchUpPageSize: options.catchUpPageSize,
-    });
-    processors = options.build(host, { incarnation: mine, clock, stream: fencedStream });
-  };
-  boot();
-
-  return {
-    stream,
-    clock,
-    store,
-    get host() {
-      return host;
-    },
-    get processors() {
-      return processors;
-    },
-    get incarnation() {
-      return incarnation;
-    },
-    crash() {
-      store.pending = [];
-      boot();
-    },
-    async deliverAll() {
-      for (const processor of Object.values(processors)) {
-        await host.catchUp(processor.contract.slug);
-      }
-    },
-    async advance(ms: number) {
-      const target = clock.now + ms;
-      while (store.alarm.at !== null && store.alarm.at <= target) {
-        clock.now = Math.max(clock.now, store.alarm.at);
-        store.alarm.at = null; // the platform consumes the alarm by firing it
-        await host.handleAlarm();
-      }
-      clock.now = target;
-    },
-  };
 }

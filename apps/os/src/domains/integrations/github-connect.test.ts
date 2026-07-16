@@ -11,8 +11,8 @@ import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   GITHUB_CONNECTED_EVENT_TYPE,
   GITHUB_DISCONNECTED_EVENT_TYPE,
+  INTEGRATION_DIRECTORY_STREAM_PATH,
   githubConnectionSecretPath,
-  integrationDirectoryStreamPath,
 } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
@@ -185,7 +185,7 @@ describe("completeConnect (github App installation)", () => {
 
   test("an installation already claimed by another project cannot be reassigned", async () => {
     const directoryName = DurableObjectNameCodec.stringify(
-      { path: integrationDirectoryStreamPath("github", "789"), projectId: null },
+      { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },
       { allowNullProjectId: true },
     );
     await network.STREAM.getByName(directoryName).append({
@@ -243,7 +243,7 @@ describe("completeConnect (github App installation)", () => {
 
   test("a concurrent foreign claim wins once and bricks the losing connection", async () => {
     const directoryName = DurableObjectNameCodec.stringify(
-      { path: integrationDirectoryStreamPath("github", "789"), projectId: null },
+      { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },
       { allowNullProjectId: true },
     );
     const state = await createOAuthState(

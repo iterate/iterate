@@ -3,6 +3,9 @@
 // types, payloads, and idempotency keys are stable wire formats.
 
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import type { EmittedInput } from "../streams/processor-contracts.ts";
+import { agentCreationForPath, EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
+import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
   EmailProcessorContract,
   type EmailProcessorState,
@@ -68,6 +71,11 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     state,
   }: Parameters<StreamProcessor<typeof EmailProcessorContract>["reduce"]>[0]): EmailProcessorState {
     switch (event.type) {
+      case "events.iterate.com/email/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("Email processor received more than one email/created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/email/received": {
         const resolution = resolveEmailThread({
           offset: event.offset,
@@ -116,7 +124,11 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     blockProcessorWhile,
     event,
     previousState,
+    state,
   }: Parameters<StreamProcessor<typeof EmailProcessorContract>["processEvent"]>[0]): undefined {
+    if (event === null) return;
+    if (event.type === "events.iterate.com/email/created") return;
+    if (state.birthCertificate === null) return;
     if (event.type !== "events.iterate.com/email/received") return;
 
     // Resolve against the state BEFORE this event — the same input reduce()
@@ -156,7 +168,21 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
       // replays; idempotency keys make the replay dedupe.
       blockProcessorWhile(async () => {
         await append(routeEvent);
-        await appendTo(resolution.streamPath, routeEvent, forwardedEvent);
+        if (this.projectId === null) {
+          throw new Error("Email router cannot create a project agent without a project id");
+        }
+        await appendTo(
+          resolution.streamPath,
+          ...emailAgentCreationEvents({
+            counterpart: counterpart ?? undefined,
+            path: resolution.streamPath,
+            projectId: this.projectId,
+            subject: event.payload.message.subject,
+            threadId: resolution.threadId,
+          }),
+          routeEvent,
+          forwardedEvent,
+        );
       });
       return;
     }
@@ -166,4 +192,32 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
       await appendTo(resolution.streamPath, forwardedEvent);
     });
   }
+}
+
+function emailAgentCreationEvents(input: {
+  counterpart?: string;
+  path: string;
+  projectId: string;
+  subject?: string;
+  threadId: string;
+}): EmittedInput<typeof EmailProcessorContract>[] {
+  return agentCreationForPath({
+    agentPath: input.path,
+    projectId: input.projectId,
+    overrides: { systemPrompt: EMAIL_AGENT_SYSTEM_PROMPT },
+    sibling: {
+      birthCertificate: EmailAgentProcessorContract.buildEvent({
+        type: "events.iterate.com/email-agent/created",
+        idempotencyKey: `email-agent/created:${input.projectId}:${input.path}`,
+        payload: {
+          config: {
+            threadId: input.threadId,
+            ...(input.counterpart === undefined ? {} : { counterpart: input.counterpart }),
+            ...(input.subject === undefined ? {} : { subject: input.subject }),
+          },
+        },
+      }),
+      processorSlug: EmailAgentProcessorContract.slug,
+    },
+  }).events satisfies EmittedInput<typeof EmailProcessorContract>[];
 }

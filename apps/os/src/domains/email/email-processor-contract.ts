@@ -2,10 +2,26 @@
 // `/integrations/email` stream. Deliberately shaped after the Slack webhook
 // router (slack-processor-contract.ts): the router owns raw inbound email
 // events and a reduced thread lookup table; it does not interpret mail as
-// agent input (the `email-agent` processor on the routed stream does that).
+// agent context (the `email-agent` processor on the routed stream does that).
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+
+const EmailBirthCertificate = z.object({
+  config: z.object({}),
+});
+
+export const EmailAgentBirthCertificate = z.object({
+  config: z.object({
+    threadId: z.string(),
+    counterpart: z.string().optional(),
+    subject: z.string().optional(),
+  }),
+});
+export type EmailAgentBirthCertificate = z.output<typeof EmailAgentBirthCertificate>;
 
 /** One parsed inbound email as the ingress door captures it. Loose on purpose:
  * the ingress parser may grow fields without a contract version bump. */
@@ -64,9 +80,9 @@ export type InboundEmailPayload = z.infer<typeof InboundEmailPayload>;
  *    thread whose id is the received event's offset — emitting
  *    `email/thread-route-configured` for new threads.
  * 3. It forwards the received event unchanged to the thread's agent stream
- *    (`/agents/email/t<threadId>`). The `email-agent` processor on that stream
- *    does the agent transcription; the project processor's
- *    child-stream-created lane gives the routed stream its subscriptions.
+ *    (`/agents/email/t<threadId>`). The router explicitly creates the Agent,
+ *    CapabilityHost, and email facet and installs all three subscriptions
+ *    before forwarding the received event.
  *
  * Outbound mail is indexed too: `email/sent` audit events carrying a
  * `threadId` fold their messageId into the same index, so replies to what the
@@ -77,6 +93,7 @@ export const EmailProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Routes inbound project email into per-thread email agent streams.",
   stateSchema: z.object({
+    birthCertificate: EmailBirthCertificate.nullable().default(null),
     /** threadId -> agent stream path for every known email thread. */
     threads: z.record(z.string(), z.string()).default({}),
     /** Normalized RFC 5322 Message-ID -> threadId, for inbound AND outbound
@@ -91,6 +108,14 @@ export const EmailProcessorContract = defineProcessorContract({
     allowedSenders: z.array(z.string()).default([]),
   }),
   events: {
+    "events.iterate.com/email/created": {
+      description: "Birth certificate for this email router processor.",
+      payloadSchema: EmailBirthCertificate,
+    },
+    "events.iterate.com/email-agent/created": {
+      description: "Birth certificate for the email facet on an agent stream.",
+      payloadSchema: EmailAgentBirthCertificate,
+    },
     "events.iterate.com/email/received": {
       description:
         "One parsed inbound email, appended by the worker email() handler to `/integrations/email` and forwarded unchanged to the routed thread stream.",
@@ -142,12 +167,23 @@ export const EmailProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "events.iterate.com/email/created",
     "events.iterate.com/email/received",
     "events.iterate.com/email/sender-allowed",
     "events.iterate.com/email/sent",
     "events.iterate.com/email/thread-route-configured",
   ],
-  emits: ["events.iterate.com/email/thread-route-configured", "events.iterate.com/email/received"],
+  processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
+  emits: [
+    "events.iterate.com/agent/created",
+    "events.iterate.com/agents/context-added",
+    "events.iterate.com/capability-host/created",
+    "events.iterate.com/capability-host/capability-provided",
+    "events.iterate.com/email-agent/created",
+    "events.iterate.com/email/thread-route-configured",
+    "events.iterate.com/email/received",
+    "events.iterate.com/stream/subscription-configured",
+  ],
 });
 
 export type EmailProcessorState = z.infer<typeof EmailProcessorContract.stateSchema>;

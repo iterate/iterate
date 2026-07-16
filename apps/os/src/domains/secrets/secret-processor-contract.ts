@@ -44,11 +44,19 @@ const StoredEncryptedMaterial = EncryptedMaterial.extend({
 /** The egress allowlist: substituted requests may only target these origins. */
 const Egress = z.object({ urls: z.array(z.string()) });
 
+const SecretBirthCertificate = z.strictObject({
+  config: z.strictObject({
+    egress: Egress,
+    encryptedMaterial: EncryptedMaterial.optional(),
+    refresh: SecretRefresh.nullable(),
+  }),
+});
 export const SecretProcessorContract = defineProcessorContract({
   slug: "secret",
   version: "0.5.0",
   description: "Folds one path-addressed secret without exposing material.",
   stateSchema: z.object({
+    birthCertificate: SecretBirthCertificate.nullable().default(null),
     audit: z
       .object({
         lastUsedAt: z.string().optional(),
@@ -68,6 +76,21 @@ export const SecretProcessorContract = defineProcessorContract({
     refresh: SecretRefresh.nullable().default(null),
   }),
   events: {
+    "events.iterate.com/secret/created": {
+      description: "Creates a secret processor on this stream.",
+      payloadSchema: SecretBirthCertificate,
+      examples: [
+        {
+          description: "A secret is born with an egress policy and no refresh strategy.",
+          payload: {
+            config: {
+              egress: { urls: ["https://api.example.com"] },
+              refresh: null,
+            },
+          },
+        },
+      ],
+    },
     "events.iterate.com/secret/updated": {
       description: "Updates secret material, egress URL config, and/or the refresh strategy.",
       payloadSchema: z.object({
@@ -124,13 +147,17 @@ export const SecretProcessorContract = defineProcessorContract({
       ],
     },
   },
-  consumes: ["events.iterate.com/secret/updated", "events.iterate.com/secret/used"],
-  emits: [],
+  consumes: [
+    "events.iterate.com/secret/created",
+    "events.iterate.com/secret/updated",
+    "events.iterate.com/secret/used",
+  ],
+  emits: ["events.iterate.com/secret/created"],
 });
 
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<SecretProcessorContract>`,
- * `ConsumedEvent<SecretProcessorContract>`, `ProcessorEvent<SecretProcessorContract, T>`.
+ * `ConsumedEvent<SecretProcessorContract>`.
  */
 export type SecretProcessorContract = typeof SecretProcessorContract;

@@ -6,6 +6,16 @@
  * crosses the RPC boundary.
  */
 
+export type SecretCreateInput = {
+  /** Complete egress policy established by the birth certificate. */
+  egress: { urls: string[] };
+  /** Optional initial write-only material. */
+  material?: unknown;
+  /** Optional initial refresh strategy; omitted means no refresh. */
+  refresh?: SecretRefresh | null;
+};
+
+/** Input for replacing secret material or changing its egress and refresh policy. */
 export type SecretUpdateInput =
   | {
       /** Replacement material must name its complete egress policy in the same
@@ -128,6 +138,8 @@ export type SecretDescription = {
     usedCount: number;
   };
   egress: { urls: string[] };
+  /** Whether the secret processor has folded its birth certificate. */
+  created: boolean;
   hasMaterial: boolean;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;

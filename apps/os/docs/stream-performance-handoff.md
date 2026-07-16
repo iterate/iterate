@@ -1,41 +1,43 @@
 # Stream Performance Handoff
 
-Snapshot captured on 2026-07-15 after merging `origin/main` through
-`591d7a4847` into draft PR [#1902](https://github.com/iterate/iterate/pull/1902).
-The latest merge commit is `1c918c190d`. The last Stream runtime change is
-`886b5ecf1`; later commits are documentation, test-harness, and main merges.
+Snapshot captured on 2026-07-15 and updated on 2026-07-16 while integrating
+`origin/main` through `44fd772b8` into draft PR
+[#1902](https://github.com/iterate/iterate/pull/1902). That main revision
+contains the #2002 processor runner/registry redesign, #2038 explicit processor
+births, and #2040 native trace roots for Stream retry alarms. The last Stream
+runtime revision covered by the cumulative checkpoint remains `886b5ecf1`;
+the integrated post-#2038 tree has not yet been cumulatively benchmarked.
 Production has not been deployed, erased, or otherwise changed.
 
 ## 2026-07-16 Integration Update
 
-Current `origin/main` is `c05c9d9b0`, the #2002 processor runner and registry
-redesign. PR #2038 (explicit processor births) is still open and conflicts with
-that redesign, so this branch has deliberately not merged main early.
+The semantic merge is now implemented. It keeps main's runtime-neutral
+`StreamProcessorRunner`, registry, two-cursor progress model, and deletion of
+`StreamProcessorHost`; explicit births and target-offset readiness barriers now
+operate on runner-owned progress. The Stream delivery frame is the compact
+triple of selected events, `deliveryThroughOffset`, and `streamMaxOffset`.
+Successful frames durably advance through scanned selector gaps, and an
+event-less at-head pass preserves reconciliation when no consumed event can
+carry the final `caughtUp` signal. The runner still self-pulls for explicit
+read-your-writes waits and cold catch-up; it no longer needs a second pull just
+to rediscover offsets already scanned by a delivered frame.
 
-A disposable integration worktree first merged the latest explicit-birth head
-into this branch. After adapting the new agent checkpoint shape, explicit
-append result modes, and birth barriers, root typecheck passed and 631 focused
-Stream, processor, recovery, project, repo, integration, and generated-API
-tests passed. Merging current main on top exposes 40 conflicted files and 193
-conflict regions because #2002 deletes `StreamProcessorHost` while the birth PR
-changes processors on that old surface. The resolution rule is semantic:
+The public API remains one `append` method. It defaults to acknowledgement-only
+and accepts an optional leading `{ return: "events" | "offsets" }` projection.
+Internal processor appends request offsets because birth and readiness barriers
+need them. Cap'n Web's remote proxy projection collapses TypeScript overloads
+to the final signature and cannot preserve a conditional generic selected by
+that option, so the RPC contract intentionally exposes one union result and
+callers narrow an explicitly requested projection with shared helpers. No
+public `appendAck` compatibility verb was reintroduced.
 
-- keep main's runtime-neutral `StreamProcessorRunner` and registry;
-- port explicit birth and readiness barriers onto runner-owned progress;
-- preserve this branch's `deliveryThroughOffset` frame contract, which lets a
-  filtered delivery advance across scanned gaps without a second journal pull;
-- preserve event-less at-head reconciliation for a frame that reaches head
-  without a consumed event, so obligations cannot strand behind an unconsumed
-  tail; and
-- regenerate the public API rather than resolving generated files by hand.
-
-The API preflight also rejected two attractive TypeScript-only designs.
-Cap'n Web's remote proxy projection collapses overloads to one signature and
-cannot preserve a conditional generic return selected by `{ return: ... }`.
-The wire therefore remains one `append` method with a union result. Callers
-that request committed events or offsets narrow that result explicitly; any
-future ergonomic wrapper belongs in generated client code, not as a second
-public append verb.
+The resolved tree passes OS typecheck. Two focused verification waves pass 502
+tests across 25 Stream, runner, processor, recovery, agent, project, repo,
+integration, scheduler, secret, email, and capability-host test files. Generated
+OS and package ITX APIs/examples were regenerated from source. Full repository
+lint/test gates and the exact post-merge cumulative/deployed benchmark remain
+pending at this snapshot; do not reinterpret the historical checkpoint as a
+measurement against #2038.
 
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
@@ -222,18 +224,21 @@ StreamDurableObject
   `-- subscriber-sinks                  RPC/webhook transport and ownership
 ```
 
-At merge `9af5f02ce`, before adding this handoff, the whole branch differed
-from merged main by 134 files and `+22,532/-3,147` lines. That number is
-dominated by the 4,500-line evidence ledger, tests, generated API output, and
-call-site migration. The Stream domain has 25 changed non-test production
-files at `+4,407/-1,212`, net +3,195 lines.
+Against integrated main `44fd772b8`, the working tree differs by 138 files and
+`+22,035/-3,141` lines. That number is dominated by this 4,600-line evidence
+ledger, tests, generated API output, and call-site migration. The Stream domain
+has 25 changed non-test production files at `+4,510/-1,271`, net +3,239 lines.
 
-The eight largest runtime coordination/storage files total 6,343 lines. An
-independent Claude CLI review counted about 5,085 delivery-side coordination
+After #2002/#2038 integration, the eight largest runtime
+coordination/storage/runner files total 8,239 lines. The old pre-runner estimate
+of 6,343 lines is no longer a valid complexity baseline. An independent Claude
+CLI review of the preceding tree counted about 5,085 delivery-side coordination
 lines, roughly 88 private members, and about 13 semi-independent state
-machines. Its realistic consolidation target was 3,300-3,600 coordination
-lines, about 45 private members, and about eight state machines. These are
-design budgets, not measured performance claims.
+machines; the new runner and registry add explicit ownership but also source.
+The realistic replacement budget remains 3,300-3,600 coordination lines,
+about 45 private members, and about eight state machines. Recount those measures
+with one agreed file set before claiming the replacement gate. These are design
+budgets, not measured performance claims.
 
 The main structural debts are:
 
@@ -343,6 +348,17 @@ subscription control envelope instead of parsing it again post-commit. This is
 unmeasured and should not delay the landing decision.
 
 ## Most Promising Remaining Experiments
+
+The next action is measurement, not another mechanism. Capture an exact-main
+post-#2038 cumulative baseline and a focused processor-birth/scanned-through
+baseline before changing the integrated runner. The focused lane must cover a
+warm already-acknowledged barrier, a cold sparse catch-up, an empty selected
+frame that scans to head, continuous writers, process eviction, and a failed
+receiver retry. Time append/birth through observed readiness on the Node host.
+This establishes whether the merged runner retained the historical 35%-40%
+suite gain and how much duplicate sparse catch-up work the compact frame
+actually removed. There is currently correctness evidence for this integration
+but no post-main performance number.
 
 The only delivery experiment with a credible deployed-scale mechanism is the
 preserved direct Project Worker lane from `9fd1cbbb3`. It bypasses the

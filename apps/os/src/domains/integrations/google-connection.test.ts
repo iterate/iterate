@@ -78,9 +78,9 @@ test("connection status filters lifecycle facts before reading a webhook-heavy j
   ).toMatchObject({ connected: true, externalId: "115079265" });
   expect(network.getEventsCalls).toEqual([
     {
+      afterOffset: 0,
       eventTypes: [GITHUB_CONNECTED_EVENT_TYPE, GITHUB_DISCONNECTED_EVENT_TYPE],
-      limit: 1,
-      order: "desc",
+      limit: 500,
     },
   ]);
 });

@@ -22,7 +22,10 @@ describe("buildFeedItemsFilter", () => {
 
   it("composes event types, raw kinds, search, and offset bounds", () => {
     const filter = buildFeedItemsFilter({
-      eventTypes: ["events.iterate.com/agent/input-added", "events.iterate.com/agent/turn-ended"],
+      eventTypes: [
+        "events.iterate.com/agents/context-added",
+        "events.iterate.com/agent/turn-ended",
+      ],
       components: ["raw.group", "raw.stream.woken"],
       searchQuery: "hello",
       offsetFrom: 10,
@@ -32,7 +35,7 @@ describe("buildFeedItemsFilter", () => {
       `"COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) IN (?, ?) AND kind IN (?, ?) AND json(data) LIKE ? AND last_offset >= ? AND first_offset <= ?"`,
     );
     expect(filter?.params).toEqual([
-      "events.iterate.com/agent/input-added",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/agent/turn-ended",
       "raw.group",
       "raw.stream.woken",
@@ -184,7 +187,7 @@ describe("feedFiltersActive", () => {
 
 describe("shortEventType", () => {
   it("drops the events.iterate.com/ prefix and leaves foreign types alone", () => {
-    expect(shortEventType("events.iterate.com/agent/input-added")).toBe("agent/input-added");
+    expect(shortEventType("events.iterate.com/agents/context-added")).toBe("agents/context-added");
     expect(shortEventType("com.example/custom")).toBe("com.example/custom");
   });
 });

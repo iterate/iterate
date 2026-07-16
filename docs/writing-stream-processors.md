@@ -6,9 +6,9 @@ Object; hibernation and crashes evict them on their own schedule. A processor
 that is only correct while its incarnation stays alive is not correct.
 
 Companion to [domain objects and stream processors](domain-objects-and-stream-processors.md)
-(creation-as-event, fold doctrine, naming). This guide covers the half that
-doctrine document takes for granted: side effects, recovery, staleness, and
-how to test all of it in plain node
+(explicit birth certificates, fold doctrine, naming). This guide covers the
+half that doctrine document takes for granted: side effects, recovery,
+staleness, and how to test all of it in plain node
 (`apps/os/src/domains/streams/test-helpers.ts`).
 
 ## The model: a processor is a reconciler
@@ -138,14 +138,13 @@ state and treat a schema mismatch as the same cache miss
 historical event, with **event-time state**: at each event, `state` is the fold
 up to that offset, not current truth.
 
-Event-time state is therefore NOT a guard. `if (state.created) return` does
-not protect a refold: the `created` fact folds _later_ in the replay, so the
-vendor call re-fires against a repo that already exists — and the repo
-processor's seeding force-pushes the seed commit over whatever the user has
-committed since. That was a real latent bug; the same shape would have
-re-added 👀 reactions to every historical Slack message (a rate-limit
-crash-loop inside `blockProcessorWhile`, with reaction resurrection as the
-user-visible symptom).
+The explicit-birth guard is therefore NOT a refold-safety guard. It only says
+whether the processor exists at this point in its history. Once the birth has
+folded, every later historical event passes that guard during a refold, so a
+vendor call attached directly to one of those events fires again. The same
+shape would re-add 👀 reactions to every historical Slack message (a
+rate-limit crash-loop inside `blockProcessorWhile`, with reaction
+resurrection as the user-visible symptom).
 
 Every side effect in a `process*` hook must be one of exactly three shapes:
 
@@ -156,8 +155,9 @@ Every side effect in a `process*` hook must be one of exactly three shapes:
 2. **An obligation reconciled from the AT-HEAD fold** (the pattern above).
    Safe because the final fold has absorbed every journaled completion:
    requested-and-completed pairs cancel out _before_ the reconciler acts.
-   `RepoProcessor.processEventBatch` is the minimal example — fold
-   `createRequested`, reconcile `createRequested && !created` at head.
+   `RepoProcessor.processEventBatch` is the minimal creation example—fold
+   `birthCertificate` and `repo/ready`, then provision only when the at-head
+   state is born but not ready.
 3. **An acknowledgement/cosmetic lane gated on FRESHNESS** — compare
    `event.createdAt` against an injected `now`. Acks mean "your message was
    just picked up"; they are only meaningful near arrival, so stale replays
@@ -177,7 +177,7 @@ exclude them, so neither a live fold nor a refold ever contains one: you never
 need to filter them out yourself, and you cannot fold or side-effect on one.
 Corollary: anything your fold or reconciler depends on must NOT be appended
 ephemeral — the durable truth is always its own event (chunks →
-`output-added`).
+an assistant-role `agents/context-added` item).
 
 ### The refold test
 
@@ -267,7 +267,14 @@ const h = createProcessorHostHarness({
   }),
 });
 
-await h.stream.append(userMessage("hello?"));
+await h.stream.append(
+  {
+    type: "events.iterate.com/agent/created",
+    idempotencyKey: "agent/created:test",
+    payload: { config: { systemPrompt: "Test agent", llm: { model: TEST_MODEL } } },
+  },
+  userMessage("hello?"),
+);
 await h.stream.waitForEvent({ eventTypes: [llmRequestStarted], timeoutMs: 5000 });
 h.crash(); // THE DEPLOY: memory dies; journal, checkpoints, alarm survive
 await h.advance(15_000); // the alarm fires; the real revival pass runs
@@ -313,6 +320,16 @@ Scenarios every obligation-carrying processor should have (crib from
 
 ## Checklist for a new processor
 
+- [ ] A distinct `*/created` event with `{ config }`; nullable
+      `state.birthCertificate` stores its exact payload.
+- [ ] The created reduce arm throws if `birthCertificate` is already set.
+      Stable append idempotency handles command retries; the reducer never
+      hides two actual births.
+- [ ] Ordinary events stay in the processor's monolithic reducer. Actions
+      return before birth, while command/RPC methods that require existence
+      assert birth explicitly.
+- [ ] The creator appends births and setup before explicit subscriptions, then
+      calls `waitUntilProcessed` through the final creation-batch offset.
 - [ ] Every `runInBackground` answers "what recovers the outcome?"
 - [ ] Obligations: requested/started/completed events; fold carries what an
       attempt needs; terminal events delete the entry.

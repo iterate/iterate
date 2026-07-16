@@ -20,6 +20,7 @@ function entry(
     action: { kind: "itx-script", script: "async () => {}" },
     definedAtOffset: 1,
     nextTriggerAt: null,
+    path: "/scheduler/primary",
     recurrence: { every: 60 },
     runCount: 0,
     setAt: new Date(BASE).toISOString(),

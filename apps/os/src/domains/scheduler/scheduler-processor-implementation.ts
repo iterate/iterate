@@ -1,6 +1,6 @@
 import { tracing } from "cloudflare:workers";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor, type ProcessorReads } from "../streams/stream-processor.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ScheduleView } from "./types.ts";
 import {
@@ -27,13 +27,27 @@ export type SchedulerProcessorDeps = {
   /** Injectable clock. Only Trigger emission reads it — reduce never does. */
   now: () => number;
   /**
-   * Repoint (or, with null, delete) the platform alarm. Called after every
-   * checkpointed batch and every triggerDue(). The batch-path await is
-   * load-bearing: a failed repoint must fail the batch so it replays.
+   * Repoint (or, with null, delete) the scheduler's slice of the platform
+   * alarm. Called at the head of every delivery (`processEvent` under
+   * `delivery.caughtUp`, as a blockProcessorWhile closure) and after every
+   * triggerDue(). The at-head await is load-bearing: a failed repoint must
+   * fail the frame so the transport redelivers it.
    */
   repointAlarm: (atMs: number | null) => void | Promise<void>;
   /** Next armed alarm time, for runtime-state inspection only. */
   readAlarm: () => Promise<number | null>;
+  /**
+   * RUNNER-backed reads of the committed fold. Under registry drive the
+   * runner owns both cursors and the processor instance's internal checkpoint
+   * never advances, so every fold read the scheduler makes OUTSIDE a hook's
+   * own args — triggerDue's due/sweep decisions, an execution's
+   * latest-code-wins resolution and read-your-writes barrier, the view
+   * builders — must go through the runner's committed progress. The hosting
+   * DO wires this to `registry.reads(processor)` (lazily — `reads()` needs
+   * the registered processor); the unit harness wires it to the driving
+   * StreamProcessorRunner.
+   */
+  reads: Pick<ProcessorReads<SchedulerProcessorState>, "snapshot" | "waitUntilEvent">;
 };
 
 /**
@@ -80,6 +94,11 @@ export class SchedulerProcessor extends StreamProcessor<
     state: SchedulerProcessorState;
   }): SchedulerProcessorState {
     switch (event.type) {
+      case "events.iterate.com/scheduler/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("scheduler received more than one created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/scheduler/schedule-set": {
         const payload = event.payload;
         return {
@@ -147,30 +166,39 @@ export class SchedulerProcessor extends StreamProcessor<
     }
   }
 
-  protected override processEvent({
-    event,
-  }: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0]): undefined {
+  protected override processEvent(
+    args: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    if (args.state.birthCertificate === null) return;
+    const { event } = args;
+    // AT-HEAD alarm derivation (was `onCaughtUp`): fires only when this event
+    // was the observed stream head at delivery, so `args.state` is the whole
+    // fold. It rides a `blockProcessorWhile` closure, which the runner awaits
+    // BEFORE the frame's final commit — the alarm always reflects the fold
+    // that is about to be acknowledged, and a failed repoint fails the frame
+    // so the transport redelivers it (the await is as load-bearing as the old
+    // per-batch repoint's was; a bare synchronous call here would NOT be
+    // awaited). Re-arming an unchanged time is a no-op in the registry's
+    // slice reconcile, so the every-at-head-frame cadence is cheap.
+    if (args.delivery.caughtUp) {
+      args.blockProcessorWhileCaughtUp(async () => {
+        await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
+      });
+    }
+    if (event === null) return;
     if (event.type !== "events.iterate.com/scheduler/trigger-requested") return;
     // No gate here — #execute does all the gating after its barrier: pending
-    // recheck against checkpointed state, plus a completion-existence read so
-    // a checkpoint-loss replay cannot re-run history. The barrier offset makes
-    // the execution wait for this batch's checkpoint (latest-code-wins reads
-    // `this.state`).
+    // recheck against committed state, plus a completion-existence read so a
+    // checkpoint-loss replay cannot re-run history. The barrier offset makes
+    // the execution wait for this frame's commit (latest-code-wins reads the
+    // runner's committed fold via deps.reads).
     this.#launchExecution(event.payload.executionId, event.offset);
   }
 
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    await super.processEventBatch(args);
-    // Inside the serialized batch section, so the alarm always reflects the
-    // state that is about to checkpoint.
-    await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
-  }
-
+  // The processor-contributed runtime bag only — the hosting registry pins
+  // the runner's snapshot under it before it leaves over RPC.
   override async getRuntimeState() {
     return {
-      snapshot: await this.snapshot(),
       runtime: {
         inflightExecutions: [...this.#inflightExecutions],
         nextAlarmAt: await this.deps.readAlarm(),
@@ -185,11 +213,13 @@ export class SchedulerProcessor extends StreamProcessor<
    * flow back through ingestion, which is where executions actually launch.
    */
   async triggerDue(): Promise<{ requested: number }> {
-    // Self-load: after a restart this can run before any batch has delivered,
-    // and the due/sweep decisions below must see the durable checkpoint.
-    await this.snapshot();
+    // Runner-backed self-load: after a restart this can run before any
+    // delivery, and the due/sweep decisions below must see the durable
+    // committed fold (the runner's load performs any pending refold too).
+    const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
     const now = this.deps.now();
-    const due = dueSchedules(this.state.schedules, now);
+    const due = dueSchedules(state.schedules, now);
     if (due.length > 0) {
       await this.append(
         ...due.map(([key, entry]) => ({
@@ -213,21 +243,23 @@ export class SchedulerProcessor extends StreamProcessor<
     }
     // Restart recovery: anything pending that no live execution owns was
     // orphaned by an eviction mid-run — launch it again (at-least-once).
-    for (const executionId of Object.keys(this.state.pendingTriggers)) {
+    for (const executionId of Object.keys(state.pendingTriggers)) {
       this.#launchExecution(executionId);
     }
     // A wake that finds schedules due while the fold has not advanced since
     // the previous wake is making no progress (wedged ingest, poison batch):
     // back off toward the heartbeat instead of re-arming at the minimum delay
-    // forever. Any checkpoint movement resets the backoff.
-    const barren = due.length > 0 && this.#lastWakeCheckpointOffset === this.checkpointOffset;
-    this.#lastWakeCheckpointOffset = this.checkpointOffset;
+    // forever. Any checkpoint movement resets the backoff. The cursor is read
+    // AFTER the appends, exactly where the old instance read sat.
+    const { offset: checkpointOffset } = await this.deps.reads.snapshot();
+    const barren = due.length > 0 && this.#lastWakeCheckpointOffset === checkpointOffset;
+    this.#lastWakeCheckpointOffset = checkpointOffset;
     if (barren) {
       this.#consecutiveBarrenWakes += 1;
       await this.deps.repointAlarm(barrenWakeAtMs(now, this.#consecutiveBarrenWakes));
     } else {
       this.#consecutiveBarrenWakes = 0;
-      await this.deps.repointAlarm(nextWakeAtMs(this.state, now));
+      await this.deps.repointAlarm(nextWakeAtMs(state, now));
     }
     return { requested: due.length };
   }
@@ -254,8 +286,10 @@ export class SchedulerProcessor extends StreamProcessor<
    * Note the reduce consequence: a manual trigger advances a recurring
    * Schedule's clock and consumes a one-shot.
    */
-  buildManualTriggerEvent(key: string) {
-    const entry = this.state.schedules[key];
+  async buildManualTriggerEvent(key: string) {
+    const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
+    const entry = state.schedules[key];
     if (entry === undefined) throw new Error(`no schedule under key "${key}"`);
     const nowIso = new Date(this.deps.now()).toISOString();
     const executionId = crypto.randomUUID();
@@ -273,27 +307,25 @@ export class SchedulerProcessor extends StreamProcessor<
   }
 
   /** One key's Schedule as the public view shape, or undefined. */
-  getScheduleView(key: string): ScheduleView | undefined {
-    const entry = this.state.schedules[key];
-    if (entry === undefined) return undefined;
-    return {
-      action: entry.action,
-      definedAtOffset: entry.definedAtOffset,
-      key,
-      ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-      nextTriggerAt:
-        entry.nextTriggerAt === null ? null : new Date(entry.nextTriggerAt).toISOString(),
-      recurrence: entry.recurrence,
-      runCount: entry.runCount,
-      setAt: entry.setAt,
-    };
+  async getScheduleView(key: string): Promise<ScheduleView | undefined> {
+    const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
+    return scheduleViewFromState(state, key);
   }
 
-  /** Every Schedule, sorted by key — the UI list is exactly this. */
-  listScheduleViews(): ScheduleView[] {
-    return Object.keys(this.state.schedules)
+  /** Every Schedule, sorted by key — the UI list is exactly this. One
+   * snapshot read serves the whole list, so it is internally consistent. */
+  async listScheduleViews(): Promise<ScheduleView[]> {
+    const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
+    return Object.keys(state.schedules)
       .sort()
-      .map((key) => this.getScheduleView(key)!);
+      .map((key) => scheduleViewFromState(state, key)!);
+  }
+
+  async assertCreated(): Promise<void> {
+    const { state } = await this.deps.reads.snapshot();
+    assertSchedulerCreated(state);
   }
 
   #launchExecution(executionId: string, barrierOffset = 0): void {
@@ -309,11 +341,14 @@ export class SchedulerProcessor extends StreamProcessor<
   }
 
   async #execute(executionId: string, barrierOffset: number): Promise<void> {
-    // Read-your-writes barrier: launched from inside a batch, this runs
-    // concurrently with the checkpoint that makes the trigger visible in
-    // `this.state`. Sweep-launched executions pass 0 and short-circuit.
-    await this.waitUntilEvent({ offset: barrierOffset, timeoutMs: 30_000 });
-    const pending = this.state.pendingTriggers[executionId];
+    // Read-your-writes barrier: launched from inside a frame, this runs
+    // concurrently with the commit that makes the trigger visible in the
+    // committed fold. Sweep-launched executions pass 0 and short-circuit.
+    // Both the barrier and every fold read below are RUNNER-backed
+    // (deps.reads): instance reads never advance under runner drive.
+    await this.deps.reads.waitUntilEvent({ offset: barrierOffset, timeoutMs: 30_000 });
+    const { state } = await this.deps.reads.snapshot();
+    const pending = state.pendingTriggers[executionId];
     if (pending === undefined) return; // already completed (e.g. by a raced sweep)
     const completionIdempotencyKey = this.idempotencyKey(`trigger-completed:${executionId}`);
     // A checkpoint-loss replay redelivers historical requests whose completions
@@ -325,8 +360,10 @@ export class SchedulerProcessor extends StreamProcessor<
     });
     if (alreadyCompleted !== undefined) return;
 
-    // Latest-code-wins: resolve the Action NOW, not at request time.
-    const entry = this.state.schedules[pending.key];
+    // Latest-code-wins: resolve the Action NOW — a fresh committed-fold read,
+    // not the request-time fold and not the pre-barrier read above.
+    const { state: freshState } = await this.deps.reads.snapshot();
+    const entry = freshState.schedules[pending.key];
     let outcome: {
       definedAtOffset?: number;
       error?: string;
@@ -337,13 +374,6 @@ export class SchedulerProcessor extends StreamProcessor<
       outcome = { outcome: "skipped" };
     } else {
       try {
-        const schedulePath =
-          entry.path ?? (await this.stream.getEvent({ offset: entry.definedAtOffset }))?.path;
-        if (schedulePath === undefined) {
-          throw new Error(
-            `cannot resolve stream path for schedule "${pending.key}" defined at offset ${entry.definedAtOffset}`,
-          );
-        }
         const result = await tracing.enterSpan("scheduler action invocation", async (span) => {
           span.setAttribute("iterate.scheduler.execution_id", executionId);
           try {
@@ -352,7 +382,7 @@ export class SchedulerProcessor extends StreamProcessor<
                 {
                   key: pending.key,
                   ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-                  path: schedulePath,
+                  path: entry.path,
                   recurrence: entry.recurrence,
                   setAt: entry.setAt,
                 },
@@ -397,6 +427,33 @@ export class SchedulerProcessor extends StreamProcessor<
       payload: { ...outcome, executionId, key: pending.key },
     });
   }
+}
+
+function assertSchedulerCreated(state: SchedulerProcessorState): void {
+  if (state.birthCertificate === null) {
+    throw new Error("scheduler has not been created");
+  }
+}
+
+/** One key's Schedule from an explicit fold as the public view shape, or
+ * undefined — pure so both view methods serve one consistent snapshot. */
+function scheduleViewFromState(
+  state: SchedulerProcessorState,
+  key: string,
+): ScheduleView | undefined {
+  const entry = state.schedules[key];
+  if (entry === undefined) return undefined;
+  return {
+    action: entry.action,
+    definedAtOffset: entry.definedAtOffset,
+    key,
+    ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
+    nextTriggerAt:
+      entry.nextTriggerAt === null ? null : new Date(entry.nextTriggerAt).toISOString(),
+    recurrence: entry.recurrence,
+    runCount: entry.runCount,
+    setAt: entry.setAt,
+  };
 }
 
 /**

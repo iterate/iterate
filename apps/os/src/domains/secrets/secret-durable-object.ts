@@ -2,8 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
-import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -14,9 +14,16 @@ import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
-import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
-import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
+import { appendedEvents, isStreamOffsetConflictError } from "../streams/rpc-types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
+import type { ProcessorState } from "../streams/processor-contracts.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import type {
+  SecretCreateInput,
+  SecretDescription,
+  SecretRefresh,
+  SecretUpdateInput,
+} from "./types.ts";
 import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
@@ -31,7 +38,7 @@ import {
 } from "./utils.ts";
 import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 
-type SecretState = InstanceType<typeof SecretProcessor>["state"];
+type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
 const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
 
@@ -52,25 +59,42 @@ const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
  * Application frames are opaque and are never scanned for placeholders.
  */
 export class SecretDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(resolveDurableObjectName(this.ctx));
-  readonly #processorHost = createStreamProcessorHost(this.ctx, {
-    stream: new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
+  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #stream = new StreamRpcTarget({
+    auth: trustedInternalAuthContext(),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+    stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
     // Secret material is write-only: the live state that leaves this DO is the
     // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
     // processor facade applies via publicState. The explicit return type does
-    // double duty: it makes the host a LiveState<SecretDescription>, and it
-    // breaks the field-initializer inference cycle (this closure reads
-    // #secretProcessor, which is built from this host).
-    getLiveState: (): SecretDescription => describeSecretState(this.#secretProcessor.currentState),
+    // double duty: it makes the registry a LiveState<SecretDescription>, and
+    // it breaks the field-initializer inference cycle (this closure reads
+    // #reads, which is built from this registry).
+    getLiveState: (): SecretDescription => describeSecretState(this.#reads.currentState),
   });
-  readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
+  // The DO constructs the processor — no host-injected readState/writeState/
+  // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
+  // recovery on purpose: SecretProcessor is a pure fold (reduce only — no
+  // processEvent, no runInBackground), so an eviction can never lose
+  // consequential background work (see the registry module doc's rule).
+  readonly #secretProcessor = this.#registry.register(
+    new SecretProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  );
+  // Runner-backed reads: under runner drive the runner owns the cursors and
+  // the processor instance's internal checkpoint never advances, so every
+  // read this DO serves (snapshots, the processor facade, live state) must go
+  // through the runner's committed progress.
+  readonly #reads = this.#registry.reads(this.#secretProcessor);
 
   // In-flight refresh, shared across concurrent callers (single-flight): a
   // burst of 401s must not fan out into N token exchanges — duplicate mints
@@ -83,12 +107,12 @@ export class SecretDurableObject extends DurableObject<Env> {
   #updates: Promise<void> = Promise.resolve();
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#processorHost.wakeStreamSubscriber(args);
+    return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#processorHost.handleAlarm(alarmInfo);
+    return this.#registry.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -97,8 +121,10 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#secretProcessor, {
-      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(SecretProcessorContract.slug),
+    // Runner-backed reads (#reads), never the processor instance — see the
+    // field comment: instance reads are stale forever under runner drive.
+    return new StreamProcessorRpcTarget(this.#reads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(SecretProcessorContract.slug),
       // Secret material is write-only: the live state that leaves this DO is
       // the DESCRIPTION — snapshots and onStateChange pushes must never carry
       // the ciphertext, only the hasMaterial fact.
@@ -108,7 +134,84 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   /** The secret's live state — the DESCRIPTION only, behind `itx.secrets.get(path).liveState`. */
   get liveState() {
-    return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
+    return new LiveStateRpcTarget<SecretDescription>(this.#registry);
+  }
+
+  create(input: SecretCreateInput) {
+    const result = this.#updates.then(() => this.#create(input));
+    this.#updates = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #create(input: SecretCreateInput) {
+    const egress = normalizeEgress(input.egress);
+    const idempotencyKey = `secret/created:${this.#name.projectId}:${this.#name.path}`;
+    const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
+      durableObjectName: this.ctx.id.name!,
+      idempotencyKey: `stream/subscription-configured:${this.ctx.id.name!}#${SecretProcessorContract.slug}`,
+      processor: ["secrets", ["get", this.#name.path], "processor"],
+      processorSlug: SecretProcessorContract.slug,
+    });
+
+    const existing = await this.#stream.getEvent({ idempotencyKey });
+    if (existing !== undefined) {
+      const [configured] = appendedEvents(
+        await this.#stream.append({ return: "events" }, subscription),
+      );
+      await this.#waitUntilProcessed(configured!.offset);
+      return existing;
+    }
+
+    for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.#snapshotWithOffset();
+      if (snapshot.state.birthCertificate !== null) {
+        throw new Error(`secret already created: ${this.#name.path}`);
+      }
+      const offset = snapshot.offset + 1;
+      const encryptedMaterial =
+        input.material === undefined
+          ? undefined
+          : await encryptSecretCellMaterial(
+              JSON.stringify(input.material),
+              this.env.SECRET_ENCRYPTION_KEY,
+              {
+                egressOrigins: egressOrigins(egress),
+                offset,
+                path: this.#name.path,
+                projectId: this.#name.projectId,
+              },
+            );
+      try {
+        const [created, configured] = appendedEvents(
+          await this.#stream.append(
+            { return: "events" },
+            {
+              idempotencyKey,
+              offset,
+              type: "events.iterate.com/secret/created",
+              payload: {
+                config: {
+                  egress,
+                  ...(encryptedMaterial === undefined ? {} : { encryptedMaterial }),
+                  refresh: input.refresh ?? null,
+                },
+              },
+            } as StreamEventInput,
+            subscription,
+          ),
+        );
+        await this.#waitUntilProcessed(Math.max(created!.offset, configured!.offset));
+        return created!;
+      } catch (error) {
+        if (!isStreamOffsetConflictError(error) || attempt === MAX_MATERIAL_APPEND_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
+    throw new Error("unreachable secret create retry state");
   }
 
   update(input: SecretUpdateInput) {
@@ -127,6 +230,8 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (input.material !== undefined && input.egress === undefined) {
       throw new Error("secret.update requires egress with replacement material");
     }
+    const initialSnapshot = await this.#snapshotWithOffset();
+    assertSecretCreated(initialSnapshot.state, this.#name.path);
 
     const egress = input.egress === undefined ? undefined : normalizeEgress(input.egress);
 
@@ -134,16 +239,14 @@ export class SecretDurableObject extends DurableObject<Env> {
     // needs no privileged append lane: egress, refresh, and audit facts are all
     // ordinary public stream coordination.
     if (input.material === undefined) {
-      const [event] = await this.#appendSecretEvent(
-        {
-          type: "events.iterate.com/secret/updated",
-          payload: {
-            ...(egress === undefined ? {} : { egress }),
-            ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
-          },
+      const [event] = await this.#appendSecretEvent({
+        type: "events.iterate.com/secret/updated",
+        payload: {
+          ...(egress === undefined ? {} : { egress }),
+          ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
         },
-        true,
-      );
+      });
+      await this.#waitUntilProcessed(event!.offset);
       return event!;
     }
 
@@ -151,13 +254,16 @@ export class SecretDurableObject extends DurableObject<Env> {
     // blob must be thrown away and recomputed for a fresh snapshot.
     for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
       const snapshot = await this.#snapshotWithOffset();
+      assertSecretCreated(snapshot.state, this.#name.path);
       try {
-        return await this.#appendMaterialUpdate({
+        const event = await this.#appendMaterialUpdate({
           egress: egress!,
           material: input.material,
           offset: snapshot.offset + 1,
           ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
         });
+        await this.#waitUntilProcessed(event.offset);
+        return event;
       } catch (error) {
         if (!isStreamOffsetConflictError(error) || attempt === MAX_MATERIAL_APPEND_ATTEMPTS) {
           throw error;
@@ -197,6 +303,7 @@ export class SecretDurableObject extends DurableObject<Env> {
 
     try {
       let state = await this.#snapshot();
+      assertSecretCreated(state, this.#name.path);
       assertOriginPinned(request.url, state);
 
       // A refresh-and-retry needs the body twice; clone while it is still
@@ -488,8 +595,13 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async #snapshotWithOffset(): Promise<SecretSnapshot> {
-    await this.#processorHost.catchUp(SecretProcessorContract.slug);
-    return await this.#secretProcessor.snapshot();
+    await this.#registry.catchUp(SecretProcessorContract.slug);
+    return await this.#reads.snapshot();
+  }
+
+  async #waitUntilProcessed(offset: number): Promise<void> {
+    await this.#registry.catchUp(SecretProcessorContract.slug);
+    await this.#reads.waitUntilEvent({ offset });
   }
 
   async #decrypt(
@@ -528,18 +640,15 @@ export class SecretDurableObject extends DurableObject<Env> {
         projectId: this.#name.projectId,
       },
     );
-    const [event] = await this.#appendSecretEvent(
-      {
-        offset: input.offset,
-        type: "events.iterate.com/secret/updated",
-        payload: {
-          egress: input.egress,
-          encryptedMaterial,
-          ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
-        },
+    const [event] = await this.#appendSecretEvent({
+      offset: input.offset,
+      type: "events.iterate.com/secret/updated",
+      payload: {
+        egress: input.egress,
+        encryptedMaterial,
+        ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
       },
-      true,
-    );
+    });
     return event!;
   }
 
@@ -567,38 +676,17 @@ export class SecretDurableObject extends DurableObject<Env> {
     });
   }
 
-  #appendSecretEvent(
-    event: {
-      offset?: number;
-      type: `events.iterate.com/secret/${string}`;
-      payload: Record<string, unknown>;
-    },
-    returnEvents: true,
-  ): Promise<StreamEvent[]>;
-  #appendSecretEvent(
-    event: {
-      offset?: number;
-      type: `events.iterate.com/secret/${string}`;
-      payload: Record<string, unknown>;
-    },
-    returnEvents?: false,
-  ): Promise<void>;
-  async #appendSecretEvent(
-    event: {
-      offset?: number;
-      type: `events.iterate.com/secret/${string}`;
-      payload: Record<string, unknown>;
-    },
-    returnEvents = false,
-  ): Promise<StreamEvent[] | void> {
-    const stream = this.env.STREAM.getByName(
+  #appendSecretEvent(event: {
+    offset?: number;
+    type: `events.iterate.com/secret/${string}`;
+    payload: Record<string, unknown>;
+  }) {
+    return this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
         path: this.#name.path,
       }),
-    );
-    if (returnEvents) return await stream.append(event as StreamEventInput);
-    await stream.appendAck(event as StreamEventInput);
+    ).append(event as StreamEventInput);
   }
 }
 
@@ -679,8 +767,15 @@ function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh): bo
 function describeSecretState(state: SecretState): SecretDescription {
   return {
     audit: state.audit,
+    created: state.birthCertificate !== null,
     egress: state.egress,
     hasMaterial: state.encryptedMaterial !== null,
     refresh: state.refresh?.kind ?? null,
   };
+}
+
+function assertSecretCreated(state: SecretState, path: string): void {
+  if (state.birthCertificate === null) {
+    throw new Error(`secret has not been created: ${path}`);
+  }
 }

@@ -12,13 +12,16 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
-import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
-  integrationDirectoryStreamPath,
+  INTEGRATION_DIRECTORY_STREAM_PATH,
 } from "../../src/domains/integrations/utils.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "../../src/domains/integrations/integration-router-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -46,7 +49,7 @@ test.skipIf(signingSecret === null)(
     // connection stream (router subscription + connected fact) + global team
     // directory claim (the storage the OAuth callback writes).
     using secret = project.secrets.get(SLACK_BOT_TOKEN_SECRET_PATH);
-    await secret.update({
+    await secret.create({
       egress: { urls: ["https://slack.com"] },
       material: `xoxb-e2e-fake-${RUN_SUFFIX}`,
     });
@@ -57,14 +60,12 @@ test.skipIf(signingSecret === null)(
     );
     using seededIntegrationStream = project.streams.get(SLACK_INTEGRATION_STREAM_PATH);
     await seededIntegrationStream.append(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: DurableObjectNameCodec.stringify({
-          projectId,
-          path: SLACK_INTEGRATION_STREAM_PATH,
-        }),
-        idempotencyKey: `slack-router-subscription:${projectId}:${CONNECTION}`,
-        processor: ["integrations", "slack", ["get", CONNECTION], "processor"],
+      buildIntegrationRouterCreatedEvent({ connection: CONNECTION, slug: "slack" }),
+      buildIntegrationRouterSubscriptionConfiguredEvent({
+        connection: CONNECTION,
+        projectId,
         processorSlug: "slack",
+        slug: "slack",
       }),
       {
         type: "events.iterate.com/slack/connected",
@@ -77,7 +78,7 @@ test.skipIf(signingSecret === null)(
         },
       },
     );
-    using directory = root.streams.get(integrationDirectoryStreamPath("slack", teamId));
+    using directory = root.streams.get(INTEGRATION_DIRECTORY_STREAM_PATH);
     await directory.append({
       type: CONNECTION_CLAIMED_EVENT_TYPE,
       payload: { connection: CONNECTION, externalId: teamId, projectId, slug: "slack" },
@@ -143,15 +144,20 @@ test.skipIf(signingSecret === null)(
     const hasEvent = (events: StreamEvent[], type: string) =>
       events.some((event) => event.type === type);
 
-    // --- slack-agent: webhook transcribed into triggering agent input, and the
-    // agent processor schedules + requests LLM work for it.
+    // --- slack-agent: webhook transcribed into triggering developer context,
+    // and the agent processor schedules + requests LLM work for it.
     await waitFor(
       () => agentStream.getEvents({ afterOffset: 0 }),
       (events) =>
         hasEvent(events, "events.iterate.com/slack/webhook-received") &&
-        hasEvent(events, "events.iterate.com/agents/message-received") &&
+        events.some(
+          (event) =>
+            event.type === AGENT_CONTEXT_ADDED_TYPE &&
+            event.payload?.role === "developer" &&
+            (event.payload.actor as { type?: string } | undefined)?.type === "slack",
+        ) &&
         hasEvent(events, "events.iterate.com/agent/llm-request-requested"),
-      () => `agent input + llm request on ${agentStreamPath}`,
+      () => `agent context + llm request on ${agentStreamPath}`,
       120_000,
     );
 

@@ -20,7 +20,7 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
     using project = itx.projects.create({ slug: `openapi-${crypto.randomUUID()}` });
     const secretPath = `/secrets/openapi/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [api.url] },
       material: secretMaterial,
     });
@@ -111,7 +111,7 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
     using project = itx.projects.create({ slug: `mcp-${crypto.randomUUID()}` });
     const secretPath = `/secrets/mcp/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [mcp.url] },
       material: secretMaterial,
     });
@@ -196,7 +196,7 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
     using project = itx.projects.create({ slug: `expr-builtins-${crypto.randomUUID()}` });
     const secretPath = `/secrets/expr-builtins/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [api.url, mcp.url] },
       material: secretMaterial,
     });
@@ -430,6 +430,7 @@ test("itx expression capabilities resolve aliases against the current itx host p
   using project = itx.projects.create({ slug: `expr-agent-${crypto.randomUUID()}` });
   const agentPath = `/agents/expr-agent-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   using _sourceProvision = await agent.provideCapability({
     capability: {
