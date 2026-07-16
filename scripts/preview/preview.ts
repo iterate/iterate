@@ -15,7 +15,10 @@ import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annota
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
-import { OS_PREVIEW_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import {
+  OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
+  OS_PREVIEW_LANE_TIMEOUT_SECS,
+} from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -1569,8 +1572,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // treating symptoms of zombie routes (routes dead at the edge →
         // 522s) — structurally gone now that deploys never delete workers
         // (routes are declared in wrangler config; DNS is create-only).
-        "pnpm exec tsx e2e/vitest/onboarding-smoke.ts > /tmp/os-preview-smoke.log 2>&1 & SMOKE_PID=$!",
-        'wait "$SMOKE_PID" || { cat /tmp/os-preview-smoke.log; exit 1; }',
+        // Keep the gate visible and separately bounded. Before this watchdog,
+        // an RPC wedge before waitForEvent's 90s greeting timeout produced no
+        // suite output and survived until Depot killed the entire 10m job.
+        `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
         // The e2e vitest lane and the Playwright specs hit the same slot but
         // provision independent projects, so they run concurrently: the vitest
         // lane in the background, the specs in the foreground. The vitest log
