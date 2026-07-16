@@ -57,7 +57,12 @@ function drive<Contract extends StreamProcessorContract, Deps extends object>(
   return {
     runner,
     async deliver(frame: { events: StreamEvent[]; streamMaxOffset: number }) {
-      await (await runner.openDelivery()).sink(frame);
+      const opened = await runner.openDelivery();
+      await opened.sink({
+        ...frame,
+        scannedAfterOffset: opened.checkpointOffset,
+        scannedThroughOffset: frame.events.at(-1)?.offset ?? opened.checkpointOffset,
+      });
     },
   };
 }

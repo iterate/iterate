@@ -28,6 +28,10 @@ import type { SandboxInstanceType } from "./instance-types.ts";
  *   and tears down now instead of waiting for `sleepAfter` (the SDK's
  *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;
  *   `destroy()` is permanent — the name is retired.
+ * - Top-level `exec()` is sessionless: every call gets a fresh shell, and a
+ *   timeout terminates the complete Linux process group before resolving an
+ *   exit-code-124 result. Use the SDK's explicit session APIs when commands
+ *   intentionally need shared shell state.
  * - `__describe()` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,

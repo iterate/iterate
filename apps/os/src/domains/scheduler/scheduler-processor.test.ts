@@ -630,6 +630,8 @@ describe("recovery and alarm derivation", () => {
     const opened = await replay.runner.openDelivery();
     await opened.sink({
       events: firstPage,
+      scannedAfterOffset: opened.checkpointOffset,
+      scannedThroughOffset: firstPage.at(-1)!.offset,
       streamMaxOffset: replay.stream.events.at(-1)!.offset,
     });
     // Give any wrongly-launched execution time to run.

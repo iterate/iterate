@@ -22,9 +22,9 @@ import {
 const T = {
   created: "events.iterate.com/capability-host/created",
   provided: "events.iterate.com/capability-host/capability-provided",
-  requested: "events.iterate.com/capability-host/script-execution-requested",
-  started: "events.iterate.com/capability-host/script-execution-started",
-  completed: "events.iterate.com/capability-host/script-execution-completed",
+  requested: "events.iterate.com/capability-host/script-run-requested",
+  started: "events.iterate.com/capability-host/script-run-started",
+  completed: "events.iterate.com/capability-host/script-run-settled",
 } as const;
 
 function capabilityHostStream(): MemoryStream {
@@ -65,11 +65,18 @@ function makeProcessor(options: {
     projectId: null,
     parent: options.parent,
     scriptExecutionEntrypoint: {
-      run:
-        options.run ??
-        (() => {
-          throw new Error("must not run in this scenario");
-        }),
+      run: async (code) => {
+        const result = await (
+          options.run ??
+          (() => {
+            throw new Error("must not run in this scenario");
+          })
+        )(code);
+        return {
+          status: "succeeded" as const,
+          ...(result === undefined ? {} : { result }),
+        };
+      },
     },
     typecheckScript: options.typecheckScript,
     reads: {
@@ -114,11 +121,20 @@ describe("script execution typecheck gate", () => {
       const completed = completion(stream);
       expect(completed?.payload).toMatchObject({
         executionId: "exec-1",
-        error: expect.stringContaining("NOT executed"),
+        settlement: {
+          status: "failed",
+          error: expect.stringContaining("NOT executed"),
+          failureKind: "typecheck",
+          phase: "typecheck",
+          executionMayHaveOccurred: false,
+          cancellation: "not-applicable",
+        },
       });
-      expect((completed!.payload as { error: string }).error).toContain("Did you mean 'get'");
+      expect((completed!.payload as { settlement: { error: string } }).settlement.error).toContain(
+        "Did you mean 'get'",
+      );
       // Shared with the run/settle lanes, so a race collapses to one completion.
-      expect(completed?.idempotencyKey).toBe("capability-host/script-execution-completed@exec-1");
+      expect(completed?.idempotencyKey).toBe("capability-host/script-run-settled@exec-1");
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(false);
   });
@@ -137,7 +153,10 @@ describe("script execution typecheck gate", () => {
     await requestScript(stream, harness);
 
     await vi.waitFor(() => {
-      expect(completion(stream)?.payload).toMatchObject({ executionId: "exec-1", result: 42 });
+      expect(completion(stream)?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: 42 },
+      });
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(true);
     expect(ran).toHaveLength(1);
@@ -157,7 +176,10 @@ describe("script execution typecheck gate", () => {
     await requestScript(stream, harness);
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
-    expect(completion(stream)?.payload).not.toHaveProperty("error");
+    expect(completion(stream)?.payload).toMatchObject({
+      executionId: "exec-1",
+      settlement: { status: "succeeded", result: null },
+    });
     expect(ran).toHaveLength(1);
   });
 
@@ -175,7 +197,10 @@ describe("script execution typecheck gate", () => {
     await requestScript(stream, harness);
 
     await vi.waitFor(() => {
-      expect(completion(stream)?.payload).toMatchObject({ executionId: "exec-1", result: "ok" });
+      expect(completion(stream)?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: "ok" },
+      });
     });
     expect(ran).toHaveLength(1);
   });
