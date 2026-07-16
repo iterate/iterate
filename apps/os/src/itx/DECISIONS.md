@@ -421,7 +421,7 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   is `/api/itx[/:target]` on the OS origin only; `:target` is a project
   id/slug (the root context) or a full URL-encoded ref.
 
-## D23: ONE socket per tab — a Session gate + slug-addressed itx + invisible reconnect (supersedes D21's socket-Map-per-context)
+## D24: ONE socket per tab — a Session gate + slug-addressed itx + invisible reconnect (supersedes D21's socket-Map-per-context)
 
 D21 keyed a WebSocket per `{ projectId, connectionKey }` context in a module
 `Map`, so a dashboard held THREE sockets at once: a global one for the sidebar

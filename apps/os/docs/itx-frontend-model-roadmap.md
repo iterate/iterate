@@ -43,13 +43,13 @@ remaining work is _completing_ the model, not undoing a parallel one.
 ## Done in PR #2048
 
 - **One WebSocket per tab** — Session gate + slug-addressed `useItx` + invisible
-  reconnect (DECISIONS.md D23).
+  reconnect (DECISIONS.md D24).
 - **`useSessionQuery`** — the session-scoped sibling of `useItxQuery` (same
   transport-only retry, non-suspending for the always-mounted shell). Folds the
   4 hand-rolled `session.projects.list()` reads (sidebar, /projects, ⌘K picker,
   admin) onto one primitive and shrinks `lib/projects-query.ts` to a shared key.
   _(Interim: codex wants this unified into `useRead({ from })` — see below.)_
-- Fixed a duplicate `D22` heading in DECISIONS.md.
+- Numbered the one-socket decision `D24` (it had collided with existing headings).
 
 ## No-brainers (next, small + safe)
 
@@ -76,7 +76,7 @@ remaining work is _completing_ the model, not undoing a parallel one.
 
 - **Unify the read layer into one scope-aware `useRead({ from, key, read })`**
   (codex #1) with central key factories that mechanically namespace by
-  `authorityEpoch` + (for project reads) slug — closing the D23 footgun that
+  `authorityEpoch` + (for project reads) slug — closing the D24 footgun that
   cache correctness depends on every caller remembering the project in its key.
   `useSessionQuery`/`useItxQuery` become migration aliases. Advance
   `authorityEpoch` only on an authentication/authority reset, never on an ordinary
