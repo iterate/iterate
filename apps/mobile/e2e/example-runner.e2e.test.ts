@@ -1,7 +1,8 @@
-// Live proof that the phone's example runner (lib/run-example.ts) actually
-// runs a real catalogue example against a real project, from Node — same
-// seam-split precedent as chat-roundtrip.e2e.test.ts: dialItx (itx-core.ts,
-// Expo-free) over a real capnweb WebSocket with a bearer token.
+// Live proof that the app's own capabilityHost.runScript call (see
+// app/project/[projectId]/examples.tsx) actually runs a real catalogue
+// example against a real project, from Node — same seam-split precedent as
+// chat-roundtrip.e2e.test.ts: dialItx (itx-core.ts, Expo-free) over a real
+// capnweb WebSocket with a bearer token.
 //
 //   doppler run --config dev -- pnpm --dir apps/mobile test:e2e   # local dev (pnpm dev must be running)
 
@@ -11,7 +12,6 @@ import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
 import type { UnauthenticatedOs } from "../../os/src/itx-api.generated.ts";
 import { phoneRunnableExamples } from "../src/lib/examples.ts";
 import { dialItx } from "../src/lib/itx-core.ts";
-import { runMobileExample } from "../src/lib/run-example.ts";
 import { portlessOrigin, requireEnv, resolveBaseUrl, wsUrl } from "./e2e-helpers.ts";
 
 test("phone example runner: egress-rules-configured runs for real against a real project", async () => {
@@ -34,13 +34,15 @@ test("phone example runner: egress-rules-configured runs for real against a real
     admin: true,
   });
   const itx = await dialItx(baseUrl, async () => token);
+  const project = await itx.projects.get(projectId);
+  const example = phoneRunnableExamples().find(
+    (candidate) => candidate.id === "egress-rules-configured",
+  )!;
+  const execution = await project.capabilityHost.runScript(
+    `async (itx) => {\nconst vars = {};\n${example.code}\n}`,
+  );
 
-  const result = (await runMobileExample(itx, projectId, "egress-rules-configured")) as {
-    host: string;
-    offset: number;
-    ruleKey: string;
-  };
-  expect(result).toMatchObject({
+  expect(execution.result).toMatchObject({
     host: "httpbin.org",
     offset: expect.any(Number),
     ruleKey: "repl-demo-hold",

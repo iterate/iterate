@@ -102,7 +102,6 @@ testable from the phone alone. See `tasks/mobile-examples-runner.md`.
 | `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
 | `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
 | `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                      |
-| `src/lib/run-example.ts`   | Runs one example via capabilityHost.runScript (Expo-free, e2e-able)                     |
 | `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals → examples     |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.

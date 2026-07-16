@@ -1,17 +1,19 @@
 // Run a catalogue example against this project, from the phone. The same
 // examples the web REPL's Examples panel shows (apps/os/src/itx/examples.ts),
-// executed via capabilityHost.runScript — no local JS eval, see
-// src/lib/run-example.ts. Exists so testing a platform feature (seeding an
-// egress hold rule, appending to a stream, ...) never needs a laptop CLI
-// step first: every mobile feature here is built by agents, so it needs to
-// be fully testable from the phone alone.
+// executed via capabilityHost.runScript directly — no local JS eval, and no
+// wrapper beyond the one-line envelope every server-side runtime already
+// uses (see apps/os/e2e/test-support/run-example.ts's runScriptEnvelope,
+// which this mirrors — not worth sharing a whole module for). Exists so
+// testing a platform feature (seeding an egress hold rule, appending to a
+// stream, ...) never needs a laptop CLI step first: every mobile feature
+// here is built by agents, so it needs to be fully testable from the phone
+// alone.
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { phoneRunnableExamples } from "../../../lib/examples.ts";
 import { getItxSession } from "../../../lib/itx.ts";
-import { runMobileExample } from "../../../lib/run-example.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
@@ -30,8 +32,13 @@ export default function ExamplesScreen() {
 
   const run = useMutation({
     mutationFn: async (exampleId: string) => {
+      const example = EXAMPLES.find((candidate) => candidate.id === exampleId)!;
       const itx = await getItxSession(baseUrl!);
-      return await runMobileExample(itx, projectId, exampleId);
+      const project = await itx.projects.get(projectId);
+      const execution = await project.capabilityHost.runScript(
+        `async (itx) => {\nconst vars = {};\n${example.code}\n}`,
+      );
+      return execution.result;
     },
   });
 
