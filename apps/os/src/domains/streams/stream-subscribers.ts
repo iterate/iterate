@@ -9,7 +9,7 @@
 // | lane       | sink arrives as                       | call result            |
 // |------------|---------------------------------------|------------------------|
 // | ephemeral  | `subscribe()` parameter               | disposed unpulled — zero return frames |
-// | wake       | returned from the expression-named poke| pulled, never awaited — prompt corpse detection |
+// | wake       | returned from the expression-named poke| pulled; next frame waits for settle |
 // | push       | named by a persisted itx expression   | awaited — the ack that advances the cursor |
 // | webhook    | the configured URL (per-event POST)   | awaited 2xx — the ack that advances the cursor |
 //
@@ -1070,31 +1070,54 @@ export class StreamSubscribers {
             );
           }
           // Wake-lane batches have their results pulled anyway (corpse
-          // detection), so the settle doubles as a free commit→consumed
-          // sample on the stream's own clock. Ephemeral results stay
-          // unpulled: no onSettled ever fires there (see subscriber-sinks.ts).
+          // detection), and their NEXT frame is gated on that settle. Sending
+          // two frames concurrently is data loss when the receiver serializes
+          // them: if frame N rejects, queued frame N+1 can otherwise commit a
+          // cursor beyond N without containing N's events. This exact race
+          // skipped a fresh project's birth certificate in preview on
+          // 2026-07-16. Ephemeral results stay unpulled and ungated: no
+          // onSettled ever fires there (see subscriber-sinks.ts).
           const newestCreatedAtMs =
             events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
-          sink(
-            {
-              projectId: currentState.projectId,
-              path: currentState.path,
-              events,
-              streamMaxOffset: currentState.maxOffset,
-              // Read in the same synchronous block as streamMaxOffset, so the
-              // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
-              state: currentState,
-            } satisfies StreamEventBatch,
-            newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
-              ? undefined
-              : {
-                  onSettled: (outcome) => {
-                    if (outcome !== "ok") return;
+          const batch = {
+            projectId: currentState.projectId,
+            path: currentState.path,
+            events,
+            streamMaxOffset: currentState.maxOffset,
+            // Read in the same synchronous block as streamMaxOffset, so the
+            // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
+            state: currentState,
+          } satisfies StreamEventBatch;
+          if (subscriptionType === "configured") {
+            const settlement = new Promise<"ok" | "error">((resolve) => {
+              sink(batch, {
+                onSettled: (outcome) => {
+                  if (
+                    outcome === "ok" &&
+                    newestCreatedAtMs !== undefined &&
+                    Number.isFinite(newestCreatedAtMs)
+                  ) {
                     const settledAtMs = this.#hooks.now();
                     connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
-                  },
+                  }
+                  resolve(outcome);
                 },
-          );
+              });
+            });
+            let outcome: "ok" | "error";
+            try {
+              outcome = await withDeliveryTimeout(settlement, `wake delivery ${subscriptionKey}`);
+            } catch (error) {
+              this.onDurableDeliveryError(subscriptionKey, error);
+              return;
+            }
+            // A remote rejection runs onDurableDeliveryError from the retained
+            // sink before reporting "error" here; either way the connection is
+            // closed and its receiver checkpoint remains the replay authority.
+            if (outcome !== "ok" || !open) return;
+          } else {
+            sink(batch);
+          }
           await Promise.resolve();
         }
       } finally {

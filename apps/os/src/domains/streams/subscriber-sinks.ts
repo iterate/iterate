@@ -19,11 +19,12 @@
 // - Return values: ownership transfers to the caller (us). We retain what the
 //   poke returned and are responsible for disposing it.
 //
-// Delivery is fire-and-forget by design (the pump never awaits a batch); the
-// asymmetry between ephemeral and durable subscribers is WHO PULLS THE RESULT:
-// ephemeral batch results are disposed unpulled — zero subscriber-originated
-// return frames on the wire — while durable batch results are pulled (never
-// awaited) purely as the prompt dead-connection signal. See
+// The callback invocation itself is non-thenable; the asymmetry between
+// ephemeral and durable subscribers is WHO PULLS THE RESULT. Ephemeral batch
+// results are disposed unpulled — zero subscriber-originated return frames on
+// the wire. Durable batch results are pulled, and their local `onSettled`
+// signal gates the connection's next frame so a later frame can never overtake
+// a failed one. See
 // `retainProcessEventBatch` below and the wire tests in
 // stream-wire.e2e.test.ts.
 
@@ -56,7 +57,7 @@ export type DeliveryOptions = {
   onSettled?: (outcome: "ok" | "error") => void;
 };
 
-/** The pump-facing delivery callback: fire-and-forget, disposable, broken-transport aware. */
+/** The pump-facing delivery callback: non-thenable, disposable, broken-transport aware. */
 export type RetainedProcessEventBatch = ((
   batch: Parameters<ProcessEventBatch>[0],
   opts?: DeliveryOptions,
@@ -73,17 +74,18 @@ export type RetainedProcessEventBatch = ((
   };
 
 /**
- * Retains a delivery sink and wraps it in the pump's fire-and-forget calling
+ * Retains a delivery sink and wraps it in the pump's non-thenable calling
  * convention.
  *
  * Without `onDeliveryError` (ephemeral subscribers) the batch result is
  * disposed WITHOUT ever being pulled, so the remote never ships a resolution —
  * frames flow in one direction only. With it (durable subscribers) the result
- * is pulled — never awaited, never gating the pump — because a dead stub
- * rejects every call, and observing that rejection is the only reliable,
- * PROMPT "this connection is a corpse" signal (`onRpcBroken` is best-effort
- * and can be a pipelined fake). One resolve frame per batch is the price of
- * millisecond-grade dead-connection detection on the lane voice rides.
+ * is pulled because a dead stub rejects every call, and observing that
+ * rejection is the only reliable, PROMPT "this connection is a corpse" signal
+ * (`onRpcBroken` is best-effort and can be a pipelined fake). The configured
+ * pump also waits on the local `onSettled` callback before dispatching another
+ * batch. One resolve frame per batch is the price of millisecond-grade
+ * dead-connection detection and ordered delivery on the lane voice rides.
  */
 export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
@@ -116,11 +118,11 @@ export function retainProcessEventBatch(
         return;
       }
       if (onDeliveryError !== undefined && isThenable(result)) {
-        // Delivery stays fire-and-forget (the pump never awaits the remote
-        // result), but the rejection must be observed: a dead stub rejects
-        // every call, and swallowing that left broken connections in place
-        // forever. Dispose only after settle; disposing before the result is
-        // pulled opts out of observing the rejection signal this path needs.
+        // The wrapper stays non-thenable, but the result is pulled and reported
+        // through onSettled: the configured pump gates its next batch on that
+        // signal, while a dead stub's rejection closes the connection. Dispose
+        // only after settle; disposing before the result is pulled opts out of
+        // observing the rejection signal this path needs.
         pendingDeliveries += 1;
         void Promise.resolve(result)
           .then(

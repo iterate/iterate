@@ -325,12 +325,13 @@ function webhookPayload(
   };
 }
 
-/** A recording sink: a plain function with a no-op dispose, as the spine expects. */
+/** A recording sink: a synchronously-settling retained sink, as the spine expects. */
 function makeSink() {
   const batches: StreamEventBatch[] = [];
   const sink = Object.assign(
-    (batch: StreamEventBatch) => {
+    (batch: StreamEventBatch, opts?: { onSettled?: (outcome: "ok" | "error") => void }) => {
       batches.push(batch);
+      opts?.onSettled?.("ok");
     },
     { [Symbol.dispose]: () => {} },
   ) as RetainedProcessEventBatch;
@@ -689,6 +690,60 @@ describe("StreamSubscribers", () => {
     expect(h.pokes).toHaveLength(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
+  });
+
+  it("i2. wake mode never overtakes an unsettled frame, so a failed frame cannot skip its events", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "birth"));
+
+    const firstAttemptBatches: StreamEventBatch[] = [];
+    let rejectFirstAttempt: ((error: Error) => void) | undefined;
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink: retainProcessEventBatch(
+        (batch) => {
+          firstAttemptBatches.push(batch);
+          return new Promise<void>((_resolve, reject) => {
+            rejectFirstAttempt = reject;
+          });
+        },
+        {
+          onDeliveryError: (error) => h.subscribers.onDurableDeliveryError("k", error),
+        },
+      ),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(firstAttemptBatches.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [1],
+    ]);
+    expect(rejectFirstAttempt).toBeDefined();
+
+    // This fact lands while offset 1 is still unacknowledged. Dispatching it
+    // as a second frame would let the receiver's serialized queue run [2]
+    // after [1] rejects, then commit through 2 without ever reducing 1.
+    h.append(evt(2, "later"));
+    h.subscribers.wake();
+    await h.settle();
+    expect(firstAttemptBatches).toHaveLength(1);
+
+    rejectFirstAttempt!(new Error("receiver rejected the birth frame"));
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 1 });
+
+    // The alarm reconnects from the receiver's unchanged checkpoint, and the
+    // complete owed prefix is replayed in one ordered frame.
+    const retry = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: retry.sink });
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(retry.batches.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [1, 2],
+    ]);
   });
 
   it("j. a poke failure lands in the same backoff rows as push failures", async () => {
