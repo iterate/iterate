@@ -469,7 +469,9 @@ slug>` carries the ambient slug — no socket of its own.
 Reviewed before implementation by codex (gpt-5.6-sol, max reasoning) for React
 19 / TanStack Start idiom; its corrections — immutable snapshot, session-owned
 (not `useMemo`) stub cache, generation-guarded reconnect, typed transport-only
-query retry, slug-namespaced query keys, unconditional scope read — are folded
-in. We deliberately did NOT adopt its confirm-auth-before-publish suggestion
-(see above): it adds a terminal/retryable branch for a case `_app` already gates,
-and the original shipped with optimistic resolve.
+query retry, unconditional scope read — are folded in. Two suggestions were
+deliberately NOT adopted: confirm-auth-before-publish (adds a terminal/retryable
+branch for a case `_app` already gates; the original shipped optimistic), and
+auto-prefixing query keys with the slug (it broke the existing
+`invalidateQueries`/`setQueryData` sites and duplicated the project id the keys
+already carry — the ambient slug drives the connection, not the cache key).

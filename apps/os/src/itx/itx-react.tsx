@@ -520,12 +520,15 @@ function isTransientItxTransportError(error: unknown): boolean {
 
 /**
  * Read once through a project itx, suspending until it resolves. A thin adapter
- * over TanStack Query's `useSuspenseQuery`. The key is automatically namespaced
- * by the ambient project slug (`["itx", slug, ...key]`), so two projects' data
- * can never collide and a forgotten key can't show another project's cache.
+ * over TanStack Query's `useSuspenseQuery`. `key` (prefixed with "itx"
+ * internally) is the cache key — it must encode what the result is scoped to,
+ * INCLUDING the project, so two projects' data can't collide: a per-project read
+ * keys by the project, e.g. `["repo-files", projectId, repoPath]`. (The ambient
+ * slug drives the CONNECTION, not the key — so a mutation invalidates with the
+ * same `["itx", ...key]` it was written under.)
  *
  *   const files = useItxQuery({
- *     key: ["repo-files", repoPath],
+ *     key: ["repo-files", projectId, repoPath],
  *     query: (itx) => itx.repos.get(repoPath).listFiles(),
  *   });
  *
@@ -535,7 +538,7 @@ function isTransientItxTransportError(error: unknown): boolean {
  * a reconnect (no re-suspend, no spinner); only an in-flight read retries, on a
  * finite transport-only policy. Errors with no cached data throw to the nearest
  * error boundary; refetch after a mutation with
- * `queryClient.invalidateQueries({ queryKey: ["itx", slug, ...key] })`.
+ * `queryClient.invalidateQueries({ queryKey: ["itx", ...key] })`.
  */
 export function useItxQuery<T>({
   key,
@@ -554,7 +557,7 @@ export function useItxQuery<T>({
     );
   }
   const result = useSuspenseQuery({
-    queryKey: ["itx", slug, ...(Array.isArray(key) ? key : [key])],
+    queryKey: ["itx", ...(Array.isArray(key) ? key : [key])],
     queryFn: async () => {
       const session = await connectSession();
       const itx = session.projects.get(slug) as unknown as ProjectStub;
