@@ -45,9 +45,9 @@ box — gets typed in and remembered as a recent.
 
 One capnweb WebSocket to `<server>/api` (`authenticate({type:"bearer"})` —
 the same itx surface every other client programs against,
-`apps/os/src/types.ts`). A chat is an agent stream: "new chat" mints
-`/agents/mobile/<timestamp>` and the first `sendMessage` creates it (same
-lazy-seeding contract as the dashboard). The chat list is the unfiltered
+`apps/os/src/itx-api.generated.ts`). A chat is an agent stream: "new chat"
+mints `/agents/mobile/<timestamp>` and the first `message()` call creates it
+(same lazy-seeding contract as the dashboard). The chat list is the unfiltered
 `/agents` catalogue, so web/Slack-started chats open and continue here too.
 The thread screen renders only visible messages plus a "working…" row derived
 from in-flight activity (`src/lib/chat.ts`); a live stream subscription pushes
