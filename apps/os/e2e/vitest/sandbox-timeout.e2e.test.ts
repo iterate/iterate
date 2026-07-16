@@ -28,15 +28,15 @@ test.skipIf(deployedBaseUrl() === null)(
     const pidFile = `/tmp/timeout-proof-${crypto.randomUUID()}.pids`;
 
     try {
-      // Both the process-group leader and its child ignore SIGTERM. This
-      // forces the sessionless executor through its grace period and SIGKILL
-      // path instead of allowing a cooperative parent exit to hide a live
-      // descendant.
+      // The process-group leader accepts SIGTERM while its child ignores it.
+      // A timeout implementation that checks only the leader can therefore
+      // report success while the child keeps executing. Redirect the child
+      // away from the leader's capture pipes so that bug is observed as a
+      // survivor instead of merely hanging the RPC forever.
       const timedOut = await sandbox.exec(
         [
           `pid_file=${shellSingleQuote(pidFile)}`,
-          "trap '' TERM",
-          "(trap '' TERM; while :; do sleep 60; done) &",
+          "(trap '' TERM; while :; do sleep 60; done) >/dev/null 2>&1 &",
           "child=$!",
           'printf \'%s %s\\n\' "$$" "$child" > "$pid_file"',
           "while :; do sleep 60; done",
@@ -51,9 +51,16 @@ test.skipIf(deployedBaseUrl() === null)(
         [
           `pid_file=${shellSingleQuote(pidFile)}`,
           'test -s "$pid_file"',
-          "alive=''",
-          'for pid in $(cat "$pid_file"); do if kill -0 "$pid" 2>/dev/null; then alive="$alive $pid"; fi; done',
-          'if test -n "$alive"; then echo "survivors:$alive" >&2; exit 1; fi',
+          "active=''",
+          "details=''",
+          'for pid in $(cat "$pid_file"); do',
+          '  row=$(ps -o pid=,ppid=,pgid=,stat=,args= -p "$pid")',
+          '  test -n "$row" || continue',
+          '  details="$details\\n$row"',
+          '  state=$(ps -o stat= -p "$pid" | tr -d " ")',
+          '  case "$state" in Z*) ;; *) active="$active $pid" ;; esac',
+          "done",
+          'if test -n "$active"; then printf "active survivors:%s\\nprocess table:%b\\n" "$active" "$details" >&2; exit 1; fi',
           "printf processes-gone",
         ].join("\n"),
         { timeout: 10_000 },
@@ -82,6 +89,10 @@ test.skipIf(deployedBaseUrl() === null)(
     await using handle = await createTestProject({ slugPrefix: "script-sandbox-deadline" });
     using itx = handle.itx();
     using agent = handle.agent("/agents/script-sandbox-deadline");
+    // Agent and capability-host processors have explicit births. A raw stream
+    // append on an unborn path is intentionally inert, so create through the
+    // public agent door before exercising the capability host.
+    await agent.create({});
     const sandboxName = `script-timeout-${crypto.randomUUID()}`;
     const { path: sandboxPath } = await itx.sandboxes.create({
       instanceType: "lite",
@@ -136,28 +147,38 @@ test.skipIf(deployedBaseUrl() === null)(
       });
 
       let settlement: unknown;
+      let observedLifecycle: { offset: number; type: string }[] = [];
       await waitForCondition(
         async () => {
-          const completions = await agent.stream.getEvents({
-            eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+          const lifecycle = await agent.stream.getEvents({
+            eventTypes: [
+              "events.iterate.com/capability-host/script-run-started",
+              "events.iterate.com/capability-host/script-run-settled",
+            ],
             limit: 100,
           });
-          const completion = completions.find(
-            (event) => event.payload?.executionId === executionId,
+          observedLifecycle = lifecycle
+            .filter((event) => event.payload?.executionId === executionId)
+            .map((event) => ({ offset: event.offset, type: event.type }));
+          const completion = lifecycle.find(
+            (event) =>
+              event.type === "events.iterate.com/capability-host/script-run-settled" &&
+              event.payload?.executionId === executionId,
           );
           if (completion === undefined) return false;
           settlement = completion.payload?.settlement;
           return true;
         },
         {
-          description: "the deadline-bounded sandbox script to settle",
+          description: () =>
+            `the deadline-bounded sandbox script to settle; observed lifecycle ${JSON.stringify(observedLifecycle)}`,
           intervalMs: 1_000,
           timeoutMs: 120_000,
         },
       );
 
       const parsed = ScriptExecutionSettlement.parse(settlement);
-      expect(parsed).toMatchObject({ status: "succeeded" });
+      expect(parsed, JSON.stringify(parsed)).toMatchObject({ status: "succeeded" });
       if (parsed.status !== "succeeded") throw new Error(parsed.error);
       expect(parsed.result).toMatchObject({
         timedOut: {
@@ -170,9 +191,16 @@ test.skipIf(deployedBaseUrl() === null)(
         [
           `pid_file=${shellSingleQuote(pidFile)}`,
           'test -s "$pid_file"',
-          "alive=''",
-          'for pid in $(cat "$pid_file"); do if kill -0 "$pid" 2>/dev/null; then alive="$alive $pid"; fi; done',
-          'if test -n "$alive"; then echo "survivors:$alive" >&2; exit 1; fi',
+          "active=''",
+          "details=''",
+          'for pid in $(cat "$pid_file"); do',
+          '  row=$(ps -o pid=,ppid=,pgid=,stat=,args= -p "$pid")',
+          '  test -n "$row" || continue',
+          '  details="$details\\n$row"',
+          '  state=$(ps -o stat= -p "$pid" | tr -d " ")',
+          '  case "$state" in Z*) ;; *) active="$active $pid" ;; esac',
+          "done",
+          'if test -n "$active"; then printf "active survivors:%s\\nprocess table:%b\\n" "$active" "$details" >&2; exit 1; fi',
           "printf processes-gone",
         ].join("\n"),
         { timeout: 10_000 },
