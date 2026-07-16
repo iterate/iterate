@@ -146,6 +146,7 @@ import type {
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
+import { rethrowStreamUnavailable } from "./domains/streams/stream-unavailable.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -468,9 +469,21 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // TypeScript infers through the generated DurableObjectStub<StreamDurableObject>
   // type and would publish the DO's internal core-processor/runtime-state
   // implementation instead of the RPC API.
+  //
+  // Plain-data methods `.catch(rethrowStreamUnavailable)`: a stub rejection
+  // caused by the DO incarnation dying mid-call (kill/eviction/deploy reset)
+  // carries workerd's lifecycle flags HERE and nowhere downstream — capnweb
+  // strips them — so this is the one hop that can tag "retryable, the stream
+  // reboots on the next call" (`stream-unavailable: …`) apart from an
+  // app-level rejection. Untagged, a kill mid-append crossed the wire as a
+  // plain `Error("kill requested")` and the browser mirror's retry classifier
+  // had to treat it as fatal (the stream-browser double-kill e2e's old CI
+  // fixme). Stub-returning methods (readEvents, subscribe) stay bare — a
+  // `.catch` would collapse the returned stub — and their data legs already
+  // ride the tagged methods.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events);
+    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -488,7 +501,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.durableObjectStub.getEvent(args);
+    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -499,7 +512,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.durableObjectStub.getEvents(args);
+    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -523,14 +536,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.durableObjectStub.waitForEvent(args);
+    return this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.durableObjectStub.getProcessorRuntimeState(args);
+    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -554,7 +567,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.durableObjectStub.runtimeState();
+    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
