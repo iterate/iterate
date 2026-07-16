@@ -11,28 +11,31 @@ import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
-import type { Stream } from "~/itx-api.generated.ts";
+import type { Stream, StreamPushEventBatch } from "~/itx-api.generated.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 
 const workerVersionHeader = "x-iterate-worker-version";
 
 /**
- * The playground's stand-in for the project worker's event-batch sink.
+ * The playground's stand-ins for the platform's project-scoped push sinks.
  *
- * Every project-scoped stream births a `project-worker` push feed whose
- * delivery dial resolves `ctx.exports.ItxEntrypoint` and evaluates
- * `["processEventBatch"]` against `get()`'s result (see
- * ~/domains/streams/subscriber-sinks.ts). The playground hosts the real
- * `StreamDurableObject` but deliberately has no project worker, so this root
- * acks every batch as a no-op. Without it the feed poisons out on offset 1
- * (`exports.ItxEntrypoint is not a function`) and every fresh stream accretes
- * error-occurred + subscription-parked noise a few seconds after birth —
- * which is nondeterministic garbage in the UI and in every e2e count.
+ * Every project-scoped stream births independent `project-worker` and
+ * `platform-search-index` feeds. Their delivery expressions resolve
+ * `ctx.exports.ItxEntrypoint`, call `get()`, and evaluate respectively
+ * `["processEventBatch"]` and `["indexStreamSearchBatch"]` against this root
+ * (see ~/domains/streams/subscriber-sinks.ts). The playground hosts the real
+ * `StreamDurableObject` but deliberately has neither receiver, so it explicitly
+ * acks both feeds as no-ops. Omitting either method leaves that feed retrying
+ * and eventually appends error/park facts to every fresh playground stream.
  */
 class PlaygroundItxRoot extends WorkersRpcTarget {
-  processEventBatch(): undefined {
+  processEventBatch(_batch: StreamPushEventBatch): undefined {
     // Delivered-to-nobody by design: the playground has no project worker.
+  }
+
+  indexStreamSearchBatch(_batch: StreamPushEventBatch): undefined {
+    // Project search belongs to OS; the standalone playground has no projection.
   }
 }
 

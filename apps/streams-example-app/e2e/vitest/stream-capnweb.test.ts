@@ -48,6 +48,54 @@ describe("stream capnweb protocol", () => {
     });
   });
 
+  it("drains both built-in project feeds without retries or poison facts", async () => {
+    const path = e2eStreamPathLabel("stream-builtin-feeds");
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
+
+    const [appended] = await stream.stream.append({
+      type: "test.stream.builtin-feeds",
+      payload: { path },
+    });
+    if (appended === undefined) throw new Error("append returned no event");
+
+    let runtime: Awaited<ReturnType<typeof stream.stream.runtimeState>> | undefined;
+    await waitFor(async () => {
+      runtime = await stream.stream.runtimeState();
+      return ["project-worker", "platform-search-index"].every(
+        (subscriptionKey) =>
+          (runtime?.runtime.subscriptions[subscriptionKey]?.ackedOffset ?? 0) >= appended.offset,
+      );
+    }, 5_000);
+
+    expect(runtime?.runtime.subscriptions).toMatchObject({
+      "project-worker": {
+        ackedOffset: appended.offset,
+        lag: 0,
+        attempt: 0,
+        nextAttemptAt: null,
+        lastError: null,
+        parkedAtOffset: null,
+      },
+      "platform-search-index": {
+        ackedOffset: appended.offset,
+        lag: 0,
+        attempt: 0,
+        nextAttemptAt: null,
+        lastError: null,
+        parkedAtOffset: null,
+      },
+    });
+
+    const events = await stream.stream.getEvents({ afterOffset: 0 });
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "events.iterate.com/stream/error-occurred" ||
+          event.type === "events.iterate.com/stream/subscription-parked",
+      ),
+    ).toEqual([]);
+  });
+
   it("appends events after the stream-created event over capnweb", async () => {
     // Re-dial ONCE on a fresh path after a pause. This test dials a FRESH
     // stream DO per attempt, so it is the fleet's canary for Durable Object
