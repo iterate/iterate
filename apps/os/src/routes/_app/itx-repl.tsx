@@ -14,13 +14,13 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
+import type { RpcStub } from "capnweb";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   runBrowserReplEntry,
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
-import type { RpcStub } from "capnweb";
 import type { Project, Session } from "~/itx-api.generated.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
 import { useItx, useSession } from "~/itx/itx-react.tsx";
@@ -110,6 +110,7 @@ function ItxReplConnected({
   );
 }
 
+// oxlint-disable-next-line iterate/no-single-use-helpers -- isolates the single useSession() call to the global branch; inlining into ItxReplConnected's conditional would be a rules-of-hooks violation.
 function SessionReplConnected(props: {
   context?: "session" | "project";
   initialCode?: string;
@@ -118,6 +119,7 @@ function SessionReplConnected(props: {
   return <ItxReplPage itx={useSession()} {...props} />;
 }
 
+// oxlint-disable-next-line iterate/no-single-use-helpers -- isolates the single useItx(poolContext) call to the project branch; inlining into ItxReplConnected's conditional would be a rules-of-hooks violation.
 function ProjectReplConnected({
   poolContext,
   ...props

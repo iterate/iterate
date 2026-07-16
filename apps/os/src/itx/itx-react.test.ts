@@ -147,7 +147,7 @@ describe("itx session socket", () => {
 
   test("a superseded generation's late open never publishes over the live one", async () => {
     const { connectSession, reconnectItx } = await import("./itx-react.tsx");
-    const first = connectSession();
+    connectSession();
     reconnectItx(); // supersede the first dial before it ever opened
     expect(FakeWebSocket.instances).toHaveLength(2);
     const second = connectSession();

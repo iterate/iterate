@@ -61,12 +61,12 @@ test("Authenticated internal auth itx can create project and append to stream", 
   // projects.get accepts a slug OR a prj_ id — both resolve the SAME project
   // (the browser addresses by the URL slug; ids still work). An unknown slug is
   // a genuine miss and fails loudly instead of minting a phantom namespace.
-  expect((await itx.projects.get("alice-project").__describe()).projectId).toBe(
-    description.projectId,
-  );
-  expect((await itx.projects.get(description.projectId).__describe()).projectId).toBe(
-    description.projectId,
-  );
+  expect(await itx.projects.get("alice-project").__describe()).toMatchObject({
+    projectId: description.projectId,
+  });
+  expect(await itx.projects.get(description.projectId).__describe()).toMatchObject({
+    projectId: description.projectId,
+  });
   await expect(itx.projects.get("no-such-project-xyz").__describe()).rejects.toThrow(/no project/);
   expect(messages).toContainEqual([
     expect.any(Number),
