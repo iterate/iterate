@@ -1647,11 +1647,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
     previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-    previewTestCommandArgs: [
-      "bash",
-      "-c",
-      'curl -fsS "$AUTH_BASE_URL/api/auth/.well-known/openid-configuration" | grep -q \'"authorization_endpoint"\'',
-    ],
+    // The OAuth2/OIDC provider e2e (apps/auth/e2e): discovery-vs-origin,
+    // dynamic registration, authorize → consent → code → token exchange with
+    // RFC 8707 resource validation, against the live worker — the lane that
+    // would have caught the 2026-07-11 streams.iterate.com stale-registration
+    // incident (a bare discovery curl used to be all that ran here). The
+    // doppler wrap supplies APP_CONFIG_SERVICE_AUTH_TOKEN for the internal.*
+    // seeding procedures; preview auth bakes the fixed test OTP the suite
+    // signs in with.
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
   "streams-example-app": {
     slug: "streams-example-app",

@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -39,9 +42,8 @@ export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
  * scheduling reconciler. Normally dead code: the obligation reconciler
  * settles every open request well before this (attempts self-cap at
  * DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS, crashed attempts cancel, expired
- * intents fail). It exists for folds the normal lifecycle didn't produce —
- * hand-seeded checkpoints, raw-append journals — and as insurance against
- * reconciliation bugs. If it ever races a still-running attempt the outcomes
+ * intents fail). It exists purely as insurance against reconciliation
+ * bugs. If it ever races a still-running attempt the outcomes
  * CONVERGE rather than conflict: the backstop failure and any late completion
  * carry idempotent keys, the reducer ignores completions for a request that
  * is no longer current, and the late attempt's output is gated on request
@@ -589,9 +591,8 @@ export const AgentProcessorContract = defineProcessorContract({
              * carries. */
             llmRequestOffset: z.number().int().positive(),
             /** Epoch ms the requested event committed (its createdAt), driving
-             * the reconciler's backstop deadline. Optional: raw appends and
-             * pre-backstop checkpoints lack it, and the backstop then skips. */
-            requestedAt: z.number().int().positive().optional(),
+             * the reconciler's backstop deadline. */
+            requestedAt: z.number().int().positive(),
           }),
         ])
         .nullable()
@@ -1063,6 +1064,25 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/status-changed",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
+    // Core lifecycle RE-CHECK signals. Neither folds into state (reduce
+    // ignores them) — they are consumed so their at-head delivery gives the
+    // obligation reconcile (`processEvent` under `delivery.caughtUp`) a
+    // guaranteed consumed-at-head turn. `stream/woken` fires when the stream DO
+    // (re)starts — the revival/deploy case; `subscriber-connected` fires when a
+    // runner (re)attaches — closing the live race where an unconsumed presence
+    // fact would otherwise land at head just after an obligation was opened and
+    // strand it until the next domain event.
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): its ordinary delivery is
+    // the guaranteed at-head turn where the obligation reconcile
+    // (`processEvent` under `delivery.caughtUp`) re-drives the open LLM
+    // obligations — crash-cancel `started` attempts, re-fire lost debounces,
+    // settle expired intents. Reduce ignores it, and it is absent from
+    // `emits`: the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/agents/context-added",

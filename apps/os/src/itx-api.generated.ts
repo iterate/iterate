@@ -276,16 +276,24 @@ export interface Ai {
   /** List the Workers AI model catalog. */
   models(): Promise<unknown>;
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
-   * The optional third argument is the binding's own options object — e.g.
-   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
-   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
-  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
-  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
+   * Outputs are model-shaped: instantiate `run<T>` with the response shape you
+   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
+   * `unknown`. The optional third argument is the binding's own options object
+   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
+  /** Calling with no arguments lists the file formats the converter accepts. */
+  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
+  /** Convert one document (`{ name, blob }`) to Markdown. */
   toMarkdown(
-    ...args: CfMarkdownConversionArgs
-  ): Promise<
-    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
-  >;
+    document: CfMarkdownDocument,
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult>;
+  /** Convert a batch of documents to Markdown; results come back in input order. */
+  toMarkdown(
+    documents: CfMarkdownDocument[],
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult[]>;
 }
 
 /** Cloudflare Browser Run binding exposed through itx. */
@@ -578,7 +586,7 @@ export interface AgentCollection {
 export interface ProjectEgress {
   __describe(): Promise<Description>;
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response>;
+  fetch(request: Request): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -2086,18 +2094,37 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
-/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;
- * otherwise one document (or an array) plus optional conversion options
- * converts to markdown. */
-export type CfMarkdownConversionArgs =
-  | []
-  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
-
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
 export type CfMarkdownSupportedFormat = {
   extension: string;
   mimeType: string;
+};
+
+/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
+ * a filename plus the raw bytes as a Blob. */
+export type CfMarkdownDocument = {
+  /** Filename including the extension; Cloudflare uses it to choose the converter. */
+  name: string;
+  blob: Blob;
+};
+
+/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+ * hostname for relative links), image description language, PDF metadata
+ * exclusion. */
+export type CfMarkdownConversionOptions = {
+  conversionOptions?: {
+    html?: {
+      cssSelector?: string;
+      hostname?: string;
+    };
+    image?: {
+      descriptionLanguage?: string;
+    };
+    pdf?: {
+      excludeMetadata?: boolean;
+    };
+  };
 };
 
 /** One converted document from `ai.toMarkdown`: `format` is "markdown" with
@@ -2395,7 +2422,7 @@ export type AgentProcessorState = {
   llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }
+    | { phase: "requested"; llmRequestOffset: number; requestedAt: number }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -2507,6 +2534,23 @@ export type ItxExpression = ItxExpressionStep[];
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
 
+/**
+ * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
+ * to `Promise<unknown>` ahead of the ambient signature. Pinned because the
+ * ambient resolution is a compiler-settings artifact — which `lib`/`types` a
+ * consumer compiles with decides whether `await response.json()` is `any`
+ * (DOM lib alone), `unknown` (the current DOM + workers-types merge), or the
+ * useless `Promise<{}>` (older merges, where workers-types'
+ * `json<T>(): Promise<T>` inferred `{}`). The first-position member makes
+ * every consumer see the same honest `unknown`: narrow or cast it to the
+ * shape you expect, or `JSON.parse(await response.text())` in plain-JS
+ * scripts that read the body dynamically.
+ */
+export type EgressResponse = {
+  /** The parsed JSON body — honestly `unknown`; the caller supplies the shape. */
+  json(): Promise<unknown>;
+} & Response;
+
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
 
@@ -2548,10 +2592,15 @@ export type SlackConnection = Record<string, any> & {
   processor: WakeableStreamProcessorRpc;
 };
 
-/** The Gmail REST API connection exposed by a connected Google account. */
+/** The Gmail REST API connection exposed by a connected Google account.
+ * `data` is whatever the addressed REST resource returns — the caller
+ * supplies the expected shape via `request<T>` (no invented Gmail schemas
+ * here); it defaults to the honest `unknown` when uninstantiated. */
 export type GmailConnection = {
-  request(input: GmailRequestInput): Promise<{
-    data: unknown;
+  request<T = unknown>(
+    input: GmailRequestInput,
+  ): Promise<{
+    data: T;
     headers: Record<string, string>;
     status: number;
     statusText: string;
@@ -2773,10 +2822,11 @@ export type SandboxInstanceType =
  * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
  * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
- * contract deliberately does not re-declare that surface (same stance as
- * `McpClientRpc`); https://developers.cloudflare.com/sandbox/api/ is
- * the authoritative reference. The image is the stock Cloudflare sandbox
+ * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
+ * contract re-declares only the everyday command door, `exec` (the rest
+ * stays undeclared, same stance as `McpClientRpc`, so new SDK methods need
+ * no forwarding code here); https://developers.cloudflare.com/sandbox/api/
+ * is the authoritative reference. The image is the stock Cloudflare sandbox
  * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
  * you need at runtime.
  *
@@ -2802,6 +2852,34 @@ export type SandboxInstanceType =
  *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object & {
+  /** Run one shell command to completion and return its captured output —
+   * the SDK's `exec`, declared with the data fields that travel over every
+   * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —
+   * exist at runtime but are transport-dependent, so they stay out of this
+   * contract). `env` values override the session's for this one command;
+   * `timeout` is milliseconds. */
+  exec(
+    command: string,
+    options?: {
+      cwd?: string;
+      encoding?: string;
+      env?: Record<string, string | undefined>;
+      timeout?: number;
+    },
+  ): Promise<{
+    /** Whether the command succeeded (`exitCode === 0`). */
+    success: boolean;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    /** The command that was executed. */
+    command: string;
+    /** Execution duration in milliseconds. */
+    duration: number;
+    /** ISO timestamp of when the command started. */
+    timestamp: string;
+    sessionId?: string;
+  }>;
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
 };
@@ -2841,7 +2919,7 @@ export type SchedulerProcessorState = {
       action: { [x: string]: unknown; kind: "itx-script"; script: string };
       definedAtOffset: number;
       metadata?: Record<string, unknown> | undefined;
-      path?: string | undefined;
+      path: string;
       nextTriggerAt: number | null;
       recurrence:
         | { [x: string]: unknown; at: string }
@@ -3358,32 +3436,6 @@ export type AgentStatusRecord = {
   note?: string | undefined;
   shortStatus?: string | undefined;
   icon?: string | undefined;
-};
-
-/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
-export type CfMarkdownDocument = {
-  /** Filename including the extension; Cloudflare uses it to choose the converter. */
-  name: string;
-  blob: Blob;
-};
-
-/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
- * hostname for relative links), image description language, PDF metadata
- * exclusion. */
-export type CfMarkdownConversionOptions = {
-  conversionOptions?: {
-    html?: {
-      cssSelector?: string;
-      hostname?: string;
-    };
-    image?: {
-      descriptionLanguage?: string;
-    };
-    pdf?: {
-      excludeMetadata?: boolean;
-    };
-  };
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */

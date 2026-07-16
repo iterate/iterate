@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Project } from "../../itx-api.generated.ts";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
+import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
   CapabilityHostProcessor,
   type CapabilityHostAncestor,
@@ -13,18 +15,26 @@ function makeProcessor(input: {
   resolveAncestor: (path: string) => CapabilityHostAncestor;
   stream: MemoryStream;
 }) {
-  return new CapabilityHostProcessor({
+  let runner!: StreamProcessorRunner<CapabilityHostProcessorContract>;
+  const processor = new CapabilityHostProcessor({
     stream: input.stream,
     itx: {} as Project,
     path: input.path,
     projectId: null,
     resolveAncestor: input.resolveAncestor,
+    reads: {
+      snapshot: () => runner.snapshot(),
+      waitUntilEvent: (args) =>
+        "offset" in args ? runner.waitUntilEvent(args) : runner.waitUntilEvent(args),
+    },
     scriptExecutionEntrypoint: {
       run: () => {
         throw new Error("must not run in this scenario");
       },
     },
   });
+  runner = new StreamProcessorRunner({ processor, stream: input.stream });
+  return { processor, runner };
 }
 
 describe("explicit capability-host ancestors", () => {
@@ -36,7 +46,7 @@ describe("explicit capability-host ancestors", () => {
       invokeCapability,
     };
     const resolveAncestor = vi.fn(() => root);
-    const processor = makeProcessor({
+    const { processor, runner } = makeProcessor({
       path: "/agents/web/2026-07-15t21-56-48-076z",
       resolveAncestor,
       stream,
@@ -45,7 +55,7 @@ describe("explicit capability-host ancestors", () => {
       type: ANCESTOR_CONFIGURED,
       payload: { ancestorPath: "/" },
     });
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
+    await runner.catchUp();
 
     await expect(processor.invokeCapability({ path: ["projectTool"] })).resolves.toBe("from-root");
     expect(resolveAncestor).toHaveBeenCalledTimes(1);
@@ -61,7 +71,7 @@ describe("explicit capability-host ancestors", () => {
       { path: ["local"], scope: "/", type: "live" as const },
       { path: ["projectTool"], scope: "/", type: "live" as const },
     ]);
-    const processor = makeProcessor({
+    const { processor, runner } = makeProcessor({
       path: "/agents/web/conversation",
       resolveAncestor: () => ({
         describeCapabilities,
@@ -76,7 +86,7 @@ describe("explicit capability-host ancestors", () => {
         payload: { path: ["local"], type: "live" },
       },
     );
-    await processor.ingest({ events: stream.events, streamMaxOffset: 2 });
+    await runner.catchUp();
 
     await expect(processor.describeCapabilities()).resolves.toMatchObject([
       { path: ["local"], scope: "/agents/web/conversation" },
@@ -90,7 +100,7 @@ describe("explicit capability-host ancestors", () => {
     const resolveAncestor = vi.fn(() => {
       throw new Error("must not infer an ancestor");
     });
-    const processor = makeProcessor({
+    const { processor } = makeProcessor({
       path: "/agents/web/unconfigured-conversation",
       resolveAncestor,
       stream,
@@ -99,7 +109,7 @@ describe("explicit capability-host ancestors", () => {
     await expect(processor.invokeCapability({ path: ["projectTool"] })).rejects.toThrow(
       'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
     );
-    expect(() => processor.describeCapabilities()).toThrow(
+    await expect(processor.describeCapabilities()).rejects.toThrow(
       'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
     );
     await expect(processor.runScript("async () => null")).rejects.toThrow(
@@ -114,16 +124,18 @@ describe("explicit capability-host ancestors", () => {
     const streamB = new MemoryStream();
     let hostA!: CapabilityHostProcessor;
     let hostB!: CapabilityHostProcessor;
-    hostA = makeProcessor({
+    let runnerA!: StreamProcessorRunner<CapabilityHostProcessorContract>;
+    let runnerB!: StreamProcessorRunner<CapabilityHostProcessorContract>;
+    ({ processor: hostA, runner: runnerA } = makeProcessor({
       path: "/agents/a",
       resolveAncestor: () => hostB,
       stream: streamA,
-    });
-    hostB = makeProcessor({
+    }));
+    ({ processor: hostB, runner: runnerB } = makeProcessor({
       path: "/agents/b",
       resolveAncestor: () => hostA,
       stream: streamB,
-    });
+    }));
     await streamA.append({
       type: ANCESTOR_CONFIGURED,
       payload: { ancestorPath: "/agents/b" },
@@ -132,8 +144,8 @@ describe("explicit capability-host ancestors", () => {
       type: ANCESTOR_CONFIGURED,
       payload: { ancestorPath: "/agents/a" },
     });
-    await hostA.ingest({ events: streamA.events, streamMaxOffset: 1 });
-    await hostB.ingest({ events: streamB.events, streamMaxOffset: 1 });
+    await runnerA.catchUp();
+    await runnerB.catchUp();
 
     await expect(hostA.describeCapabilities()).rejects.toThrow(
       "capability-host ancestor cycle: /agents/a -> /agents/b -> /agents/a",

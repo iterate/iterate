@@ -1,9 +1,19 @@
 import { StreamProcessor } from "../../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
-import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
+import {
+  browserProcessorProgressRewindStatements,
+  deleteBrowserProcessorState,
+  ensureBrowserProcessorProgressSchema,
+} from "../../browser/processor-state-storage.ts";
+import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserFeedContract } from "./contract.ts";
-import { planBrowserFeedOps, type BrowserFeedState, type FeedOp } from "./projector.ts";
+import {
+  planBrowserFeedOps,
+  RAW_GROUP_KIND,
+  type BrowserFeedState,
+  type FeedOp,
+} from "./projector.ts";
 export { BrowserFeedContract } from "./contract.ts";
 
 /** The table this processor owns — the ONLY rendered-feed table in the mirror. */
@@ -12,21 +22,31 @@ export const BROWSER_FEED_TABLE = "feed_items";
 /** Bumped into the writer-lock name (and mirror meta) so a schema/projection change rebuilds the mirror. */
 export const BROWSER_FEED_SCHEMA_VERSION = 1;
 
-export type { BrowserFeedState };
-
 /**
  * Folds stream events into the single `feed_items` projection for the browser
- * feed UI. The projection logic lives in the pure `planBrowserFeedOps` helper:
- * `reduce` runs it one event at a time to advance state, and
- * `processEventBatch` runs it over the whole batch (from the same batch-entry
- * state) to produce one SQLite transaction — keeping the two in lockstep by
- * construction.
+ * feed UI. The projection logic lives in the pure `planBrowserFeedOps` helper,
+ * run one event at a time by BOTH hooks — `reduce` keeps its `endState`,
+ * `processEvent` keeps its `ops` — so state and projection stay in lockstep by
+ * construction. The ops are buffered into {@link projectionBuffer}; the
+ * browser progress store (processor-state-storage.ts) flushes them and the
+ * two-cursor progress record in ONE SQLite transaction per delivered frame.
+ *
+ * The open raw-group row grows with every folded event; its per-event ops are
+ * COALESCED in the buffer to one upsert per commit carrying the row's final
+ * data (matching the legacy batch override's one-statement-per-touched-row
+ * serialization cost — without it a monotype catch-up would serialize the
+ * group's cumulative events array once per event, O(n²) bytes on the exact
+ * deep-replay path the mirror's flow control protects).
  */
 export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, { sql: SqlClient }> {
   readonly contract = BrowserFeedContract;
 
-  protected override async prepare(): Promise<void> {
-    await ensureBrowserFeedSchema(this.deps.sql);
+  /** Shared with the progress store — see the class doc. One per instance. */
+  readonly projectionBuffer = new BrowserProjectionWriteBuffer();
+
+  /** Projection schema for the progress store's first-open (prepare() successor). */
+  ensureProjectionSchema(sql: SqlClient): Promise<void> {
+    return ensureBrowserFeedSchema(sql);
   }
 
   protected override reduce(
@@ -35,16 +55,43 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     return planBrowserFeedOps(args.state, [args.event]).endState;
   }
 
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<BrowserFeedContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    const { ops } = planBrowserFeedOps(args.previousState, args.events);
-
-    if (ops.length > 0) {
-      await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
-    }
-
-    await super.processEventBatch(args);
+  protected override processEvent(
+    args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
+  ): undefined {
+    const { ops } = planBrowserFeedOps(args.previousState, [args.event]);
+    if (ops.length === 0) return;
+    const open = args.state.open;
+    this.projectionBuffer.append(
+      args.event.offset,
+      ops.map((op) => {
+        if (open === null || op.localIndex !== open.localIndex) {
+          // Settled rows (agent items, raw singletons, groups closed within
+          // this event): one immutable statement each.
+          return { build: () => feedOpToStatement(op) };
+        }
+        // The still-open raw group row. Always written as the UPSERT shape
+        // with the row's FULL current values: a pending same-key write may be
+        // the row's original insert (which a plain UPDATE must not replace —
+        // the row would never be created), and against an already-committed
+        // row the upsert's conflict arm is exactly the legacy UPDATE.
+        const upsert: FeedOp =
+          op.kind === "insert"
+            ? op
+            : {
+                kind: "insert",
+                localIndex: op.localIndex,
+                itemKind: RAW_GROUP_KIND,
+                firstOffset: open.firstOffset,
+                lastOffset: op.lastOffset,
+                eventCount: op.eventCount,
+                data: op.data,
+              };
+        return {
+          coalesceKey: `feed-item:${op.localIndex}`,
+          build: () => feedOpToStatement(upsert),
+        };
+      }),
+    );
   }
 }
 
@@ -75,8 +122,11 @@ function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
   };
 }
 
-const ensureBrowserFeedSchema = createSchemaEnsurer({
+export const ensureBrowserFeedSchema = createSchemaEnsurer({
   run: async (sql) => {
+    // The rewind statements below reference processor_progress; make sure the
+    // progress schema exists before the reset transaction can touch it.
+    await ensureBrowserProcessorProgressSchema(sql);
     // No PRAGMA user_version here: feed_items shares the per-stream OPFS
     // database with the raw-events `events` table, which owns user_version.
     // Version resets ride the store's resetOnSchemaVersionChange lane
@@ -87,14 +137,25 @@ const ensureBrowserFeedSchema = createSchemaEnsurer({
     // with a `component` column. Both are disposable projections — drop them
     // (the old-shape feed_items is detected by its missing `kind` column) and
     // clear the retired processors' checkpoints so the mirror is exactly
-    // events + feed_items plus the shared processor_state bookkeeping.
+    // events + feed_items plus the shared progress bookkeeping.
     const columns = await sql.exec(`SELECT name FROM pragma_table_info('feed_items')`);
     const isLegacyFeedItems =
       columns.length > 0 && !columns.some((column) => column.name === "kind");
     await sql.batch(
       [
         { sql: `DROP TABLE IF EXISTS agent_feed_items` },
-        ...(isLegacyFeedItems ? [{ sql: `DROP TABLE IF EXISTS feed_items` }] : []),
+        ...(isLegacyFeedItems
+          ? [
+              // Dropping the old-shaped table MUST rewind browser-feed's own
+              // cursor in the SAME transaction: a rollback build recreates the
+              // old shape without touching processor_progress, so a surviving
+              // acknowledgement at N over the recreated-empty table would
+              // resume delivery at N+1 and leave feed rows 1..N permanently
+              // missing.
+              ...browserProcessorProgressRewindStatements(BrowserFeedContract.slug),
+              { sql: `DROP TABLE IF EXISTS feed_items` },
+            ]
+          : []),
         {
           sql: `
             -- One row per rendered Feed Item, pretty and raw interleaved in ONE

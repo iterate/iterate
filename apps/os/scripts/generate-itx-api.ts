@@ -394,6 +394,16 @@ export function generateItxApi(): string {
     const lines: string[] = [];
     const classDoc = jsDocOf(cls);
     if (classDoc) lines.push(classDoc);
+    // Overloaded methods: TypeScript's rule is that only the body-less
+    // declarations are the published signatures — the implementation
+    // signature underneath them is never directly callable, so emitting it
+    // would add a phantom overload to the contract.
+    const overloadedMethodNames = new Set<string>();
+    for (const member of cls.members) {
+      if (isMethodDeclaration(member) && !member.body && member.name) {
+        overloadedMethodNames.add(member.name.getText());
+      }
+    }
     // A class extending another published class is an interface extension:
     // emit only the subclass's own members and inherit the rest. (The opt-in
     // roots themselves are not in renameMap, so a direct extends is no clause.)
@@ -422,6 +432,7 @@ export function generateItxApi(): string {
       if (SKIPPED_MEMBER_NAMES.has(memberName)) continue;
 
       if (isMethodDeclaration(member)) {
+        if (member.body && overloadedMethodNames.has(memberName)) continue;
         if (memberName === "[Symbol.dispose]") {
           if (doc) lines.push(doc);
           lines.push(`  [Symbol.dispose](): void;`);

@@ -171,11 +171,7 @@ import {
   openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
-import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
-import type {
-  StreamProcessor,
-  StreamProcessorContract,
-} from "./domains/streams/stream-processor.ts";
+import type { ProcessorReads } from "./domains/streams/stream-processor.ts";
 import type {
   CapabilityDescription,
   Description,
@@ -248,7 +244,9 @@ import type {
   CfImageTransformInput,
   CfAiRunOptions,
   CfMarkdownConversionArgs,
+  CfMarkdownConversionOptions,
   CfMarkdownConversionResult,
+  CfMarkdownDocument,
   CfMarkdownSupportedFormat,
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
@@ -263,6 +261,7 @@ import { beginMcpOAuth, fetchLikeFromFetcher } from "./domains/itx/mcp-oauth.ts"
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
 import type {
+  EgressResponse,
   ProjectEgressIntercept,
   ProjectEgressInterceptor,
 } from "./domains/projects/egress.ts";
@@ -298,7 +297,7 @@ import type {
   SubscriptionRuntimeState,
 } from "./domains/streams/stream-subscribers.ts";
 import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
-import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
+import type { StreamProcessorRegistry } from "./domains/streams/stream-processor-registry.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
@@ -2690,16 +2689,33 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   }
 
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
-   * The optional third argument is the binding's own options object — e.g.
-   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
-   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
-  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown> {
+   * Outputs are model-shaped: instantiate `run<T>` with the response shape you
+   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
+   * `unknown`. The optional third argument is the binding's own options object
+   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
     const gateway = options?.gateway ?? this.props.gateway;
     const merged = gateway === undefined ? options : { ...options, gateway };
-    return env.AI.run(model, body as Record<string, unknown>, merged as AiRunOptions | undefined);
+    return env.AI.run(
+      model,
+      body as Record<string, unknown>,
+      merged as AiRunOptions | undefined,
+    ) as Promise<T>;
   }
 
-  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
+  /** Calling with no arguments lists the file formats the converter accepts. */
+  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
+  /** Convert one document (`{ name, blob }`) to Markdown. */
+  toMarkdown(
+    document: CfMarkdownDocument,
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult>;
+  /** Convert a batch of documents to Markdown; results come back in input order. */
+  toMarkdown(
+    documents: CfMarkdownDocument[],
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult[]>;
   toMarkdown(
     ...args: CfMarkdownConversionArgs
   ): Promise<
@@ -3366,9 +3382,10 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "  path: string;",
         "  query?: Record<string, boolean | number | string | null | undefined>;",
         "};",
-        "// itx.integrations.gmail.get() exposes:",
+        "// itx.integrations.gmail.get() exposes (data is the addressed REST resource's",
+        "// shape — supply it via request<T>; uninstantiated it stays unknown):",
         "interface GmailConnection {",
-        "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
+        "  request<T = unknown>(input: GmailRequestInput): Promise<{ data: T; headers: Record<string, string>; status: number; statusText: string }>;",
         "}",
         "// Exact package type; Iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
         'type GithubConnection = { octokit: import("octokit").Octokit };',
@@ -6103,7 +6120,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   }
 
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response> {
+  fetch(request: Request): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(request);
   }
 
@@ -6152,35 +6169,32 @@ export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgr
 }
 
 /**
- * The read-only capability a host hands out for one of its processors.
+ * The read-only capability a hosting Durable Object hands out for one of its
+ * processors.
  *
- * A `StreamProcessor` is itself an `RpcTarget`, so returning the instance
- * directly over RPC would expose its host-only plumbing — most dangerously
- * `ingest`, which drives the durable checkpoint. A caller could then call
- * `ingest` with a fabricated high-offset event and fast-forward the checkpoint
- * past every real event, permanently silencing the processor (and run its side
- * effects for events that were never committed). This facade forwards only the
- * four inspection methods of the public `StreamProcessorRpc` contract, so the
- * dangerous surface never crosses the RPC boundary.
+ * A `StreamProcessor` is itself an `RpcTarget`, and its fold lives in the
+ * driving StreamProcessorRunner, not the instance — so the readable surface is
+ * the registry's runner-backed reads (`registry.reads(processor)`,
+ * stream-processor-registry.ts), and this facade forwards only the inspection
+ * methods of the public `StreamProcessorRpc` contract. Returning a processor
+ * instance over RPC would expose author-side plumbing without answering a
+ * single read correctly.
  */
-export class StreamProcessorRpcTarget<
-  Contract extends StreamProcessorContract,
-  PublicState = ProcessorState<Contract>,
->
+export class StreamProcessorRpcTarget<State, PublicState = State>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements StreamProcessorRpc<PublicState>
 {
-  readonly #processor: StreamProcessor<Contract, object>;
+  readonly #reads: ProcessorReads<State>;
   readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
-  readonly #publicState: ((state: ProcessorState<Contract>) => PublicState) | undefined;
+  readonly #publicState: ((state: State) => PublicState) | undefined;
 
   constructor(
-    processor: StreamProcessor<Contract, object>,
+    reads: ProcessorReads<State>,
     options: {
       /**
-       * Host-provided pull-through (`StreamProcessorHost.catchUp`): snapshots
-       * served over this target reflect events the push delivery has not
-       * brought yet, giving remote readers read-your-writes.
+       * Registry-provided pull-through (`StreamProcessorRegistry.catchUp`):
+       * snapshots served over this target reflect events the push delivery
+       * has not brought yet, giving remote readers read-your-writes.
        */
       catchUpBeforeSnapshot?: () => Promise<void>;
       /**
@@ -6190,16 +6204,16 @@ export class StreamProcessorRpcTarget<
        * `hasMaterial` instead); the node's `.liveState` applies the SAME
        * redaction through the host's `getLiveState`. Omitted = identity.
        */
-      publicState?: (state: ProcessorState<Contract>) => PublicState;
+      publicState?: (state: State) => PublicState;
     } = {},
   ) {
     super();
-    this.#processor = processor;
+    this.#reads = reads;
     this.#catchUpBeforeSnapshot = options.catchUpBeforeSnapshot;
     this.#publicState = options.publicState;
   }
 
-  #project(state: ProcessorState<Contract>): PublicState {
+  #project(state: State): PublicState {
     return this.#publicState === undefined
       ? (state as unknown as PublicState)
       : this.#publicState(state);
@@ -6207,12 +6221,12 @@ export class StreamProcessorRpcTarget<
 
   async snapshot(): Promise<ProcessorSnapshot<PublicState>> {
     await this.#catchUpBeforeSnapshot?.();
-    const { offset, state } = await this.#processor.snapshot();
+    const { offset, state } = await this.#reads.snapshot();
     return { offset, state: this.#project(state) };
   }
 
   async getRuntimeState() {
-    const runtimeState = await this.#processor.getRuntimeState();
+    const runtimeState = await this.#reads.getRuntimeState();
     return {
       ...runtimeState,
       snapshot: {
@@ -6223,7 +6237,7 @@ export class StreamProcessorRpcTarget<
   }
 
   waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
-    return this.#processor.waitUntilEvent(input);
+    return this.#reads.waitUntilEvent(input);
   }
 }
 
@@ -6567,19 +6581,19 @@ class ProcessorRelayRpcTarget<State>
 }
 
 /**
- * DO-side RpcTarget over a host's live-state engine — the surface a `.liveState`
- * node exposes: `get()`/`subscribe()` — read-only over the wire (see
- * LiveStateRpc: the DO derives this state from its fold, so writes go through
- * the node's own verbs). `get`/`subscribe` first seed the engine from committed
- * state so the first paint is never stale after a DO restart.
+ * DO-side RpcTarget over a registry's live-state engine — the surface a
+ * `.liveState` node exposes: `get()`/`subscribe()` — read-only over the wire
+ * (see LiveStateRpc: the DO derives this state from its fold, so writes go
+ * through the node's own verbs). `get`/`subscribe` first seed the engine from
+ * committed state so the first paint is never stale after a DO restart.
  */
 export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
   extends IterateRpcRelay<"LiveStateRpc">
   implements LiveStateRpc<State>
 {
-  readonly #host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">;
+  readonly #host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">;
 
-  constructor(host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">) {
+  constructor(host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">) {
     super();
     this.#host = host;
   }

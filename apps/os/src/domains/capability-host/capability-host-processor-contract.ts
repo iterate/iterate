@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { ItxExpressionStep } from "../../itx/expression.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
@@ -66,6 +70,10 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   version: "0.2.0",
   description: "A tiny dynamic capability table and script execution journal.",
+  // Brings the core `stream/*` lifecycle events into scope so the obligation
+  // reconcile can consume `stream/woken` / `subscriber-connected` as re-check
+  // signals (see `consumes`).
+  processorDeps: [CoreProcessorContract],
   stateSchema: z.object({
     /**
      * The one explicitly declared scope this host inherits from. Absence means
@@ -164,9 +172,8 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       payloadSchema: z.looseObject({
         code: z.string(),
         executionId: z.string(),
-        /** Epoch ms past which the reconciler settles instead of running.
-         * Absent (raw appends), defaults to createdAt + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS. */
-        expiresAt: z.number().int().positive().optional(),
+        /** Epoch ms past which the reconciler settles instead of running. */
+        expiresAt: z.number().int().positive(),
       }),
       examples: [
         {
@@ -222,6 +229,22 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-started",
     "events.iterate.com/capability-host/script-execution-completed",
+    // Core lifecycle RE-CHECK signals (see the agent contract for the full
+    // rationale): neither folds into state, but their at-head delivery gives
+    // the script-obligation reconcile a guaranteed consumed-at-head turn —
+    // `stream/woken` on a stream (re)start, `subscriber-connected` on a runner
+    // (re)attach.
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): its ordinary delivery is
+    // the guaranteed at-head turn where the obligation reconcile
+    // (`processEvent` under `delivery.caughtUp`) re-drives open script
+    // obligations — fresh requested scripts start, orphaned started scripts
+    // settle as failures. Reduce ignores it, and it is absent from `emits`:
+    // the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/capability-host/ancestor-configured",

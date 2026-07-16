@@ -3,6 +3,7 @@ import {
   StreamProcessor,
   type StreamProcessorConstructorArgs,
 } from "../streams/stream-processor.ts";
+import type { ProcessorState } from "../streams/processor-contracts.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
@@ -134,6 +135,31 @@ type AncestorDeclaration = {
   path: string | null;
 };
 
+/**
+ * RUNNER-backed reads of the committed fold. Under registry drive the runner
+ * owns both cursors and the processor instance's internal checkpoint never
+ * advances, so every fold read this processor makes OUTSIDE a hook's own args
+ * — capability resolution, the revoke guard, the provide/revoke
+ * read-your-writes barriers, the script-completion wait — must go through the
+ * runner's committed progress. The hosting DO wires this to
+ * `registry.reads(processor)` (lazily — `reads()` needs the registered
+ * processor); test harnesses wire it to the driving StreamProcessorRunner.
+ * `waitUntilEvent` takes BOTH forms as one union parameter (the registry's
+ * read surface accepts it; the predicate form is in-process-only — a function
+ * cannot cross the RPC facade).
+ */
+export type CapabilityHostProcessorReads = {
+  snapshot(): Promise<{
+    offset: number;
+    state: ProcessorState<CapabilityHostProcessorContract>;
+  }>;
+  waitUntilEvent(
+    input:
+      | { offset: number; timeoutMs?: number }
+      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number },
+  ): Promise<void>;
+};
+
 export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
   readonly contract = CapabilityHostProcessorContract;
   #itx: Project;
@@ -150,11 +176,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       }) => Promise<ScriptExecutionCheck>)
     | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
+  #reads: CapabilityHostProcessorReads;
 
   constructor(
-    args: StreamProcessorConstructorArgs<CapabilityHostProcessorContract, object> & {
+    args: StreamProcessorConstructorArgs & {
       itx: Project;
       path: string;
+      /** Runner-backed fold reads — see {@link CapabilityHostProcessorReads}. */
+      reads: CapabilityHostProcessorReads;
       /** Runs run-script workers in this scope. */
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
       /** Injected clock (expiry decisions); production defaults to Date.now. */
@@ -182,6 +211,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
+    this.#reads = args.reads;
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#now = args.now;
     this.#resolveAncestor = args.resolveAncestor;
@@ -242,9 +272,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
             [event.payload.executionId]: {
               status: "requested" as const,
               code: event.payload.code,
-              expiresAt:
-                event.payload.expiresAt ??
-                Date.parse(event.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+              expiresAt: event.payload.expiresAt,
             },
           },
         };
@@ -274,32 +302,53 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   readonly #liveExecutions = new Set<string>();
 
   /**
-   * End-of-batch reconciliation of desired (open script obligations in the
-   * fold) against actual (this incarnation's live executions) — the same
-   * shape as the LLM providers' (see OpenAiWsProcessor.processEventBatch for
-   * the doctrine), with one policy difference: a `started` script that lost
-   * its incarnation is settled as a FAILURE and never re-run, because a
-   * script may have half-executed its side effects and scripts are not
-   * assumed idempotent. The agent renders the failure and the model decides
-   * whether to retry.
+   * The at-head reconcile (was `onCaughtUp`): `processEvent` invokes it under
+   * `delivery.caughtUp`, so this processor has no per-event side effects — all
+   * of its work is the obligation reconciliation. It runs ONLY for the last
+   * consumed event of a batch that reached head (the at-head gate the legacy
+   * `processEventBatch` override carried lives in the runner now), so a
+   * mid-catch-up fold never re-runs a settled script.
    */
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEventBatch"]>[0],
+  protected override processEvent(
+    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    // ONE outer blocking closure per at-head pass — the settle appends inside
+    // #reconcileScriptObligations are awaited (holding this head event's
+    // deferred commit); a nested blockProcessorWhile would register after the
+    // runner's per-event blocker snapshot and never be awaited.
+    if (args.delivery.caughtUp) {
+      args.blockProcessorWhileCaughtUp(() => this.#reconcileScriptObligations(args));
+    }
+  }
+
+  /**
+   * At-head reconciliation of desired (open script obligations in the head
+   * fold) against actual (this incarnation's live executions) — the
+   * obligation doctrine, with one policy difference from the LLM providers: a
+   * `started` script that lost its incarnation is settled as a FAILURE and
+   * never re-run, because a script may have half-executed its side effects
+   * and scripts are not assumed idempotent. The agent renders the failure and
+   * the model decides whether to retry.
+   *
+   * RECOVERY rides this same path: `events.iterate.com/stream/processor-revived`
+   * — the fact the keepalive's revival pass journals after an eviction took
+   * in-flight work — is consumed by the contract, so its ordinary delivery is
+   * a guaranteed turn that lands at head and runs this reconcile, where the
+   * undriven obligations are re-driven. The `processEvent` switch has no arm
+   * for its type; the at-head reconcile is the whole point.
+   */
+  async #reconcileScriptObligations(
+    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
-    await super.processEventBatch(args);
-    // At-head gate — see OpenAiWsProcessor.processEventBatch.
-    if (args.checkpointOffset < args.streamMaxOffset) return;
     const now = (this.#now ?? Date.now)();
     const settle: { executionId: string; error: string }[] = [];
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
       if (this.#liveExecutions.has(executionId)) continue;
       if (execution.status === "requested" && now < execution.expiresAt) {
         this.#liveExecutions.add(executionId);
-        // The batch's own fold, NOT this.state: the durable checkpoint (and
-        // the state getter behind it) advances only after this hook returns,
-        // and the typecheck gate must see capabilities provided in the same
-        // batch as the request or it would judge the script against a stale
-        // scope.
+        // The head fold handed to this reconcile, NOT an instance read: the
+        // typecheck gate must see capabilities provided in the same delivery
+        // as the request or it would judge the script against a stale scope.
         const capabilities = args.state.capabilities;
         const ancestor = args.state.ancestor;
         args.runInBackground(() =>
@@ -315,16 +364,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
             : "Script execution expired before any attempt started (the host was down past the request's expiry). It never ran.",
       });
     }
-    if (settle.length === 0) return;
-    args.blockProcessorWhile(async () => {
-      for (const { executionId, error } of settle) {
-        console.error("[capability-host] settling undriven script execution", {
-          executionId,
-          error,
-        });
-        await this.#appendCompletion({ executionId, error });
-      }
-    });
+    // Settle inline — this runs inside the head event's outer blocking closure
+    // (see processEvent), so awaiting the completions holds the frame.
+    for (const { executionId, error } of settle) {
+      console.error("[capability-host] settling undriven script execution", {
+        executionId,
+        error,
+      });
+      await this.#appendCompletion({ executionId, error });
+    }
   }
 
   async provideCapability(input: ProvideCapabilityInput) {
@@ -412,7 +460,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     previousLive?.dispose();
 
-    await this.waitUntilEvent({ offset: committedOffset });
+    await this.#reads.waitUntilEvent({ offset: committedOffset });
     return { path, providedAtOffset: committedOffset };
   }
 
@@ -467,7 +515,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
     assertCapabilityPath(path);
-    const current = this.state.capabilities.find((record) => samePath(record.path, path));
+    const { state } = await this.#reads.snapshot();
+    const current = state.capabilities.find((record) => samePath(record.path, path));
     if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
       return;
     }
@@ -482,20 +531,21 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     });
     this.#liveCapabilities.delete(key);
     previousLive?.dispose();
-    await this.waitUntilEvent({ offset: committed.offset });
+    await this.#reads.waitUntilEvent({ offset: committed.offset });
   }
 
   async invokeCapability(
     { args = [], path }: { args?: unknown[]; path: string[] },
     visitedScopePaths: string[] = [],
   ) {
-    const ancestorDeclaration = this.#requireAncestorDeclaration(this.state.ancestor);
     // A trailing __describe is a valid INVOCATION (answered from the mount's
     // durable metadata below) — the reserved-name rule is for MOUNT names, so
     // validate the path without it or discovery on provided capabilities dies
     // here with "invalid capability path segment".
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
-    const hit = resolveLongestPrefix(this.state.capabilities, path);
+    const { state } = await this.#reads.snapshot();
+    const ancestorDeclaration = this.#requireAncestorDeclaration(state.ancestor);
+    const hit = resolveLongestPrefix(state.capabilities, path);
     if (!hit) {
       // Not declared at THIS scope. Ask only the ancestor named in this host's
       // durable declaration. Path prefixes are names, not capability scopes.
@@ -571,10 +621,11 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   // Reports everything reachable at this scope: this scope's own mounts plus
   // those reachable through its explicit ancestor, each tagged with the scope
   // it was declared at. A nearer scope shadows a farther one at the same path.
-  describeCapabilities(visitedScopePaths: string[] = []): Promise<CapabilityDescription[]> {
-    return this.#describeCapabilitiesFrom(
-      this.state.capabilities,
-      this.#requireAncestorDeclaration(this.state.ancestor),
+  async describeCapabilities(visitedScopePaths: string[] = []): Promise<CapabilityDescription[]> {
+    const { state } = await this.#reads.snapshot();
+    return await this.#describeCapabilitiesFrom(
+      state.capabilities,
+      this.#requireAncestorDeclaration(state.ancestor),
       visitedScopePaths,
     );
   }
@@ -633,8 +684,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return resolveAncestor(ancestorPath);
   }
 
-  ancestorPath(): string | null {
-    return this.#requireAncestorDeclaration(this.state.ancestor).path;
+  async ancestorPath(): Promise<string | null> {
+    const { state } = await this.#reads.snapshot();
+    return this.#requireAncestorDeclaration(state.ancestor).path;
   }
 
   #requireAncestorDeclaration(declaration: AncestorDeclaration | undefined): AncestorDeclaration {
@@ -645,26 +697,25 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
-    this.#requireAncestorDeclaration(this.state.ancestor);
+    const { state } = await this.#reads.snapshot();
+    this.#requireAncestorDeclaration(state.ancestor);
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     const [requested] = await this.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
-      payload: { code, executionId },
+      payload: {
+        code,
+        executionId,
+        expiresAt: (this.#now ?? Date.now)() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+      },
     });
-    // The public DO door caught this processor up immediately before calling
-    // runScript. In the uncontended case our new event is therefore the exact
-    // next journal offset: consume that committed fact directly instead of
-    // waiting for StreamDurableObject to wake us and read it back over RPC.
-    // `ingest` is serialized and drops offsets already checkpointed, so a
-    // simultaneous subscription delivery is harmless. If another writer won
-    // the next offset, leave the non-contiguous suffix to normal catch-up —
-    // skipping over an unseen journal fact would be incorrect.
+    // Consume our committed request through the runner's serialized self-pull
+    // instead of waiting for the asynchronous subscription wake to circle
+    // through the Stream Durable Object. The offset barrier also includes any
+    // concurrent facts before this request, so it cannot skip journal state.
     await tracing.enterSpan("capability_host.script_request_consume", async (span) => {
-      const contiguous = requested.offset === this.checkpointOffset + 1;
-      span.setAttribute("iterate.capability_host.request_contiguous", contiguous);
-      if (!contiguous) return;
-      await this.ingest({ events: [requested], streamMaxOffset: requested.offset });
+      span.setAttribute("iterate.capability_host.request_offset", requested.offset);
+      await this.#reads.waitUntilEvent({ offset: requested.offset });
     });
     const event = await completed;
     const payload = event.payload as CompletedPayload;
@@ -674,7 +725,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   async #waitForScriptCompletion(executionId: string) {
     let completed: StreamEvent | undefined;
-    await this.waitUntilEvent({
+    await this.#reads.waitUntilEvent({
       predicate: (event) => {
         if (event.type !== "events.iterate.com/capability-host/script-execution-completed")
           return false;

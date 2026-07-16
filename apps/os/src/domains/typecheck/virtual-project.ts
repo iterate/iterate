@@ -368,8 +368,8 @@ const EXECUTION_CHECK_DEADLINE_MS = 10_000;
  * errors do not: capabilities are provided dynamically (a script may mount
  * `itx.demoStream` and call it two lines later — journal-legal, invisible to
  * a static check), and the declared surface demonstrably lags the runtime in
- * places (preview e2e: `CloudflareSandbox.exec` exists at runtime but not in
- * types, handle results declared `{}`). The advisory door (checkItxScript)
+ * places (handle results declared `{}`; `CloudflareSandbox` deliberately
+ * declares only part of the sandbox SDK). The advisory door (checkItxScript)
  * still reports everything.
  */
 const TS_PROPERTY_NEAR_MISS = 2551; // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
