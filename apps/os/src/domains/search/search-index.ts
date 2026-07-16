@@ -128,12 +128,6 @@ export function triggerProjectSearchSyncDebounced(projectId: string): Promise<vo
   return triggerProjectSearchSync(projectId);
 }
 
-export type StreamSearchIndexRequest = {
-  projectId: string;
-  path: string;
-  offsets: readonly number[];
-};
-
 /**
  * Pin ONE stream event into the corpus as a focused document (the write side
  * of `itx.search.indexEvent`). The event already lives in its 100-offset
@@ -179,16 +173,17 @@ export async function indexPinnedStreamEvent(input: {
  * same source offsets, including when the stream goes quiet immediately
  * afterwards; no later event is needed to heal the segment.
  */
-export async function indexStreamOffsets(
-  input: StreamSearchIndexRequest & {
-    /** Committed-event range read from the stream (bounds exclusive/exclusive, like the DO's getEvents). */
-    readEvents: (args: {
-      afterOffset: number;
-      beforeOffset: number;
-      limit: number;
-    }) => Promise<StreamEvent[]>;
-  },
-): Promise<void> {
+export async function indexStreamOffsets(input: {
+  projectId: string;
+  path: string;
+  offsets: readonly number[];
+  /** Committed-event range read from the stream (bounds exclusive/exclusive, like the DO's getEvents). */
+  readEvents: (args: {
+    afterOffset: number;
+    beforeOffset: number;
+    limit: number;
+  }) => Promise<StreamEvent[]>;
+}): Promise<void> {
   const offsets = input.offsets;
   if (offsets.length === 0) return;
 
