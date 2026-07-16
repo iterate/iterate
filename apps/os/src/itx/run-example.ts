@@ -10,9 +10,9 @@ import { ITX_EXAMPLES } from "./examples.ts";
 
 /** The run-script envelope every server-side runtime uses: the entry's body
  * with the call's vars serialized inline (see the CapabilityHost contract).
- * Shared with the e2e examples matrix so it proves the exact envelope every
- * caller of {@link runExample} gets. */
-export function runScriptEnvelope(code: string, vars: Record<string, unknown>): string {
+ * The e2e examples matrix proves this exact envelope via {@link runExample}
+ * (its own runInRunScript case), not by calling this directly. */
+function runScriptEnvelope(code: string, vars: Record<string, unknown>): string {
   return `async (itx) => {\nconst vars = ${JSON.stringify(vars)};\n${code}\n}`;
 }
 
