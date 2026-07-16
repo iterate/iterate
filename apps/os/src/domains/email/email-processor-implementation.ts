@@ -4,11 +4,7 @@
 
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { agentDefaultsForPath, EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { agentCreationForPath, EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
   EmailProcessorContract,
@@ -204,51 +200,23 @@ function emailAgentCreationEvents(input: {
   subject?: string;
   threadId: string;
 }): EmittedInput<typeof EmailProcessorContract>[] {
-  const policy = agentDefaultsForPath({
+  return agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
     overrides: { systemPrompt: EMAIL_AGENT_SYSTEM_PROMPT },
-  });
-  const [agentCreated, capabilityHostCreated, ...setupEvents] = policy.events;
-  if (agentCreated === undefined || capabilityHostCreated === undefined) {
-    throw new Error("Agent creation policy did not contain its required birth events");
-  }
-  const durableObjectName = DurableObjectNameCodec.stringify({
-    projectId: input.projectId,
-    path: input.path,
-  });
-  return [
-    agentCreated,
-    capabilityHostCreated,
-    {
-      type: "events.iterate.com/email-agent/created",
-      idempotencyKey: `email-agent/created:${input.projectId}:${input.path}`,
-      payload: {
-        config: {
-          threadId: input.threadId,
-          ...(input.counterpart === undefined ? {} : { counterpart: input.counterpart }),
-          ...(input.subject === undefined ? {} : { subject: input.subject }),
+    sibling: {
+      birthCertificate: EmailAgentProcessorContract.buildEvent({
+        type: "events.iterate.com/email-agent/created",
+        idempotencyKey: `email-agent/created:${input.projectId}:${input.path}`,
+        payload: {
+          config: {
+            threadId: input.threadId,
+            ...(input.counterpart === undefined ? {} : { counterpart: input.counterpart }),
+            ...(input.subject === undefined ? {} : { subject: input.subject }),
+          },
         },
-      },
-    },
-    ...setupEvents,
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
-      processor: ["agents", ["get", input.path], "processor"],
-      processorSlug: AgentProcessorContract.slug,
-    }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-      processor: ["capabilityHosts", ["get", input.path], "processor"],
-      processorSlug: CapabilityHostProcessorContract.slug,
-    }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${EmailAgentProcessorContract.slug}`,
-      processor: ["agents", ["get", input.path], "processor"],
+      }),
       processorSlug: EmailAgentProcessorContract.slug,
-    }),
-  ] as EmittedInput<typeof EmailProcessorContract>[];
+    },
+  }).events satisfies EmittedInput<typeof EmailProcessorContract>[];
 }

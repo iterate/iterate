@@ -172,7 +172,8 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // now END YOUR TURN — the report arrives as your input.",
   "  // Standing agents are project infrastructure — e.g. a shared friction collector:",
   '  const bugs = itx.agents.get("/agents/bugs");',
-  "  await bugs.create({});",
+  "  const bugsSnapshot = await bugs.processor.snapshot();",
+  "  if (bugsSnapshot.state.birthCertificate === null) await bugs.create({});",
   '  await bugs.message("docs.search returned nothing for query X");',
   "",
   "  // CONNECT AN API — MCP servers and OpenAPI specs become callable in one expression:",
@@ -213,7 +214,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  await itx.scheduler.set({",
   '    key: "daily-report",',
   '    recurrence: { cron: "0 9 * * *", timezone: "Europe/London" },',
-  "    script: \"async (itx) => { const agent = itx.agents.get('/agents/daily-report'); await agent.create({}); await agent.message('Write the daily report.'); }\",",
+  "    script: \"async (itx) => { const agent = itx.agents.get('/agents/daily-report'); const snapshot = await agent.processor.snapshot(); if (snapshot.state.birthCertificate === null) await agent.create({}); await agent.message('Write the daily report.'); }\",",
   "  });",
   "",
   "  // SHARE A FILE — attach it; never paste base64 into message text:",
@@ -589,12 +590,6 @@ export const AgentProcessorContract = defineProcessorContract({
           publishedThrough: z.number().int().nonnegative().default(0),
         })
         .prefault({}),
-      llmConfig: z
-        .object({
-          model: z.string().min(1),
-        })
-        .default({ model: DEFAULT_AGENT_MODEL }),
-      llmConfigConfigured: z.boolean().default(false),
       currentRequest: z
         .discriminatedUnion("phase", [
           z.object({
@@ -787,27 +782,6 @@ export const AgentProcessorContract = defineProcessorContract({
             message:
               "You have 4 unread emails. The two that look important are from Dana (contract renewal) and GitHub (a failing build on main).",
           },
-        },
-      ],
-    },
-    "events.iterate.com/agent/llm-provider-selected": {
-      description: "Selects the model for future LLM requests.",
-      payloadSchema: z.object({
-        ifUnset: z.boolean().optional(),
-        model: z.string().min(1),
-      }),
-      examples: [
-        {
-          description:
-            "Agent birth applies the platform default model unless something already chose one.",
-          payload: {
-            ifUnset: true,
-            model: "openai/gpt-5.6-sol",
-          },
-        },
-        {
-          description: "The project explicitly selects a Workers AI model.",
-          payload: { model: "openai/gpt-5.6-sol" },
         },
       ],
     },
@@ -1099,7 +1073,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/configured",
     "events.iterate.com/agents/context-added",
     "events.iterate.com/agents/web-message-sent",
-    "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-started",

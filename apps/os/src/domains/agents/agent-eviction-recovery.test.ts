@@ -247,8 +247,8 @@ describe("eviction recovery, end to end", () => {
         payload: birthCertificate,
       },
       {
-        type: "events.iterate.com/agent/llm-provider-selected",
-        payload: { model: "gpt-test" },
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "gpt-test" } } },
       },
       {
         type: T.context,

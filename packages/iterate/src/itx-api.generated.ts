@@ -103,7 +103,7 @@ export interface Project {
   ai: Ai;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
   browser: CfBrowserCapability;
-  /** THIS agent's control surface — present only on an agent-scoped itx (path under `/agents/`). */
+  /** This scope's agent control handle, when its address is under `/agents/`. */
   agent?: Agent;
   /** THIS agent's web-chat door — present only on an agent-scoped itx. */
   chat?: AgentChat;
@@ -350,10 +350,11 @@ export interface Agent {
   /**
    * Create the agent on this stream. The birth certificate contains only the
    * processor-owned config; this method also creates the universally paired
-   * capability host, installs both subscriptions, and returns only after both
-   * processors have durably processed the complete batch.
+   * capability host, installs both subscriptions, appends any durable
+   * `initialEvents` in the same batch, and returns only after both processors
+   * have durably processed the complete batch.
    */
-  create(input: AgentDefaultsOverrides): Promise<void>;
+  create(input: AgentCreateInput): Promise<void>;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
@@ -2391,8 +2392,6 @@ export type AgentProcessorState = {
     )[];
     publishedThrough: number;
   };
-  llmConfig: { model: string };
-  llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
     | { phase: "requested"; llmRequestOffset: number; requestedAt: number }
@@ -2431,12 +2430,13 @@ export type AgentProcessorState = {
   };
 };
 
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the generic platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
+/** Public agent-creation input. Durable, idempotency-keyed startup inputs
+ * commit in the same append as the birth certificates and subscriptions,
+ * before create waits for the processors to catch up. */
+export type AgentCreateInput = AgentDefaultsOverrides & {
+  initialEvents?: Array<
+    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
+  >;
 };
 
 /**
@@ -3410,6 +3410,14 @@ export type AgentStatusRecord = {
   note?: string | undefined;
   shortStatus?: string | undefined;
   icon?: string | undefined;
+};
+
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the generic platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  model?: string;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */

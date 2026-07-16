@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
+import { ONBOARDING_AGENT_SYSTEM_PROMPT } from "../domains/agents/agent-defaults.ts";
 import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
-import { isOnboardingActive, onboardingStartEvent } from "./onboarding-agent.ts";
+import {
+  isOnboardingActive,
+  onboardingAgentCreateInput,
+  onboardingStartEvent,
+} from "./onboarding-agent.ts";
 
 const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState => ({
   agents: [],
@@ -34,6 +39,13 @@ describe("onboardingStartEvent", () => {
         key: "agent/onboarding-start",
         llmRequestPolicy: { behaviour: "after-current-request" },
       },
+    });
+  });
+
+  test("is part of the single explicit onboarding create input", () => {
+    expect(onboardingAgentCreateInput("prj_test")).toEqual({
+      systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
+      initialEvents: [onboardingStartEvent("prj_test")],
     });
   });
 });

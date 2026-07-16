@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { ONBOARDING_AGENT_PATH, onboardingStartEvent } from "~/lib/onboarding-agent.ts";
-import { ONBOARDING_AGENT_SYSTEM_PROMPT } from "~/domains/agents/agent-defaults.ts";
+import { ONBOARDING_AGENT_PATH, onboardingAgentCreateInput } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import {
@@ -71,8 +70,10 @@ function ProjectAgentDetailContent() {
         try {
           const itx = await connectItxBrowser({ projectId: project.id });
           const agent = itx.agents.get(ONBOARDING_AGENT_PATH);
-          await agent.create({ systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT });
-          await agent.stream.append(onboardingStartEvent(project.id));
+          const snapshot = await agent.processor.snapshot();
+          if (snapshot.state.birthCertificate === null) {
+            await agent.create(onboardingAgentCreateInput(project.id));
+          }
           return;
         } catch (error) {
           lastError = error;
@@ -85,6 +86,11 @@ function ProjectAgentDetailContent() {
     })();
 
     onboardingBirthRef.current = { key, promise };
+    void promise.catch(() => {
+      if (onboardingBirthRef.current?.promise === promise) {
+        onboardingBirthRef.current = null;
+      }
+    });
     return promise;
   }, [project.id, streamPath]);
 

@@ -53,6 +53,7 @@ function webhook(input?: {
 }
 
 function harness(input?: {
+  agentBirthCertificate?: unknown | null;
   checkRuns?: (args: { page: number; ref: string }) => unknown[];
   liveDraft?: boolean;
   liveHead?: string;
@@ -107,10 +108,14 @@ function harness(input?: {
   };
   const getConnection = vi.fn(() => ({ octokit }));
   const createAgent = vi.fn().mockResolvedValue(undefined);
+  const snapshotAgent = vi.fn().mockResolvedValue({
+    state: { birthCertificate: input?.agentBirthCertificate ?? null },
+  });
   const getAgent = vi.fn(() => ({
     capabilityHost: { kill: killCapabilityHost },
     create: createAgent,
     kill: killAgent,
+    processor: { snapshot: snapshotAgent },
     stream: { append },
   }));
   const readFile = vi.fn().mockResolvedValue({
@@ -148,6 +153,7 @@ function harness(input?: {
     listForRef,
     readFile,
     set,
+    snapshotAgent,
     update,
   };
 }
@@ -183,6 +189,7 @@ describe("config-repo GitHub reviews", () => {
       "/agents/repos/route/pull-requests/7/iterate-reviews/100",
     );
     expect(h.createAgent).toHaveBeenCalledWith({});
+    expect(h.snapshotAgent).toHaveBeenCalledOnce();
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({
         check_run_id: 100,
@@ -195,6 +202,18 @@ describe("config-repo GitHub reviews", () => {
     // the task is proven structurally instead.
     expect(task.payload.content).toContain("100");
     expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+  });
+
+  it("reuses an already-created review agent on webhook redelivery", async () => {
+    const h = harness({ agentBirthCertificate: { config: {} } });
+
+    await expect(
+      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+    ).resolves.toBe("queued");
+
+    expect(h.snapshotAgent).toHaveBeenCalledOnce();
+    expect(h.createAgent).not.toHaveBeenCalled();
+    expect(h.append).toHaveBeenCalledOnce();
   });
 
   it("does not extend the Check Run deadline when a webhook is redelivered", async () => {

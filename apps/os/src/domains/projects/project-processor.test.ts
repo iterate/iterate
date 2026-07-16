@@ -75,6 +75,12 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
     ]);
+    expect(network.eventsAt("/repos/config")[2]).toMatchObject({
+      payload: {
+        deliver: "new",
+        subscriptionKey: "cross-post:/",
+      },
+    });
     expect(network.eventsAt("/integrations/email").map((event) => event.type)).toEqual([
       "events.iterate.com/email/created",
       "events.iterate.com/stream/subscription-configured",

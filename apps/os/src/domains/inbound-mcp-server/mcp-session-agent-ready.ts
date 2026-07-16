@@ -7,11 +7,16 @@ export async function ensureMcpSessionAgentReady(input: {
     agents: {
       get(path: string): {
         create(config: { systemPrompt: string }): Promise<void>;
+        processor: {
+          snapshot(): Promise<{ state: { birthCertificate: unknown | null } }>;
+        };
       };
     };
   };
 }): Promise<void> {
-  await input.projectItx.agents.get(input.agentPath).create({
-    systemPrompt: MCP_AGENT_SYSTEM_PROMPT,
-  });
+  const agent = input.projectItx.agents.get(input.agentPath);
+  const snapshot = await agent.processor.snapshot();
+  if (snapshot.state.birthCertificate === null) {
+    await agent.create({ systemPrompt: MCP_AGENT_SYSTEM_PROMPT });
+  }
 }

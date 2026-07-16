@@ -4,8 +4,16 @@
 // what kind of processor exists on a stream.
 
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
-import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  AgentProcessorContract,
+  DEFAULT_AGENT_MODEL,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "./agent-processor-contract.ts";
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
@@ -168,29 +176,24 @@ export type AgentDefaultsOverrides = {
   model?: string;
 };
 
-/** The default policy for one agent path: the named pieces plus the exact
- * event batch that applies them (idempotency-keyed, safe to re-append). */
-type AgentDefaultPolicy = {
-  systemPrompt: string;
-  model: string;
-  events: AgentPolicyEventInput[];
-};
-
-/** The policy events an agent is born with, as append inputs. Typed
- * structurally (not against the full event catalog) so the SDK projection
- * stays self-contained. */
-type AgentPolicyEventInput = {
-  type: string;
-  idempotencyKey: string;
-  payload: Record<string, unknown>;
+/** Public agent-creation input. Durable, idempotency-keyed startup inputs
+ * commit in the same append as the birth certificates and subscriptions,
+ * before create waits for the processors to catch up. */
+export type AgentCreateInput = AgentDefaultsOverrides & {
+  initialEvents?: Array<
+    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
+  >;
 };
 
 /**
- * The default agent policy for a path. Every agent runs through the single
- * agent processor's Cloudflare AI binding; `overrides` bake caller
- * customization into the returned events so the common case stays one append.
+ * Build the complete creation batch for one agent stream. Every agent has the
+ * same agent + capability-host pair; a router may add one explicitly named
+ * sibling processor and its birth certificate. The stream path remains only
+ * an address and never selects a processor.
  */
-export function agentDefaultsForPath(input: {
+export function agentCreationForPath<
+  const SiblingBirthCertificate extends StreamEventInput = never,
+>(input: {
   agentPath: string;
   projectId: string;
   /**
@@ -202,72 +205,114 @@ export function agentDefaultsForPath(input: {
    */
   project?: { name: string; slug: string; workerUrl?: string };
   overrides?: AgentDefaultsOverrides;
-}): AgentDefaultPolicy {
+  sibling?: {
+    birthCertificate: SiblingBirthCertificate;
+    processorSlug: string;
+  };
+}) {
   const { agentPath, projectId, project } = input;
   const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
   // An override replaces the generic prompt wholesale. Child-agent-ness rides
   // on the sender actor in each context item, not on the addressed path.
   const systemPrompt = input.overrides?.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
 
-  const events: AgentPolicyEventInput[] = [
-    {
-      type: "events.iterate.com/agent/created",
-      idempotencyKey: `agent/created:${projectId}:${agentPath}`,
-      payload: { config: { systemPrompt, llm: { model } } },
-    },
-    {
-      type: "events.iterate.com/capability-host/created",
-      idempotencyKey: `capability-host/created:${projectId}:${agentPath}`,
-      payload: { config: {} },
-    },
+  const birthCertificate = AgentProcessorContract.buildEvent({
+    type: "events.iterate.com/agent/created",
+    idempotencyKey: `agent/created:${projectId}:${agentPath}`,
+    payload: { config: { systemPrompt, llm: { model } } },
+  });
+  const capabilityHostBirthCertificate = CapabilityHostProcessorContract.buildEvent({
+    type: "events.iterate.com/capability-host/created",
+    idempotencyKey: `capability-host/created:${projectId}:${agentPath}`,
+    payload: { config: {} },
+  });
+  const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per
     // call, so agent birth never touches the workspace Durable Object. (No
     // sandbox mount: sandboxes are pets, created explicitly via
     // itx.sandboxes.create.)
-    {
-      type: "events.iterate.com/capability-host/capability-provided",
-      idempotencyKey: `capability-host/workspace-provided:${projectId}:${agentPath}`,
-      payload: {
-        path: ["workspace"],
-        type: "itx-expression",
-        expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
-        instructions:
-          `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): an instant copy-on-write overlay over the config repo's latest main, living in a Durable Object filesystem — no container, no clone, always warm. ` +
-          'Reads see latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
-          "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
-      },
+    type: "events.iterate.com/capability-host/capability-provided",
+    idempotencyKey: `capability-host/workspace-provided:${projectId}:${agentPath}`,
+    payload: {
+      path: ["workspace"],
+      type: "itx-expression",
+      expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
+      instructions:
+        `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): an instant copy-on-write overlay over the config repo's latest main, living in a Durable Object filesystem — no container, no clone, always warm. ` +
+        'Reads see latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
+        "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
     },
+  });
+  const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths
     // differ per agent but must survive history compaction. Facts and pointers
     // only — everything per-capability is discoverable through itx.docs /
     // __describe, so this must not grow back into a capability tour (the
     // prompt budget test holds the line). System context never wakes the LLM
     // by itself.
-    {
-      type: "events.iterate.com/agents/context-added",
-      idempotencyKey: `agent/boot-system-context:${projectId}:${agentPath}`,
-      payload: {
-        role: "system",
-        key: "agent/boot-context",
-        content: [
-          "Platform context for this agent:",
-          project === undefined
-            ? `- Project id: ${projectId}`
-            : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
-          `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
-          // One seed list, marked non-exhaustive, and ONE rule for choosing
-          // between the two write doors — the model was repeating this line
-          // verbatim to users as the repo's full contents.
-          '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
-          "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
-          "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create({}); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
-          // Deliberate reinforcement of the prompt's FIND WORKING CODE
-          // section — repetition is the one thing small prompts buy back.
-          '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. For unfamiliar PROJECT facts or history: await itx.search.query({ q }) — conversations, webhooks, events, files, and the repo are all indexed, and each hit carries a ref back to the exact source. Noisy results? Refine the query (drop filler words, quote exact tokens); do not fall back to paging vendor APIs. await itx.__describe() lists everything at your scope.',
-        ].join("\n"),
-      },
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: `agent/boot-system-context:${projectId}:${agentPath}`,
+    payload: {
+      role: "system",
+      key: "agent/boot-context",
+      content: [
+        "Platform context for this agent:",
+        project === undefined
+          ? `- Project id: ${projectId}`
+          : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
+        `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
+        // One seed list, marked non-exhaustive, and ONE rule for choosing
+        // between the two write doors — the model was repeating this line
+        // verbatim to users as the repo's full contents.
+        '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
+        "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
+        "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create({}); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
+        // Deliberate reinforcement of the prompt's FIND WORKING CODE
+        // section — repetition is the one thing small prompts buy back.
+        '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. For unfamiliar PROJECT facts or history: await itx.search.query({ q }) — conversations, webhooks, events, files, and the repo are all indexed, and each hit carries a ref back to the exact source. Noisy results? Refine the query (drop filler words, quote exact tokens); do not fall back to paging vendor APIs. await itx.__describe() lists everything at your scope.',
+      ].join("\n"),
     },
-  ];
+  });
+  const durableObjectName = DurableObjectNameCodec.stringify({ projectId, path: agentPath });
+  const agentSubscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    durableObjectName,
+    idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
+    processor: ["agents", ["get", agentPath], "processor"],
+    processorSlug: AgentProcessorContract.slug,
+  });
+  const capabilityHostSubscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    durableObjectName,
+    idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
+    processor: ["capabilityHosts", ["get", agentPath], "processor"],
+    processorSlug: CapabilityHostProcessorContract.slug,
+  });
+  const siblingBirthCertificates: SiblingBirthCertificate[] =
+    input.sibling === undefined ? [] : [input.sibling.birthCertificate];
+  const siblingSubscriptions =
+    input.sibling === undefined
+      ? []
+      : [
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName,
+            idempotencyKey: `stream/subscription-configured:${durableObjectName}#${input.sibling.processorSlug}`,
+            processor: ["agents", ["get", agentPath], "processor"],
+            processorSlug: input.sibling.processorSlug,
+          }),
+        ];
 
-  return { systemPrompt, model, events };
+  return {
+    birthCertificate,
+    systemPrompt,
+    model,
+    events: [
+      birthCertificate,
+      capabilityHostBirthCertificate,
+      ...siblingBirthCertificates,
+      workspaceProvided,
+      bootContext,
+      agentSubscription,
+      capabilityHostSubscription,
+      ...siblingSubscriptions,
+    ],
+  };
 }

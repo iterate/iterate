@@ -4,11 +4,7 @@
 
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { agentDefaultsForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { readRecord, telegramChatStreamPath } from "./utils.ts";
 import {
@@ -170,7 +166,7 @@ function telegramAgentCreationEvents(input: {
   path: string;
   projectId: string;
 }): EmittedInput<TelegramProcessorContract>[] {
-  const policy = agentDefaultsForPath({
+  return agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
     overrides: {
@@ -180,51 +176,23 @@ function telegramAgentCreationEvents(input: {
         connection: input.connection,
       }),
     },
-  });
-  const [agentCreated, capabilityHostCreated, ...setupEvents] = policy.events;
-  if (agentCreated === undefined || capabilityHostCreated === undefined) {
-    throw new Error("Agent creation policy did not contain its required birth events");
-  }
-  const durableObjectName = DurableObjectNameCodec.stringify({
-    projectId: input.projectId,
-    path: input.path,
-  });
-  return [
-    agentCreated,
-    capabilityHostCreated,
-    {
-      type: "events.iterate.com/telegram-agent/created",
-      idempotencyKey: `telegram-agent/created:${input.projectId}:${input.path}`,
-      payload: {
-        config: {
-          chatId: input.chatId,
-          connection: input.connection,
-          ...(input.messageThreadId === undefined
-            ? {}
-            : { messageThreadId: input.messageThreadId }),
+    sibling: {
+      birthCertificate: TelegramAgentProcessorContract.buildEvent({
+        type: "events.iterate.com/telegram-agent/created",
+        idempotencyKey: `telegram-agent/created:${input.projectId}:${input.path}`,
+        payload: {
+          config: {
+            chatId: input.chatId,
+            connection: input.connection,
+            ...(input.messageThreadId === undefined
+              ? {}
+              : { messageThreadId: input.messageThreadId }),
+          },
         },
-      },
-    },
-    ...setupEvents,
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
-      processor: ["agents", ["get", input.path], "processor"],
-      processorSlug: AgentProcessorContract.slug,
-    }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-      processor: ["capabilityHosts", ["get", input.path], "processor"],
-      processorSlug: CapabilityHostProcessorContract.slug,
-    }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${TelegramAgentProcessorContract.slug}`,
-      processor: ["agents", ["get", input.path], "processor"],
+      }),
       processorSlug: TelegramAgentProcessorContract.slug,
-    }),
-  ] as EmittedInput<TelegramProcessorContract>[];
+    },
+  }).events satisfies EmittedInput<TelegramProcessorContract>[];
 }
 
 /** The chat-scoped part of a routed stream path (`chat-{id}` or

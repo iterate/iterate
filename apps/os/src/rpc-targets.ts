@@ -229,10 +229,9 @@ import type {
   SearchQueryResult,
   SearchResultChunk,
 } from "./domains/search/search-corpus.ts";
-import {
-  AgentProcessorContract,
-  type AgentFileAttachment,
-  type AgentProcessorState,
+import type {
+  AgentFileAttachment,
+  AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
@@ -328,7 +327,6 @@ import {
   emailAddressForProject,
   emailCounterpart,
   emailDomainForDeployment,
-  emailThreadIdFromAgentPath,
   emailThreadReplyAddress,
   EMAIL_INTEGRATION_STREAM_PATH,
   EMAIL_RECEIVED_EVENT_TYPE,
@@ -339,12 +337,12 @@ import {
   type OutboundEmailAttachment,
   type SendEmailBinding,
 } from "./domains/email/utils.ts";
-import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
-import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
-  agentDefaultsForPath,
-  type AgentDefaultsOverrides,
-} from "./domains/agents/agent-defaults.ts";
+  EmailAgentBirthCertificate,
+  EmailProcessorContract,
+} from "./domains/email/email-processor-contract.ts";
+import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
+import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -3625,8 +3623,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
     /** Attachments: project files by path and/or inline base64 content. */
     attachments?: EmailAttachmentInput[];
   }): Promise<{ from: string; to: string; messageId: string | null }> {
-    const threadId =
-      emailThreadIdFromAgentPath(this.props.scopePath) ?? (await this.#threadIdFromOwnRoute());
+    const threadId = await this.#threadIdFromBirthCertificate();
     if (threadId === null) {
       throw new Error(
         `email.reply needs an agent scope with a bound email thread (an email thread agent, or any agent that has sent/received project email); this scope is "${this.props.scopePath}". Use email.send for new mail.`,
@@ -3692,7 +3689,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
    * 2. `thread-route-configured` on `/integrations/email` — the router
    *    forwards replies (token or header match) to this agent's stream.
    * 3. The same route event on the agent's own stream — thread context for
-   *    the email-agent processor and `reply`'s thread lookup.
+   *    the email-agent processor.
    * 4. The email-agent processor subscription on the agent's stream — a
    *    non-email agent (Slack, web chat, …) gains the transcriber that turns
    *    forwarded replies into its input. Email thread agents had it at birth;
@@ -3705,10 +3702,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
   }) {
     const scopePath = this.props.scopePath;
     if (!scopePath.startsWith("/agents/")) return null;
-    const threadId =
-      emailThreadIdFromAgentPath(scopePath) ??
-      (await this.#threadIdFromOwnRoute()) ??
-      mintOutboundEmailThreadId();
+    const threadId = (await this.#threadIdFromBirthCertificate()) ?? mintOutboundEmailThreadId();
     const firstRecipient = Array.isArray(input.request.to) ? input.request.to[0] : input.request.to;
     const routeEvent = {
       type: "events.iterate.com/email/thread-route-configured",
@@ -3752,31 +3746,21 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
   }
 
   /**
-   * The thread already bound to this agent scope, if any: the latest
-   * `thread-route-configured` on the agent's own stream that names this
-   * stream. Lets repeated sends reuse one conversation and lets `reply` work
-   * from non-email agent scopes.
+   * The thread explicitly assigned to this agent's email facet, if it has
+   * one. Birth is the identity source; the stream path is only an address.
    */
-  async #threadIdFromOwnRoute(): Promise<string | null> {
+  async #threadIdFromBirthCertificate(): Promise<string | null> {
     if (!this.props.scopePath.startsWith("/agents/")) return null;
-    const stream = integrationStreamStub(this.props.projectId, this.props.scopePath);
-    let afterOffset = 0;
-    let threadId: string | null = null;
-    for (;;) {
-      const page = await stream.getEvents({
-        afterOffset,
-        eventTypes: ["events.iterate.com/email/thread-route-configured"],
-        limit: 500,
-      });
-      for (const event of page) {
-        const payload = event.payload as { streamPath?: string; threadId?: string };
-        if (payload.streamPath === this.props.scopePath && typeof payload.threadId === "string") {
-          threadId = payload.threadId;
-        }
-      }
-      if (page.length < 500) return threadId;
-      afterOffset = page[page.length - 1]!.offset;
+    const event = await integrationStreamStub(this.props.projectId, this.props.scopePath).getEvent({
+      idempotencyKey: `email-agent/created:${this.props.projectId}:${this.props.scopePath}`,
+    });
+    if (event === undefined) return null;
+    if (event.type !== "events.iterate.com/email-agent/created") {
+      throw new Error(
+        `email agent birth key on "${this.props.scopePath}" names unexpected event type "${event.type}"`,
+      );
     }
+    return EmailAgentBirthCertificate.parse(event.payload).config.threadId;
   }
 
   /**
@@ -3933,6 +3917,20 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
   }
 }
 
+async function assertAgentCreated(input: { path: string; projectId: string }): Promise<void> {
+  const event = await integrationStreamStub(input.projectId, input.path).getEvent({
+    idempotencyKey: `agent/created:${input.projectId}:${input.path}`,
+  });
+  if (event === undefined) {
+    throw new Error(`agent at "${input.path}" has not been created`);
+  }
+  if (event.type !== "events.iterate.com/agent/created") {
+    throw new Error(
+      `agent birth key on "${input.path}" names unexpected event type "${event.type}"`,
+    );
+  }
+}
+
 /** Agent-local web chat response tool exposed inside agent script execution. */
 class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
   async __describe(): Promise<Description> {
@@ -3962,17 +3960,6 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     });
   }
 
-  get #processor(): WakeableStreamProcessorRpc<AgentProcessorState> {
-    const durableObjectName = DurableObjectNameCodec.stringify({
-      path: this.props.path,
-      projectId: this.props.projectId,
-    });
-    return new ProcessorRelayRpcTarget<AgentProcessorState>({
-      auth: this.props.auth,
-      host: () => env.AGENT.getByName(durableObjectName) as unknown as ProcessorHostStub,
-    });
-  }
-
   /**
    * Say something to the user — pass the message as a plain string:
    * `await itx.chat.sendMessage("Here you go!")`.
@@ -3986,10 +3973,7 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     message: string,
     options?: { files?: Array<{ contentType: string; data: FileData; filename: string }> },
   ): Promise<StreamEvent> {
-    const snapshot = await this.#processor.snapshot();
-    if (snapshot.state.birthCertificate === null) {
-      throw new Error(`Agent at "${this.props.path}" has not been created`);
-    }
+    await assertAgentCreated({ path: this.props.path, projectId: this.props.projectId });
     const trimmed = message.trim();
     if (trimmed === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
     const files =
@@ -4122,35 +4106,25 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   /**
    * Create the agent on this stream. The birth certificate contains only the
    * processor-owned config; this method also creates the universally paired
-   * capability host, installs both subscriptions, and returns only after both
-   * processors have durably processed the complete batch.
+   * capability host, installs both subscriptions, appends any durable
+   * `initialEvents` in the same batch, and returns only after both processors
+   * have durably processed the complete batch.
    */
-  async create(input: AgentDefaultsOverrides = {}): Promise<void> {
-    const policy = agentDefaultsForPath({
+  async create(input: AgentCreateInput = {}): Promise<void> {
+    const initialEvents: StreamEventInput[] = input.initialEvents ?? [];
+    if (initialEvents.some((event) => event.idempotencyKey === undefined)) {
+      throw new Error("agent create initialEvents must have idempotency keys");
+    }
+    if (initialEvents.some((event) => event.ephemeral === true)) {
+      throw new Error("agent create initialEvents must be durable");
+    }
+    const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
       ...(await agentBootProjectFacts(this.#props.projectId)),
-      overrides: input,
+      overrides: { model: input.model, systemPrompt: input.systemPrompt },
     });
-    const durableObjectName = DurableObjectNameCodec.stringify({
-      projectId: this.#props.projectId,
-      path: this.#path,
-    });
-    const committed = await this.stream.append(
-      ...policy.events,
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName,
-        idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
-        processor: ["agents", ["get", this.#path], "processor"],
-        processorSlug: AgentProcessorContract.slug,
-      }),
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName,
-        idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-        processor: ["capabilityHosts", ["get", this.#path], "processor"],
-        processorSlug: CapabilityHostProcessorContract.slug,
-      }),
-    );
+    const committed = await this.stream.append(...creation.events, ...initialEvents);
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum
@@ -4392,10 +4366,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   async #assertCreated(): Promise<void> {
-    const snapshot = await this.processor.snapshot();
-    if (snapshot.state.birthCertificate === null) {
-      throw new Error(`agent at ${this.#path} has not been created`);
-    }
+    await assertAgentCreated({ path: this.#path, projectId: this.#props.projectId });
   }
 }
 
@@ -5272,13 +5243,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new CfBrowserCapabilityRpcTarget();
   }
 
-  // `agent` and `chat` exist only when this itx is scoped under `/agents/` — i.e.
-  // when it IS an agent context. They are derived from the scope path rather than
-  // mounted as capabilities: being an agent is a property of where the itx sits,
-  // not something a caller provided, so a getter keeps zero durable state, needs
-  // no bootstrap step, and means `env.ITX.get()` can return this one class at any
-  // path with no per-scope branching. On a project-root itx both are undefined.
-  /** THIS agent's control surface — present only on an agent-scoped itx (path under `/agents/`). */
+  // `agent` and `chat` are address-context conveniences for itx scopes under
+  // `/agents/`. The path does not confer agent identity or create a processor:
+  // `agent/created` does that, and operations on the returned handle assert the
+  // birth certificate. Synchronous getters keep the contextual handle free of
+  // bootstrap state while `env.ITX.get()` can return one class at every path.
+  // On a project-root itx both are undefined.
+  /** This scope's agent control handle, when its address is under `/agents/`. */
   get agent(): AgentRpcTarget | undefined {
     const path = this.#props.capabilityHost.path;
     return path.startsWith("/agents/") ? this.agents.get(path) : undefined;

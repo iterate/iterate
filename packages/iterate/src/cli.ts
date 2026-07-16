@@ -20,7 +20,6 @@ import type {
   Project,
   ProjectListEntry,
   Session,
-  Stream,
 } from "./itx-api.generated.ts";
 import {
   emitComputerNeedsLogin,
@@ -338,7 +337,6 @@ export const verifyOsSession = async (input: {
 
 const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
   let projectItx: RpcStub<Project> | undefined;
-  let agentStream: RpcStub<Stream> | undefined;
   try {
     projectItx = (await session.projects.create({
       projectId: project.id,
@@ -346,18 +344,11 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
       ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
       waitUntilReady: false,
     })) as unknown as RpcStub<Project>;
-    agentStream = projectItx.streams.get(DEFAULT_CHAT_AGENT_PATH) as RpcStub<Stream>;
-    await agentStream.waitForEvent({
-      afterOffset: 0,
-      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
-      timeoutMs: 15_000,
-    });
   } catch (error) {
     throw new Error(
       `Project "${project.slug}" (${project.id}) exists in auth but is missing in OS. Failed to set it up for chat: ${errorMessage(error)}`,
     );
   } finally {
-    disposeRpc(agentStream);
     disposeRpc(projectItx);
   }
   return project.id;

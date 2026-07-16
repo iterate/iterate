@@ -187,8 +187,11 @@ export async function processGithubReviewEvent(input: {
   // conversational PR stream prevents a push-triggered review from cancelling
   // or coalescing with the human multi-step code-work turn.
   const reviewAgent = input.itx.agents.get(reviewAgentPath);
+  const reviewAgentSnapshot = await reviewAgent.processor.snapshot();
   await Promise.all([
-    reviewAgent.create({}),
+    reviewAgentSnapshot.state.birthCertificate === null
+      ? reviewAgent.create({})
+      : Promise.resolve(),
     setGithubReviewDetailsUrl({
       check,
       detailsUrl,

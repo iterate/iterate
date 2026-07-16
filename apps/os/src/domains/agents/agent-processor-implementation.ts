@@ -806,6 +806,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const { state } = args;
+    if (state.config === null) {
+      throw new Error("created agent is missing its reduced config");
+    }
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
       // Agent birth and inbound input are independent distributed reactions.
@@ -843,7 +846,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ),
         payload: {
           debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS + this.#llmRetryBackoffMs(state),
-          model: state.llmConfig.model,
+          model: state.config.llm.model,
           requestId: `llm-request:gen-${state.requestGeneration}`,
         },
       });
@@ -882,7 +885,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // makes this safe if the timer also fires concurrently.
     await args.append(
       this.#buildLlmRequestRequested({
-        model: state.llmConfig.model,
+        model: state.config.llm.model,
         requestId: state.currentRequest.requestId,
         scheduledOffset: state.currentRequest.scheduledOffset,
       }),
@@ -1237,8 +1240,6 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
           content: event.payload.config.systemPrompt,
           offset: event.offset,
         }),
-        llmConfig: event.payload.config.llm,
-        llmConfigConfigured: true,
       };
     case "events.iterate.com/agent/configured": {
       const config = AgentConfig.parse(mergeProcessorConfig(state.config, event.payload.config));
@@ -1249,8 +1250,6 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
           content: config.systemPrompt,
           offset: event.offset,
         }),
-        llmConfig: config.llm,
-        llmConfigConfigured: true,
       };
     }
     case "events.iterate.com/agents/context-added": {
@@ -1267,16 +1266,6 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
         consecutiveLlmFailures: triggerSource === "user" ? 0 : state.consecutiveLlmFailures,
       };
     }
-    case "events.iterate.com/agent/llm-provider-selected":
-      if (event.payload.ifUnset && state.llmConfigConfigured) return state;
-      return {
-        ...state,
-        ...(state.config === null
-          ? {}
-          : { config: { ...state.config, llm: { model: event.payload.model } } }),
-        llmConfig: { model: event.payload.model },
-        llmConfigConfigured: true,
-      };
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
         ...state,

@@ -6,11 +6,7 @@
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { agentDefaultsForPath, slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { agentCreationForPath, slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { SlackAgentProcessorContract } from "./slack-agent-processor-contract.ts";
 import { readRecord, readString, slackThreadStreamPath, webhookAckIsFresh } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
@@ -167,53 +163,25 @@ function slackAgentCreationEvents(input: {
   projectId: string;
   threadTs: string;
 }): EmittedInput<SlackProcessorContract>[] {
-  const policy = agentDefaultsForPath({
+  return agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
     overrides: { systemPrompt: slackAgentSystemPrompt(input.connection) },
-  });
-  const [agentCreated, capabilityHostCreated, ...setupEvents] = policy.events;
-  if (agentCreated === undefined || capabilityHostCreated === undefined) {
-    throw new Error("Agent creation policy did not contain its required birth events");
-  }
-  const durableObjectName = DurableObjectNameCodec.stringify({
-    projectId: input.projectId,
-    path: input.path,
-  });
-  return [
-    agentCreated,
-    capabilityHostCreated,
-    {
-      type: "events.iterate.com/slack-agent/created",
-      idempotencyKey: `slack-agent/created:${input.projectId}:${input.path}`,
-      payload: {
-        config: {
-          channel: input.channel,
-          connection: input.connection,
-          threadTs: input.threadTs,
+    sibling: {
+      birthCertificate: SlackAgentProcessorContract.buildEvent({
+        type: "events.iterate.com/slack-agent/created",
+        idempotencyKey: `slack-agent/created:${input.projectId}:${input.path}`,
+        payload: {
+          config: {
+            channel: input.channel,
+            connection: input.connection,
+            threadTs: input.threadTs,
+          },
         },
-      },
-    },
-    ...setupEvents,
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
-      processor: ["agents", ["get", input.path], "processor"],
-      processorSlug: AgentProcessorContract.slug,
-    }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-      processor: ["capabilityHosts", ["get", input.path], "processor"],
-      processorSlug: CapabilityHostProcessorContract.slug,
-    }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SlackAgentProcessorContract.slug}`,
-      processor: ["agents", ["get", input.path], "processor"],
+      }),
       processorSlug: SlackAgentProcessorContract.slug,
-    }),
-  ] as EmittedInput<SlackProcessorContract>[];
+    },
+  }).events satisfies EmittedInput<SlackProcessorContract>[];
 }
 
 type SlackRoute = {

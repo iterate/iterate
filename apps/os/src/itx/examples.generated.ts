@@ -755,7 +755,8 @@ return { record }; // ["capability-provided", "capability-revoked"]
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
-await agent.create({});
+const snapshot = await agent.processor.snapshot();
+if (snapshot.state.birthCertificate === null) await agent.create({});
 // The returned value is the committed stream event — the durable record
 // the agent loop reduces into its context projection.
 const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
@@ -1661,7 +1662,7 @@ return { found: schedules.some((s) => s.key === key), nextTriggerAt: view.nextTr
     id: "scheduler-agent-checkin",
     title: "Give an agent a recurring task",
     description:
-      "The scheduler + agents flywheel: schedule a script that explicitly creates an agent, sends it a message, and the agent wakes on cadence, does the work, and reports in its own chat. create() is idempotent for a fixed path; a date-stamped path creates a new agent per occurrence.",
+      "The scheduler + agents flywheel: schedule a script that explicitly creates an agent when its birth certificate is absent, sends it a message, and the agent wakes on cadence, does the work, and reports in its own chat. A fixed path reuses one agent; a date-stamped path creates a new agent per occurrence.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -1674,7 +1675,8 @@ const view = await itx.scheduler.set({
     // agent per occurrence use a derived path instead, e.g.
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
     const agent = itx.agents.get("/agents/checkin");
-    await agent.create({});
+    const snapshot = await agent.processor.snapshot();
+    if (snapshot.state.birthCertificate === null) await agent.create({});
     await agent.message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );

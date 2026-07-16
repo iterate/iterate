@@ -2663,8 +2663,8 @@ describe("token usage and history compaction", () => {
     const second = await appendSettledRequest("openai/model-b", "second");
     await stream.append(
       {
-        type: "events.iterate.com/agent/llm-provider-selected",
-        payload: { model: "openai/model-c" },
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "openai/model-c" } } },
       },
       {
         type: "events.iterate.com/agent/token-usage-reported",
@@ -2693,7 +2693,7 @@ describe("token usage and history compaction", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.model).toBe("openai/model-b");
     expect(calls[0]!.messages.some((message) => message.content.includes("second"))).toBe(true);
-    expect(reduceAgentEvents(stream.events).llmConfig.model).toBe("openai/model-c");
+    expect(reduceAgentEvents(stream.events).config?.llm.model).toBe("openai/model-c");
     expect(
       stream.events.find(
         (event) =>

@@ -303,7 +303,8 @@ export function RepoIde({
       // The task commit intentionally happens before explicit birth, so the
       // agent's first turn can always read the durable assignment.
       const agent = itx.agents.get(assignment.agentPath);
-      await agent.create({});
+      const snapshot = await agent.processor.snapshot();
+      if (snapshot.state.birthCertificate === null) await agent.create({});
       await agent.message(assignment.instructions);
       toast.success(`Assigned ${task.title} to ${assignment.agentPath}.`);
       return assignment.agentPath;

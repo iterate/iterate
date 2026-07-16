@@ -1,14 +1,14 @@
 import { describe, expect, test } from "vitest";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
-import { agentDefaultsForPath } from "./agent-defaults.ts";
+import { agentCreationForPath } from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
 
 function defaultsFor(
   agentPath: string,
-  overrides?: Parameters<typeof agentDefaultsForPath>[0]["overrides"],
+  overrides?: Parameters<typeof agentCreationForPath>[0]["overrides"],
 ) {
-  return agentDefaultsForPath({
+  return agentCreationForPath({
     agentPath,
     projectId: PROJECT_ID,
     ...(overrides === undefined ? {} : { overrides }),
@@ -21,10 +21,10 @@ function createdEvent(agentPath: string, overrides?: Parameters<typeof defaultsF
   );
 }
 
-describe("agentDefaultsForPath", () => {
+describe("agentCreationForPath", () => {
   test("boot context names the project when directory facts are supplied — id-only without", () => {
     const bootContent = (project?: { name: string; slug: string; workerUrl?: string }) => {
-      const events = agentDefaultsForPath({
+      const events = agentCreationForPath({
         agentPath: "/agents/demo",
         projectId: PROJECT_ID,
         ...(project === undefined ? {} : { project }),
@@ -32,7 +32,10 @@ describe("agentDefaultsForPath", () => {
       const boot = events.find((event) =>
         String(event.idempotencyKey).startsWith("agent/boot-system-context:"),
       );
-      return String(boot?.payload.content);
+      if (boot?.type !== "events.iterate.com/agents/context-added") {
+        throw new Error("agent creation batch did not contain its boot context");
+      }
+      return boot.payload.content;
     };
 
     const named = bootContent({
@@ -74,7 +77,7 @@ describe("agentDefaultsForPath", () => {
       });
       expect(
         defaults.events.some((event) =>
-          event.idempotencyKey.startsWith("project-onboarding-start:"),
+          String(event.idempotencyKey).startsWith("project-onboarding-start:"),
         ),
       ).toBe(false);
     }
@@ -107,10 +110,20 @@ describe("agentDefaultsForPath", () => {
     ).toEqual(["events.iterate.com/agent/created", "events.iterate.com/capability-host/created"]);
   });
 
+  test("installs both universal processor subscriptions in the same batch", () => {
+    const subscriptions = defaultsFor("/agents/demo").events.filter(
+      (event) => event.type === "events.iterate.com/stream/subscription-configured",
+    );
+    expect(subscriptions.map((event) => event.payload.delivery.processorSlug)).toEqual([
+      "agent",
+      "capability-host",
+    ]);
+  });
+
   test("keys every event on (projectId, agentPath) so exact retries dedupe", () => {
     for (const event of defaultsFor("/agents/demo").events) {
-      expect(event.idempotencyKey).toContain(PROJECT_ID);
-      expect(event.idempotencyKey).toContain("/agents/demo");
+      expect(String(event.idempotencyKey)).toContain(PROJECT_ID);
+      expect(String(event.idempotencyKey)).toContain("/agents/demo");
     }
   });
 });

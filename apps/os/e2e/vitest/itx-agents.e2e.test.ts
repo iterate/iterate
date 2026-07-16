@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
-import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
-import { agentDefaultsForPath } from "../../src/domains/agents/agent-defaults.ts";
+import type {
+  Agent,
+  AgentChat,
+  AgentCreateInput,
+  CapabilityHost,
+} from "../../src/itx-api.generated.ts";
+import { agentCreationForPath } from "../../src/domains/agents/agent-defaults.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -13,6 +18,59 @@ import {
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // These are hand written tests - they MUST pass
+test("agent create folds startup events and is idempotent only for the same birth", async () => {
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+
+  using project = itx.projects.create({ slug: `agent-create-${crypto.randomUUID()}` });
+  using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
+  await expect(
+    agent.create({
+      initialEvents: [{ type: "test/unkeyed-startup", payload: {} }],
+    } as unknown as AgentCreateInput),
+  ).rejects.toThrow("agent create initialEvents must have idempotency keys");
+  await expect(
+    agent.create({
+      initialEvents: [
+        {
+          type: "test/ephemeral-startup",
+          idempotencyKey: "test/ephemeral-startup",
+          ephemeral: true,
+          payload: {},
+        },
+      ],
+    } as unknown as AgentCreateInput),
+  ).rejects.toThrow("agent create initialEvents must be durable");
+  const createInput = {
+    systemPrompt: "original prompt",
+    initialEvents: [
+      {
+        type: AGENT_CONTEXT_ADDED_TYPE,
+        idempotencyKey: `agent-create-startup-${crypto.randomUUID()}`,
+        payload: {
+          role: "system",
+          key: "test/create-startup",
+          content: "startup event was folded before create returned",
+        },
+      },
+    ],
+  };
+  await agent.create(createInput);
+  expect((await agent.processor.snapshot()).state.context.system).toContainEqual(
+    expect.objectContaining({
+      key: "test/create-startup",
+      content: "startup event was folded before create returned",
+    }),
+  );
+  await expect(agent.create(createInput)).resolves.toBeUndefined();
+  await expect(agent.create({ systemPrompt: "different prompt" })).rejects.toThrow(
+    /idempotency key .* already names a different event/,
+  );
+});
+
 test("Agent scripts update their own status record via itx.agent.setStatus", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
@@ -173,13 +231,20 @@ test("Late agent subscriptions replay history after an earlier birth certificate
   const agentPath = `/agents/auto-bootstrap-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
-  // Birth is the first domain event. Stage the ordinary creation policy
-  // without its processor subscriptions, then install those subscriptions
-  // through the idempotent public create() after history exists. This is the
-  // supported late-subscription case: history may precede the subscription,
-  // but it never precedes the birth certificate.
-  const policy = agentDefaultsForPath({ agentPath, projectId });
-  await agent.stream.append(...policy.events);
+  // Birth is the first domain event. Stage the immutable creation events
+  // without the processor subscriptions or directory-derived boot context,
+  // then install those through public create() after history exists. This is
+  // the supported late-subscription case: history may precede the
+  // subscription, but it never precedes the birth certificate.
+  const creation = agentCreationForPath({ agentPath, projectId });
+  const bootContextKey = `agent/boot-system-context:${projectId}:${agentPath}`;
+  await agent.stream.append(
+    ...creation.events.filter(
+      (event) =>
+        event.type !== "events.iterate.com/stream/subscription-configured" &&
+        event.idempotencyKey !== bootContextKey,
+    ),
+  );
 
   const content = fencedAgentScript(
     defineItxScript<{ chat: AgentChat }, { marker: string }>(

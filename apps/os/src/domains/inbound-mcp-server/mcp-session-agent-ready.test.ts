@@ -6,6 +6,7 @@ describe("ensureMcpSessionAgentReady", () => {
   it("explicitly creates the session agent and waits for create to return", async () => {
     const created = Promise.withResolvers<void>();
     const create = vi.fn(() => created.promise);
+    const snapshot = vi.fn().mockResolvedValue({ state: { birthCertificate: null } });
     let requestedPath: string | undefined;
 
     const ready = ensureMcpSessionAgentReady({
@@ -14,7 +15,7 @@ describe("ensureMcpSessionAgentReady", () => {
         agents: {
           get(path) {
             requestedPath = path;
-            return { create };
+            return { create, processor: { snapshot } };
           },
         },
       },
@@ -23,6 +24,7 @@ describe("ensureMcpSessionAgentReady", () => {
     await Promise.resolve();
 
     expect(requestedPath).toBe("/agents/mcp/session-test");
+    expect(snapshot).toHaveBeenCalledOnce();
     expect(create).toHaveBeenCalledWith({ systemPrompt: MCP_AGENT_SYSTEM_PROMPT });
 
     let returned = false;
@@ -36,5 +38,24 @@ describe("ensureMcpSessionAgentReady", () => {
     await ready;
 
     expect(returned).toBe(true);
+  });
+
+  it("does not try to recreate an existing session agent", async () => {
+    const create = vi.fn();
+    const snapshot = vi.fn().mockResolvedValue({
+      state: { birthCertificate: { config: { systemPrompt: "original" } } },
+    });
+
+    await ensureMcpSessionAgentReady({
+      agentPath: "/agents/mcp/session-test",
+      projectItx: {
+        agents: {
+          get: () => ({ create, processor: { snapshot } }),
+        },
+      },
+    });
+
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(create).not.toHaveBeenCalled();
   });
 });

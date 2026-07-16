@@ -166,11 +166,11 @@ export class ProjectProcessor extends StreamProcessor<
               ),
             ),
             // The config repo is an ordinary repo on its own stream. Its
-            // birth batch is: the repo processor subscription, the
-            // cross-post rule that copies EVERY config-repo event onto the
-            // project stream `/` (deliver: "all", so the full history —
-            // including the `repo/created` this saga's next lane waits for —
-            // arrives with provenance), and the create request itself.
+            // birth batch contains the birth certificate, repo processor
+            // subscription, and the cross-post rule that copies subsequent
+            // config-repo events onto the project stream `/`. The repo
+            // processor cross-posts its own birth certificate for the project
+            // catalog, so replaying the setup batch here would duplicate it.
             timedStep("create-timing", timing, "config-repo-append", () =>
               appendTo(
                 CONFIG_REPO_PATH,
@@ -196,12 +196,12 @@ export class ProjectProcessor extends StreamProcessor<
                     // `removeCrossPost({ path: "/" })` can manage this rule.
                     subscriptionKey: "cross-post:/",
                     description:
-                      "Special project config repo: every event is cross-posted to the project root so the project processor can react when config changes.",
+                      "Special project config repo: every event after the birth/setup batch is cross-posted to the project root so the project processor can react when config changes.",
                     delivery: {
                       mode: "push",
                       expression: ["streams", ["get", "/"], "acceptCrossPost"],
                     },
-                    deliver: "all",
+                    deliver: "new",
                   },
                 },
               ),

@@ -112,9 +112,19 @@ only around actions. Command/RPC methods that require a live object assert
 that `birthCertificate !== null` and fail clearly when called too early.
 
 A second distinct birth is a corrupt journal and MUST throw. Retrying the same
-create command is different: creators use a stable idempotency key, so the
-stream append deduplicates the retry and the processor still sees exactly one
-birth. Reducer leniency must never hide two actual `*/created` records.
+create command with the exact same batch is different: creators use stable
+idempotency keys, so the stream append deduplicates the retry and the processor
+still sees exactly one birth. Reusing a key for a different type, payload,
+metadata, or durability is rejected rather than silently returning the first
+event. Reducer leniency must never hide two actual `*/created` records.
+
+`create` is not an “ensure” operation for a long-lived object: defaults and
+caller-supplied birth config may change between deployments while the existing
+birth remains immutable. Reconnects, webhook retries, recurring jobs, and UI
+remounts first inspect `processor.snapshot().state.birthCertificate`; they call
+`create` only when it is `null`. Concurrent first creators may both observe
+`null`; their identical idempotency-keyed batches safely converge, while
+different births fail loudly.
 
 ### Creation commands own the whole birth batch
 
@@ -131,6 +141,13 @@ An agent creation batch is the reference shape:
 3. the ordinary workspace capability and boot-input setup events;
 4. explicit Agent and Capability Host subscriptions;
 5. `waitUntilProcessed({ offset: finalBatchOffset })` on both processors.
+
+`agent.create({ initialEvents })` may add durable, idempotency-keyed startup
+facts to that same atomic append. The final wait includes them. Onboarding uses
+this to commit its kickoff context with the births and subscriptions instead
+of racing a second append. Unkeyed inputs are not retry-safe, and ephemeral
+events are not valid startup facts because durable processors cannot wait
+through them.
 
 Transport routers use the same batch shape when they create routed agents,
 with one additional facet birth and subscription. Their source webhook is
