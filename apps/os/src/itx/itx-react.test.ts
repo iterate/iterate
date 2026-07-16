@@ -288,21 +288,72 @@ describe("itx session socket", () => {
     container.remove();
   });
 
-  test("a terminal authenticate rejection surfaces (no infinite spinner) and does not auto-redial", async () => {
-    const { connectIterateSession } = await import("./itx-react.tsx");
+  test("a terminal authenticate rejection PARKS: no dial storm, explicit reset revives", async () => {
+    // A real auth answer over a working socket is terminal. The failed
+    // generation must keep owning the slot: renders re-read the snapshot (which
+    // dials when the slot is empty) and the failure's own setState re-renders —
+    // clearing the slot here would be an unbounded WebSocket storm.
+    const { connectIterateSession, useIterateSession, reconnectIterateSession } =
+      await import("./itx-react.tsx");
     control.authError = new Error("handshake rejected for this principal");
     const first = connectIterateSession();
     FakeWebSocket.instances[0]!.fire("open");
     await expect(first).rejects.toThrow(/handshake rejected/);
-    // Terminal — a real answer over a working socket must not loop dials.
     expect(FakeWebSocket.instances).toHaveLength(1);
-    // Recovery is explicit: the next connect attempt dials fresh.
+
+    // Parked: repeated imperative connects return the SAME terminal failure
+    // without dialing…
+    expect(connectIterateSession()).toBe(first);
+    await expect(connectIterateSession()).rejects.toThrow(/handshake rejected/);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // …and rendering (the storm vector: every render reads the snapshot) does
+    // not dial either — the suspended tree surfaces the terminal error.
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const [React, { createRoot }] = await Promise.all([
+      import("react"),
+      import("react-dom/client"),
+    ]);
+    const { act, createElement, Component, Suspense } = React;
+    function Probe() {
+      useIterateSession();
+      return null;
+    }
+    class Boundary extends Component<{ children?: unknown }, { failed: boolean }> {
+      state = { failed: false };
+      static getDerivedStateFromError() {
+        return { failed: true };
+      }
+      render() {
+        return this.state.failed
+          ? createElement("output", { "data-state": "error" })
+          : (this.props.children as ReturnType<typeof createElement>);
+      }
+    }
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        createElement(
+          Boundary,
+          null,
+          createElement(Suspense, { fallback: null }, createElement(Probe)),
+        ),
+      );
+    });
+    expect(container.querySelector("output")?.getAttribute("data-state")).toBe("error");
+    expect(FakeWebSocket.instances).toHaveLength(1); // still parked — render dialed nothing
+
+    // Revival is explicit: the semantic reset dials fresh and recovers.
     control.authError = undefined;
-    const second = connectIterateSession();
-    expect(second).not.toBe(first);
+    reconnectIterateSession();
     expect(FakeWebSocket.instances).toHaveLength(2);
+    const revived = connectIterateSession();
+    expect(revived).not.toBe(first);
     await openLatest();
-    await expect(second).resolves.toBe(control.lastRoot);
+    await expect(revived).resolves.toBe(control.lastRoot);
+    await act(async () => root.unmount());
+    container.remove();
   });
 
   test("a semantic reset clears dial backoff so new claims dial immediately", async () => {

@@ -156,6 +156,15 @@ type Generation = {
   liveness: ReturnType<typeof setInterval> | undefined;
   /** Single-flight latch for {@link verifyTransport}, per generation. */
   verifying: boolean;
+  /**
+   * PARKED after a terminal auth rejection: the generation keeps owning the
+   * slot (so a render can never trigger a fresh dial — every re-render of an
+   * always-mounted hook reads {@link currentSnapshot}, which dials when the
+   * slot is empty, and the failure's own setState re-renders: an unbounded
+   * socket storm otherwise) and its close handler must not redial. Only an
+   * explicit {@link reconnectIterateSession} (or a page load) revives.
+   */
+  failed: boolean;
 };
 
 /**
@@ -241,7 +250,9 @@ const serverSnapshot = (): never => {
 /**
  * Ensure a live-or-connecting session and return its connecting promise. The
  * imperative sibling of {@link useIterateSession}: for handlers, `mutationFn`s, and
- * lazy closures that can't call a hook. Same one socket the hooks use.
+ * lazy closures that can't call a hook. Same one socket the hooks use. After a
+ * TERMINAL auth rejection this keeps returning that failure (the parked
+ * generation — see Generation.failed) until {@link reconnectIterateSession}.
  */
 export function connectIterateSession(): Promise<SessionStub> {
   if (typeof window === "undefined") serverSnapshot();
@@ -271,6 +282,7 @@ function dial(): Generation {
     ping: undefined,
     liveness: undefined,
     verifying: false,
+    failed: false,
   };
   current = generation;
   // Keep showing the last session while the new generation dials (invisible
@@ -372,12 +384,16 @@ function dial(): Generation {
           // rejected handshake): this dial is terminally failed. Surface it to
           // imperative awaiters AND the suspended tree — retrying would loop.
           // Reject BEFORE closing: the close handler's generic dial-close
-          // rejection must never mask the real error.
+          // rejection must never mask the real error. Then PARK: the failed
+          // generation keeps owning the slot (see Generation.failed) so a
+          // render can't storm fresh dials; publish the parked snapshot so
+          // effects observe one final generation and settle in "error".
           const terminal = error instanceof Error ? error : new Error(String(error));
+          generation.failed = true;
           reject(terminal);
           firstConnect?.reject(terminal);
           firstConnect = undefined;
-          current = undefined;
+          setSnapshot({ generation: id, session: snapshot?.session, connecting: promise });
           retireGeneration(generation);
           return;
         }
@@ -400,7 +416,9 @@ function dial(): Generation {
 
     ws.addEventListener("close", () => {
       clearTimeout(timeout);
-      const wasCurrent = current === generation;
+      // A PARKED generation stays the owner: its socket closing must not
+      // redial (that would restart the terminal-auth loop it exists to stop).
+      const wasCurrent = current === generation && !generation.failed;
       // The socket is already closed — release resources WITHOUT re-closing it
       // (that would re-enter this handler); disposeGeneration is idempotent.
       disposeGeneration(generation);

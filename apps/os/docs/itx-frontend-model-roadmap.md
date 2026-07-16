@@ -86,17 +86,20 @@ remaining work is _completing_ the model, not undoing a parallel one.
 
 ### Considered and kept as-is
 
-- **`useItxEffect` stays a separate private hook.** Both reviews floated folding
-  it into `useItxSubscription` (its only caller). We evaluated and kept it split:
-  it isn't exported, so it's not public surface, and it cleanly isolates one
-  subtle concern — a _reconnect-aware itx effect_ (await the itx inside the effect
-  so mounting never suspends; re-run on the session generation so a reconnect
-  recovers; run late async cleanup even if you unmounted mid-await; route dial
-  errors out). `useItxSubscription` layers a different concern on top (the
-  connecting/live/error machine + the liveness watchdog + retry). Inlining would
-  merge two ~30/~90-line single-responsibility pieces into one dense function
-  mixing five concerns — harder to explain, not easier — and it's the seam future
-  subscription hooks will reuse.
+- **`useReconnectableItxEffect` stays a separate private hook.** Both reviews
+  floated folding it into `useItxSubscription` (its only caller). We evaluated
+  and kept it split — then NARROWED it in the second thermo round (renamed from
+  `useItxEffect`, Promise-only setup, a shared `ItxEffectSignal` cancellation
+  contract, the unused `itx:` opt cut): it isn't exported, so it's not public
+  surface, and it cleanly isolates one subtle concern — a _reconnect-aware
+  effect_ (await the itx inside the effect so mounting never suspends; re-run on
+  the session generation so a reconnect recovers — that dep is also the whole
+  dial-retry story; run late async cleanup even if superseded mid-await; route
+  connection errors out). `useItxSubscription` layers a different concern on top
+  (the connecting/live/error machine + the liveness watchdog + transport-only
+  retry). Inlining would merge two single-responsibility pieces into one dense
+  function mixing five concerns — harder to explain, not easier — and it's the
+  seam future subscription hooks will reuse.
 
 ## Medium
 
