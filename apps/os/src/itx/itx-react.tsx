@@ -304,6 +304,15 @@ function dial(): Generation {
       // successor is live. It was kept alive through the reconnect gap so
       // useIterateSession()/useItx() never handed out a disposed stub; dispose its
       // project-stub cache + the stub itself only here.
+      //
+      // Safe even though this runs the same turn as setSnapshot (before React
+      // commits the re-render whose useItxEffect cleanups unsubscribe): a
+      // successor only dials after `current` was cleared, and every path clears
+      // it AFTER closing the prior socket (the close handler, reconnectIfCurrent,
+      // reconnectIterateSession). So the prior transport is ALWAYS already closed
+      // here — its subscriptions are already dead (capnweb rejects on close) and
+      // their unsubscribe cleanups are catch-wrapped. This releases already-dead
+      // local refs, never a live subscription.
       const priorSession = liveSession;
       liveSession = root;
       setSnapshot({ generation: id, session: root, connecting: promise });
@@ -457,6 +466,10 @@ export function reconnectIterateSession(): void {
     current = undefined; // FIRST: the close retireGeneration triggers must not auto-redial
     retireGeneration(generation);
   }
+  // A deliberate reset dials NOW: clear any backoff inherited from earlier
+  // closed-before-open failures so the new-claims socket doesn't wait out a
+  // transient storm that's already irrelevant.
+  consecutiveDialFailures = 0;
   dial();
 }
 
@@ -465,11 +478,13 @@ export function reconnectIterateSession(): void {
 // watchdogs (subscriptions) recover their lanes faster; this covers a
 // query-only page whose socket nobody else probes.
 if (typeof document !== "undefined") {
-  const onResume = () => {
+  // Becoming visible → verify (a tab going hidden shouldn't trigger a probe).
+  document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") reportTransportSuspicion();
-  };
-  document.addEventListener("visibilitychange", onResume);
-  window.addEventListener("online", onResume);
+  });
+  // Connectivity returning → verify UNCONDITIONALLY: a backgrounded tab must
+  // recover a half-open socket when the network comes back, not wait for focus.
+  window.addEventListener("online", () => reportTransportSuspicion());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -806,19 +821,23 @@ function watchItxSubscription(
     }
   };
 
-  const onWake = () => {
+  // Becoming visible → check (going hidden shouldn't). Connectivity returning →
+  // check UNCONDITIONALLY, so a backgrounded tab holding a live subscription
+  // recovers a half-open socket when the network comes back, not on next focus.
+  const onVisible = () => {
     if (document.visibilityState === "visible") void check();
   };
+  const onOnline = () => void check();
   const interval = setInterval(() => void check(), LIVENESS_INTERVAL_MS);
-  document.addEventListener("visibilitychange", onWake);
-  window.addEventListener("online", onWake);
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("online", onOnline);
 
   const stop = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(interval);
-    document.removeEventListener("visibilitychange", onWake);
-    window.removeEventListener("online", onWake);
+    document.removeEventListener("visibilitychange", onVisible);
+    window.removeEventListener("online", onOnline);
   };
   return stop;
 }

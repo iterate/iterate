@@ -199,6 +199,23 @@ describe("itx session socket", () => {
     }
   });
 
+  test("a semantic reset clears dial backoff so new claims dial immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.tsx");
+      connectIterateSession();
+      FakeWebSocket.instances[0]!.fire("close"); // failure 1 → immediate re-dial
+      FakeWebSocket.instances[1]!.fire("close"); // failure 2 → next dial is now paced
+      expect(FakeWebSocket.instances).toHaveLength(2); // backoff: no socket yet
+      // A deliberate reset (new claims after create/unlock) must dial NOW, not
+      // inherit pacing from those earlier closed-before-open failures.
+      reconnectIterateSession();
+      expect(FakeWebSocket.instances).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("reportTransportSuspicion leaves a HEALTHY socket alone (no false-positive reconnect)", async () => {
     const { connectIterateSession, reportTransportSuspicion } = await import("./itx-react.tsx");
     const first = connectIterateSession();
@@ -381,5 +398,31 @@ describe("useItxSubscription liveness", () => {
     await harness.advance(0);
     expect(harness.subscribe).toHaveBeenCalledTimes(2);
     await harness.unmount();
+  });
+
+  test("regaining connectivity while HIDDEN still checks (a backgrounded tab recovers)", async () => {
+    let handles = 0;
+    const harness = await mountSubscription(() => {
+      handles += 1;
+      const mine = handles;
+      return { ping: () => mine > 1, unsubscribe: vi.fn() };
+    });
+
+    // Background the tab. A visibilitychange must NOT check while hidden…
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    try {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await harness.advance(0);
+      expect(harness.subscribe).toHaveBeenCalledTimes(1);
+
+      // …but `online` (the network came back) checks regardless of visibility, so
+      // a half-open socket recovers without waiting for the tab to be focused.
+      window.dispatchEvent(new Event("online"));
+      await harness.advance(0);
+      expect(harness.subscribe).toHaveBeenCalledTimes(2);
+    } finally {
+      Reflect.deleteProperty(document, "visibilityState"); // back to jsdom's default "visible"
+      await harness.unmount();
+    }
   });
 });
