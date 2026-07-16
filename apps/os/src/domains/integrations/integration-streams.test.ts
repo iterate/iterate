@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { StreamEvent } from "iterate/stream-events";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { foldConnectionDirectory } from "./integration-streams.ts";
 import { CONNECTION_CLAIMED_EVENT_TYPE, CONNECTION_UNCLAIMED_EVENT_TYPE } from "./utils.ts";
 

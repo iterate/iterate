@@ -8,7 +8,7 @@ import {
   MinuteBuckets,
   pingRoundTrip,
   StreamRuntimeMetrics,
-} from "iterate/stream-runtime-metrics";
+} from "./stream-runtime-metrics.ts";
 
 describe("LatencyRing", () => {
   it("reports null until the first sample — surfaces render a dash, never a number", () => {

@@ -1,10 +1,10 @@
-import { applyPatch } from "iterate/live-state-diff";
-import type { LiveUpdate } from "iterate/live-state-protocol";
+import { applyPatch } from "./diff.ts";
+import type { LiveUpdate } from "./protocol.ts";
 
 /**
  * The client half of the live-state channel: a tiny external store that folds
  * wire updates (one snapshot, then patches) back into the live value. The
- * server's `LiveState` is the producing half; `useLiveState` renders
+ * server's `LiveState` engine is the producing half; `useLiveState` renders
  * this store via `useSyncExternalStore`.
  *
  * Revision discipline: a patch only applies when its `from` matches the held

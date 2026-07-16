@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
-import { StreamProcessorRunner, type ProcessorProgress } from "iterate/stream-processor-runner";
+import {
+  StreamProcessorRunner,
+  type ProcessorProgress,
+} from "../../src/domains/streams/stream-processor-runner.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   PROJECT_WORKER_FORWARDED_EVENT_TYPE,

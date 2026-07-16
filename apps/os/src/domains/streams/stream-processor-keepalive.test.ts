@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { StreamEventInput } from "iterate/stream-events";
+import type { StreamEventInput } from "./schemas.ts";
 import {
   KEEPALIVE_ALARM_LEAD_MS,
   MAX_CONSECUTIVE_BUSY_REFIRES,
@@ -7,7 +7,7 @@ import {
   REVIVAL_BACKOFF_PLATEAU_MS,
   revivalBackoffMs,
   type KeepaliveRecord,
-} from "iterate/stream-processor-keepalive";
+} from "./stream-processor-keepalive.ts";
 
 const T0 = Date.parse("2026-07-09T12:00:00Z");
 
@@ -257,7 +257,7 @@ describe("the crash-loop breaker", () => {
     expect(h.state.facts).toHaveLength(1);
     expect(h.state.facts[0]).toMatchObject({
       type: "events.iterate.com/stream/error-occurred",
-      idempotencyKey: "processor-crash-loop:v1",
+      idempotencyKey: "processor-host-crash-loop:v1",
     });
   });
 

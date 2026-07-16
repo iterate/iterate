@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPatch, diff } from "iterate/live-state-diff";
+import { applyPatch, diff } from "./diff.ts";
 
 /** applyPatch(prev, diff(prev, next)) must reconstruct `next` exactly. */
 function roundTrip(prev: unknown, next: unknown) {

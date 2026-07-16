@@ -1,5 +1,5 @@
-// Processor revival guarantee: a Durable Object that dies owing work gets
-// dialed again.
+// The processor host's revival guarantee: a Durable Object that dies owing
+// work gets dialed again.
 //
 // THE GAP THIS CLOSES. Stream-side delivery is already durable (the spine's
 // cursor rows + the stream DO's alarm retry/park machinery,
@@ -28,7 +28,7 @@
 // the revival lane is a crash-loop breaker, not a loop: every revival attempt
 // durably marks `revivals + 1` BEFORE doing anything else and arms its next
 // try at a growing backoff (10s → 1m → 5m → 30m → 6h, plateau forever — a
-// permanently poisoned processor costs ~4 wakes a day). The mark only resets on a
+// permanently poisoned host costs ~4 wakes a day). The mark only resets on a
 // QUIET-CLEAN confirmation (a fire that finds all tracked work settled
 // successfully — not merely "the revival pass resolved", which a
 // crash-looping post-revival batch would reset endlessly) or on a version
@@ -43,7 +43,7 @@
 // stream-subscribers.ts, so the whole state machine runs in plain-node vitest
 // with a mutable clock and scripted revivals (stream-processor-keepalive.test.ts).
 
-import type { StreamEventInput } from "./stream-events.js";
+import type { StreamEventInput } from "./schemas.ts";
 
 /**
  * The durable mark, stored in DO KV BELOW the journal/fold: the crash-loop
@@ -257,10 +257,10 @@ export class ProcessorKeepalive {
     if (record.revivals === CRASH_LOOP_EVIDENCE_THRESHOLD) {
       this.#hooks.appendFact({
         type: "events.iterate.com/stream/error-occurred",
-        idempotencyKey: `processor-crash-loop:${record.version}`,
+        idempotencyKey: `processor-host-crash-loop:${record.version}`,
         payload: {
           message:
-            `stream processor revival has failed ${record.revivals} consecutive times on ` +
+            `processor host revival has failed ${record.revivals} consecutive times on ` +
             `version ${record.version}; backing off (plateau ${REVIVAL_BACKOFF_PLATEAU_MS / 60_000}m). ` +
             `A deploy resets the budget.`,
         },
@@ -282,7 +282,7 @@ export class ProcessorKeepalive {
       if (!wedged) this.#arm(this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS);
       return "revived";
     } catch (error) {
-      console.error("stream processor revival failed; backing off", {
+      console.error("stream processor host revival failed; backing off", {
         revivals: record.revivals,
         nextAttemptAt: record.armedAtMs,
         error,

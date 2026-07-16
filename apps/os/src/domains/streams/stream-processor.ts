@@ -1,12 +1,13 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
-import type { ProcessorRuntimeState, ProcessorSnapshot, Stream } from "./itx-api.generated.js";
-import type { StreamEvent, StreamEventInput } from "./stream-events.js";
+import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
 // Type-only by necessity, not just hygiene: the runner imports this module's
 // VALUE (the class, for `runnerDriver`), so a value import back would be a
 // runtime cycle. Types erase; the cycle doesn't exist at runtime.
-import type { DeliveryContext } from "./stream-processor-runner.js";
-import { SubscriberMetrics } from "./subscriber-metrics.js";
+import type { DeliveryContext } from "./stream-processor-runner.ts";
+import { SubscriberMetrics } from "./subscriber-metrics.ts";
 import {
   assertObjectProcessorState,
   cachedEventSchema,
@@ -17,7 +18,7 @@ import {
   type EmittedInput,
   type EventCatalog,
   type ProcessorState,
-} from "./processor-contracts.js";
+} from "./processor-contracts.ts";
 
 // =============================================================================
 // Class-based stream processor runtime.
@@ -235,7 +236,7 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
     ingestStartedAtMs: number;
     atMs: number;
   }): void;
-  /** The key derivation: `<slug>/<key>[@<path>:<offset>]`. */
+  /** The key derivation — `<slug>/<key>[@<path>:<offset>]` — byte-preserved from the legacy engine. */
   idempotencyKey(key: string, whileProcessing?: Pick<StreamEvent, "offset" | "path">): string;
   /** The `source.processor` provenance stamp for runner-authored raw appends. */
   processorStamp(whileProcessing?: Pick<StreamEvent, "offset" | "type">): ProcessorSourceStamp;
@@ -559,7 +560,7 @@ export abstract class StreamProcessor<
     });
   }
 
-  // keepAliveWhile is fire-and-forget (it only
+  // keepAliveWhile is fire-and-forget from the host's point of view (it only
   // keeps the runtime alive while the work runs), so this bridges the work's
   // result/failure back into a promise the caller can await.
   async #runKeepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {

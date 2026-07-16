@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "iterate/stream-events";
+import type { StreamEvent } from "../streams/schemas.ts";
 import {
   extractMatchSnippet,
   fileRef,

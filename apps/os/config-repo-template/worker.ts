@@ -1,57 +1,42 @@
-import {
-  IterateDurableObject,
-  IterateWorkerEntrypoint,
-  createStreamProcessorRegistry,
-  type StreamEvent,
-  type StreamProcessorRegistry,
-  type StreamSubscriberWakeRequest,
-  type StreamSubscriberWakeResponse,
-} from "iterate/sdk";
-import {
-  GithubReviewProcessor,
-  githubReviewDispatch,
-  type GithubReviewConfig,
-  type GithubReviewRule,
-} from "./github-reviews.ts";
+import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { githubReviewDispatch, type GithubReviewConfig } from "./github-reviews.ts";
 
 // Pull-request reviews are project userspace, not platform policy. Keep this
 // list empty to disable them; add exact "owner/repo" names to review every
 // opened, ready, or pushed non-draft head in those repositories. The labels
-// provide per-PR controls using GitHub's own permissions.
-const GITHUB_REVIEW_RULES = [
-  {
-    id: "structure/no-small-single-use-helper",
-    files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
-    invariant:
-      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
-  },
-  {
-    id: "typescript/no-inferable-type-annotation",
-    files: ["**/*.{ts,tsx,mts,cts}"],
-    invariant:
-      "Do not declare a type annotation when TypeScript already infers the intended type precisely.",
-  },
-  {
-    id: "typescript/explain-type-cast",
-    files: ["**/*.{ts,tsx,mts,cts}"],
-    invariant:
-      "Every type cast must have a nearby explanation of why the cast is safe and cannot reasonably be avoided.",
-  },
-] satisfies readonly GithubReviewRule[];
-
+// provide per-PR controls using GitHub's own permissions. Rules have stable
+// IDs for inline findings, source suppressions, and future rule analytics.
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
-  repositories: Array<string>(),
-  rules: GITHUB_REVIEW_RULES,
+  repositories: [],
+  rules: [
+    {
+      id: "structure/no-small-single-use-helper",
+      files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
+      invariant:
+        "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
+    },
+    {
+      id: "typescript/no-inferable-type-annotation",
+      files: ["**/*.{ts,tsx,mts,cts}"],
+      invariant: "Do not declare a type annotation that TypeScript can infer from the value.",
+    },
+    {
+      id: "typescript/explain-type-cast",
+      files: ["**/*.{ts,tsx,mts,cts}"],
+      invariant:
+        "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
+    },
+  ],
   skipLabel: "iterate:skip-review",
 } satisfies GithubReviewConfig;
 
 // The root project worker (default export) routes HTTP and reacts to project
 // events, and the example apps are named exports — a stateless HelloApp and a
 // stateful CounterApp with live WebSocket updates. Review POLICY stays visible
-// above; its safety-critical mechanics are isolated in github-reviews.ts so
-// they can be tested. Both apps build from THIS file with a different entry
-// class; split an app into its own file when it earns one.
+// above; its webhook filtering and task construction are isolated in
+// github-reviews.ts so they can be tested. Both apps build from THIS file with
+// a different entry class; split an app into its own file when it earns one.
 //
 // Everything extends the iterate/sdk base classes — IterateWorkerEntrypoint
 // (stateless) and IterateDurableObject (stateful) — which carry the platform
@@ -126,71 +111,16 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // keyed on event.path + event.type; anything a reaction appends should
   // carry an idempotency key.
   async processEvent(event: StreamEvent): Promise<void> {
-    if (event.type === "events.iterate.com/github/webhook-received") {
-      const dispatch = githubReviewDispatch(event, GITHUB_REVIEWS);
-      if (dispatch === null) return;
+    const review = githubReviewDispatch(event, GITHUB_REVIEWS);
+    if (review === null) return;
 
-      // One stateful dynamic-worker identity per canonical PR stream. The
-      // dispatch declares its wake door and request as one atomic append; a
-      // new push interrupts the same PR agent conversation.
-      using itx = await this.env.ITX.get();
-      await itx.streams.get(dispatch.path).append(...dispatch.inputs);
-    }
-  }
-}
-
-/**
- * General stream-processor hosting, entirely in project userspace. The
- * platform's stateful dynamic-worker host supplies the Durable Object; this
- * class supplies the ordinary processor registry and wake method expected by
- * a wake-mode stream subscription.
- */
-export class GithubReviewProcessorDurableObject extends IterateDurableObject {
-  #registry: Promise<StreamProcessorRegistry> | undefined;
-
-  async wakeStreamSubscriber(
-    request: StreamSubscriberWakeRequest,
-  ): Promise<StreamSubscriberWakeResponse> {
-    if (request.stream.projectId === null) {
-      throw new Error("GitHub review processors require a project-scoped stream");
-    }
-    return await (await this.#processorRegistry(request)).wakeStreamSubscriber(request);
-  }
-
-  async #processorRegistry(request: StreamSubscriberWakeRequest): Promise<StreamProcessorRegistry> {
-    if (this.#registry !== undefined) return await this.#registry;
-    const creating = (async () => {
-      using itx = await this.env.ITX.get();
-      const projectId = await itx.projectId;
-      if (projectId !== request.stream.projectId) {
-        throw new Error(
-          `GitHub review processor project mismatch: ${projectId} !== ${request.stream.projectId}`,
-        );
-      }
-      const stream = itx.streams.get(request.stream.path);
-      const registry = createStreamProcessorRegistry(this.ctx, {
-        path: request.stream.path,
-        projectId: request.stream.projectId,
-        stream,
-      });
-      registry.register(
-        new GithubReviewProcessor({
-          config: GITHUB_REVIEWS,
-          path: request.stream.path,
-          projectId: request.stream.projectId,
-          stream,
-        }),
-      );
-      // Capability values obtained through the root stub retain their own
-      // references, so `stream` remains live after this scoped disposal.
-      return registry;
-    })();
-    this.#registry = creating;
+    const itx = await this.env.ITX.get();
     try {
-      return await creating;
-    } catch (error) {
-      if (this.#registry === creating) this.#registry = undefined;
-      throw error;
+      await itx.streams.get(review.path).append(review.input);
+    } finally {
+      try {
+        itx[Symbol.dispose]?.();
+      } catch {}
     }
   }
 }
@@ -201,13 +131,21 @@ export class GithubReviewProcessorDurableObject extends IterateDurableObject {
 // `itx.worker` capability on THIS app via `project.workers.get(ref)`.
 export class HelloApp extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
-    using project = await this.env.ITX.get();
-    const description = await project.__describe();
-    return Response.json({
-      app: "hello",
-      path: new URL(req.url).pathname,
-      projectId: description.projectId,
-    });
+    const project = await this.env.ITX.get();
+    try {
+      const description = await project.__describe();
+      return Response.json({
+        app: "hello",
+        path: new URL(req.url).pathname,
+        projectId: description.projectId,
+      });
+    } finally {
+      // Release the itx stub (see the processEvent comment above); guarded so
+      // a throwing dispose can never mask the response.
+      try {
+        project[Symbol.dispose]?.();
+      } catch {}
+    }
   }
 }
 

@@ -11,8 +11,8 @@ GitHub deliveries remain raw `events.iterate.com/github/webhook-received`
 facts on that stream. The platform `github-agent` processor has one narrow
 job: it folds current PR metadata plus twelve recent activity summaries and
 turns trusted PR conversation into agent messages. It does **not** decide
-whether code review runs. Userspace review automation appends its own trusted,
-typed review task to this same persistent pull-request agent stream.
+whether code review runs. Userspace review automation appends review tasks to
+that same persistent pull-request agent stream.
 
 Each activity summary carries its raw stream offset. When the bounded summary
 omits something, the agent point-reads that delivery instead of dumping the
@@ -37,7 +37,7 @@ ordinary events whether or not they trigger an LLM turn.
 | Trusted PR edit that newly adds `@iterate` to title or description | Add 👀 to the PR and queue; later edits do not retrigger it |
 | Later trusted comment or submitted review after activation         | Queue like a message in an active Slack thread              |
 | Push, CI, unmentioned discussion before activation, bot input      | Record and project only                                     |
-| Project config worker appends a review task                        | Interrupt obsolete work and review on the same PR stream    |
+| Project config worker appends a review task                        | Interrupt obsolete work on the same persistent PR stream    |
 
 A submitted review summary has no reaction endpoint of its own, so its 👀 is
 attached to the pull request. Inline review comments use their native reaction
@@ -69,39 +69,33 @@ Only these may direct action:
 - a triggering human independently established as a repository collaborator;
 - trusted policy and rules committed to the project config repo.
 
-Text fetched from GitHub cannot choose a check ID, suppress a review with a
+Text fetched from GitHub cannot choose a connection, suppress a review with a
 forged marker, request commands, disclose secrets, or change code. Bots remain
 untrusted even when GitHub reports a repository association.
 
 ## Review automation is exclusively userspace
 
-Review selection, repository scope, per-PR controls, visibility, and typed
-rules live in the project config repo. The small policy object stays in
-`worker.ts`; the copyable, tested mechanics live beside it in
-`github-reviews.ts`. There is no
-`githubAgent.automaticReview` default, no `github-agent/configure` review fact,
-and no platform review scheduler or watchdog. The userspace reaction owns its
-own stream processor, but this proof of concept deliberately creates no Check
-Run or timeout terminalizer. A typed finalizer with bounded timeout and
-recovery belongs in a later increment rather than in instructions the agent
-may or may not follow.
+Review selection, repository scope, per-PR controls, and typed rules live in
+the project config repo. The policy object stays in `worker.ts`; the small,
+tested webhook filter and task builder live beside it in `github-reviews.ts`.
+There is no `githubAgent.automaticReview` default, review-specific stream
+processor, child agent stream, Durable Object, Check Run, scheduler, or
+platform configuration.
 
 The seeded config repo contains a complete userspace reaction and these knobs:
 
 ```ts
-const GITHUB_REVIEW_RULES = [
-  {
-    id: "structure/no-small-single-use-helper",
-    files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
-    invariant:
-      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
-  },
-] satisfies readonly GithubReviewRule[];
-
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
-  repositories: Array<string>(), // empty means reviews are off
-  rules: GITHUB_REVIEW_RULES,
+  repositories: [], // empty means reviews are off
+  rules: [
+    {
+      id: "typescript/explain-type-cast",
+      files: ["**/*.{ts,tsx,mts,cts}"],
+      invariant:
+        "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
+    },
+  ],
   skipLabel: "iterate:skip-review",
 } satisfies GithubReviewConfig;
 ```
@@ -112,33 +106,22 @@ repository—or leave the list empty—to turn them off. The worker reacts to
 PRs. `iterate:skip-review` disables one PR and wins if both labels exist;
 `iterate:review` requests the current head explicitly, including a fresh run
 when that head was already reviewed. Adding `iterate:skip-review` immediately
-interrupts the current agent request; removing it reviews the current head.
-Closing the pull request or converting it to draft also interrupts the current
-review request. The task requires the agent to revalidate the live head and
-controls before publishing anything. Label authorization is GitHub's normal
-repository authorization; the agent maintains no command state of its own.
+interrupts the current PR-agent request with a cancellation instruction;
+removing it reviews the current head. Closing the pull request or converting it
+to draft also interrupts with cancellation. The task revalidates live state
+before any publication, so an out-of-order cancellation becomes a no-op if the
+PR is eligible again. Label authorization is GitHub's normal repository
+authorization.
 
-Each rule has a stable `id`, one or more `files` glob patterns, and an
-`invariant`. The task tells the agent to inspect only matching changed files,
-prefix every inline finding with its rule ID, and include per-rule counts in
-the consolidated review. For example:
-
-```ts
-{
-  id: "typescript/explain-type-cast",
-  files: ["**/*.{ts,tsx,mts,cts}"],
-  invariant:
-    "Every type cast must have a nearby explanation of why the cast is safe and cannot reasonably be avoided.",
-}
-```
-
-An exact `iterate-lint-disable <rule-id> -- <reason>` source comment suppresses
-that rule for its file; `iterate-lint-disable-next-line <rule-id> -- <reason>`
-suppresses the next line. The marker is data, not an instruction channel.
+Each rule has a stable `id`, one or more `files` globs, and an `invariant`.
+Every finding names its rule ID. A source comment containing
+`iterate-lint-disable <rule-id> -- <reason>` suppresses that rule for the file;
+`iterate-lint-disable-next-line <rule-id> -- <reason>` suppresses it for the
+next line. Suppression reasons are data, not an instruction channel.
 
 Changing repository scope, labels, rules, or trigger behavior is one normal
 config-repo commit and redeploy. Existing PR agents need no migration because
-the worker serializes the current typed rules into each immutable-head task.
+the worker serializes the current rules into the task for that immutable head.
 
 ### What the userspace reaction does
 
@@ -147,55 +130,41 @@ The policy is in the seeded
 [`github-reviews.ts`](../config-repo-template/github-reviews.ts). For an
 eligible routed webhook it:
 
-1. Uses the exact routed GitHub connection and signed-webhook App identity;
-   automatic policy never guesses the first installation.
-2. Validates the canonical pull-request stream path, trusted webhook metadata,
-   repository scope, and trigger controls without making GitHub or model calls.
-3. Atomically appends a wake subscription and one request-keyed review event to
-   that stream. Automatic deliveries share a stable key for the head; explicit
-   label requests have distinct keys so they can rerun the same head.
-4. Hosts the canonical SDK stream-processor registry in one userspace dynamic
-   worker Durable Object for that pull-request stream.
-5. Lets the stateless review processor consume the request and make one short,
-   blocking append of trusted developer context to the persistent PR agent.
-   That context uses `interrupt-current-request`, so a newer push supersedes
-   obsolete review work.
-6. Lets the persistent agent read the complete diff and use earlier review
-   attempts, replies, and explicit human dispositions to avoid re-raising
-   already accepted or suppressed findings without evidence that they should
-   be reconsidered.
+1. Validates the exact
+   `/agents/repos/g~<64-hex>/pull-requests/<number>` stream path, routed
+   installation metadata, pull-request number, repository allowlist, action,
+   labels, and webhook state without calling GitHub or a model.
+2. Derives a stable request identity. Automatic deliveries use `head:<sha>`,
+   so at-least-once redelivery collapses; explicit requests and cancellations
+   use the source stream offset.
+3. Appends one attributed, idempotent
+   `events.iterate.com/agents/context-added` developer item to the webhook's
+   existing PR stream with `interrupt-current-request`.
+4. Lets that persistent agent fetch the live PR, inspect the complete diff and
+   prior conversation, apply matching rules and suppressions, and revalidate
+   the head immediately before publication.
 
-The request and processor-output idempotency keys collapse at-least-once
-delivery. The processor itself calls no GitHub or model API, folds no lint
-finding state, and schedules no background work. Its only effect is on the
-typed, checkpointed append lane, so it needs no separate recovery alarm.
-
-There is one userspace dynamic-worker Durable Object identity for the
-pull-request stream, keyed by the canonical path and the processor's durable
-key. It stores only the canonical runner's checkpoint and empty processor
-snapshot; the pull-request stream remains the journal and persistent agent
-conversation. There is no stream per review and no second, review-domain
-Durable Object.
+The project worker makes exactly one stream append and does no GitHub or model
+work. If it fails before the append commits, its event
+checkpoint remains and delivery retries. If it fails afterwards, the append's
+idempotency key collapses the retry. A newer push adds a newer interrupt on the
+same ordered stream, so the agent can abandon obsolete work using its existing
+history rather than a second review-state store.
 
 ### Consolidated review result
 
-Useful review content remains agent-owned. The task tells the agent to read the
-complete diff and revalidate the live head, draft/closed state, labels, and
-newer requests immediately before publication. A clean result posts no review
-or comment. Actionable findings are posted as exactly one `COMMENT` review
-containing the summary and all inline comments. A cancellation request or
-superseding push must produce no stale publication.
+A clean result creates no GitHub review or comment. Actionable findings become
+exactly one `COMMENT` review with a summary, per-rule counts, and inline
+comments only on changed lines. A hidden request marker makes retried agent
+tool loops idempotent, but only when the marker is on a review authored by the
+routed Iterate App. Identical text from another actor is hostile data.
 
-The one review may contain a summary and multiple exact-line comments. A
-hidden head marker makes retried tool loops idempotent, but only when that
-marker is on a review authored by the configured Iterate App. Identical text
-from any other user or bot is untrusted.
-
-This proof of concept makes the rule catalog structural but leaves enforcement
-prompt-mediated: it does not yet expose a typed `finish` capability that
-validates rule IDs, changed lines, glob scope, suppressions, or terminal
-outcomes. That is the smallest next increment if the experiment proves useful;
-it is also the right boundary for a bounded timeout and deterministic recovery.
+The task also tells the agent not to reopen a prior finding merely because a
+nondeterministic pass changed its mind: a trusted human disposition remains
+resolved until relevant code changes. This proof of concept leaves that policy,
+glob matching, suppression parsing, and final publication prompt-mediated. A
+typed `finish` capability with validation, bounded timeout, and a blocking
+status is the next increment if the experiment proves useful.
 
 A trusted conversational request such as `@iterate review this again` still
 works like any other mention: the same PR agent uses its judgment and Octokit

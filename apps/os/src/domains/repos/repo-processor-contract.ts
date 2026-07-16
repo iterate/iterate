@@ -1,10 +1,9 @@
 import { z } from "zod";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import {
-  defineProcessorContract,
+  CoreProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-  type ProcessorState,
-} from "iterate/processor-contracts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+} from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 

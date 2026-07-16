@@ -1,4 +1,4 @@
-import { StreamProcessor } from "iterate/stream-processor";
+import { StreamProcessor } from "../../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import {
   browserProcessorProgressRewindStatements,

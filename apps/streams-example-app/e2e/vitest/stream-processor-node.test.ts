@@ -11,11 +11,14 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/processor-contracts";
-import { StreamProcessor } from "iterate/stream-processor";
-import { StreamProcessorRunner, type ProcessorProgress } from "iterate/stream-processor-runner";
 import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
+import { defineProcessorContract } from "~/domains/streams/processor-contracts.ts";
+import { StreamProcessor } from "~/domains/streams/stream-processor.ts";
+import {
+  StreamProcessorRunner,
+  type ProcessorProgress,
+} from "~/domains/streams/stream-processor-runner.ts";
 import type { Stream } from "~/itx-api.generated.ts";
 
 const EchoExampleContract = defineProcessorContract({

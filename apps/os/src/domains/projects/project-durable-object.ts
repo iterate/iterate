@@ -1,6 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { createStreamProcessorRegistry } from "iterate/stream-processor-registry";
-import type { StreamEvent } from "iterate/stream-events";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -12,10 +10,12 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";

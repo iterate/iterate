@@ -14,19 +14,13 @@ stream in the project through `processEvent(event)` (checkpointed,
 at-least-once, per-stream order — `event.path` says which stream), and reaches
 the project's capabilities through `await this.env.ITX.get()`. Small local
 modules are fine when logic deserves focused tests; the seeded GitHub review
-contract and `StreamProcessor` live in `github-reviews.ts`, while its
-`createStreamProcessorRegistry` Durable Object, repository scope, and labels stay
-obvious in `worker.ts`. Review rules are typed data in `worker.ts` too, so each
-finding can carry a stable rule ID and file scope. The processor is attached
-to the canonical `/agents/repos/g~<sha256>/pull-requests/<number>` stream with
-a wake-mode subscription; that one stream is its journal, checkpoint source,
-and persistent agent conversation. The worker is built by the
-platform's worker build pipeline: multi-file TypeScript works (the bundler
-follows imports), and npm dependencies declared in `package.json` are
+filter and task builder live in `github-reviews.ts`, while typed rules,
+repository scope, and labels stay obvious in `worker.ts`. The worker is built
+by the platform's worker build pipeline: multi-file TypeScript works (the
+bundler follows imports), and npm dependencies declared in `package.json` are
 installed at build time. The platform's capability types and worker base
 classes come from the `iterate` package — `import { IterateWorkerEntrypoint,
-IterateDurableObject, StreamProcessor, createStreamProcessorRegistry } from
-"iterate/sdk"`. It's a
+IterateDurableObject, type StreamEvent } from "iterate/sdk"`. It's a
 devDependency here: the platform supplies `iterate/sdk` to every worker build
 as a virtual module, so the build never installs it; run `npm install` to get
 typechecking and editor support.
@@ -38,18 +32,6 @@ the two sdk base classes: `IterateWorkerEntrypoint` (stateless) or
 `processEvent(event)` calls, `invokeCapability` dispatches flattened
 `itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP
 into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
-
-Project-defined stream processors use the same three pieces as built-ins:
-`defineProcessorContract(...)`, a class extending `StreamProcessor`, and a
-stateful worker class that registers it with `createStreamProcessorRegistry`
-and exposes `wakeStreamSubscriber`. The GitHub review processor is the seeded
-copyable example. Its only effect is one short, idempotent context append on
-the blocking lane; GitHub and model work belongs to the persistent agent. It
-therefore has no background obligation and needs no recovery alarm. A processor
-extended with consequential background work must enable registry recovery and
-forward `alarm`. Keep consequential output on the typed `append` lane so the
-runtime stamps processor provenance and checkpoints only after blocking work
-settles.
 
 The example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless, extends

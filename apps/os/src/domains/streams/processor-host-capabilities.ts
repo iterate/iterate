@@ -4,19 +4,10 @@ import type {
   ProcessorSnapshot,
   StreamPingInput,
   StreamSubscriberPing,
-} from "./itx-api.generated.js";
-import type { SubscriberMetrics } from "./subscriber-metrics.js";
-import type { ProcessorRuntimeContribution } from "./stream-processor.js";
-
-/** Serializable processor contract carried in a subscriber presence fact. */
-export type ProcessorContractAnnouncement = {
-  slug: string;
-  version: string;
-  description: string;
-  consumes: string[];
-  emits: string[];
-  ownedEvents: { type: string; description?: string }[];
-};
+} from "./rpc-types.ts";
+import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
+import type { SubscriberMetrics } from "./subscriber-metrics.ts";
+import type { ProcessorRuntimeContribution } from "./stream-processor.ts";
 
 /**
  * The processor surface shared by the Durable Object registry

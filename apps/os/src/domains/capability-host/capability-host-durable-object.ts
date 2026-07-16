@@ -1,9 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { createStreamProcessorRegistry } from "iterate/stream-processor-registry";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
+import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,

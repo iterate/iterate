@@ -28,8 +28,8 @@
 
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
-import { StreamProcessor } from "iterate/stream-processor";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
+import { StreamProcessor } from "../streams/stream-processor.ts";
 import {
   mergeAgentStatusPatch,
   type AgentFileAttachment,

@@ -31,7 +31,7 @@
 // typecheck with `implements <its generated interface>` injected, proving the
 // projection is sound (the classes really do satisfy what we publish).
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { API, ModifierFlags, SignatureKind } from "@typescript/native-preview/unstable/sync";
@@ -67,7 +67,6 @@ const rpcTargetsPath = path.join(projectDir, "src/rpc-targets.ts");
 const outPath = path.join(projectDir, "src/itx-api.generated.ts");
 /** The copy published as `iterate/sdk` (packages/iterate re-exports it from its hand-written sdk.ts). Same content as outPath. */
 const packageCopyPath = path.resolve(projectDir, "../../packages/iterate/src/itx-api.generated.ts");
-const iteratePackageSourceDir = path.resolve(projectDir, "../../packages/iterate/src");
 /** The Itx Type Graph: the flat file's declarations as per-declaration records (see src/domains/itx/itx-api-graph.ts). */
 const graphOutPath = path.join(projectDir, "src/itx-api-graph.generated.ts");
 
@@ -248,20 +247,16 @@ export function generateItxApi(): string {
   const { classByPublicName, relayContracts, renameMap } = collectClasses(rpcTargetsFile);
 
   /**
-   * Every exported named type (alias or interface) in the app or canonical
-   * iterate SDK, by name, keyed to all its declarations. Discovered across
-   * those source files because itx data shapes live in domain modules, not one
-   * central file.
+   * Every exported named type (alias or interface) in the app, by name, keyed
+   * to all its declarations. Discovered across the project's files because itx
+   * data shapes live in their own domain modules now, not one central file.
    * The walker is demand-driven — only names actually reached from the
    * entrypoint are emitted — and a reached name with more than one declaration
    * is a hard error (see `resolveNamedDecl`), so cross-module name clashes can
    * never silently pick the wrong shape.
    */
   const namedDecls = new Map<string, (TypeAliasDeclaration | InterfaceDeclaration)[]>();
-  const iteratePackageSourceFiles = readdirSync(iteratePackageSourceDir)
-    .filter((name) => name.endsWith(".ts") && name !== "itx-api.generated.ts")
-    .map((name) => path.join(iteratePackageSourceDir, name));
-  for (const fileName of [...project.rootFiles, ...iteratePackageSourceFiles]) {
+  for (const fileName of project.rootFiles) {
     if (fileName.endsWith(".d.ts")) continue;
     const resolved = path.resolve(fileName);
     if (resolved === rpcTargetsPath || resolved === outPath) continue;

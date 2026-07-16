@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent } from "iterate/stream-events";
+import type { StreamEvent } from "../../schemas.ts";
 import {
   catchUpDurableHistory,
   catchUpToLiveReplayBoundary,

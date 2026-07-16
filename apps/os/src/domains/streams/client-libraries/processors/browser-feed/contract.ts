@@ -5,7 +5,7 @@
 // the live in-flight agent tail.
 
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/processor-contracts";
+import { defineProcessorContract } from "../../../processor-contracts.ts";
 import {
   initialBrowserFeedState,
   isCurrentBrowserFeedState,

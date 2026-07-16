@@ -1,11 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import type { ProcessorState } from "iterate/processor-contracts";
-import { createStreamProcessorRegistry } from "iterate/stream-processor-registry";
-import type { StreamEventInput } from "iterate/stream-events";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -17,6 +15,8 @@ import {
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
+import type { ProcessorState } from "../streams/processor-contracts.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import type {
   SecretCreateInput,

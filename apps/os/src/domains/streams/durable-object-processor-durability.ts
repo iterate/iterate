@@ -13,14 +13,14 @@
 // vitest over an in-memory `storage.kv` fake
 // (durable-object-processor-durability.test.ts).
 
-import type { Stream } from "./itx-api.generated.js";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./processor-contracts.js";
-import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.js";
+import type { Stream } from "../../itx-api.generated.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
+import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import type {
   ProcessorProgress,
   ProcessorProgressStore,
   ProcessorRecovery,
-} from "./stream-processor-runner.js";
+} from "./stream-processor-runner.ts";
 
 // -----------------------------------------------------------------------------
 // Key layout. Per-slug, all under the `stream-processor:` prefix.
@@ -92,7 +92,7 @@ export function durableObjectProgressStore<State>(args: {
  * DO-shaped seams are INJECTED, not reached for:
  *   - `armAlarm` — the hosting registry's alarm slice for this runner. A DO
  *     has ONE alarm; the registry merges every runner's desire (plus its own)
- *     and arms the earliest. This
+ *     and arms the earliest, exactly like the host's `setAlarmSlice`. This
  *     adapter never touches `storage.setAlarm`.
  *   - `waitUntil` — the hosting DO's `ctx.waitUntil` lane, keeping the
  *     incarnation alive while tracked work runs.
@@ -104,10 +104,11 @@ export function durableObjectProgressStore<State>(args: {
  * `woken` fan-out cold-boots the stream DO if the deploy evicted it too), and
  * the ordinary wake-mode delivery of that fact is the guaranteed turn that
  * runs the processor's own reconciliation — the runner's construction check
- * enforces that the contract consumes it. Delivery has ONE entrypoint.
+ * enforces that the contract consumes it. No self-driven catch-up here,
+ * unlike the host's `catchUpInternal` loop: delivery has ONE entrypoint.
  *
- * Construction re-issues a persisted armed desire through `armAlarm`: a
- * platform `setAlarm` that failed after the KV
+ * Construction re-issues a persisted armed desire through `armAlarm` (the
+ * host's boot-time reconcile): a platform `setAlarm` that failed after the KV
  * record committed — or an eviction in the fire→re-arm window — would
  * otherwise leave the only thing that revives this DO permanently lost.
  */
@@ -118,8 +119,9 @@ export function durableObjectRecovery(args: {
   /** The processor's home stream: revived facts and crash-loop evidence land here. */
   stream: Stream;
   /** Worker deploy version; a change resets the keepalive's crash-loop budget
-   * (the antidote deploy). Pass `workerVersion(env)`. REQUIRED because a
-   * silent default could never take the version-reset lane. */
+   * (the antidote deploy). Pass `workerVersion(env)`. REQUIRED for the same
+   * reason the host requires it: a silent default could never take the
+   * version-reset lane. */
   version: string;
   /** The registry's alarm-slice seam for this runner (null = disarm). */
   armAlarm: (atMs: number | null) => void;
@@ -134,7 +136,8 @@ export function durableObjectRecovery(args: {
   const readRecord = () => args.storage.kv.get<KeepaliveRecord>(recordKey);
 
   const recovery: ProcessorRecovery = {
-    // Every registered closure — blocking, background, and the runner's whole-frame
+    // The host's wiring verbatim (stream-processor-host.ts:445): every
+    // registered closure — blocking, background, and the runner's whole-frame
     // attempt — rides the keepalive, so "the DO died owing work" is exactly
     // "the DO died with the alarm armed".
     keepAliveWhile: (work) => keepalive.track(work()),
@@ -142,7 +145,8 @@ export function durableObjectRecovery(args: {
       // Keyed per revival ATTEMPT: the keepalive durably marks the record
       // (revivals+1, lastRevivalAt=now) BEFORE its revive hook runs, so this
       // read names the current attempt. A platform retry of the same attempt
-      // dedupes; distinct attempts journal distinct facts, per slug.
+      // dedupes; distinct attempts journal distinct facts — the same
+      // derivation as the host's `processor-host-revived@...` key, per-slug.
       const record = readRecord();
       await args.stream.append({
         type: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
@@ -188,7 +192,8 @@ export function durableObjectRecovery(args: {
     version: args.version,
   });
 
-  // A fresh incarnation restores — and re-issues — the persisted alarm desire,
+  // Boot-time reconcile (the host's post-construction block verbatim): a
+  // fresh incarnation restores — and RE-ISSUES — the persisted alarm desire,
   // so a lost platform alarm heals on the next dial instead of never.
   const persisted = readRecord();
   if (persisted !== undefined && persisted.armedAtMs !== null) {

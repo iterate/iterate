@@ -26,7 +26,7 @@
 // fence the REBUILDING runner's commits as "backward". The revision bump
 // points the fence at the stale writer instead.
 
-import type { ProcessorProgress, ProcessorProgressStore } from "iterate/stream-processor-runner";
+import type { ProcessorProgress, ProcessorProgressStore } from "../../stream-processor-runner.ts";
 import { createSchemaEnsurer } from "./ensure-schema-once.ts";
 import type { BrowserProjectionWriteBuffer } from "./projection-write-buffer.ts";
 import type { SqlClient, SqlValue } from "./stream-browser-db.ts";

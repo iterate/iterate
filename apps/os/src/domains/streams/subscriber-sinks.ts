@@ -27,8 +27,8 @@
 // `retainProcessEventBatch` below and the wire tests in
 // stream-wire.e2e.test.ts.
 
-import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/rpc-retain";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
+import { disposeIgnoredRpcResult, isThenable, retainCallback } from "../../lib/rpc/retain.ts";
 import { itxLoopbackStub } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
@@ -99,9 +99,8 @@ export function retainProcessEventBatch(
   } = {},
 ): RetainedProcessEventBatch {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
-  // the defensive onRpcBroken wiring — see
-  // packages/iterate/src/rpc-retain.ts for why that wiring is subtle); this
-  // layer adds only the pump's delivery semantics.
+  // the defensive onRpcBroken wiring — see lib/rpc/retain.ts for why that
+  // wiring is subtle); this layer adds only the pump's delivery semantics.
   const retained = retainCallback<Parameters<ProcessEventBatch>[0]>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;
   let pendingDeliveries = 0;

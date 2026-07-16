@@ -1,6 +1,6 @@
 import { tracing } from "cloudflare:workers";
-import { StreamProcessor, type ProcessorReads } from "iterate/stream-processor";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
+import { StreamProcessor, type ProcessorReads } from "../streams/stream-processor.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ScheduleView } from "./types.ts";
 import {

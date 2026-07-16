@@ -10,9 +10,8 @@
 // platform embeds this module (compiled to plain JS) as the `iterate/sdk`
 // virtual module in every dynamic worker build — see apps/os
 // iterate-sdk-virtual-module.generated.ts. The published package is still the
-// editor/typecheck story. The embed is bundled, so the stream-processor
-// runtime and its zod/capnweb dependencies are available in project workers
-// without a project-level npm install.
+// editor/typecheck story; keep runtime code here dependency-free (only
+// `cloudflare:workers` imports) so the embed stays self-contained.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerRef,
@@ -24,21 +23,6 @@ import type {
 // Extensionless on purpose: this specifier lands verbatim in the published
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated";
-
-// A project-defined processor uses the same contract, runner, and Durable
-// Object registry as the platform's built-in processors. The `.js` specifiers land
-// verbatim in the published declarations and resolve to emitted files; the
-// virtual `iterate/sdk` module bundles their runtime implementations.
-export * from "./processor-contracts.js";
-export * from "./stream-processor.js";
-export * from "./stream-processor-registry.js";
-export * from "./stream-processor-runner.js";
-export {
-  StreamEvent as StreamEventSchema,
-  StreamEventInput as StreamEventInputSchema,
-  StreamListItem as StreamListItemSchema,
-} from "./stream-events.js";
-export { z } from "zod";
 
 /** The one binding the platform supplies to every dynamic worker: `get()`
  * for capability method calls, `fetch()` for HTTP into sibling workers. */

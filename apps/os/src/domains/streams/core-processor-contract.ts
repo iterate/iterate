@@ -5,17 +5,14 @@
 // instead of through a subscription runner. Token-bucket rate limiting lives in
 // the circuit-breaker processor.
 //
-// Contract files are the schema/type layer: plumbing modules import payload
-// schemas from here, and processors that
+// Contract files are the schema/type layer: plumbing modules (types.ts, the
+// processor host) import payload schemas from here, and processors that
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
-import {
-  defineProcessorContract,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "iterate/processor-contracts";
 import { ItxExpression } from "../../itx/expression.ts";
 import { EventSelector } from "./event-selector.ts";
+import { defineProcessorContract } from "./processor-contracts.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
 // the core reducer starts deriving NEW state from already-reduced events
@@ -242,7 +239,7 @@ const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodT
  * subscriptions, from the reduced roster
  * (`connectionsByKey[..].subscriber.processor.announcement`).
  */
-const ProcessorContractAnnouncement = z.object({
+export const ProcessorContractAnnouncement = z.object({
   slug: z.string().trim().min(1),
   version: z.string().trim().min(1),
   description: z.string(),
@@ -255,6 +252,8 @@ const ProcessorContractAnnouncement = z.object({
     }),
   ),
 });
+
+export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnnouncement>;
 
 /**
  * Identity the connecting party passes in its subscribe call. All fields are
@@ -290,6 +289,8 @@ export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescript
  * ignores it — the at-head reconcile its delivery guarantees is the whole
  * point.
  */
+export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
+
 export const StreamSubscriberDisconnectReason = z.enum([
   /** A new connection for the same subscriptionKey replaced this one. */
   "replaced",

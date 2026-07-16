@@ -1,8 +1,11 @@
 import { describe, expect, it, test, vi } from "vitest";
 import type { z } from "zod";
-import type { StreamEventInput } from "iterate/stream-events";
-import { StreamProcessorRunner, type ProcessorProgress } from "iterate/stream-processor-runner";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "../streams/test-helpers.ts";
+import {
+  StreamProcessorRunner,
+  type ProcessorProgress,
+} from "../streams/stream-processor-runner.ts";
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,

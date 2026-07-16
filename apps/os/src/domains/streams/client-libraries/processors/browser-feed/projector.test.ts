@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "iterate/stream-events";
+import type { StreamEvent } from "../../../schemas.ts";
 import {
   BROWSER_FEED_SCHEMA_VERSION,
   initialBrowserFeedState,

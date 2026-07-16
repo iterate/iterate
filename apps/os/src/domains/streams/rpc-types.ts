@@ -4,8 +4,8 @@
  * These are hand-authored shapes (generics preserved) that both the public itx
  * contract and the server-side host/subscriber machinery build against.
  */
-import type { LiveUpdate } from "iterate/live-state-protocol";
-import type { StreamEvent } from "iterate/stream-events";
+import type { LiveUpdate } from "../../lib/live-state/protocol.ts";
+import type { StreamEvent } from "./schemas.ts";
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;

@@ -1,4 +1,4 @@
-import type { LiveStatePatch } from "./live-state-protocol.js";
+import type { LiveStatePatch } from "./protocol.ts";
 
 /**
  * Structural diff between two JSON values, producing the minimal `LiveStatePatch`

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mergeProcessorConfig } from "iterate/processor-contracts";
+import { mergeProcessorConfig } from "./processor-contracts.ts";
 
 describe("mergeProcessorConfig", () => {
   test("recurses through plain objects and retains omitted keys", () => {

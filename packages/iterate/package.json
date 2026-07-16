@@ -26,21 +26,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./durable-object-processor-durability": "./src/durable-object-processor-durability.ts",
-    "./live-state": "./src/live-state.ts",
-    "./live-state-diff": "./src/live-state-diff.ts",
-    "./live-state-protocol": "./src/live-state-protocol.ts",
-    "./processor-contracts": "./src/processor-contracts.ts",
-    "./processor-host-capabilities": "./src/processor-host-capabilities.ts",
-    "./rpc-retain": "./src/rpc-retain.ts",
     "./sdk": "./src/sdk.ts",
-    "./stream-events": "./src/stream-events.ts",
-    "./stream-processor": "./src/stream-processor.ts",
-    "./stream-processor-keepalive": "./src/stream-processor-keepalive.ts",
-    "./stream-processor-registry": "./src/stream-processor-registry.ts",
-    "./stream-processor-runner": "./src/stream-processor-runner.ts",
-    "./stream-runtime-metrics": "./src/stream-runtime-metrics.ts",
-    "./subscriber-metrics": "./src/subscriber-metrics.ts",
     "./worker": "./src/worker.ts"
   },
   "publishConfig": {
@@ -84,7 +70,7 @@
     "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
-    "zod": "4.3.6"
+    "zod": "4.1.12"
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",

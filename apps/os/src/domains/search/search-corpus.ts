@@ -16,8 +16,8 @@
 //   {projectId}/repos{repoPath}/files{repoFilePath}       repo file contents at HEAD
 //   {projectId}/{kind}/{id}                               anything else, via itx.search.index()
 
-import type { StreamEvent } from "iterate/stream-events";
 import type { ItxExpression } from "../../itx/expression.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 
 /** Offsets per stream-event segment document. */
 export const SEARCH_SEGMENT_SIZE = 100;

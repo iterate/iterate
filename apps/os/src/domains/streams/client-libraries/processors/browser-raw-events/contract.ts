@@ -3,7 +3,7 @@
 // append log into the per-stream OPFS SQLite `events` table that stream views read.
 
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/processor-contracts";
+import { defineProcessorContract } from "../../../processor-contracts.ts";
 
 export const BrowserRawEventsContract = defineProcessorContract({
   slug: "browser-raw-events",

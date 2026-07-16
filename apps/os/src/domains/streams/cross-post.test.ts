@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { StreamEventInput, type StreamEvent } from "iterate/stream-events";
 import { buildCrossPostAppendInput } from "./cross-post.ts";
+import { StreamEventInput, type StreamEvent } from "./schemas.ts";
 
 describe("buildCrossPostAppendInput", () => {
   it("strips committed-only fields before forwarding through append", () => {

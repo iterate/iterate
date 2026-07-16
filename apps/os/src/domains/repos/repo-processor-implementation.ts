@@ -1,4 +1,4 @@
-import { StreamProcessor } from "iterate/stream-processor";
+import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { githubAgentCreationEvents } from "./github-agent-mechanics.ts";
 import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";

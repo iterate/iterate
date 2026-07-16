@@ -6,8 +6,8 @@
 // is exercised in domains/typecheck/virtual-project.test.ts.
 
 import { describe, expect, it, vi } from "vitest";
-import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import type { Project } from "../../itx-api.generated.ts";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";

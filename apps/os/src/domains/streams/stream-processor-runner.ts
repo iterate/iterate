@@ -6,12 +6,14 @@
 // docs/stream-processor-runner-redesign.md; the invariants are pinned by the
 // in-memory harness in stream-processor-runner.test.ts (the executable spec).
 //
-// The PROCESSOR is passed into a plain runtime-neutral runner: the same class
-// runs in a browser tab over SQLite, in a Durable Object over KV, and in the
-// in-memory test harness that serves as the semantic spec. Nothing
-// Cloudflare-shaped enters the core: durable behavior arrives through the
-// optional `durability` adapter, and incarnation behavior through the optional
-// `keepAlive` hook.
+// The shape inversion this file exists for: the legacy host was the star
+// (`createStreamProcessorHost(ctx)` + `host.add(factory)`, hand-fed a Durable
+// Object ctx). Here the PROCESSOR is passed INTO the runner, and the runner is
+// a plain runtime-neutral object — the same class runs in a browser tab over
+// SQLite, in a Durable Object over KV, and in the in-memory test harness that
+// serves as the semantic spec. Nothing Cloudflare-shaped enters the core:
+// anything durable arrives through the optional `durability` adapter, and
+// anything incarnation-shaped through the optional `keepAlive` hook.
 //
 // Delivery: `openDelivery()` answers the wake handshake — a resume cursor plus
 // a `sink`. The sink IS the `processEventBatch` wire callback the transport
@@ -22,7 +24,9 @@
 // outcomes). `blockProcessorWhile` is therefore a strict per-event barrier,
 // never a per-frame one.
 //
-// The load-bearing delivery orderings are explicit here:
+// The load-bearing orderings in here are transplanted from the legacy
+// `StreamProcessor.#ingest` (deleted with the host) — the most
+// incident-scarred loop in the system — and each is marked at its new home:
 //   - failed frame settles already-started blockers, cursor untouched
 //   - persist BEFORE advancing the in-memory cursor
 //   - malformed consumed events advance the cursor, diagnostics append AFTER
@@ -33,15 +37,17 @@
 // appends) shares the types below but is gated on a commit-path benchmark.
 
 import type { z } from "zod";
-import type { Stream, StreamEventBatch } from "./itx-api.generated.js";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE, type ProcessorState } from "./processor-contracts.js";
-import type { StreamEvent } from "./stream-events.js";
+import type { Stream } from "../../itx-api.generated.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
+import type { ProcessorState } from "./processor-contracts.ts";
+import type { StreamEvent } from "./schemas.ts";
+import type { StreamEventBatch } from "./rpc-types.ts";
 import {
   StreamProcessor,
   type MaybePromise,
   type StreamProcessorContract,
   type StreamProcessorDriver,
-} from "./stream-processor.js";
+} from "./stream-processor.ts";
 
 /**
  * The reduction half of a processor's durable progress: a disposable CACHE of
@@ -130,7 +136,7 @@ export type ProcessorProgressStore<State> = {
  *   even at zero lag. It is called by the adapter's own revival pass (the
  *   keepalive's `revive` hook), not by the runner core.
  * - `handleAlarm` services the durable timer (`ProcessorKeepalive.onAlarm`);
- *   the hosting DO multiplexes its single alarm across runners and routes fires
+ *   the host DO multiplexes its single alarm across runners and routes fires
  *   to {@link StreamProcessorRunner.handleAlarm}, which delegates here.
  */
 export type ProcessorRecovery = {
@@ -224,7 +230,8 @@ type EventWaiter =
 type FrameContext<State> = {
   /** The revision every commit in this frame asserts (fixed at frame start). */
   revision: number;
-  /** When this frame's drive began; feeds the per-commit consumption metrics. */
+  /** When this frame's drive began — feeds the per-commit consumption metrics
+   * (the legacy `#ingest` timed the whole batch the same way). */
   ingestStartedAtMs: number;
   state: State;
   reducedThroughOffset: number;
@@ -240,8 +247,9 @@ type FrameContext<State> = {
  * The delivery driver for one processor on one stream. Runtime-neutral by
  * construction: the browser, the Durable Object registry, and the in-memory
  * test harness all instantiate exactly this class and differ only in the
- * `durability` / `keepAlive` adapters they pass. One runner exists per
- * processor; a registry builds adapters and routes wakes and alarms.
+ * `durability` / `keepAlive` adapters they pass. One runner per processor —
+ * the "host" of old survives only as a thin registry that builds adapters and
+ * routes wakes/alarms to the right runner.
  *
  * Serialization: frames and self-pulls share ONE in-memory chain, so a
  * catch-up never interleaves with a half-processed frame. Cross-incarnation
@@ -260,11 +268,12 @@ export class StreamProcessorRunner<
   private readonly now: () => number;
   private readonly readPageSize: number;
 
-  /** Memoized load; cleared on failure so the next call retries. */
+  /** Memoized load; cleared on failure so the next call retries (legacy #loadState). */
   #loaded: Promise<void> | undefined;
   /** True once progress reflects a real load (fresh default over an empty
    * store counts; a pending/failed load does not) — the gate that keeps
-   * default or partially-refolded state from ever escaping. `snapshot()` additionally
+   * default or partially-refolded state from ever escaping (the legacy
+   * `isLoaded` invariant). `snapshot()` additionally
    * awaits the load, so partial state cannot escape through it either. */
   #hasLoaded = false;
   /** The COMMITTED progress — what snapshot()/openDelivery() publish. Frame
@@ -406,9 +415,10 @@ export class StreamProcessorRunner<
   }
 
   /**
-   * Whether published state is a real fold rather than the schema default.
-   * Loading performs any pending refold, so this is true after the first
-   * successful load.
+   * Whether published state IS a real fold rather than the schema default —
+   * the legacy `isLoaded` gate. With the runner, the load itself performs any
+   * pending refold, so this is true whenever a load has completed and false
+   * only before the first successful load.
    */
   get isLoaded(): boolean {
     return this.#hasLoaded;
@@ -416,8 +426,9 @@ export class StreamProcessorRunner<
 
   /**
    * The current committed fold, synchronously (the schema default until the
-   * first load), so a hosting registry can assemble its live state without an
-   * async hop. Gate on {@link isLoaded} first: a cold
+   * first load) — the legacy `StreamProcessor.currentState`,
+   * kept so a hosting registry can assemble its
+   * live state without an async hop. Gate on {@link isLoaded} first: a cold
    * runner reports the default, and publishing that anywhere live would wipe
    * real facts for subscribers.
    */
@@ -430,9 +441,10 @@ export class StreamProcessorRunner<
   /**
    * Observe committed reduced-state changes IN-PROCESS: the observer is a
    * local function (the hosting registry wires it to reassemble its
-   * LiveState), never a retained RPC stub. It fires after a frame
-   * commit lands durably AND the committed state changed identity. Returns an
-   * unsubscribe.
+   * live-state engine), never a retained RPC stub. It fires after a frame
+   * commit lands durably AND the committed state changed identity — the
+   * runner's home for the legacy `StreamProcessor.observeStateChanges` +
+   * post-persist notify. Returns an unsubscribe.
    */
   observeStateChanges(
     observer: (snapshot: { offset: number; state: ProcessorState<Contract> }) => void,
@@ -444,8 +456,8 @@ export class StreamProcessorRunner<
   /**
    * Pull-page the journal from the ACKNOWLEDGED cursor and drive ordinary
    * frames until caught up — the public door for read-your-writes pulls and a
-   * hosting registry's cold-load healing. One page of lookahead, so every
-   * non-final frame carries a
+   * hosting registry's cold-load healing (the legacy host's `catchUpInternal`
+   * shape). One page of lookahead, so every non-final frame carries a
    * `streamMaxOffset` past its own tail and only the genuinely final page is
    * at-head. Serialized with delivered frames on the runner's chain; failures
    * RETHROW — the caller owns any swallow-and-log policy.
@@ -546,7 +558,7 @@ export class StreamProcessorRunner<
     const frameScannedThroughOffset = Math.max(committedThroughOffset, frame.scannedThroughOffset);
 
     // Offset-dedupe against the acknowledged cursor (and within the frame):
-    // redelivered events are silent skips.
+    // redelivered events are silent skips, exactly like legacy ingest.
     const pending: StreamEvent[] = [];
     let scan = committedThroughOffset;
     for (const event of frame.events) {
@@ -565,7 +577,9 @@ export class StreamProcessorRunner<
     );
     if (pending.length === 0 && frameScannedThroughOffset === committedThroughOffset) return;
     const observedHeadOffset = this.#observedHeadOffset;
-    // What this frame will acknowledge through once its blocking work completes.
+    // What this frame will acknowledge through once its blocking work
+    // completes — the legacy `checkpointOffset` semantics, kept verbatim for
+    // the existing `processEvent` signature.
     const frameCheckpointOffset = frameScannedThroughOffset;
 
     // AT-HEAD is a BATCH property, not a per-event-offset one. If this batch
@@ -688,13 +702,14 @@ export class StreamProcessorRunner<
       // nothing rejects unobserved. Whatever was not yet durably committed is
       // not committed now — the frame stays retryable and the transport
       // replays it from the last acknowledged cursor.
+      // (The legacy #ingest's failure settlement, verbatim.)
       await Promise.allSettled(startedBlockers);
       throw error;
     }
 
     // FIXED CADENCE: one durable commit per delivered frame, after EVERY
-    // event's blocking work — the at-head reconcile's included — has settled.
-    // The gap between the
+    // event's blocking work — the at-head reconcile's included — has settled
+    // (the legacy batch checkpoint window exactly). The gap between the
     // in-memory cursor and the last persisted acknowledgement is the
     // deliberate at-least-once replay window (appends stay
     // idempotency-keyed). Committing only at frame end is also what keeps a
@@ -710,7 +725,7 @@ export class StreamProcessorRunner<
    * Persist the frame context, THEN advance the published cursor, resolve
    * waiters, and flush parse-failure diagnostics for the covered events.
    *
-   * Persist-before-advance is load-bearing:
+   * Persist-before-advance is load-bearing (the legacy #ingest's ordering):
    * if the durable write fails, the frame must stay retryable — the redelivered
    * frame re-reduces from the OLD published state and retries the write.
    * Advancing in-memory first would make the retry a silent no-op (every
@@ -736,7 +751,8 @@ export class StreamProcessorRunner<
     const committedFailures = ctx.uncommittedParseFailures.splice(0);
     // The commit is durable and the published cursor advanced — the events
     // are genuinely CONSUMED, which is the moment self-measured subscriber
-    // metrics report. Fed through the driver so the wake
+    // metrics report (the legacy #ingest's noteBatchIngested placement).
+    // Fed through the driver so the wake
     // capability's consumption-lag samples stay live under runner drive.
     if (committedEvents.length > 0) {
       const newestEventCreatedAtMs = Date.parse(committedEvents.at(-1)!.createdAt);
@@ -748,7 +764,8 @@ export class StreamProcessorRunner<
         atMs: this.now(),
       });
     }
-    // Observers before waiters, both after the durable commit: by the time either
+    // Observers before waiters, both after the durable commit — the legacy
+    // ingest ordering: by the time either
     // fires, published state already reflects the committed frame.
     if (!Object.is(previousCommittedState, next.reduction.state)) {
       this.#notifyStateChange({
@@ -761,6 +778,7 @@ export class StreamProcessorRunner<
     // the raw event in the log is the authoritative record and the
     // idempotency key dedupes redelivery, so a failing record append can
     // never re-poison the frame it just rescued.
+    // (The legacy #ingest's parse-failure lane, verbatim.)
     for (const { event, error } of committedFailures) {
       const message =
         `stream processor "${this.driver.contract.slug}" skipped event at offset ` +
@@ -936,7 +954,8 @@ export class StreamProcessorRunner<
    * self-pulling the journal — a catch-up cannot rely on the transport
    * pump, whose cursor was fixed at wake handshake. One page of lookahead so
    * every non-final frame carries a streamMaxOffset PAST its own tail (the
-   * at-head pulse fires only on the genuinely final page).
+   * at-head pulse fires only on the genuinely final page), mirroring the
+   * host's catch-up.
    */
   async #selfCatchUp(): Promise<void> {
     let scannedAfterOffset = this.#requireProgress().processing.acknowledgedThroughOffset;
@@ -974,7 +993,8 @@ export class StreamProcessorRunner<
    * Route registered work through the recovery adapter's keepalive when
    * present (both `blockProcessorWhile` and `runInBackground` ride it — "the
    * DO died owing work" must equal "the alarm was armed"), else through the
-   * plain `keepAlive` hook, else run directly.
+   * plain `keepAlive` hook, else run directly. Same fire-and-forget→promise
+   * bridge as the legacy `#runKeepAliveBackedWork`.
    */
   async #keepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
     const keepAliveWhile = this.durability?.recovery?.keepAliveWhile ?? this.keepAlive;
@@ -1023,7 +1043,8 @@ export class StreamProcessorRunner<
   }
 
   // A throwing observer is ITS bug, never the frame's: the commit already
-  // landed, so failures are logged and the loop continues.
+  // landed, so failures are logged and the loop continues (the legacy
+  // #notifyStateChange, verbatim).
   #notifyStateChange(snapshot: { offset: number; state: ProcessorState<Contract> }): void {
     for (const observer of [...this.#stateChangeObservers]) {
       try {

@@ -1,8 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "iterate/stream-events";
-import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import type { Stream } from "../../../../../itx-api.generated.ts";
+import type { StreamEvent } from "../../../schemas.ts";
+import { StreamProcessorRunner } from "../../../stream-processor-runner.ts";
 import { CompositeMirrorDrive } from "../../browser/composite-mirror-drive.ts";
 import { browserProcessorProgressStore } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";

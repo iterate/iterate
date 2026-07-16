@@ -197,9 +197,9 @@ _Avoid_: cron API, scheduler client
 - A **Slack Team Claim** is the lookup record for routing inbound Slack webhooks to the claimed ProjectId.
 - Google Connections are project-level in the current OS secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
-- In OS, **Processor Subscriptions** deliver events to processors registered inside the relevant domain Durable Object through `createStreamProcessorRegistry`; domain Durable Objects remain command and capability owners and inject runtime dependencies.
-- Processor contracts and implementations live with their OS domains; the
-  shared processor authoring and runtime layers live in `packages/iterate`.
+- In OS, **Processor Subscriptions** deliver events to processors hosted inside the relevant domain Durable Object through `createStreamProcessorHost`; domain Durable Objects remain command and capability owners and inject runtime dependencies.
+- Processor contracts and implementations live with their OS domains unless a
+  reusable runtime boundary is explicitly extracted later.
 - **App Config** is available inside deployed app code.
 - **Deployment Config** is available to deploy scripts only.
 - Cloudflare API credentials, worker names, resource IDs, hostnames, and

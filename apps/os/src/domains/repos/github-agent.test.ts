@@ -1,7 +1,7 @@
 // GitHub PR agent projection, trust, and conversation trigger policy.
 
 import { describe, expect, it } from "vitest";
-import { StreamProcessorRunner } from "iterate/stream-processor-runner";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import {
   GITHUB_LINK,
   MemoryStream,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/rpc-retain";
+import { disposeIgnoredRpcResult, isThenable, retainCallback } from "./retain.ts";
 
 describe("retainCallback", () => {
   it("passes a plain local function through, callable and disposable", () => {

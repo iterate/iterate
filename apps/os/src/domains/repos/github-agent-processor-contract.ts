@@ -6,11 +6,11 @@
 // tasks directly when their own repository rules say to do so.
 
 import { z } from "zod";
+import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import {
-  defineProcessorContract,
+  CoreProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "iterate/processor-contracts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+} from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { GithubAgentBirthCertificate, RepoProcessorContract } from "./repo-processor-contract.ts";
 

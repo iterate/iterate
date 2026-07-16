@@ -12,7 +12,7 @@
 // as arguments, so the whole thing unit-tests in plain node and runs
 // unchanged in a browser (performance-now deltas) or a worker (Date.now).
 
-import { LatencyRing, type LatencyStats } from "./stream-runtime-metrics.js";
+import { LatencyRing, type LatencyStats } from "./stream-runtime-metrics.ts";
 
 /** The `runtime.metrics` slice a host reports through `getRuntimeState()`. */
 export type SubscriberMetricsReport = {
