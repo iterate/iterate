@@ -1311,6 +1311,32 @@ async function jitterScrollAwayFromBottom(
 async function waitForVisibleRowsSettled(page: Page) {
   await expect.poll(() => page.locator("[data-testid='event-meta']").count()).toBeGreaterThan(0);
   await expect.poll(() => page.getByTestId("event-row-pending").count()).toBe(0);
+  await page.getByTestId("stream-events").evaluate(async (element) => {
+    if (!(element instanceof HTMLElement))
+      throw new Error("stream scroller must be an HTMLElement");
+
+    // Resolving every async row is not the end of virtualizer setup: each
+    // newly rendered window is measured by ResizeObserver, and TanStack may
+    // compensate scrollTop on the following frame. Sampling that correction
+    // makes a healthy settled window look as if user scrolling reversed.
+    const deadline = performance.now() + 5_000;
+    let previousScrollTop = element.scrollTop;
+    let stableFrames = 0;
+    while (performance.now() < deadline) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const currentScrollTop = element.scrollTop;
+      const hasPendingRows = element.querySelector("[data-testid='event-row-pending']") !== null;
+      stableFrames =
+        !hasPendingRows && Math.abs(currentScrollTop - previousScrollTop) <= 0.5
+          ? stableFrames + 1
+          : 0;
+      if (stableFrames >= 3) return;
+      previousScrollTop = currentScrollTop;
+    }
+    throw new Error(
+      `virtual rows did not settle (scrollTop=${element.scrollTop}, pending=${element.querySelectorAll("[data-testid='event-row-pending']").length})`,
+    );
+  });
 }
 
 async function scrollToMiddle(page: Page) {
@@ -1375,15 +1401,24 @@ function expectStableUpwardScroll(frames: Awaited<ReturnType<typeof sampleUpward
     run = isUnhealthy ? run + 1 : 0;
     longestUnhealthyRun = Math.max(longestUnhealthyRun, run);
   }
-  const largestForwardJump = Math.max(
-    0,
-    ...frames.slice(1).map((frame, index) => frame.scrollTop - frames[index].scrollTop),
-  );
+  const forwardJumps = frames
+    .slice(1)
+    .map((frame, index) => frame.scrollTop - frames[index].scrollTop);
+  const largestForwardJump = Math.max(0, ...forwardJumps);
+  const largestForwardJumpIndex = forwardJumps.indexOf(largestForwardJump) + 1;
 
   expect(
     longestUnhealthyRun,
     JSON.stringify(frames.filter((_, index) => unhealthy[index]).slice(0, 3)),
   ).toBeLessThanOrEqual(2);
   // Scroll position jumping forward is a determinism bug, never load noise.
-  expect(largestForwardJump).toBeLessThanOrEqual(2);
+  expect(
+    largestForwardJump,
+    JSON.stringify(
+      frames.slice(
+        Math.max(0, largestForwardJumpIndex - 2),
+        Math.min(frames.length, largestForwardJumpIndex + 2),
+      ),
+    ),
+  ).toBeLessThanOrEqual(2);
 }
