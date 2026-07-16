@@ -83,7 +83,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
     };
     for (const [connection, material] of Object.entries(secrets)) {
       using secret = project.secrets.get(`/secrets/integrations/ocado/${connection}/session`);
-      await secret.update({ egress: { urls: [echo.url] }, material });
+      await secret.create({ egress: { urls: [echo.url] }, material });
       await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
         description: `ocado/${connection} secret to fold`,
       });
@@ -199,7 +199,7 @@ test("builtin waitrose: grammar, __describe, and method-miss stay loud", async (
   );
 
   using sessionSecret = project.secrets.get("/secrets/integrations/waitrose/mum/session");
-  await sessionSecret.update({
+  await sessionSecret.create({
     egress: { urls: ["https://www.waitrose.com"] },
     material: { username: "mum@example.com", password: "not-used" },
   });
@@ -247,7 +247,7 @@ test.skipIf(shouldSkipPetshopE2e())(
     // The connection secret: the account credential and NOTHING token-shaped.
     // "correct-horse" is the fixture's one accepted password (graphql-login.ts).
     using secret = project.secrets.get("/secrets/integrations/waitrose/mum/session");
-    await secret.update({
+    await secret.create({
       egress: { urls: [petshop] },
       material: { username, password: "correct-horse" },
       refresh: {

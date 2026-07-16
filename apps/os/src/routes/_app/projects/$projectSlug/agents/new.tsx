@@ -32,11 +32,12 @@ function NewAgentPage() {
     mutationFn: async (content: string) => {
       const agentPath = `/agents/web/${slugifyCreationTime(new Date())}`;
       // connectItxBrowser (imperative, not the suspending hook) lands on the project
-      // provider's socket (keyed by project ID). Agents are lazily seeded by
-      // the project processor on the first stream append, so sending the first
-      // message IS the creation.
+      // provider's socket (keyed by project ID). Birth is explicit and
+      // completes before the first conversational event is appended.
       const itx = await connectItxBrowser({ projectId: project.id });
-      await itx.agents.get(agentPath).message(content);
+      const agent = itx.agents.get(agentPath);
+      await agent.create({});
+      await agent.message(content);
       return agentPath;
     },
     onSuccess: (agentPath) => {

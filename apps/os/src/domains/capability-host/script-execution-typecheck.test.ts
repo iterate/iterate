@@ -20,11 +20,25 @@ import {
 } from "./capability-host-processor-implementation.ts";
 
 const T = {
+  created: "events.iterate.com/capability-host/created",
   provided: "events.iterate.com/capability-host/capability-provided",
   requested: "events.iterate.com/capability-host/script-execution-requested",
   started: "events.iterate.com/capability-host/script-execution-started",
   completed: "events.iterate.com/capability-host/script-execution-completed",
 } as const;
+
+function capabilityHostStream(): MemoryStream {
+  const stream = new MemoryStream();
+  stream.events.push({
+    type: T.created,
+    idempotencyKey: `capability-host/created:test:${stream.path}`,
+    payload: { config: {} },
+    createdAt: new Date().toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+  return stream;
+}
 
 type Harness = {
   processor: CapabilityHostProcessor;
@@ -86,7 +100,7 @@ function completion(stream: MemoryStream) {
 
 describe("script execution typecheck gate", () => {
   it("a problems verdict settles as an error completion — never started, never run", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const harness = makeProcessor({
       stream,
       typecheckScript: async () => ({
@@ -110,7 +124,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("a clean verdict runs the script normally", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -130,7 +144,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("an unchecked verdict runs the script (permissive on unknowns)", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -148,7 +162,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("a THROWING checker runs the script — the gate must never fail a script for its own failure", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -167,7 +181,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("no checker wired (node harness) runs the script", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -183,7 +197,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("the checker sees this scope's mounts AND inherited capabilities", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const seen: CapabilityDescription[][] = [];
     const inherited: CapabilityDescription = {
       path: ["tools", "weather"],
@@ -217,7 +231,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("a rejected execution deletes its obligation — the reconciler never re-runs it", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const harness = makeProcessor({
       stream,
       typecheckScript: async () => ({ verdict: "problems", problems: ["script:1 — nope (TS1)"] }),

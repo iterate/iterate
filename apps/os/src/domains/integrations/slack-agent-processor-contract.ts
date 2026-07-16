@@ -15,7 +15,7 @@ import {
 } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract, AgentStatusRecord } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { SlackProcessorContract } from "./slack-processor-contract.ts";
+import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";
 
 /**
  * Processor for one Slack-backed agent stream.
@@ -39,6 +39,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   version: "0.5.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
+    birthCertificate: SlackAgentBirthCertificate.nullable().default(null),
     /**
      * The agent's merged status record — what the assistant thread should
      * show. Folded from agent/status-changed patches with the contract's
@@ -70,6 +71,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     CoreProcessorContract,
   ],
   consumes: [
+    "events.iterate.com/slack-agent/created",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/status-changed",
@@ -93,7 +95,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<SlackAgentProcessorContract>`,
- * `ConsumedEvent<SlackAgentProcessorContract>`, `ProcessorEvent<SlackAgentProcessorContract, T>`.
+ * `ConsumedEvent<SlackAgentProcessorContract>`.
  */
 export type SlackAgentProcessorContract = typeof SlackAgentProcessorContract;
 
