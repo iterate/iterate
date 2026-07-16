@@ -241,9 +241,9 @@ export class ProjectProcessor extends StreamProcessor<
           // execution. Waiting for sibling processors here is a recursive RPC
           // cycle: their stream delivery calls project.processEventBatch(),
           // whose search-index fan-in re-enters this same Project Durable
-          // Object while it is suspended on those siblings. The outer
-          // projects.create() command performs the read-through birth barrier
-          // after this frame commits, from a fresh and bounded RPC lineage.
+          // Object while it is suspended on those siblings. Once these
+          // appends commit, each sibling's read-through processor facade
+          // catches itself up independently at the point of use.
           await siblingBirths;
         });
         break;

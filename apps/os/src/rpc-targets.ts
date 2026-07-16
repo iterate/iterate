@@ -4600,14 +4600,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
 
 type ProjectListEntryBase = Omit<ProjectListEntry, "deploymentStatus">;
 
-function hasProcessorBirthCertificate(snapshot: { state: unknown }): boolean {
-  if (typeof snapshot.state !== "object" || snapshot.state === null) return false;
-  if (!("birthCertificate" in snapshot.state)) return false;
-  return (
-    typeof snapshot.state.birthCertificate === "object" && snapshot.state.birthCertificate !== null
-  );
-}
-
 /** Catalog of projects reachable from a {@link Session}. */
 export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollection"> {
   async __describe(): Promise<Description> {
@@ -4735,42 +4727,13 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
         offset: Math.max(created.offset, subscription.offset),
       }),
     );
-    // The Project processor owns the atomic sibling appends, but deliberately
-    // does not wait on processors whose event delivery calls back into the
-    // Project DO. Pull each universally available sibling through its birth
-    // HERE, at the top-level command boundary, after the Project frame has
-    // committed. Each snapshot is read-through, so a non-null certificate is
-    // both the barrier and the postcondition; this keeps the RPC graph shallow
-    // while preserving create()'s immediate-usability contract.
-    const [capabilityHost, scheduler, repo, email] = await Promise.all([
-      timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
-        project.capabilityHost.processor.snapshot(),
-      ),
-      timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
-        project.scheduler.processor.snapshot(),
-      ),
-      timedStep("create-timing", timing, "wait-config-repo-birth", () =>
-        project.repo.processor.snapshot(),
-      ),
-      timedStep("create-timing", timing, "wait-email-router-birth", () =>
-        project.email.processor.snapshot(),
-      ),
-    ]);
-    const siblingBirths: Array<readonly [name: string, snapshot: { state: unknown }]> = [
-      ["root capability host", capabilityHost],
-      ["primary scheduler", scheduler],
-      ["config repo", repo],
-      ["email router", email],
-    ];
-    const missingSiblingBirths = siblingBirths
-      .filter(([, snapshot]) => !hasProcessorBirthCertificate(snapshot))
-      .map(([name]) => name);
-    if (missingSiblingBirths.length > 0) {
-      throw new Error(`project birth saga completed without ${missingSiblingBirths.join(", ")}`);
-    }
-    // The project now EXISTS, its birth has been processed, and every
-    // universal sibling is usable. Whether to wait for the seeded project
-    // worker's bootstrap readiness is the caller's choice.
+    // Project birth atomically appends every universal sibling's birth batch.
+    // Do not force those independent processors to catch up here: their event
+    // delivery can call back into the Project DO, so joining them turns project
+    // creation into a recursive, high-fan-out RPC lineage. Their public
+    // processor facades are read-through and catch up at the point of use.
+    // Whether to wait for the seeded project worker's bootstrap readiness is
+    // the caller's choice.
     if (args.waitUntilReady !== false) {
       await timedStep("create-timing", timing, "wait-project-ready", () =>
         stream.waitForEvent({

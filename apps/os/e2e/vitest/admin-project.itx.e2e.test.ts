@@ -19,11 +19,12 @@ test("creates a disposable project and uses project streams through itx", async 
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });
   using itx = handle.itx();
 
-  // Project creation waits for every universally available sibling processor
-  // to consume its birth batch. This assertion deliberately goes through the
-  // public email capability: the email router shares the Project DO with the
-  // project processor, so its relay must select the email processor's own
-  // read facade rather than the host's default `processor` property.
+  // Project creation commits every universal sibling's birth batch without
+  // recursively waiting for those processors. This read-through snapshot
+  // proves the public email capability catches up its own processor: the email
+  // router shares the Project DO with the project processor, so its relay must
+  // select the email processor's facade rather than the host's default
+  // `processor` property.
   expect((await itx.email.processor.snapshot()).state).toMatchObject({
     birthCertificate: { config: {} },
     threads: {},
