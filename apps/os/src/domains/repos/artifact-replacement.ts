@@ -1,3 +1,5 @@
+import { disposeIgnoredRpcResult } from "../../lib/rpc/retain.ts";
+
 const DELETE_POLL_INTERVAL_MS = 500;
 const DELETE_POLL_ATTEMPTS = 60;
 
@@ -31,7 +33,11 @@ export async function replaceArtifactWithEmptyRepo(
 
     for (let attempt = 0; attempt < pollAttempts; attempt++) {
       try {
-        await artifacts.get(name);
+        const repo = await artifacts.get(name);
+        // `Artifacts.get()` returns a Workers RPC repo handle. The handle is
+        // useful only as the "still present" signal here; release it before
+        // polling again so deletion waits cannot accumulate remote refs.
+        disposeIgnoredRpcResult(repo);
       } catch (error) {
         if ((error as { code?: unknown })?.code !== "NOT_FOUND") throw error;
         deletionApplied = true;

@@ -12,6 +12,7 @@ import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
+import { disposeIgnoredRpcResult } from "../../lib/rpc/retain.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -1354,7 +1355,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       // failures (an INTERNAL_ERROR here fell through to get(), which then
       // reported a misleading NOT_FOUND).
       if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
-      await this.requireArtifacts().get(name);
+      const existing = await this.requireArtifacts().get(name);
+      disposeIgnoredRpcResult(existing);
       return { created: false };
     }
   }
@@ -1377,8 +1379,15 @@ export class RepoDurableObject extends DurableObject<Env> {
 
 async function artifactToken(artifacts: Artifacts, name: string) {
   const repo = await artifacts.get(name);
-  const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return plaintext.split("?expires=")[0] ?? plaintext;
+  try {
+    const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
+    return plaintext.split("?expires=")[0] ?? plaintext;
+  } finally {
+    // Artifacts repo handles are Workers RPC stubs. The minted token is plain
+    // data and remains valid after releasing the handle; retaining the stub
+    // otherwise produces one leaked RPC result + stub per cold Repo DO.
+    disposeIgnoredRpcResult(repo);
+  }
 }
 
 async function seedArtifactRepo(input: {
