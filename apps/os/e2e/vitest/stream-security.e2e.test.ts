@@ -63,8 +63,8 @@ test("append accepts an offset assertion on a subscription-configured core event
   using stream = project.streams.get(streamPath);
 
   // A brand-new project stream has committed created(1) + the birth-certificate
-  // project-worker feed's subscription-configured(2) + woken(3); the next append
-  // is 4. `offset` is the DO's optimistic-concurrency assertion. It rides on the
+  // project-worker(2) + platform-search-index(3) subscriptions + woken(4); the
+  // next append is 5. `offset` is the DO's optimistic-concurrency assertion. It rides on the
   // append input at runtime but is intentionally absent from the narrow public
   // `Stream` type, so it is cast in here exactly as a concurrency-sensitive
   // caller would.
@@ -73,7 +73,7 @@ test("append accepts an offset assertion on a subscription-configured core event
   ) => Promise<{ offset: number }[]>;
   const [configured] = await appendWithOffset({
     type: "events.iterate.com/stream/subscription-configured",
-    offset: 4,
+    offset: 5,
     payload: {
       subscriptionKey: `cross-post-${marker}`,
       delivery: {
@@ -88,7 +88,7 @@ test("append accepts an offset assertion on a subscription-configured core event
     },
   });
 
-  expect(configured!).toMatchObject({ offset: 4 });
+  expect(configured!).toMatchObject({ offset: 5 });
 });
 
 // B6: the subscriber descriptor supplied to subscribe() must be validated at the

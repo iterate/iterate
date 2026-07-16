@@ -59,6 +59,15 @@ const RECOVERY_EXPORT_SESSION_PAGE_LIMIT = 32;
 const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
 /**
+ * The platform-owned search projection. It has its own durable cursor so an
+ * R2 outage cannot either drop a corpus update or hold up the userspace
+ * project worker. Unlike the worker feed, poison is never skipped: the source
+ * event is authoritative and a failed derived write must remain pending (and
+ * eventually park loudly) until it can be replayed.
+ */
+const SEARCH_INDEX_SUBSCRIPTION_KEY = "platform-search-index";
+
+/**
  * Durable stream storage plus the stream's own ("core") processor.
  *
  * The pieces, in the order they appear below:
@@ -148,13 +157,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
-    // For project-scoped streams the birth certificate includes the worker
-    // feed: a `subscription-configured` push subscription to the project
-    // worker's `processEventBatch`, appended by the stream TO ITSELF in the
-    // same synchronous turn as `created`. Born-configured means zero wiring
-    // window — the feed is armed before the first user event can land (a
-    // voice stream streams from birth) — while remaining ordinary config:
-    // one registry, one spine, overridable by re-appending the same key.
+    // For project-scoped streams the birth certificate includes two
+    // independent push subscriptions, appended by the stream TO ITSELF in the
+    // same synchronous turn as `created`: the userspace project-worker feed
+    // and the platform search projection. Born-configured means zero wiring
+    // window — both cursors exist before the first user event can land (a
+    // voice stream streams from birth) — while remaining ordinary durable
+    // subscriptions in the one registry/spine.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
@@ -172,6 +181,22 @@ export class StreamDurableObject extends DurableObject<Env> {
             deliver: "all",
             // One poison event must not silence a project's entire feed.
             onPoison: "skip",
+          } satisfies SubscriptionConfiguredPayload,
+        });
+        this.append({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: SEARCH_INDEX_SUBSCRIPTION_KEY,
+            delivery: { mode: "push", expression: ["indexStreamSearchBatch"] },
+            // Rebuild every segment from authoritative history, including
+            // streams created before this deployment when production is
+            // intentionally recreated for this breaking birth-certificate
+            // shape.
+            deliver: "all",
+            // A derived write failure is an outage, never poison source data.
+            // The durable spine retries with bounded backoff and parks with a
+            // durable fact after its attempt budget instead of skipping.
+            onPoison: "park",
           } satisfies SubscriptionConfiguredPayload,
         });
       }

@@ -34,6 +34,9 @@ type ConfiguredSubscriberRecord = {
     offset?: number;
     payload?: {
       subscriptionKey?: string;
+      delivery?: { mode?: "wake" | "push" | "webhook"; expression?: unknown[] };
+      deliver?: "all" | "new" | { afterOffset: number };
+      onPoison?: "park" | "skip";
       selector?: { eventTypes?: string[] };
     };
   };
@@ -312,7 +315,7 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
   ).toBe(true);
 });
 
-test("project streams are born with the project-worker push feed and replace it by key", async () => {
+test("project streams are born with independent worker and search feeds", async () => {
   // Stateless workers are no longer a wake-target kind: a worker consumes via
   // a PUSH subscription whose expression addresses it. Every project-scoped
   // stream self-configures the default feed at birth — subscriptionKey
@@ -320,7 +323,10 @@ test("project streams are born with the project-worker push feed and replace it 
   // dispatch point, delegating to the worker), deliver
   // "all", onPoison "skip" — in the same synchronous turn as `created`, so
   // there is no wiring window. It stays ordinary config: one registry, one
-  // spine, overridable by re-appending the same key.
+  // spine, overridable by re-appending the same key. The platform search
+  // projection is a second durable feed with onPoison "park": R2 failures
+  // replay independently and can neither skip source data nor block the
+  // userspace worker.
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -335,6 +341,15 @@ test("project streams are born with the project-worker push feed and replace it 
   // the push feed before any caller wires anything.
   const initial = asStreamRuntimeState(await stream.runtimeState());
   expect(initial.runtime.subscriptions["project-worker"]?.mode).toBe("push");
+  expect(initial.runtime.subscriptions["platform-search-index"]?.mode).toBe("push");
+  expect(
+    initial.coreProcessorState.configuredSubscribersByKey?.["platform-search-index"]
+      ?.latestConfiguredEvent?.payload,
+  ).toMatchObject({
+    delivery: { mode: "push", expression: ["indexStreamSearchBatch"] },
+    deliver: "all",
+    onPoison: "park",
+  });
 
   // Appending advances the feed's authoritative cursor once the project
   // worker acks the batch (durable delivery, so it retries until the seeded
@@ -346,10 +361,13 @@ test("project streams are born with the project-worker push feed and replace it 
   await waitForCondition(
     async () => {
       const state = asStreamRuntimeState(await stream.runtimeState());
-      return (state.runtime.subscriptions["project-worker"]?.ackedOffset ?? 0) >= appended.offset;
+      return (
+        (state.runtime.subscriptions["project-worker"]?.ackedOffset ?? 0) >= appended.offset &&
+        (state.runtime.subscriptions["platform-search-index"]?.ackedOffset ?? 0) >= appended.offset
+      );
     },
     {
-      description: "project-worker feed ackedOffset to advance past the appended event",
+      description: "worker and search feed cursors to advance past the appended event",
       timeoutMs: 30_000,
     },
   );

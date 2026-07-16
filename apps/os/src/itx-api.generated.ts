@@ -1028,8 +1028,8 @@ export interface Search {
   ): Promise<{ key: string }>;
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
-   * predate search indexing, or the rare tail gap a failed per-batch write can
-   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   * predate search indexing or whose durable projection was parked and later
+   * repaired (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
    */
   indexStream(input: { path: string }): Promise<{ segments: number }>;
   /**

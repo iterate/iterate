@@ -277,22 +277,30 @@ advancing watermarks past its own disconnect facts so teardown doesn't
 immediately re-poke. The spine's RETRY alarm is the opposite case on purpose:
 its state is durable rows, so waking a hibernated DO is exactly the point.
 
-## The worker feed: born, not wired
+## The worker and search feeds: born, not wired
 
-Every project-scoped stream appends its own worker feed in its birth
-certificate — `created (1)`, `subscription-configured (2)`, `woken (3)`:
+Every project-scoped stream appends two independent feeds in its birth
+certificate — `created (1)`, worker `subscription-configured (2)`, search
+`subscription-configured (3)`, `woken (4)`:
 
 ```ts
 { subscriptionKey: "project-worker",
   delivery: { mode: "push", expression: ["processEventBatch"] },
   deliver: "all",      // the worker sees full history once it first builds
   onPoison: "skip" }   // one bad event must not silence the feed
+
+{ subscriptionKey: "platform-search-index",
+  delivery: { mode: "push", expression: ["indexStreamSearchBatch"] },
+  deliver: "all",
+  onPoison: "park" }   // retry derived writes; never skip source data
 ```
 
-Born-configured means zero wiring window (the feed is armed before the first
-user event can land) with no derivation special case: it is ordinary config,
-overridable by re-appending the same key (narrow the selector, park it,
-whatever). The worker returns → ack; throws → redelivery with backoff.
+Born-configured means zero wiring window (both feeds are armed before the first
+user event can land) with no derivation special case: both are ordinary
+durable config. The search feed owns a separate cursor, so an R2 outage cannot
+hold up the userspace worker; it retries with bounded backoff and parks with a
+durable explanation rather than skipping a source event. The worker returns →
+ack; throws → redelivery with backoff.
 `${event.path}@${event.offset}` is the idempotency idiom that makes
 at-least-once redelivery a no-op.
 

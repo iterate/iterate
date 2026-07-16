@@ -30,11 +30,6 @@ import {
   secretReferencePathsFromRequest,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
-import { indexStreamOffsets, triggerProjectSearchSyncDebounced } from "../search/search-index.ts";
-import {
-  StreamSearchIndexCoordinator,
-  type StreamSearchIndexRequest,
-} from "../search/stream-search-index-coordinator.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
@@ -84,24 +79,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // The agents roster — every agent stream's merged status record, fed from
   // the same fan-in (the status-changed patches ride the touch call).
   readonly #agentStatusDatabase = new AgentStatusDatabase(this.ctx.storage.sql);
-  // Every userspace-worker delivery also mirrors its stream batch into the
-  // derived search corpus. Those deliveries fan in concurrently, but all
-  // offsets in one 100-event segment rewrite the same R2 object. Keep the
-  // single-writer/coalescing boundary on this project's Durable Object so the
-  // guarantee survives main-Worker isolate fan-out.
-  readonly #streamSearchIndex = new StreamSearchIndexCoordinator(async (request) => {
-    const streamStub = this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: request.projectId, path: request.path },
-        { allowNullProjectId: true },
-      ),
-    );
-    await indexStreamOffsets({
-      ...request,
-      readEvents: (args) => streamStub.getEvents(args),
-    });
-    await triggerProjectSearchSyncDebounced(request.projectId);
-  });
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -315,20 +292,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
   touchStreamActivity(input: TouchInput): void {
     this.#streamDatabase.touch(input);
     this.#registry.refreshLive();
-  }
-
-  /**
-   * Serialize and coalesce derived search-corpus rewrites for one stream.
-   * This RPC accepts only durable coordinates; event bodies are re-read from
-   * their authoritative stream immediately before the R2 write.
-   */
-  indexStreamSearch(request: StreamSearchIndexRequest): Promise<void> {
-    if (request.projectId !== this.#name.projectId) {
-      throw new Error(
-        `project search-index owner mismatch: expected ${this.#name.projectId}, received ${request.projectId}`,
-      );
-    }
-    return this.#streamSearchIndex.index(request);
   }
 
   /**

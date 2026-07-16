@@ -21,10 +21,12 @@
 // events never reach the index: durable delivery doesn't carry them and the
 // segment re-read uses the default `getEvents`, which excludes ephemeral rows.
 //
-// The write paths are best-effort mirrors: a failed index write must never
-// fail the user-facing operation that triggered it (append, file put, repo
-// commit). Failures log at warn — the corpus is derived and self-healing
-// (see indexStreamOffsets), never the system of record.
+// The write paths never fail the user-facing operation that produced their
+// source data. Stream writes run behind their own durable subscription: an R2
+// rejection leaves that subscription's cursor behind for bounded backoff and
+// replay, then parks with a durable explanation if the outage persists. The
+// corpus remains derived and rebuildable, but automatic stream updates are
+// not silently best-effort.
 //
 // LOCAL DEV runs against the real cloud service, not a local emulation: the
 // AI Search bindings have no local simulator, so they always hit the account,
@@ -35,7 +37,6 @@
 import { itxEnv } from "../../env.ts";
 import { ItxExpression } from "../../itx/expression.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
-import type { StreamSearchIndexRequest } from "./stream-search-index-coordinator.ts";
 import { expectedSearchSyncSkipReason } from "./search-sync-outcome.ts";
 import {
   MAX_SEARCH_KEY_BYTES,
@@ -127,6 +128,12 @@ export function triggerProjectSearchSyncDebounced(projectId: string): Promise<vo
   return triggerProjectSearchSync(projectId);
 }
 
+export type StreamSearchIndexRequest = {
+  projectId: string;
+  path: string;
+  offsets: readonly number[];
+};
+
 /**
  * Pin ONE stream event into the corpus as a focused document (the write side
  * of `itx.search.indexEvent`). The event already lives in its 100-offset
@@ -166,14 +173,11 @@ export async function indexPinnedStreamEvent(input: {
  * batch's events, so the document is complete and the write is idempotent
  * regardless of how delivery batched the offsets.
  *
- * That full re-read is also what makes this safe to run as a first-party step
- * on the shared project-worker delivery (root `processEventBatch`) instead of
- * its own checkpointed lane: the delivery cursor advances on the worker's
- * success, not this side effect, so a transient R2 failure here is healed by
- * the NEXT batch in the same segment (which re-reads and rewrites the whole
- * segment). Only a segment that goes permanently quiet right after a failed
- * write stays short until `itx.search.indexStream`/reindex — acceptable for a
- * derived, rebuildable corpus.
+ * The full re-read makes redelivery idempotent: the platform-search-index
+ * subscription advances its own durable cursor only after every touched
+ * segment has been rewritten. A transient R2 failure therefore replays the
+ * same source offsets, including when the stream goes quiet immediately
+ * afterwards; no later event is needed to heal the segment.
  */
 export async function indexStreamOffsets(
   input: StreamSearchIndexRequest & {
@@ -227,12 +231,12 @@ export async function indexStreamOffsets(
 }
 
 /**
- * Re-index a whole stream from offset 0 — the explicit repair verb for the
- * one gap the fire-and-forget per-batch indexing can leave: a segment that
- * went permanently quiet right after a failed write. Paginates the stream in
- * offset order and rewrites every segment document (grouping by segment
- * boundary, so gaps from ephemeral/disallow-listed offsets don't matter).
- * Idempotent: same events → same segment documents.
+ * Re-index a whole stream from offset 0 — the explicit backfill/repair verb
+ * for streams that predate automatic indexing or whose projection was parked
+ * and later repaired. Paginates the stream in offset order and rewrites every
+ * segment document (grouping by segment boundary, so gaps from
+ * ephemeral/disallow-listed offsets don't matter). Idempotent: same events →
+ * same segment documents.
  */
 function offsetRangeOf(segment: number): { firstOffset: number; lastOffset: number } {
   const { first, last } = segmentOffsetRange(segment);

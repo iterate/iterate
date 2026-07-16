@@ -216,10 +216,11 @@ import {
   indexDocument,
   indexPinnedStreamEvent,
   indexEntireStream,
+  indexStreamOffsets,
   mirrorFileToSearchIndex,
   triggerProjectSearchSync,
+  triggerProjectSearchSyncDebounced,
 } from "./domains/search/search-index.ts";
-import type { StreamSearchIndexRequest } from "./domains/search/stream-search-index-coordinator.ts";
 import {
   extractMatchSnippet,
   narrowStreamRefToChunk,
@@ -2578,8 +2579,8 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
 
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
-   * predate search indexing, or the rare tail gap a failed per-batch write can
-   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   * predate search indexing or whose durable projection was parked and later
+   * repaired (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
    */
   async indexStream(input: { path: string }): Promise<{ segments: number }> {
     const streamStub = env.STREAM.getByName(
@@ -5233,7 +5234,6 @@ type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(input: TouchInput): Promise<void>;
-  indexStreamSearch(input: StreamSearchIndexRequest): Promise<void>;
   touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
   rebuildAgentStatus(input: AgentStatusTouchInput): Promise<boolean>;
 };
@@ -5607,14 +5607,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // INTENT, not the implementation — so envelope evolution happens here in
   // deployment code instead of by patching user repos, and first-party
   // per-event work (the streams index via #indexStreamActivity; future
-  // policy/metrics feeds) joins the same ordered, checkpointed delivery.
+  // policy/metrics feeds) can observe the same envelope without coupling its
+  // own durable progress to userspace delivery.
   // Rule for such steps: idempotent and never-throwing; only the worker
   // delegation may reject into the spine's retry/park machinery. Same trust
   // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
-    this.#indexStreamSearch(batch);
     try {
       return await this.worker.processEventBatch(batch);
     } catch (error) {
@@ -5734,31 +5734,38 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
-   * SPIKE platform step: mirror the batch's stream events into the itx.search
-   * corpus (domains/search/search-index.ts) as fixed 100-offset segment
-   * documents. Same rules as {@link #indexStreamActivity}: idempotent
-   * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
-   * — only the worker delegation may reject into the spine's retry. The
-   * project Durable Object is the explicit single writer: it coalesces
-   * concurrent delivery offsets, then re-reads each touched segment's full
-   * range from the authoritative stream before writing R2.
+   * @internal
+   * Platform search-projection receiver. Every project stream has a separate
+   * birth-certificate subscription targeting this method. Its awaited result
+   * is that subscription's ack: an R2 rejection leaves the durable cursor
+   * behind for replay and can never delay or duplicate the userspace worker
+   * feed. Only the stream delivery spine may invoke it.
    */
-  #indexStreamSearch(batch: StreamPushEventBatch): void {
-    if (batch.projectId === null || batch.events.length === 0) return;
-    // waitUntil, not bare fire-and-forget: the project-DO hop plus stream
-    // re-read and R2 put outlive this RPC's resolve. Only coordinates cross
-    // the ownership boundary; the DO never trusts a delivered event body.
-    this.#props.ctx.waitUntil(
-      Promise.resolve(
-        this.#projectDo.indexStreamSearch({
-          projectId: batch.projectId,
-          path: batch.path,
-          offsets: batch.events.map((event) => event.offset),
-        }),
-      ).catch((error: unknown) => {
-        console.warn("search index stream batch failed", { path: batch.path, error });
-      }),
-    );
+  async indexStreamSearchBatch(batch: StreamPushEventBatch): Promise<void> {
+    if (this.#props.auth.principal !== "trusted-internal") {
+      throw new Error(
+        "indexStreamSearchBatch is dialed by stream push subscriptions, not sessions",
+      );
+    }
+    if (batch.projectId !== this.#props.projectId) {
+      throw new Error(
+        `search-index project mismatch: expected ${this.#props.projectId}, received ${batch.projectId}`,
+      );
+    }
+    if (batch.events.length === 0) return;
+
+    const stream = new StreamRpcTarget({
+      auth: this.#props.auth,
+      path: batch.path,
+      projectId: batch.projectId,
+    });
+    await indexStreamOffsets({
+      projectId: batch.projectId,
+      path: batch.path,
+      offsets: batch.events.map((event) => event.offset),
+      readEvents: (args) => stream.getEvents(args),
+    });
+    await triggerProjectSearchSyncDebounced(batch.projectId);
   }
 
   /**
