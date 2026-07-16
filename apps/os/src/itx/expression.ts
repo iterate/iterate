@@ -124,7 +124,7 @@ export async function evaluateItxExpression(
     return { receiver, value: finalValue };
   } catch (error) {
     // The failed walk owns everything it materialized — release it all. The
-    // dial's own catch additionally disposes the root chain.
+    // The caller owns the authority root separately.
     disposeIntermediates([]);
     throw error;
   }

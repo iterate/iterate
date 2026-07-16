@@ -1,8 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
+import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
+import {
+  deploymentItxForTrustedInternal,
+  itxForScope,
+  StreamSubscriptionRpcTarget,
+} from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import type {
@@ -127,6 +132,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
+        authorityRoot: () => {
+          const projectId = this.name.projectId;
+          return projectId === null
+            ? deploymentItxForTrustedInternal({ ctx: this.ctx })
+            : itxForScope({
+                auth: trustedInternalAuthContext(),
+                ctx: this.ctx,
+                path: "/",
+                projectId,
+              });
+        },
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),

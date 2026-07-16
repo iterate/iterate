@@ -30,7 +30,6 @@
 
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
 import { disposeIgnoredRpcResult, isThenable, retainCallback } from "../../lib/rpc/retain.ts";
-import { itxLoopbackStub } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
   GetProcessorRuntimeState,
@@ -91,13 +90,6 @@ export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
   opts: {
     onDeliveryError?: (error: unknown) => void;
-    /**
-     * Runs after the retained stub is disposed — the hook that lets a caller
-     * tie OTHER stubs' lifetimes to this sink's (the wake dial parks the
-     * loopback chain that carried the sink here, so the chain outlives every
-     * batch call but not the connection).
-     */
-    onDisposed?: () => void;
   } = {},
 ): RetainedProcessEventBatch {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
@@ -147,11 +139,7 @@ export function retainProcessEventBatch(
     {
       pendingDeliveries: () => pendingDeliveries,
       [Symbol.dispose]() {
-        try {
-          retained[Symbol.dispose]();
-        } finally {
-          opts.onDisposed?.();
-        }
+        retained[Symbol.dispose]();
       },
     },
   );
@@ -224,77 +212,29 @@ export type RetainedSubscriberPing = ((
 
 /**
  * Builds the spine's {@link SubscriberDial}. Wake and push share ONE lane: the
- * persisted itx expression is evaluated against the stream's authority root —
- * the itx loopback that mints the project-scoped root every dynamic worker
- * sees as `env.ITX`, or the trusted deployment root for a global
- * (`projectId: null`) stream. Everything transport-shaped — root minting,
- * retention of returned sinks, per-delivery stub lifecycles, expression
- * walking over RPC — lives here, keeping this file the ONLY streams module
- * that knows transports exist.
+ * persisted itx expression is evaluated against the stream's authority root.
+ * The owning Durable Object supplies that root from the same scoped-itx factory
+ * as `env.ITX.get()`, but directly: putting an in-process delivery behind a
+ * loopback Worker RPC made receiver backoff surface as an entrypoint exception
+ * and added an avoidable round trip. Everything transport-shaped — retention
+ * of returned sinks and expression walking over RPC — stays here.
  */
 export function createSubscriberDial(deps: {
   /** The stream's projectId; `null` = global stream (deployment authority root). */
   projectId: string | null;
   /** The Durable Object's `ctx.exports` (the in-worker loopback registry). */
   exports: unknown;
+  /**
+   * A fresh local authority root from `itxForScope` (or the deployment-global
+   * equivalent). It is a server-side RpcTarget, not a client stub: expression
+   * evaluation owns any transport stubs reached through it, while the root
+   * itself has no remote lifetime to retain or dispose.
+   */
+  authorityRoot(): unknown;
   /** Where durable-sink delivery rejections land (spine: close → re-poke). */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void;
 }): SubscriberDial {
-  /**
-   * Mints the stream's authority root for one expression evaluation. Both the
-   * loopback binding and the root it returned are per-acquisition stubs —
-   * dropping either unpulled leaks the remote reference for the isolate's
-   * lifetime, so the caller MUST run `dispose` (push: right after the call;
-   * wake: when the connection's sink is disposed, because the returned sink
-   * proxies through this chain and must not outlive it).
-   */
-  const acquireAuthorityRoot = async () => {
-    const binding = itxLoopbackStub(deps.exports, { projectId: deps.projectId, path: "/" });
-    try {
-      const root = await binding.get();
-      return {
-        root,
-        dispose: () => {
-          (root as Partial<Disposable>)[Symbol.dispose]?.();
-          binding[Symbol.dispose]?.();
-        },
-      };
-    } catch (error) {
-      binding[Symbol.dispose]?.();
-      throw error;
-    }
-  };
-
-  /**
-   * The push lane's CACHED authority root. The authority is the ambient
-   * trusted context at the stream's own fixed scope — there is nothing
-   * per-delivery to re-derive — so re-minting the loopback chain (an awaited
-   * RPC round trip plus target-graph construction) on every batch bought
-   * nothing and sat directly on the ack latency path; at trickle rates every
-   * append paid it. Any delivery failure disposes the chain and the next
-   * attempt re-mints (bounds a wedged chain); the chain is same-isolate, so
-   * holding it pins memory, not cross-isolate duration. The WAKE lane stays
-   * per-acquisition: its chain's lifetime is tied to the sink the poke
-   * returns (see `onDisposed` below).
-   */
-  let pushRoot: Promise<{ root: unknown; dispose: () => void }> | undefined;
-  const acquirePushRoot = () => {
-    if (pushRoot === undefined) {
-      const acquiring = acquireAuthorityRoot();
-      pushRoot = acquiring;
-      // A failed mint must not cache a forever-rejected promise.
-      acquiring.catch(() => {
-        if (pushRoot === acquiring) pushRoot = undefined;
-      });
-    }
-    return pushRoot;
-  };
-  const invalidatePushRoot = (chain: Promise<{ root: unknown; dispose: () => void }>) => {
-    if (pushRoot === chain) pushRoot = undefined;
-    void chain.then((acquired) => acquired.dispose()).catch(() => {});
-  };
-
-  /** The webhook lane's cached project-egress fetcher (same policy as `pushRoot`). */
+  /** The webhook lane's cached project-egress fetcher. */
   let webhookEgress: ReturnType<typeof projectEgressFetcher> | undefined;
 
   return {
@@ -304,26 +244,18 @@ export function createSubscriberDial(deps: {
      * (returned-stub semantics:
      * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/).
      * The sink is retained with the durable lane's result-pulling liveness
-     * policy attached, and the loopback chain that carried it stays alive
-     * until the sink is disposed.
+     * policy attached.
      */
     async poke(expression: ItxExpression, request: StreamSubscriberWakeRequest) {
-      const { root, dispose } = await acquireAuthorityRoot();
-      let response: StreamSubscriberWakeResponse;
-      try {
-        const { value } = await evaluateItxExpression(root, toInvocation(expression, request));
-        response = parseWakeHandshake(value);
-      } catch (error) {
-        // Disposing the chain releases whatever the failed/misshapen
-        // evaluation exported along the way.
-        dispose();
-        throw error;
-      }
+      const { value } = await evaluateItxExpression(
+        deps.authorityRoot(),
+        toInvocation(expression, request),
+      );
+      const response = parseWakeHandshake(value);
       return {
         checkpointOffset: response.checkpointOffset,
         sink: retainProcessEventBatch(response.sink, {
           onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
-          onDisposed: dispose,
         }),
         subscriber: response.subscriber,
         getRuntimeState: response.getRuntimeState,
@@ -338,21 +270,12 @@ export function createSubscriberDial(deps: {
      * `["streams", ["get", path], "acceptCrossPost"]` reaches a sibling stream —
      * through exactly the calls ordinary user code would make. The
      * awaited resolve is the ack; a reject propagates to the spine's
-     * retry/park machine. The authority root is cached across deliveries and
-     * dropped on failure (see `acquirePushRoot`).
+     * retry/park machine. The root is a fresh local RpcTarget: only the receiver
+     * hop crosses RPC, so a modelled receiver rejection stays in the spine's
+     * backoff state instead of poisoning Worker entrypoint error telemetry.
      */
     async push(expression: ItxExpression, batch: StreamPushEventBatch) {
-      const chain = acquirePushRoot();
-      const { root } = await chain;
-      try {
-        await evaluateItxExpression(root, toInvocation(expression, batch));
-      } catch (error) {
-        // The failure may BE a broken chain; drop it so the retry re-mints.
-        // A concurrent delivery mid-evaluate on the same chain fails with it
-        // and retries on a fresh one — the spine's backoff owns both.
-        invalidatePushRoot(chain);
-        throw error;
-      }
+      await evaluateItxExpression(deps.authorityRoot(), toInvocation(expression, batch));
     },
 
     /**
@@ -371,9 +294,8 @@ export function createSubscriberDial(deps: {
       if (deps.projectId === null) {
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
-      // Cached like the push root (webhook drains deliver per EVENT, so a
-      // per-POST loopback mint would be paid at the highest possible rate);
-      // any failure drops it and the retry re-mints.
+      // Webhook drains deliver per EVENT, so cache the egress binding; any
+      // failure drops it and the retry re-mints.
       webhookEgress ??= projectEgressFetcher(
         deps.exports as ExecutionContext["exports"],
         deps.projectId,
