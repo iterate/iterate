@@ -236,6 +236,11 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
     ingestStartedAtMs: number;
     atMs: number;
   }): void;
+  /** Highest offset returned by a successful append to this processor's home
+   * stream in this incarnation. The runner folds it into its observed head so
+   * a queued transport frame whose head snapshot predates a processor append
+   * cannot claim `delivery.caughtUp` and re-drive the same obligation. */
+  highestCommittedHomeAppendOffset(): number;
   /** The key derivation — `<slug>/<key>[@<path>:<offset>]` — byte-preserved from the legacy engine. */
   idempotencyKey(key: string, whileProcessing?: Pick<StreamEvent, "offset" | "path">): string;
   /** The `source.processor` provenance stamp for runner-authored raw appends. */
@@ -302,6 +307,12 @@ export abstract class StreamProcessor<
    */
   readonly subscriberMetrics = new SubscriberMetrics(Date.now());
 
+  /** Monotonic home-stream append knowledge shared with this processor's
+   * runner. Unlike subscriber metrics this is a correctness input: an append
+   * may land while a later transport frame is already queued with an older
+   * `streamMaxOffset`. */
+  #highestCommittedHomeAppendOffset = 0;
+
   readonly #keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined;
 
   constructor(args: StreamProcessorConstructorArgs<Deps>) {
@@ -338,6 +349,7 @@ export abstract class StreamProcessor<
       isDeliverable: (event) => processor.#isDeliverable(event),
       processEvent: (args) => processor.processEvent(args),
       noteBatchIngested: (args) => processor.subscriberMetrics.noteBatchIngested(args),
+      highestCommittedHomeAppendOffset: () => processor.#highestCommittedHomeAppendOffset,
       idempotencyKey: (key, whileProcessing) => processor.idempotencyKey(key, whileProcessing),
       processorStamp: (whileProcessing) => processor.#processorStamp(whileProcessing),
       append: (opts, input) =>
@@ -554,6 +566,10 @@ export abstract class StreamProcessor<
     return Promise.resolve(this.stream.append(...events)).then((committed) => {
       const maxCommittedOffset = committed.reduce((max, event) => Math.max(max, event.offset), 0);
       if (maxCommittedOffset > 0) {
+        this.#highestCommittedHomeAppendOffset = Math.max(
+          this.#highestCommittedHomeAppendOffset,
+          maxCommittedOffset,
+        );
         this.subscriberMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() });
       }
       return committed;

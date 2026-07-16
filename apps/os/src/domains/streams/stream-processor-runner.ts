@@ -279,7 +279,8 @@ export class StreamProcessorRunner<
   /** The COMMITTED progress — what snapshot()/openDelivery() publish. Frame
    * folds accumulate in locals and land here only after the durable commit. */
   #progress: ProcessorProgress<ProcessorState<Contract>> | undefined;
-  /** Highest stream offset observed across all frames this incarnation. */
+  /** Highest stream offset observed across all frames and successful
+   * processor home-stream appends this incarnation. */
   #observedHeadOffset = 0;
   /** Serializes frames + self-pulls; failures are contained per entry. */
   #chain: Promise<void> = Promise.resolve();
@@ -586,13 +587,20 @@ export class StreamProcessorRunner<
       pending.push(event);
     }
 
-    // observedHead = max(streamMaxOffset, last event offset), monotonic across
-    // frames: "the highest offset the runner has OBSERVED" never regresses on
-    // a stale redelivery, so a behind frame can always SEE it is behind.
+    // observedHead = max(transport head, scan tail, processor home appends),
+    // monotonic across frames. Transport frames carry a head SNAPSHOT from
+    // when the stream produced them; one can sit queued while the preceding
+    // frame's at-head reconcile appends its terminal fact. Without importing
+    // the append's returned offset here, that queued frame can falsely claim
+    // caughtUp over the pre-terminal fold and repeat the external obligation
+    // (the fresh-project config-repo double-seed incident). The processor
+    // records every successful home append, including protected append()
+    // calls outside a delivery hook; sibling appends do not affect this head.
     this.#observedHeadOffset = Math.max(
       this.#observedHeadOffset,
       frame.streamMaxOffset,
       frameScannedThroughOffset,
+      this.driver.highestCommittedHomeAppendOffset(),
     );
     if (pending.length === 0 && frameScannedThroughOffset === committedThroughOffset) return;
     const observedHeadOffset = this.#observedHeadOffset;

@@ -67,7 +67,7 @@ function taskContract(
     // check), so a runtime-supplied list is what the wildcard test needs; the
     // literal-union type the builder infers is irrelevant to the runner.
     consumes: consumes as unknown as [typeof REQUESTED, typeof COMPLETED, typeof REVIVED],
-    emits: [ECHOED, DRIVEN],
+    emits: [ECHOED, DRIVEN, COMPLETED],
   });
 }
 
@@ -964,6 +964,59 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
 // =============================================================================
 
 describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
+  it("does not reconcile a queued stale-head frame after the preceding reconcile appends to its home stream", async () => {
+    const journal = makeJournal();
+    const firstRequested = journal.seed({ type: REQUESTED, payload: { id: "a" } });
+    const effectStarted = deferred();
+    const releaseEffect = deferred();
+    const headStates: string[][] = [];
+    let effectAttempts = 0;
+    const hooks: TaskHooks = {
+      onHead: (args, stableKey) => {
+        headStates.push([...args.state.open]);
+        if (!args.state.open.includes("a")) return;
+        args.blockProcessorWhile(async () => {
+          effectAttempts += 1;
+          effectStarted.resolve();
+          await releaseEffect.promise;
+          await args.append({
+            type: COMPLETED,
+            idempotencyKey: stableKey("complete:a"),
+            payload: { id: "a" },
+          });
+        });
+      },
+    };
+    const harness = makeHarness({ journal, hooks });
+    const { sink } = await harness.runner.openDelivery();
+
+    // Frame 1 reaches the head at offset 1 and starts its obligation. While
+    // that work is in flight, another consumed fact becomes a queued frame
+    // whose transport snapshot says the head is 2.
+    const first = sink(deliveryFrame([firstRequested], 1));
+    await effectStarted.promise;
+    const secondRequested = journal.seed({ type: REQUESTED, payload: { id: "b" } });
+    const second = sink(deliveryFrame([secondRequested], 2));
+
+    // The first reconcile settles by appending its terminal fact at offset 3.
+    // The queued frame's head=2 snapshot is now stale. It may fold/commit
+    // offset 2, but MUST NOT reconcile the still-pre-terminal fold: doing so
+    // repeats the external effect before offset 3 is delivered (the fresh
+    // project config-repo double-seed incident).
+    releaseEffect.resolve();
+    await first;
+    await second;
+    expect(headStates).toEqual([["a"]]);
+    expect(effectAttempts).toBe(1);
+
+    // Once the self-appended terminal fact itself reaches the runner, the
+    // processor is honestly at head again and reconciles the final fold.
+    const completed = journal.rows().find((event) => event.type === COMPLETED)!;
+    await sink(deliveryFrame([completed], 3));
+    expect(headStates).toEqual([["a"], ["b"]]);
+    expect(effectAttempts).toBe(1);
+  });
+
   it("fires on the last consumed event of a head-reaching batch; an unconsumed tail defers to the next consumed-at-head event", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1: opens the obligation
