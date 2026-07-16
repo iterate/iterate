@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
@@ -19,9 +19,9 @@ import { BrowserFeedContract } from "~/domains/streams/client-libraries/processo
 import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
-import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
-import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
-import { ScriptExecutionInspectorPanel } from "~/components/script-execution-inspector-panel.tsx";
+import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";
+import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
+import { ScriptExecutionInspectorContent } from "~/components/script-execution-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
   StreamStatePanel,
@@ -49,8 +49,8 @@ type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 /**
  * The stream view: every domain page's main pane. Renders mode-owned feed
  * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
- * with the composer below and right-edge overlays (raw-event inspector,
- * processors sheet) on top.
+ * with the composer below and standard right-edge sheets (inspectors and
+ * processor state) on top.
  *
  * This component is the orchestrator: it owns the two browser-hosted
  * processors that mirror the stream into local SQLite (the raw `events` log
@@ -291,14 +291,14 @@ export function ProjectStreamView({
 
   const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
 
-  // The feed column — mode body with overlays on top, composer below. One JSX
+  // The feed column — mode body with inspectors on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
   // thing.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {modeBody}
-        <StreamInspectorOverlay
+        <StreamInspectorSheet
           agentUiState={agentUiState}
           caps={caps}
           panels={panels}
@@ -409,7 +409,7 @@ export function ProjectStreamView({
 }
 
 /**
- * The feed's right-edge inspector, or nothing. At most one inspector holds
+ * The feed's standard right-edge inspector sheet. At most one inspector holds
  * the edge (useStreamViewPanels keeps their URL keys mutually exclusive):
  * the raw-event inspector when the mode offers it and `?event=` is set,
  * else an LLM or script inspector when its deep-link parameter is set — in
@@ -417,7 +417,7 @@ export function ProjectStreamView({
  * inspectors read the RAW events mirror (not feed_items): the fold reads the journal,
  * the same source the processor read.
  */
-function StreamInspectorOverlay({
+function StreamInspectorSheet({
   agentUiState,
   caps,
   panels,
@@ -428,42 +428,135 @@ function StreamInspectorOverlay({
   panels: ReturnType<typeof useStreamViewPanels>;
   database: StreamBrowserDatabase;
 }) {
-  if (caps.eventInspector && panels.inspectedOffset != null) {
-    return (
-      <RawEventInspectorPanel
-        database={database}
-        offset={panels.inspectedOffset}
-        onNavigate={panels.inspectEvent}
-        onClose={panels.closeInspector}
-      />
-    );
+  const activeInspector = useMemo<
+    | { kind: "event"; offset: number }
+    | { kind: "llm"; offset: number }
+    | { kind: "script"; executionId: string }
+    | null
+  >(() => {
+    if (caps.eventInspector && panels.inspectedOffset != null) {
+      return { kind: "event", offset: panels.inspectedOffset };
+    }
+    if (panels.inspectedLlmRequestOffset != null) {
+      return { kind: "llm", offset: panels.inspectedLlmRequestOffset };
+    }
+    if (panels.inspectedScriptExecutionId != null) {
+      return { kind: "script", executionId: panels.inspectedScriptExecutionId };
+    }
+    return null;
+  }, [
+    caps.eventInspector,
+    panels.inspectedLlmRequestOffset,
+    panels.inspectedOffset,
+    panels.inspectedScriptExecutionId,
+  ]);
+  const activeInspectorContext = useMemo(
+    () =>
+      activeInspector == null
+        ? null
+        : {
+            inspector: activeInspector,
+            database,
+            agentUiState,
+          },
+    [activeInspector, agentUiState, database],
+  );
+  const [retainedInspectorContext, setRetainedInspectorContext] = useState(activeInspectorContext);
+  const activeInspectorKey =
+    activeInspector?.kind === "script"
+      ? `script:${activeInspector.executionId}`
+      : activeInspector == null
+        ? null
+        : `${activeInspector.kind}:${activeInspector.offset}`;
+  // Base UI reports dismissal before TanStack Router commits the URL search
+  // update. Suppress that exact inspector immediately so retained exit content
+  // cannot navigate and write its deep link back during the closing frame.
+  // Keep suppression latched past animation completion if the router is slow;
+  // release it only after the URL actually leaves this selection.
+  const [dismissedInspectorKey, setDismissedInspectorKey] = useState<string | null>(null);
+  const inspectorOpen = activeInspectorKey != null && activeInspectorKey !== dismissedInspectorKey;
+
+  useEffect(() => {
+    if (dismissedInspectorKey != null && activeInspectorKey !== dismissedInspectorKey) {
+      setDismissedInspectorKey(null);
+    }
+  }, [activeInspectorKey, dismissedInspectorKey]);
+
+  // Base UI keeps the popup mounted for its exit transition. Retain the last
+  // target and the stream data it belongs to while URL-driven navigation
+  // closes the sheet, so a stream switch cannot briefly query the new stream
+  // with the previous stream's inspector identifier.
+  useEffect(() => {
+    if (activeInspectorContext != null) setRetainedInspectorContext(activeInspectorContext);
+  }, [activeInspectorContext]);
+
+  const inspectorContext = activeInspectorContext ?? retainedInspectorContext;
+  let content: ReactNode = null;
+  let testId: string | undefined;
+
+  if (inspectorContext != null) {
+    const { inspector } = inspectorContext;
+    if (inspector.kind === "event") {
+      testId = "raw-event-inspector";
+      content = (
+        <RawEventInspectorContent
+          database={inspectorContext.database}
+          navigationEnabled={inspectorOpen && activeInspector?.kind === "event"}
+          offset={inspector.offset}
+          onNavigate={panels.inspectEvent}
+        />
+      );
+    } else if (inspector.kind === "llm") {
+      const liveStep = inspectorContext.agentUiState?.live?.steps.find(
+        (step): step is AgentUiLlmStep =>
+          step.kind === "llm" &&
+          step.llmRequestOffset === inspector.offset &&
+          step.status === "running",
+      );
+      testId = "llm-request-inspector";
+      content = (
+        <LlmRequestInspectorContent
+          database={inspectorContext.database}
+          {...(liveStep == null ? {} : { liveStep })}
+          llmRequestOffset={inspector.offset}
+        />
+      );
+    } else {
+      testId = "script-execution-inspector";
+      content = (
+        <ScriptExecutionInspectorContent
+          database={inspectorContext.database}
+          executionId={inspector.executionId}
+        />
+      );
+    }
   }
-  if (panels.inspectedLlmRequestOffset != null) {
-    const liveStep = agentUiState?.live?.steps.find(
-      (step): step is AgentUiLlmStep =>
-        step.kind === "llm" &&
-        step.llmRequestOffset === panels.inspectedLlmRequestOffset &&
-        step.status === "running",
-    );
-    return (
-      <LlmRequestInspectorPanel
-        database={database}
-        {...(liveStep == null ? {} : { liveStep })}
-        llmRequestOffset={panels.inspectedLlmRequestOffset}
-        onClose={panels.closeLlmRequestInspector}
-      />
-    );
-  }
-  if (panels.inspectedScriptExecutionId != null) {
-    return (
-      <ScriptExecutionInspectorPanel
-        database={database}
-        executionId={panels.inspectedScriptExecutionId}
-        onClose={panels.closeScriptExecutionInspector}
-      />
-    );
-  }
-  return null;
+
+  return (
+    <Sheet
+      open={inspectorOpen}
+      onOpenChange={(open) => {
+        if (!open) {
+          setDismissedInspectorKey(activeInspectorKey);
+          panels.closeInspector();
+        }
+      }}
+      onOpenChangeComplete={(open) => {
+        if (!open) {
+          setRetainedInspectorContext(null);
+        }
+      }}
+    >
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
+        data-testid={testId}
+        inert={!inspectorOpen}
+      >
+        {content}
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 /**
