@@ -1,11 +1,11 @@
 ---
-status: implemented, pending apps/mobile merge
+status: implemented, needs on-device pass
 size: medium
 ---
 
 # mobile-examples-runner
 
-**Status summary:** the `apps/os` half is done and live-e2e-proven (a shared `run-example.ts` promoted from e2e-only test support to product source, plus a new `egress-rules-configured` example). The `apps/mobile` half (the actual runner screen) is blocked on `apps/mobile` existing on `main` — it currently only exists on the not-yet-merged `os-ios-app` branch (PR #2044). Once that merges and this branch pulls `main`, the mobile screen is the remaining work.
+**Status summary:** fully implemented and live-e2e-proven. `apps/os`: `runExample`/`runScriptEnvelope` promoted from e2e-only test support to product source, plus a new `egress-rules-configured` example. `apps/mobile`: a new per-project Examples screen lists every phone-runnable catalogue example and runs it via `capabilityHost.runScript`, showing the JSON result inline. Unit tests + a live e2e (real project, real `runScript` call) both pass. Missing: the one manual on-device pass — see the checklist.
 
 ## Why
 
@@ -21,14 +21,14 @@ From a conversation while testing PR #2044's human-in-the-loop egress approvals 
 
 ## Checklist
 
-- [x] Promote `run-example.ts` from `apps/os/e2e/test-support/` to `apps/os/src/itx/` — _typechecks, `example-matrix.ts`'s `run-script` runtime updated to the new import; old file deleted_
-- [x] Add the `egress-rules-configured` example to `examples-source.ts` + regenerate `examples.generated.ts` — _new matrix case in `example-cases.ts` (`.invalid` TLD host so nothing real ever gets contacted), live-verified passing across every server-side runtime (node/cli/run-script/project-worker) against a local dev server_
-- [ ] `apps/mobile/src/lib/examples.ts` — filter `ITX_EXAMPLES` to phone-runnable entries
-- [ ] `apps/mobile/src/lib/run-example.ts` — thin wrapper calling `itx.projects.get(id).capabilityHost` into the shared `runExample()`
-- [ ] `apps/mobile/src/app/project/[projectId]/examples.tsx` — list + run + result screen
-- [ ] Nav entry point (project chat-list header, alongside Approvals)
-- [ ] Unit test for the phone-runnable filter
-- [ ] Live e2e: run `egress-rules-configured` (or another deterministic example) through the mobile app's own code from Node, same pattern as `apps/mobile/e2e/*.e2e.test.ts`
+- [x] Promote `run-example.ts` from `apps/os/e2e/test-support/` to `apps/os/src/itx/` — _typechecks, `example-matrix.ts`'s `run-script` runtime updated to the new import; old file deleted (git-detected rename)_
+- [x] Add the `egress-rules-configured` example to `examples-source.ts` + regenerate `examples.generated.ts` — _new matrix case in `example-cases.ts` (`.invalid` TLD host for the e2e case so nothing real ever gets contacted during the matrix run; the example's own default host is `httpbin.org`), live-verified passing across every server-side runtime (node/cli/run-script/project-worker) against a local dev server_
+- [x] `apps/mobile/src/lib/examples.ts` — filter `ITX_EXAMPLES` to phone-runnable entries — _36 of the catalogue's ~50 entries qualify_
+- [x] `apps/mobile/src/lib/run-example.ts` — thin wrapper taking an already-dialed `ItxSession` into the shared `runExample()` — _Expo-free by design (same seam split as itx-core.ts/itx.ts) so the e2e drives this exact function from Node; the UI screen supplies the session via itx.ts_
+- [x] `apps/mobile/src/app/project/[projectId]/examples.tsx` — list + run + result screen — _tap Run, shows JSON result or error inline; Run disables while pending_
+- [x] Nav entry point (project chat-list header, alongside Approvals)
+- [x] Unit tests for the phone-runnable filter — _4 specs (`examples.test.ts`)_
+- [x] Live e2e: `egress-rules-configured` runs through the mobile app's own `runMobileExample` from Node, same pattern as the other `apps/mobile/e2e/*.e2e.test.ts` lanes — _passed live against a local dev server; second spec asserts the phone-runnable filter matches what the runner can actually execute_
 - [ ] Manual on-device pass: open Examples, run `egress-rules-configured` against a real project, confirm the Approvals screen then sees a held request after asking an agent to fetch that host — the actual end-to-end "no laptop needed" proof
 
 ## Out of scope (v1)
@@ -37,6 +37,15 @@ From a conversation while testing PR #2044's human-in-the-loop egress approvals 
 - Non-`run-script`-capable examples (session/agent-context, live-session-only)
 - Any change to the web REPL or the example catalogue's browser-eval path
 
+## Handoff — the one manual pass (needs a phone)
+
+1. `pnpm --dir apps/mobile start` in this worktree, Expo Go, scan the QR.
+2. Sign in, open a project (or use the dedicated approvals-testing project), tap **Examples**.
+3. Run `egress-rules-configured` — should show a JSON result (`host`, `ruleKey`, `offset`).
+4. In that project's chat, ask an agent: "Fetch https://httpbin.org/post and tell me what it returns."
+5. Open **Approvals** — the held request should appear; enroll (if not already) and approve. Confirm the agent's fetch resolves. This is the full "no laptop anywhere in the loop" proof this task exists for.
+
 ## Implementation log
 
-- 2026-07-16: `apps/os` half done and live-verified. Blocked here on PR #2044 (`os-ios-app`, adds `apps/mobile` to main) merging — this branch was created before that merge to get a head start on the OS-side pieces, which don't depend on `apps/mobile` existing. Next: merge #2044, pull main into this branch, build the mobile screen.
+- 2026-07-16: `apps/os` half done and live-verified. Started before PR #2044 (`os-ios-app`, adds `apps/mobile` to main) merged, to get a head start on the OS-side pieces that don't depend on `apps/mobile` existing.
+- 2026-07-16: #2044 merged, `main` pulled into this branch cleanly (no conflicts — different files). `apps/mobile` half built: `lib/examples.ts` (filter), `lib/run-example.ts` (Expo-free runner), `app/project/[projectId]/examples.tsx` (screen), nav entry, unit tests, live e2e (`e2e/example-runner.e2e.test.ts`) — all green. Also hit a local-only snag: this worktree's Doppler scope for `apps/mobile` wasn't set up yet (`doppler configure` still pointed the directory at the `_shared` project from before `apps/mobile` existed) — fixed with `doppler setup --project os --config dev --no-interactive` in `apps/mobile`; not a code issue, just this machine's per-worktree Doppler cache.
