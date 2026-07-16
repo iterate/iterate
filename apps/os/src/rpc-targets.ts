@@ -5458,9 +5458,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
-    this.#indexStreamSearch(batch);
     try {
-      return await this.worker.processEventBatch(batch);
+      await this.worker.processEventBatch(batch);
     } catch (error) {
       // The bootstrap window: the worker cannot be MATERIALIZED yet (config
       // repo unseeded, or its first build still in flight). That is this
@@ -5478,6 +5477,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       }
       throw error;
     }
+    // This is awaited before the delivery is acknowledged, so the stream's
+    // ordered push lane also orders rewrites of each R2 segment object. The
+    // method catches its own failures because search remains a derived mirror.
+    await this.#indexStreamSearch(batch);
   }
 
   /**
@@ -5580,37 +5583,31 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * SPIKE platform step: mirror the batch's stream events into the itx.search
    * corpus (domains/search/search-index.ts) as fixed 100-offset segment
-   * documents. Same rules as {@link #indexStreamActivity}: idempotent
-   * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
-   * — only the worker delegation may reject into the spine's retry. It rides
-   * the same ordered, checkpointed delivery, re-reading each touched segment's
-   * full range from the stream so a transient failure self-heals on the next
+   * documents. It is idempotent (segment docs are deterministic rewrites),
+   * awaited as part of ordered delivery, and MUST NOT throw — only the worker
+   * delegation may reject into the spine's retry. Re-reading each touched
+   * segment's full range means a transient failure self-heals on the next
    * batch in that segment (see indexStreamEventBatch).
    */
-  #indexStreamSearch(batch: StreamPushEventBatch): void {
+  async #indexStreamSearch(batch: StreamPushEventBatch): Promise<void> {
     if (batch.projectId === null) return;
-    const streamStub = env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: batch.projectId, path: batch.path },
-        { allowNullProjectId: true },
-      ),
-    );
-    // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
-    // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
-    // promise can be cancelled when the invocation's I/O context ends.
-    const projectId = batch.projectId;
-    this.#props.ctx.waitUntil(
-      indexStreamEventBatch({
+    try {
+      const streamStub = env.STREAM.getByName(
+        DurableObjectNameCodec.stringify(
+          { projectId: batch.projectId, path: batch.path },
+          { allowNullProjectId: true },
+        ),
+      );
+      await indexStreamEventBatch({
         batch,
         readEvents: (args) => streamStub.getEvents(args),
-      })
-        // Freshness: nudge the project's instance (if one exists) so passive
-        // content is searchable in minutes, not on the hourly schedule.
-        .then(() => triggerProjectSearchSyncDebounced(projectId))
-        .catch((error: unknown) => {
-          console.warn("search index stream batch failed", { path: batch.path, error });
-        }),
-    );
+      });
+      // Freshness: nudge the project's instance (if one exists) so passive
+      // content is searchable in minutes, not on the hourly schedule.
+      await triggerProjectSearchSyncDebounced(batch.projectId);
+    } catch (error: unknown) {
+      console.warn("search index stream batch failed", { path: batch.path, error });
+    }
   }
 
   /**

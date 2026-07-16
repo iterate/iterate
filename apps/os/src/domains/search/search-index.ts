@@ -178,14 +178,16 @@ export async function indexPinnedStreamEvent(input: {
  * batch's events, so the document is complete and the write is idempotent
  * regardless of how delivery batched the offsets.
  *
- * That full re-read is also what makes this safe to run as a first-party step
- * on the shared project-worker delivery (root `processEventBatch`) instead of
- * its own checkpointed lane: the delivery cursor advances on the worker's
- * success, not this side effect, so a transient R2 failure here is healed by
- * the NEXT batch in the same segment (which re-reads and rewrites the whole
- * segment). Only a segment that goes permanently quiet right after a failed
- * write stays short until `itx.search.indexStream`/reindex — acceptable for a
- * derived, rebuildable corpus.
+ * That full re-read is also what makes this safe to run as a best-effort
+ * first-party step on the shared project-worker delivery (root
+ * `processEventBatch`) instead of its own checkpointed lane. The step is
+ * awaited so adjacent deliveries cannot rewrite one R2 object concurrently,
+ * but a transient R2 failure is logged rather than failing the authoritative
+ * stream delivery; the NEXT batch in the same segment heals it by re-reading
+ * and rewriting the whole segment. Only a segment that goes permanently quiet
+ * right after a failed write stays short until
+ * `itx.search.indexStream`/reindex — acceptable for a derived, rebuildable
+ * corpus.
  */
 export async function indexStreamEventBatch(input: {
   batch: StreamPushEventBatch;
@@ -223,8 +225,11 @@ export async function indexStreamEventBatch(input: {
       // Nothing indexable in the segment (all housekeeping/ephemeral). Delete
       // rather than skip so a segment that RENDERED before but no longer does
       // (e.g. after a disallow-list change) self-heals instead of serving a
-      // stale document forever.
-      await itxEnv.SEARCH_BUCKET.delete(key);
+      // stale document forever. R2 reports a native error for deleting a
+      // missing key, so make the ordinary never-indexed case a clean no-op.
+      if ((await itxEnv.SEARCH_BUCKET.head(key)) !== null) {
+        await itxEnv.SEARCH_BUCKET.delete(key);
+      }
       continue;
     }
     const { first: firstOffset, last: lastOffset } = segmentOffsetRange(segment);
@@ -241,7 +246,7 @@ export async function indexStreamEventBatch(input: {
 
 /**
  * Re-index a whole stream from offset 0 — the explicit repair verb for the
- * one gap the fire-and-forget per-batch indexing can leave: a segment that
+ * one gap the best-effort per-batch indexing can leave: a segment that
  * went permanently quiet right after a failed write. Paginates the stream in
  * offset order and rewrites every segment document (grouping by segment
  * boundary, so gaps from ephemeral/disallow-listed offsets don't matter).

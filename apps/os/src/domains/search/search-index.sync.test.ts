@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const searchBinding = vi.hoisted(() => ({
   createJob: vi.fn(),
+  deleteObject: vi.fn(),
   get: vi.fn(),
+  headObject: vi.fn(),
   list: vi.fn(),
+  putObject: vi.fn(),
 }));
 
 vi.mock("../../env.ts", () => ({
@@ -12,11 +15,16 @@ vi.mock("../../env.ts", () => ({
       get: searchBinding.get,
       list: searchBinding.list,
     },
+    SEARCH_BUCKET: {
+      delete: searchBinding.deleteObject,
+      head: searchBinding.headObject,
+      put: searchBinding.putObject,
+    },
     WORKER_SELF: "os-test",
   },
 }));
 
-import { triggerProjectSearchSyncDebounced } from "./search-index.ts";
+import { indexStreamEventBatch, triggerProjectSearchSyncDebounced } from "./search-index.ts";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -49,5 +57,42 @@ describe("passive project search sync", () => {
 
     expect(searchBinding.get).toHaveBeenCalledWith("00000000000000000000000000000002");
     expect(searchBinding.createJob).toHaveBeenCalledOnce();
+  });
+});
+
+describe("automatic stream indexing", () => {
+  it("does not delete an absent segment when the batch has no indexable events", async () => {
+    searchBinding.headObject.mockResolvedValue(null);
+    const housekeepingEvent = {
+      type: "events.iterate.com/stream/woken",
+      offset: 1,
+      createdAt: "2026-07-16T00:00:00.000Z",
+      path: "/agents/test",
+      payload: {},
+    };
+
+    await indexStreamEventBatch({
+      batch: {
+        projectId: "prj_00000000000000000000000000000003",
+        path: "/agents/test",
+        events: [housekeepingEvent],
+        streamMaxOffset: 1,
+        subscriptionKey: "project-worker",
+        deliveryId: "project-worker:1-1",
+        attempt: 1,
+        configuredEvent: {
+          type: "events.iterate.com/stream/subscription-configured",
+          offset: 0,
+          createdAt: "2026-07-16T00:00:00.000Z",
+          path: "/agents/test",
+          payload: {},
+        },
+      },
+      readEvents: vi.fn().mockResolvedValue([housekeepingEvent]),
+    });
+
+    expect(searchBinding.headObject).toHaveBeenCalledOnce();
+    expect(searchBinding.deleteObject).not.toHaveBeenCalled();
+    expect(searchBinding.putObject).not.toHaveBeenCalled();
   });
 });
