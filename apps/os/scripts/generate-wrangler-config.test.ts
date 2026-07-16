@@ -5,6 +5,7 @@ import {
   builderConfig,
   config,
   localAuthServiceBinding,
+  localDevAuthJwks,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
   scriptExecutorBootstrapConfig,
@@ -135,6 +136,20 @@ it("binds local OS to the selected auth worker's default entrypoint", () => {
     binding: "AUTH",
     service: selected.authWorkerName,
     ...(selected.authRemote ? { remote: true } : {}),
+  });
+});
+
+it("keeps forge JWKS local-only while deployed builds use the atomic Worker secret", () => {
+  const forgePrivateJwk = JSON.stringify({
+    kty: "RSA",
+    kid: "dev-forge",
+    n: "public-material",
+    d: "private-material",
+  });
+
+  expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: "preview_3" })).toBeUndefined();
+  expect(JSON.parse(localDevAuthJwks({ forgePrivateJwk, deployedEnv: undefined })!)).toEqual({
+    keys: [{ kty: "RSA", kid: "dev-forge", n: "public-material" }],
   });
 });
 

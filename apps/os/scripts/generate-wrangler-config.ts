@@ -485,7 +485,10 @@ function localDevBindings() {
     accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     ...authBinding,
   });
-  const localAuthJwks = localDevAuthJwks();
+  const localAuthJwks = localDevAuthJwks({
+    forgePrivateJwk: process.env.AUTH_FORGE_PRIVATE_JWK,
+    deployedEnv: process.env.CLOUDFLARE_ENV,
+  });
   return {
     ...bindings,
     vars: {
@@ -507,8 +510,17 @@ function localDevBindings() {
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
 
-function localDevAuthJwks() {
-  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+export function localDevAuthJwks(input: {
+  forgePrivateJwk: string | undefined;
+  deployedEnv: string | undefined;
+}) {
+  // The generated top-level block is local dev, but Wrangler still compares
+  // it with the selected env during `vite build`. Never emit this local-only
+  // var in a deployed build: the env receives the authoritative JWKS as an
+  // atomic Worker secret from deploy.ts.
+  if (input.deployedEnv?.trim()) return undefined;
+
+  const forgePrivateJwk = input.forgePrivateJwk?.trim();
   if (!forgePrivateJwk) return undefined;
 
   const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
