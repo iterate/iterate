@@ -351,7 +351,9 @@ describe("expiry, refresh, revocation", () => {
   test("backdoor expire-tokens kills outstanding access tokens but not refresh tokens", async () => {
     const shop = makeShop();
     const tokens = await connect(shop);
-    expect((await shop("/__backdoor/expire-tokens", { method: "POST" })).status).toBe(200);
+    expect(
+      (await shop("/__backdoor/expire-tokens", postJson({ clientId: DEFAULT_CLIENT_ID }))).status,
+    ).toBe(200);
     expect((await shop("/api/me", bearer(tokens.access_token))).status).toBe(401);
 
     const refreshed = await exchange(shop, {
@@ -360,6 +362,29 @@ describe("expiry, refresh, revocation", () => {
       body: { grant_type: "refresh_token", refresh_token: tokens.refresh_token },
     });
     expect(refreshed.status).toBe(200);
+  });
+
+  test("expiring one client's tokens leaves concurrently active clients alone", async () => {
+    const shop = makeShop();
+    const first = await connect(shop);
+    const otherClient = await (
+      await shop("/__backdoor/clients", postJson({}))
+    ).json<MintedClient>();
+    const other = await connect(shop, otherClient);
+
+    expect(
+      (await shop("/__backdoor/expire-tokens", postJson({ clientId: DEFAULT_CLIENT_ID }))).status,
+    ).toBe(200);
+
+    expect((await shop("/api/me", bearer(first.access_token))).status).toBe(401);
+    expect((await shop("/api/me", bearer(other.access_token))).status).toBe(200);
+  });
+
+  test("expire-tokens requires an explicit client so it cannot globally invalidate tests", async () => {
+    const shop = makeShop();
+    const response = await shop("/__backdoor/expire-tokens", { method: "POST" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_request" });
   });
 
   test("backdoor revoke-refresh-token kills exactly that refresh token", async () => {
@@ -426,7 +451,7 @@ describe("legacy login (email + password, no refresh grant)", () => {
     const { accessToken } = await (
       await shop("/api/legacy-login", postJson({ email: "a@b.c", password: "correct-horse" }))
     ).json<{ accessToken: string }>();
-    await shop("/__backdoor/expire-tokens", { method: "POST" });
+    await shop("/__backdoor/expire-tokens", postJson({ clientId: "legacy-login" }));
     expect((await shop("/api/me", bearer(accessToken))).status).toBe(401);
   });
 });

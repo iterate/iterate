@@ -96,6 +96,8 @@ export function processCustomDomainEvent({
   projectId: string;
   state: ProjectProcessEventArgs["state"];
 }): boolean {
+  // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+  if (event === null) return false;
   switch (event.type) {
     case "events.iterate.com/project/custom-domain-add-requested":
     case "events.iterate.com/project/custom-domain-refresh-requested": {

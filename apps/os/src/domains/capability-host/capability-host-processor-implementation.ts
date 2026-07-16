@@ -304,16 +304,18 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   /**
    * The at-head reconcile (was `onCaughtUp`): `processEvent` invokes it under
    * `delivery.caughtUp`, so this processor has no per-event side effects — all
-   * of its work is the obligation reconciliation. It runs ONLY for the last
-   * consumed event of a batch that reached head (the at-head gate the legacy
-   * `processEventBatch` override carried lives in the runner now), so a
-   * mid-catch-up fold never re-runs a settled script.
+   * of its work is the obligation reconciliation. It runs after the scan
+   * reaches head, on either the last consumed event or the runner's eventless
+   * pass, so a mid-catch-up fold never re-runs a settled script.
    */
   protected override processEvent(
     args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
   ): undefined {
     if (args.state.birthCertificate === null) return;
-    if (args.event.type === "events.iterate.com/capability-host/script-run-settled") {
+    if (
+      args.event !== null &&
+      args.event.type === "events.iterate.com/capability-host/script-run-settled"
+    ) {
       this.#pendingSettlements.delete(args.event.payload.executionId);
     }
     // ONE outer blocking closure per at-head pass — the settle appends inside

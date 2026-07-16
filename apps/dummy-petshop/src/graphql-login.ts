@@ -27,9 +27,9 @@ export const GRAPHQL_SESSION_TTL_SECONDS = 3;
  * petshop's legacy-login endpoint. */
 export const GRAPHQL_LOGIN_PASSWORD = "correct-horse";
 
-/** What the door needs from the shop: the sealing key and a per-call read
- * of the access-token epoch, so `POST /__backdoor/expire-tokens` invalidates
- * outstanding sessions exactly like every other petshop token. */
+/** What the door needs from the shop: the sealing key and a per-call read of
+ * the GraphQL login client's revocation epoch, so targeted expiry invalidates
+ * its outstanding sessions exactly like every other petshop token. */
 export interface GraphqlLoginDeps {
   sealKey: string;
   getAccessTokenEpoch(): Promise<number>;
