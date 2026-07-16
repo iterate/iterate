@@ -39,6 +39,41 @@ APIs/examples were regenerated from source. The exact post-merge cumulative
 and deployed benchmarks remain pending; do not reinterpret the historical
 checkpoint as a measurement of the current merged tree.
 
+### Preview-9 correctness findings
+
+The first deployed run of merged head `0128ebe73` was not a shipping pass. It
+exposed two independent correctness defects that local fresh-process tests had
+not exercised:
+
+- Fresh schema creation used several synchronous DDL statements without an
+  explicit transaction. An interrupted first activation could therefore leave
+  an unversioned partial `events` table. Every later activation retried
+  `create table events`, failed with `SQLITE_ERROR: table events already
+exists`, and permanently wedged that Stream. Preview telemetry recorded 124
+  such errors and one 60-second append invocation. Schema creation now runs in
+  `transactionSync`; an absent schema marker identifies a fresh/interrupted
+  bootstrap whose partial Stream-owned tables are replaced, while any SQL
+  failure after a marker exists is rethrown as corruption rather than hidden.
+- The compact acknowledgement/offset append optimization had retained only an
+  idempotency hit's offset and accidentally removed the logical-event identity
+  comparison. A conflicting payload with the same key was silently accepted as
+  a retry. Compact appends still make the cheap indexed offset probe on the
+  common miss, but an actual hit now hydrates the envelope and compares type,
+  payload, metadata, and ephemerality before deduplicating. Same-batch hits keep
+  the already-constructed envelope in memory. Provenance remains intentionally
+  excluded, preserving processor retries across deployment stamps.
+
+Raw deployed Cap'n Web frames showed that acknowledgement-only append resolves
+normally as its explicit undefined wire value. The test's misleading
+`'' is not a function` arose only after the server wrongly resolved a call the
+test expected to reject; it is not evidence for a separate void-return
+transport bug. The expanded deployed test covers same-batch and persisted
+retries in acknowledgement, offset, and event projection modes.
+
+The fixes pass OS and playground TypeScript, focused lint, and all 544 current
+Stream-domain tests locally. A new preview deployment and telemetry audit are
+still required before this paragraph may be treated as deployed proof.
+
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
 source of truth for experiment setup, immutable revisions, raw sample paths,

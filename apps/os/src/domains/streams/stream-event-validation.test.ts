@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { StreamEventInput } from "./schemas.ts";
-import { parseStreamAppendInput, StreamAppendInput } from "./stream-event-validation.ts";
+import { StreamEventInput, type StreamEvent } from "./schemas.ts";
+import {
+  parseStreamAppendInput,
+  sameIdempotentEvent,
+  StreamAppendInput,
+} from "./stream-event-validation.ts";
 
 const BaselineStreamAppendInput = StreamEventInput.extend({
   offset: z.number().int().nonnegative().optional(),
@@ -154,5 +158,59 @@ describe("StreamAppendInput", () => {
     expect(() => StreamAppendInput.parse({ type: "test/event", extra: true })).toThrow();
     expect(() => StreamAppendInput.parse({ type: "test/event", ephemeral: false })).toThrow();
     expect(() => StreamAppendInput.parse({ type: "test/event", offset: -1 })).toThrow();
+  });
+});
+
+describe("sameIdempotentEvent", () => {
+  const existing: StreamEvent = {
+    type: "test/event",
+    payload: { nested: { value: 1 }, list: [true, null] },
+    metadata: { trace: "original" },
+    idempotencyKey: "logical-event",
+    source: {
+      processor: {
+        slug: "processor",
+        version: "1",
+        stream: { path: "/source", projectId: null },
+      },
+    },
+    offset: 4,
+    createdAt: "2026-07-16T00:00:00.000Z",
+    path: "/target",
+  };
+
+  it("matches structural event identity while excluding provenance", () => {
+    expect(
+      sameIdempotentEvent(existing, {
+        type: existing.type,
+        payload: { list: [true, null], nested: { value: 1 } },
+        metadata: { trace: "original" },
+        idempotencyKey: existing.idempotencyKey,
+        source: {
+          processor: {
+            slug: "processor",
+            version: "2",
+            stream: { path: "/source", projectId: null },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { payload: { nested: { value: 2 }, list: [true, null] } },
+    { metadata: { trace: "different" } },
+    { type: "test/other" },
+    { ephemeral: true },
+  ] satisfies Partial<StreamEventInput>[])("rejects a changed logical event %#", (changed) => {
+    expect(
+      sameIdempotentEvent(existing, {
+        type: existing.type,
+        payload: existing.payload,
+        metadata: existing.metadata,
+        idempotencyKey: existing.idempotencyKey,
+        ...changed,
+      }),
+    ).toBe(false);
   });
 });

@@ -4760,3 +4760,39 @@ envelopes, continuous writers, eviction, receiver retry, and singular public
 `processEvent` Worker consumers. Worker-local elapsed time remains invalid when
 there is no network I/O because Cloudflare may freeze the isolate clock.
 Production remains untouched.
+
+## 2026-07-16: Preview-9 Bootstrap And Idempotency Diagnosis
+
+Preview-9 deployed merged head `0128ebe7308be444fd882c11cc2304e70bd8f87f`.
+Its browser root-state test, Cap'n Web idempotency test, and OS onboarding smoke
+did not pass. Cloudflare observability, queried from the host rather than timed
+inside an isolate, identified 124 Streams playground errors with
+`table events already exists at offset 841: SQLITE_ERROR` across append, read,
+head, runtime-state, and subscribe calls. One append invocation remained open
+for 60 seconds.
+
+The failure was an interrupted schema-v8 bootstrap. Fresh Stream storage
+created its tables in separate DDL statements and treated every bootstrap query
+error as a fresh database. If activation stopped after `events` existed but
+before `stream_storage_schema` committed, every later incarnation repeated the
+non-idempotent first DDL statement and failed forever. The correction makes the
+fresh DDL sequence one `transactionSync` transaction, uses absence of the
+schema marker as the only fresh/interrupted signal, replaces partial
+Stream-owned tables in that state, and rethrows errors when the marker exists.
+Injected-failure tests prove rollback leaves no partial tables and a retry
+creates the exact current schema. This is destructive recovery for an
+uncommitted fresh bootstrap, not legacy-format adoption.
+
+The Cap'n Web failure had a separate cause. Raw host-captured frames proved the
+default append acknowledgement was correctly encoded as
+`["resolve", ..., ["undefined"]]`. The compact append path had lost main's
+`sameIdempotentEvent` check, so a conflicting retry resolved as though it were
+identical. The correction preserves the offset-only miss probe and hydrates
+only actual compact-mode hits for exact structural identity validation;
+same-batch retries use their in-memory committed envelope. Tests now cover
+identical and conflicting retries in all result modes.
+
+Local proof at this checkpoint is 544 passing Stream-domain tests, clean OS and
+playground TypeScript, and clean focused lint. The replacement preview run,
+full deployed lane, and post-deploy error audit remain pending. Production was
+not deployed, erased, or otherwise changed.

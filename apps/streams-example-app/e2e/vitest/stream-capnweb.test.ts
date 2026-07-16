@@ -355,6 +355,29 @@ describe("stream capnweb protocol", () => {
         payload: { n: 2 },
       }),
     ).rejects.toThrow('idempotency key "same-batch" already names a different event');
+
+    const acknowledgedEvent = {
+      ...event,
+      type: "test.stream.capnweb-same-batch-idempotency-ack",
+      idempotencyKey: "same-batch-ack",
+    } as const;
+    expect(await stream.stream.append(acknowledgedEvent, acknowledgedEvent)).toBeUndefined();
+    await expect(
+      stream.stream.append({ ...acknowledgedEvent, metadata: { conflicting: true } }),
+    ).rejects.toThrow('idempotency key "same-batch-ack" already names a different event');
+
+    const offsetEvent = {
+      ...event,
+      type: "test.stream.capnweb-same-batch-idempotency-offset",
+      idempotencyKey: "same-batch-offset",
+    } as const;
+    expect(await stream.stream.append({ return: "offsets" }, offsetEvent, offsetEvent)).toEqual([
+      6, 6,
+    ]);
+    await expect(
+      stream.stream.append({ return: "offsets" }, { ...offsetEvent, payload: { n: 2 } }),
+    ).rejects.toThrow('idempotency key "same-batch-offset" already names a different event');
+
     await expect(
       stream.stream
         .getEvents({ afterOffset: 0 })
@@ -367,6 +390,8 @@ describe("stream capnweb protocol", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/woken",
       "test.stream.capnweb-same-batch-idempotency",
+      "test.stream.capnweb-same-batch-idempotency-ack",
+      "test.stream.capnweb-same-batch-idempotency-offset",
     ]);
   });
 

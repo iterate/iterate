@@ -94,9 +94,19 @@ const initializedStreamStorage = new WeakSet<SqlStorage>();
 
 type StreamStorageBootstrap = StreamOffsetBounds & { version: number };
 
+function hasStreamStorageSchemaMarker(sqlStorage: SqlStorage): boolean {
+  return (
+    sqlStorage
+      .exec<{ name: string }>(
+        "select name from sqlite_master where type = 'table' and name = 'stream_storage_schema'",
+      )
+      .toArray()[0] !== undefined
+  );
+}
+
 function readStreamStorageBootstrap(sqlStorage: SqlStorage): StreamStorageBootstrap | undefined {
   try {
-    return sqlStorage
+    const bootstrap = sqlStorage
       .exec<StreamStorageBootstrap>(`
         with event_bounds as (
           select coalesce(max(offset), 0) as highestOffset
@@ -109,92 +119,112 @@ function readStreamStorageBootstrap(sqlStorage: SqlStorage): StreamStorageBootst
         where singleton = 1
       `)
       .toArray()[0];
-  } catch {
+    if (bootstrap !== undefined) return bootstrap;
+    // A marker table without its singleton row can only be an interrupted
+    // fresh bootstrap. It is reset by initializeStreamStorage below.
+    return undefined;
+  } catch (error) {
+    // Absence of the marker identifies a fresh or interrupted bootstrap. Once
+    // the marker exists, preserve every SQL failure as actual corruption.
+    if (hasStreamStorageSchemaMarker(sqlStorage)) throw error;
     return undefined;
   }
 }
 
 /** Bootstrap the append-log and delivery-cursor tables once per storage handle. */
-export function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBounds | undefined {
+export function initializeStreamStorage(
+  sqlStorage: SqlStorage,
+  transactionRunner?: TransactionRunner,
+): StreamOffsetBounds | undefined {
   if (initializedStreamStorage.has(sqlStorage)) return undefined;
   const bootstrap = readStreamStorageBootstrap(sqlStorage);
-  const schemaVersion = bootstrap?.version ?? 0;
-  if (schemaVersion === CURRENT_STREAM_STORAGE_SCHEMA_VERSION) {
+  if (bootstrap?.version === CURRENT_STREAM_STORAGE_SCHEMA_VERSION) {
     initializedStreamStorage.add(sqlStorage);
     return bootstrap;
   }
-  if (schemaVersion !== 0) {
-    throw new Error(`Unsupported stream storage schema version: ${schemaVersion}`);
+  if (bootstrap !== undefined) {
+    throw new Error(`Unsupported stream storage schema version: ${bootstrap.version}`);
   }
-  sqlStorage.exec(`
-    -- Stream-owned append log metadata. Bounded JSON is inline; oversized JSON is chunked.
-    -- offset is the replay cursor; the partial index below owns keyed dedup/lookups.
-    -- createdAt stays solely in event_json: no query filters or orders on it, so a
-    -- duplicate column would consume one binding and one SQLite field per append.
-    -- path is omitted because every row belongs to this Durable Object's one path.
-    -- Chunked rows retain their raw serialized length beside null event_json so
-    -- delivery sizing never reads chunks it may exclude at the frame boundary.
-    -- ephemeral marks second-class rows: range reads exclude them unless asked, and
-    -- the stream may evict them in the future. Eviction keeps offsets consumed
-    -- in stream_storage_schema but forgets their idempotency keys.
-    create table events (
-      offset integer primary key,
-      type text not null,
-      idempotency_key text,
-      ephemeral integer not null default 0,
-      event_json blob,
-      chunked_json_byte_length integer
-    )
-  `);
-  sqlStorage.exec(`
-    -- Most facts have no idempotency key. A partial index preserves exact
-    -- uniqueness and point lookups for keyed facts without writing a null
-    -- index entry for every ordinary append.
-    create unique index events_idempotency_key
-    on events(idempotency_key)
-    where idempotency_key is not null
-  `);
-  sqlStorage.exec(`
-    -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
-    -- primary key is the lookup index used by point reads and range replay.
-    create table event_chunks (
-      offset integer not null,
-      chunk_index integer not null,
-      chunk_bytes blob not null,
-      primary key (offset, chunk_index),
-      foreign key (offset) references events(offset) on delete cascade
-    ) without rowid
-  `);
-  sqlStorage.exec(`
-    create table subscriptions (
-      subscription_key text primary key,
-      acked_offset integer not null,
-      attempt integer not null default 0,
-      next_attempt_at integer,
-      last_error text,
-      epoch integer not null default 0,
-      pending_through_offset integer,
-      pending_stream_max_offset integer,
-      pending_attempt integer,
-      pending_recovery_at integer,
-      check ((pending_through_offset is null) = (pending_stream_max_offset is null)),
-      check ((pending_through_offset is null) = (pending_attempt is null)),
-      check (pending_through_offset is null or pending_stream_max_offset >= pending_through_offset),
-      check (pending_attempt is null or pending_attempt >= 1),
-      check (pending_recovery_at is null or pending_attempt is not null)
-    )
-  `);
-  sqlStorage.exec(`
-    create table stream_storage_schema (
-      singleton integer primary key check (singleton = 1),
-      version integer not null,
-      evicted_offset_floor integer not null
-    )
-  `);
-  sqlStorage.exec(
-    "insert into stream_storage_schema (singleton, version, evicted_offset_floor) values (1, ?, 0)",
-    CURRENT_STREAM_STORAGE_SCHEMA_VERSION,
-  );
+  const createCurrentSchema = () => {
+    // A missing marker is either a fresh database or an interrupted fresh
+    // bootstrap. There is deliberately no legacy adoption: discard any
+    // uncommitted partial tables and create exactly the current schema.
+    sqlStorage.exec("drop table if exists event_chunks");
+    sqlStorage.exec("drop table if exists subscriptions");
+    sqlStorage.exec("drop table if exists events");
+    sqlStorage.exec("drop table if exists stream_storage_schema");
+    sqlStorage.exec(`
+      -- Stream-owned append log metadata. Bounded JSON is inline; oversized JSON is chunked.
+      -- offset is the replay cursor; the partial index below owns keyed dedup/lookups.
+      -- createdAt stays solely in event_json: no query filters or orders on it, so a
+      -- duplicate column would consume one binding and one SQLite field per append.
+      -- path is omitted because every row belongs to this Durable Object's one path.
+      -- Chunked rows retain their raw serialized length beside null event_json so
+      -- delivery sizing never reads chunks it may exclude at the frame boundary.
+      -- ephemeral marks second-class rows: range reads exclude them unless asked, and
+      -- the stream may evict them in the future. Eviction keeps offsets consumed
+      -- in stream_storage_schema but forgets their idempotency keys.
+      create table events (
+        offset integer primary key,
+        type text not null,
+        idempotency_key text,
+        ephemeral integer not null default 0,
+        event_json blob,
+        chunked_json_byte_length integer
+      )
+    `);
+    sqlStorage.exec(`
+      -- Most facts have no idempotency key. A partial index preserves exact
+      -- uniqueness and point lookups for keyed facts without writing a null
+      -- index entry for every ordinary append.
+      create unique index events_idempotency_key
+      on events(idempotency_key)
+      where idempotency_key is not null
+    `);
+    sqlStorage.exec(`
+      -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
+      -- primary key is the lookup index used by point reads and range replay.
+      create table event_chunks (
+        offset integer not null,
+        chunk_index integer not null,
+        chunk_bytes blob not null,
+        primary key (offset, chunk_index),
+        foreign key (offset) references events(offset) on delete cascade
+      ) without rowid
+    `);
+    sqlStorage.exec(`
+      create table subscriptions (
+        subscription_key text primary key,
+        acked_offset integer not null,
+        attempt integer not null default 0,
+        next_attempt_at integer,
+        last_error text,
+        epoch integer not null default 0,
+        pending_through_offset integer,
+        pending_stream_max_offset integer,
+        pending_attempt integer,
+        pending_recovery_at integer,
+        check ((pending_through_offset is null) = (pending_stream_max_offset is null)),
+        check ((pending_through_offset is null) = (pending_attempt is null)),
+        check (pending_through_offset is null or pending_stream_max_offset >= pending_through_offset),
+        check (pending_attempt is null or pending_attempt >= 1),
+        check (pending_recovery_at is null or pending_attempt is not null)
+      )
+    `);
+    sqlStorage.exec(`
+      create table stream_storage_schema (
+        singleton integer primary key check (singleton = 1),
+        version integer not null,
+        evicted_offset_floor integer not null
+      )
+    `);
+    sqlStorage.exec(
+      "insert into stream_storage_schema (singleton, version, evicted_offset_floor) values (1, ?, 0)",
+      CURRENT_STREAM_STORAGE_SCHEMA_VERSION,
+    );
+  };
+  if (transactionRunner === undefined) createCurrentSchema();
+  else transactionRunner.transactionSync(createCurrentSchema);
   initializedStreamStorage.add(sqlStorage);
   return { highestOffset: 0, highestAssignedOffset: 0 };
 }
@@ -207,10 +237,11 @@ export class StreamEventLog {
   constructor(
     readonly sql: SqlStorage,
     path: string,
+    transactionRunner?: TransactionRunner,
   ) {
     this.#path = path;
     this.#pathPropertyByteLength = textEncoder.encode(`,"path":${JSON.stringify(path)}`).byteLength;
-    this.#bootstrapOffsetBounds = initializeStreamStorage(this.sql);
+    this.#bootstrapOffsetBounds = initializeStreamStorage(this.sql, transactionRunner);
   }
 
   highestOffset(): number {
@@ -599,7 +630,7 @@ export class StreamEventLog {
     return chunked === undefined ? undefined : this.#parseEvent(chunked.chunks, chunked.byteLength);
   }
 
-  /** Resolve a void append's duplicate without materializing its stored event. */
+  /** Probe a compact append's indexed duplicate without materializing a miss. */
   getOffsetByIdempotencyKey(idempotencyKey: string): number | undefined {
     return this.sql
       .exec<{ offset: number }>(
@@ -609,7 +640,7 @@ export class StreamEventLog {
       .toArray()[0]?.offset;
   }
 
-  /** Batched counterpart to getOffsetByIdempotencyKey for variadic void appends. */
+  /** Batched counterpart to getOffsetByIdempotencyKey for variadic compact appends. */
   getOffsetsByIdempotencyKeys(idempotencyKeys: readonly string[]): Map<string, number> {
     if (idempotencyKeys.length === 1) {
       const idempotencyKey = idempotencyKeys[0]!;

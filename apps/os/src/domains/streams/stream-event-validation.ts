@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { StreamEventInput } from "./schemas.ts";
+import { StreamEventInput, type StreamEvent } from "./schemas.ts";
 
 // `z.record(z.string(), z.unknown())` walks every payload/metadata key through
 // two no-op schemas, then shallow-copies it. On large event payloads that work
@@ -80,6 +80,20 @@ export function parseStreamAppendInput(value: unknown): ParsedStreamAppendInput 
   return parsed;
 }
 
+/**
+ * Idempotency names one logical event, not any write that happens to reuse a
+ * key. Provenance is excluded so a processor retry remains valid after its
+ * source-version stamp changes across a deployment.
+ */
+export function sameIdempotentEvent(existing: StreamEvent, requested: StreamEventInput): boolean {
+  return (
+    existing.type === requested.type &&
+    jsonValuesEqual(existing.payload, requested.payload) &&
+    jsonValuesEqual(existing.metadata, requested.metadata) &&
+    existing.ephemeral === requested.ephemeral
+  );
+}
+
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 
@@ -123,4 +137,29 @@ function appendInputKeysAreKnown(input: Record<string, unknown>): boolean {
     }
   }
   return true;
+}
+
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  return (
+    leftKeys.length === Object.keys(rightRecord).length &&
+    leftKeys.every(
+      (key) =>
+        Object.hasOwn(rightRecord, key) && jsonValuesEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
 }

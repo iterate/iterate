@@ -137,6 +137,47 @@ describe("StreamEventLog.getRange", () => {
     expect(statements).toHaveLength(2);
   });
 
+  it("replaces an interrupted unversioned bootstrap atomically", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("create table events (partial integer)");
+
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream", transactionRunner(db));
+
+    expect(log.offsetBounds()).toEqual({ highestOffset: 0, highestAssignedOffset: 0 });
+    expect(
+      db
+        .prepare("select name from pragma_table_info('events') order by cid")
+        .all()
+        .map((column) => column.name),
+    ).toEqual([
+      "offset",
+      "type",
+      "idempotency_key",
+      "ephemeral",
+      "event_json",
+      "chunked_json_byte_length",
+    ]);
+  });
+
+  it("rolls back a failed fresh bootstrap instead of committing a partial schema", () => {
+    const db = new DatabaseSync(":memory:");
+    let fail = true;
+    const sql = wrapSqlStorage(db, (statement) => {
+      if (fail && statement.includes("create table event_chunks")) {
+        throw new Error("injected bootstrap interruption");
+      }
+    });
+
+    expect(() => new StreamEventLog(sql, "/tests/stream", transactionRunner(db))).toThrow(
+      "injected bootstrap interruption",
+    );
+    expect(db.prepare("select name from sqlite_master where type = 'table'").all()).toEqual([]);
+
+    fail = false;
+    const retried = new StreamEventLog(sql, "/tests/stream", transactionRunner(db));
+    expect(retried.offsetBounds()).toEqual({ highestOffset: 0, highestAssignedOffset: 0 });
+  });
+
   it("rejects any event-log schema other than the exact current version", () => {
     const db = new DatabaseSync(":memory:");
     const sql = wrapSqlStorage(db);

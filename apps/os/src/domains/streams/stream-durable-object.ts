@@ -9,7 +9,7 @@ import {
   AcknowledgedIdempotencyOffsetCache,
 } from "./acknowledged-idempotency-offset-cache.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
-import { parseStreamAppendInput } from "./stream-event-validation.ts";
+import { parseStreamAppendInput, sameIdempotentEvent } from "./stream-event-validation.ts";
 import {
   appendOrdinaryEventToRun,
   foldOrdinaryEventRun,
@@ -102,13 +102,14 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  */
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(resolveDurableObjectName(this.ctx));
-  readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
+  readonly #sql = this.ctx.storage.sql;
+  readonly #log = new StreamEventLog(this.#sql, this.name.path, this.ctx.storage);
   /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)
    * because the core-state rebuild path also reconciles these rows against
    * the freshly folded config — see #readCoreProcessorState.
    */
-  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
+  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.#sql);
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
   readonly #subscribers = new StreamSubscribers({
@@ -269,7 +270,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   #append(eventInputs: readonly StreamEventInput[], result: "offsets"): number[];
   #append(eventInputs: readonly StreamEventInput[], result: "void"): void;
 
-  /** The shared commit path; compact callers resolve duplicates by offset, not envelope. */
+  /** The shared commit path; compact callers probe by offset and hydrate only actual hits. */
   #append(
     eventInputs: readonly StreamEventInput[],
     result: "events" | "offsets" | "void",
@@ -285,7 +286,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     let reducedEvents: ReducedCoreEvent[] | undefined;
     let committedAt: string | undefined;
     let committedAtMs = 0;
-    let idempotencyHitsInBatch: Map<string, StreamEvent | number> | undefined;
+    let idempotencyHitsInBatch: Map<string, StreamEvent> | undefined;
     let idempotencyKeys: Set<string> | undefined;
     let ordinaryRun: OrdinaryEventRun | undefined;
     // The single-event path is already allocation-minimal. Variadic appends
@@ -354,9 +355,25 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (expectedOffset !== undefined && expectedOffset !== existingOffset) {
             throw new Error(`idempotency hit at offset ${existingOffset}, got ${expectedOffset}`);
           }
-          if (typeof existing !== "number") {
+          // Compact result modes keep the common miss cheap by probing only
+          // the indexed offset. A real retry is rare and must hydrate the
+          // envelope: idempotency rejects a different logical event rather
+          // than silently discarding it merely because the key matches.
+          const existingEvent =
+            typeof existing === "number" ? this.#log.getByOffset(existing) : existing;
+          if (existingEvent === undefined) {
+            throw new Error(
+              `idempotency index points to missing event at offset ${existingOffset}`,
+            );
+          }
+          if (!sameIdempotentEvent(existingEvent, body)) {
+            throw new Error(
+              `idempotency key "${body.idempotencyKey}" already names a different event at offset ${existingOffset}`,
+            );
+          }
+          if (materializeIdempotencyHits) {
             newEvents ??= events.slice();
-            events.push(existing);
+            events.push(existingEvent);
           }
           offsets?.push(existingOffset);
           continue;
@@ -424,10 +441,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       offsets?.push(committed.offset);
       newEvents?.push(committed);
       if (committed.idempotencyKey !== undefined) {
-        (idempotencyHitsInBatch ??= new Map()).set(
-          committed.idempotencyKey,
-          materializeIdempotencyHits ? committed : committed.offset,
-        );
+        (idempotencyHitsInBatch ??= new Map()).set(committed.idempotencyKey, committed);
       }
     }
 
