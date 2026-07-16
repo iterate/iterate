@@ -3154,7 +3154,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
                 path: `/integrations/slack/${connection}`,
                 projectId: this.props.projectId,
               }),
-            ) as unknown as ProcessorHostStub,
+            ) as unknown as ProjectRouterProcessorHostStub,
+          processorFacade: (host) => host.slackProcessor,
         });
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
@@ -3266,7 +3267,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
                 path: `/integrations/telegram/${connection}`,
                 projectId: this.props.projectId,
               }),
-            ) as unknown as ProcessorHostStub,
+            ) as unknown as ProjectRouterProcessorHostStub,
+          processorFacade: (host) => host.telegramProcessor,
         });
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
@@ -3568,7 +3570,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
             path: EMAIL_INTEGRATION_STREAM_PATH,
             projectId: this.props.projectId,
           }),
-        ) as unknown as ProcessorHostStub,
+        ) as unknown as ProjectRouterProcessorHostStub,
+      processorFacade: (host) => host.emailProcessor,
     });
   }
 
@@ -6487,6 +6490,16 @@ type ProcessorHostStub = {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
 };
 
+/** The Project DO hosts three integration routers alongside its primary
+ * Project processor. Their public handles must select the matching runner-
+ * backed read facade; the default `processor` property intentionally remains
+ * the Project processor. */
+type ProjectRouterProcessorHostStub = ProcessorHostStub & {
+  emailProcessor: PromiseLike<unknown>;
+  slackProcessor: PromiseLike<unknown>;
+  telegramProcessor: PromiseLike<unknown>;
+};
+
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
  *
@@ -6508,21 +6521,27 @@ type ProcessorHostStub = {
  * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
  * exists to close for `ingest`).
  */
-class ProcessorRelayRpcTarget<State>
+class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements WakeableStreamProcessorRpc<State>
 {
   readonly #auth: ItxAuth;
-  readonly #host: () => ProcessorHostStub;
+  readonly #host: () => Host;
+  readonly #processorFacade: (host: Host) => PromiseLike<unknown>;
 
-  constructor(args: { auth: ItxAuth; host: () => ProcessorHostStub }) {
+  constructor(args: {
+    auth: ItxAuth;
+    host: () => Host;
+    processorFacade?: (host: Host) => PromiseLike<unknown>;
+  }) {
     super();
     this.#auth = args.auth;
     this.#host = args.host;
+    this.#processorFacade = args.processorFacade ?? ((host) => host.processor);
   }
 
   async #processor(): Promise<StreamProcessorRpc<State>> {
-    return (await this.#host().processor) as StreamProcessorRpc<State>;
+    return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
   }
 
   async snapshot() {
