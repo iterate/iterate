@@ -216,11 +216,10 @@ import {
   indexDocument,
   indexPinnedStreamEvent,
   indexEntireStream,
-  indexStreamEventBatch,
   mirrorFileToSearchIndex,
   triggerProjectSearchSync,
-  triggerProjectSearchSyncDebounced,
 } from "./domains/search/search-index.ts";
+import type { StreamSearchIndexRequest } from "./domains/search/stream-search-index-coordinator.ts";
 import {
   extractMatchSnippet,
   narrowStreamRefToChunk,
@@ -5192,6 +5191,7 @@ type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(input: TouchInput): Promise<void>;
+  indexStreamSearch(input: StreamSearchIndexRequest): Promise<void>;
   touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
   rebuildAgentStatus(input: AgentStatusTouchInput): Promise<boolean>;
 };
@@ -5696,34 +5696,26 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * corpus (domains/search/search-index.ts) as fixed 100-offset segment
    * documents. Same rules as {@link #indexStreamActivity}: idempotent
    * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
-   * — only the worker delegation may reject into the spine's retry. It rides
-   * the same ordered, checkpointed delivery, re-reading each touched segment's
-   * full range from the stream so a transient failure self-heals on the next
-   * batch in that segment (see indexStreamEventBatch).
+   * — only the worker delegation may reject into the spine's retry. The
+   * project Durable Object is the explicit single writer: it coalesces
+   * concurrent delivery offsets, then re-reads each touched segment's full
+   * range from the authoritative stream before writing R2.
    */
   #indexStreamSearch(batch: StreamPushEventBatch): void {
-    if (batch.projectId === null) return;
-    const streamStub = env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: batch.projectId, path: batch.path },
-        { allowNullProjectId: true },
-      ),
-    );
-    // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
-    // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
-    // promise can be cancelled when the invocation's I/O context ends.
-    const projectId = batch.projectId;
+    if (batch.projectId === null || batch.events.length === 0) return;
+    // waitUntil, not bare fire-and-forget: the project-DO hop plus stream
+    // re-read and R2 put outlive this RPC's resolve. Only coordinates cross
+    // the ownership boundary; the DO never trusts a delivered event body.
     this.#props.ctx.waitUntil(
-      indexStreamEventBatch({
-        batch,
-        readEvents: (args) => streamStub.getEvents(args),
-      })
-        // Freshness: nudge the project's instance (if one exists) so passive
-        // content is searchable in minutes, not on the hourly schedule.
-        .then(() => triggerProjectSearchSyncDebounced(projectId))
-        .catch((error: unknown) => {
-          console.warn("search index stream batch failed", { path: batch.path, error });
+      Promise.resolve(
+        this.#projectDo.indexStreamSearch({
+          projectId: batch.projectId,
+          path: batch.path,
+          offsets: batch.events.map((event) => event.offset),
         }),
+      ).catch((error: unknown) => {
+        console.warn("search index stream batch failed", { path: batch.path, error });
+      }),
     );
   }
 

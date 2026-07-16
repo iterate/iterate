@@ -24,7 +24,7 @@
 // The write paths are best-effort mirrors: a failed index write must never
 // fail the user-facing operation that triggered it (append, file put, repo
 // commit). Failures log at warn — the corpus is derived and self-healing
-// (see indexStreamEventBatch), never the system of record.
+// (see indexStreamOffsets), never the system of record.
 //
 // LOCAL DEV runs against the real cloud service, not a local emulation: the
 // AI Search bindings have no local simulator, so they always hit the account,
@@ -35,7 +35,8 @@
 import { itxEnv } from "../../env.ts";
 import { ItxExpression } from "../../itx/expression.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
-import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
+import type { StreamSearchIndexRequest } from "./stream-search-index-coordinator.ts";
+import { expectedSearchSyncSkipReason } from "./search-sync-outcome.ts";
 import {
   MAX_SEARCH_KEY_BYTES,
   fileRef,
@@ -100,7 +101,9 @@ export async function triggerProjectSearchSync(projectId: string): Promise<void>
   try {
     await itxEnv.SEARCH_INSTANCES.get(projectSearchInstanceId(projectId)).jobs.create();
   } catch (error) {
-    console.warn("search sync trigger skipped", { projectId, error: String(error).slice(0, 200) });
+    const expected = expectedSearchSyncSkipReason(error);
+    if (expected !== null) return;
+    console.warn("search sync trigger failed", { projectId, error: String(error).slice(0, 200) });
   }
 }
 
@@ -172,18 +175,17 @@ export async function indexPinnedStreamEvent(input: {
  * write stays short until `itx.search.indexStream`/reindex — acceptable for a
  * derived, rebuildable corpus.
  */
-export async function indexStreamEventBatch(input: {
-  batch: StreamPushEventBatch;
-  /** Committed-event range read from the stream (bounds exclusive/exclusive, like the DO's getEvents). */
-  readEvents: (args: {
-    afterOffset: number;
-    beforeOffset: number;
-    limit: number;
-  }) => Promise<StreamEvent[]>;
-}): Promise<void> {
-  const { batch } = input;
-  if (batch.projectId === null) return;
-  const offsets = batch.events.map((event) => event.offset);
+export async function indexStreamOffsets(
+  input: StreamSearchIndexRequest & {
+    /** Committed-event range read from the stream (bounds exclusive/exclusive, like the DO's getEvents). */
+    readEvents: (args: {
+      afterOffset: number;
+      beforeOffset: number;
+      limit: number;
+    }) => Promise<StreamEvent[]>;
+  },
+): Promise<void> {
+  const offsets = input.offsets;
   if (offsets.length === 0) return;
 
   const segments = new Set(offsets.map(segmentForOffset));
@@ -197,11 +199,11 @@ export async function indexStreamEventBatch(input: {
     const document = renderStreamSegmentDocument({
       events,
       segment,
-      streamPath: batch.path,
+      streamPath: input.path,
     });
     const key = streamSegmentKey({
-      projectId: batch.projectId,
-      streamPath: batch.path,
+      projectId: input.projectId,
+      streamPath: input.path,
       segment,
     });
     if (document === null) {
@@ -217,8 +219,8 @@ export async function indexStreamEventBatch(input: {
       httpMetadata: { contentType: "text/markdown" },
       customMetadata: searchMetadata(
         "streams",
-        streamSegmentContext({ streamPath: batch.path, segment }),
-        streamEventsRef({ path: batch.path, firstOffset, lastOffset }),
+        streamSegmentContext({ streamPath: input.path, segment }),
+        streamEventsRef({ path: input.path, firstOffset, lastOffset }),
       ),
     });
   }
