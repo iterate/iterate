@@ -46,6 +46,8 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+/** Recover durable one-shot waits promptly when their live delivery connection is replaced. */
+const WAIT_FOR_EVENT_DURABLE_RESCAN_INTERVAL_MS = 1_000;
 /** Keep recovery callback frames far below Cap'n Web's 32 MiB value limit. */
 const RECOVERY_EXPORT_PAGE_BYTE_LIMIT = 1024 * 1024;
 /** Bound CPU per RPC; the client continues the same fixed export window. */
@@ -1364,9 +1366,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    * appended after this wait opens. It never matches a historical ephemeral
    * row, regardless of `afterOffset`.
    *
-   * Intentionally not a durable waiter. If the RPC caller or this DO
-   * incarnation dies, the wait dies too; callers that need retry semantics
-   * should call again with the same `afterOffset`.
+   * The wait itself is not persisted: if its RPC caller dies, it dies too.
+   * While the call remains alive, it periodically re-reads durable rows from
+   * its original boundary. That closes the gap where recovery or a deployment
+   * replaces the live subscription but leaves the pending RPC call alive.
    */
   async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): Promise<StreamEvent> {
     if (args.eventTypes === undefined && args.predicate === undefined) {
@@ -1384,6 +1387,9 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     const predicate = args.predicate ?? (() => true);
     const found = Promise.withResolvers<StreamEvent>();
+    // `undefined` means live-from-now. Capture that boundary synchronously
+    // before subscribe() opens so the recovery scan cannot match history.
+    let durableQueuedThroughOffset = args.afterOffset ?? this.#coreProcessorState.maxOffset;
 
     // Bound the memory a long wait on a busy stream can hold: keep a count and a
     // small ring of recent types for the timeout message rather than every seen
@@ -1397,31 +1403,67 @@ export class StreamDurableObject extends DurableObject<Env> {
     // batch can never overtake an earlier one. The first match wins; a predicate
     // that throws rejects the wait.
     let scan: Promise<void> = Promise.resolve();
+    const enqueue = (events: StreamEvent[], scannedThroughOffset: number) => {
+      const previousDurableOffset = durableQueuedThroughOffset;
+      durableQueuedThroughOffset = Math.max(durableQueuedThroughOffset, scannedThroughOffset);
+      // A durable row can arrive through both the live subscription and the
+      // periodic storage scan. Its offset makes that race exactly-once here.
+      // Ephemeral rows exist only on the live lane, so never suppress one just
+      // because a later durable scan advanced past its offset first.
+      const unseen = events.filter(
+        (event) => event.ephemeral === true || event.offset > previousDurableOffset,
+      );
+      if (unseen.length === 0) return;
+
+      scan = scan.then(async () => {
+        for (const event of unseen) {
+          if (settled) break;
+          seenCount += 1;
+          recentTypes.push(event.type);
+          if (recentTypes.length > 20) recentTypes.shift();
+          if (await predicate(event)) {
+            settled = true;
+            found.resolve(event);
+            break;
+          }
+        }
+      });
+      void scan.catch((error: unknown) => {
+        if (settled) return;
+        settled = true;
+        found.reject(error);
+      });
+    };
+
     const handle = this.subscribe({
       eventTypes: args.eventTypes,
       replayAfterOffset: args.afterOffset,
       subscriber: { description: "waitForEvent" },
-      processEventBatch: ({ events }) => {
-        scan = scan.then(async () => {
-          for (const event of events) {
-            if (settled) break;
-            seenCount += 1;
-            recentTypes.push(event.type);
-            if (recentTypes.length > 20) recentTypes.shift();
-            if (await predicate(event)) {
-              settled = true;
-              found.resolve(event);
-              break;
-            }
-          }
-        });
-        void scan.catch((error: unknown) => {
-          if (settled) return;
-          settled = true;
-          found.reject(error);
-        });
+      processEventBatch: ({ events, scannedThroughOffset }) => {
+        enqueue(events, scannedThroughOffset);
       },
     });
+
+    const rescan = setInterval(() => {
+      if (settled) return;
+      try {
+        const page = this.getEvents({
+          afterOffset: durableQueuedThroughOffset,
+          limit: MAX_GET_EVENTS_LIMIT,
+        });
+        const scannedThroughOffset = page.at(-1)?.offset;
+        if (scannedThroughOffset === undefined) return;
+        const matching =
+          args.eventTypes === undefined || args.eventTypes.includes("*")
+            ? page
+            : page.filter((event) => args.eventTypes!.includes(event.type));
+        enqueue(matching, scannedThroughOffset);
+      } catch (error) {
+        if (settled) return;
+        settled = true;
+        found.reject(error);
+      }
+    }, WAIT_FOR_EVENT_DURABLE_RESCAN_INTERVAL_MS);
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -1438,6 +1480,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       return await found.promise;
     } finally {
       clearTimeout(timer);
+      clearInterval(rescan);
       handle.unsubscribe();
     }
   }

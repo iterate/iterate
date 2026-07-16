@@ -1,6 +1,54 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
+
+test("waitForEvent still finds a durable event after recovery replaces its live subscription", async () => {
+  const marker = crypto.randomUUID();
+  const path = `/recovery-wait-${marker}`;
+  const eventType = "events.iterate.test/recovery-wait-target";
+  using transport = withItxSession();
+  using session = transport.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using stream = session.streams.get(path);
+  using recovery = session.streamRecovery.get({ projectId: null, path });
+
+  const [seed] = await stream.append({
+    type: "events.iterate.test/recovery-wait-seed",
+    payload: { marker },
+  });
+  const exported = await recovery.exportForRecovery({ limit: 500 });
+  const pending = stream.waitForEvent({
+    afterOffset: seed!.offset,
+    eventTypes: [eventType],
+    timeoutMs: 5_000,
+  });
+  void pending.catch(() => undefined);
+
+  await waitForCondition(
+    async () => {
+      const state = await stream.runtimeState();
+      return Object.values(state.runtime.connections).some(
+        (connection) => connection.subscriber?.description === "waitForEvent",
+      );
+    },
+    { description: "waitForEvent subscription to open" },
+  );
+
+  await recovery.restoreFromRecovery({
+    format: exported.format,
+    version: exported.version,
+    stream: exported.stream,
+    events: exported.events,
+    highestAssignedOffset: exported.throughOffset,
+  });
+  const [target] = await stream.append({ type: eventType, payload: { marker } });
+
+  await expect(pending).resolves.toMatchObject({
+    offset: target!.offset,
+    payload: { marker },
+    type: eventType,
+  });
+});
 
 test("recovery rejects incompatible core events before replacing the live stream", async () => {
   const path = `/recovery-strict-${crypto.randomUUID()}`;
