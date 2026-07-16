@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentPath } from "./utils.ts";
+import { agentCapabilityHostAncestorPath, resolveAgentPath } from "./utils.ts";
+
+describe("agentCapabilityHostAncestorPath", () => {
+  it("uses the calling agent only for a strict descendant", () => {
+    expect(agentCapabilityHostAncestorPath("/agents/main/researcher", "/agents/main")).toBe(
+      "/agents/main",
+    );
+    expect(agentCapabilityHostAncestorPath("/agents/main/team/researcher", "/agents/main")).toBe(
+      "/agents/main",
+    );
+  });
+
+  it("uses root for the same agent, siblings, parents, and unrelated paths", () => {
+    expect(agentCapabilityHostAncestorPath("/agents/main", "/agents/main")).toBe("/");
+    expect(agentCapabilityHostAncestorPath("/agents/main/sibling", "/agents/main/researcher")).toBe(
+      "/",
+    );
+    expect(agentCapabilityHostAncestorPath("/agents/main", "/agents/main/researcher")).toBe("/");
+    expect(agentCapabilityHostAncestorPath("/agents/other", "/agents/main")).toBe("/");
+    expect(agentCapabilityHostAncestorPath("/agents/mainland", "/agents/main")).toBe("/");
+    expect(agentCapabilityHostAncestorPath("/agents/main", undefined)).toBe("/");
+  });
+});
 
 describe("resolveAgentPath", () => {
   it("passes absolute agent paths through", () => {

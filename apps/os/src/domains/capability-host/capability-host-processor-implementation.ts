@@ -868,6 +868,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.#typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
+    const rejectProblems = (problems: string[]) => ({
+      rejection: [
+        "Script was NOT executed: it does not typecheck against this scope's capability types.",
+        ...problems,
+        "Fix the type errors and resend the whole corrected script.",
+      ].join("\n"),
+    });
+    let platformProblems: string[] | undefined;
     try {
       const check = (capabilities: CapabilityDescription[], surface: "platform" | "scope") =>
         tracing.enterSpan("capability_host.script_typecheck", async (span) => {
@@ -901,6 +909,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       // adding mount declarations. Preserve the permissive unchecked lane
       // without paying capability discovery first.
       if (platformChecked.verdict === "unchecked") return { rejection: null };
+      if (platformChecked.verdict === "problems") {
+        // A complete scope check can disprove a platform-only diagnostic by
+        // supplying the missing dynamic declaration. Until that succeeds,
+        // though, these remain proven blockers rather than an unchecked lane.
+        platformProblems = platformChecked.problems;
+      }
 
       const capabilities = await tracing.enterSpan(
         "capability_host.script_describe_capabilities",
@@ -918,19 +932,18 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         // type-stripped output, so scripts are genuinely TypeScript.
         return { rejection: null, emittedJs: checked.emittedJs };
       }
-      if (checked.verdict !== "problems") return { rejection: null };
-      return {
-        rejection: [
-          "Script was NOT executed: it does not typecheck against this scope's capability types.",
-          ...checked.problems,
-          "Fix the type errors and resend the whole corrected script.",
-        ].join("\n"),
-      };
+      if (checked.verdict === "problems") return rejectProblems(checked.problems);
+      return platformProblems === undefined
+        ? { rejection: null }
+        : rejectProblems(platformProblems);
     } catch (error) {
-      // The gate must never fail a script for the checker's own failure — an
-      // unreachable sidecar or a parent-scope dial error means unchecked.
+      // A checker/ancestor failure is permissive only when no completed check
+      // has already proved a blocker. Losing the scope-aware recheck must not
+      // erase the platform check's durable verdict.
       console.warn("[capability-host] script typecheck skipped", { error });
-      return { rejection: null };
+      return platformProblems === undefined
+        ? { rejection: null }
+        : rejectProblems(platformProblems);
     }
   }
 

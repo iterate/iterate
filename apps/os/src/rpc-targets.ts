@@ -50,7 +50,11 @@ import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
-import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import {
+  agentCapabilityHostAncestorPath,
+  normalizeAgentPath,
+  resolveAgentPath,
+} from "./domains/agents/utils.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -4141,12 +4145,13 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     }
     const creation = agentCreationForPath({
       agentPath: this.#path,
-      // The creator scope chooses the relationship once. Absolute path
-      // segments never become a fallback inheritance chain.
-      capabilityHostAncestorPath:
-        this.#props.sourceScopePath?.startsWith("/agents/") === true
-          ? this.#props.sourceScopePath
-          : "/",
+      // The creator relationship is explicit and must agree with the resolved
+      // stream tree: siblings, parents, and unrelated absolute paths inherit
+      // from root rather than from whichever agent happened to address them.
+      capabilityHostAncestorPath: agentCapabilityHostAncestorPath(
+        this.#path,
+        this.#props.sourceScopePath,
+      ),
       projectId: this.#props.projectId,
       ...(await agentBootProjectFacts(this.#props.projectId)),
       overrides: { model: input.model, systemPrompt: input.systemPrompt },

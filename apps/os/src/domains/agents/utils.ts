@@ -14,6 +14,24 @@ export function normalizeAgentPath(path: string): string {
 }
 
 /**
+ * Choose the capability ancestor recorded at agent birth. A calling agent is
+ * the ancestor only when it is the target's strict path ancestor; addressing a
+ * sibling, parent, or unrelated absolute path does not create an inheritance
+ * edge merely because the call originated inside an agent scope.
+ */
+export function agentCapabilityHostAncestorPath(
+  agentPath: string,
+  sourceScopePath: string | undefined,
+): string {
+  const target = normalizeAgentPath(agentPath);
+  if (sourceScopePath?.startsWith("/agents/") === true) {
+    const source = normalizeAgentPath(sourceScopePath);
+    if (target.startsWith(`${source}/`)) return source;
+  }
+  return "/";
+}
+
+/**
  * Resolve an agent path the way callers address agents: absolute
  * `/agents/...` paths pass through, and relative paths resolve against the
  * calling scope with plain filesystem semantics — `"."` stays put, `".."`

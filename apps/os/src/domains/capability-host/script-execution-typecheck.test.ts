@@ -244,6 +244,29 @@ describe("script execution typecheck gate", () => {
     expect(ran).toHaveLength(1);
   });
 
+  it("does not lose proven platform problems when the scope recheck is unavailable", async () => {
+    const stream = capabilityHostStream();
+    const run = vi.fn(async () => null);
+    const typecheckScript = vi
+      .fn()
+      .mockResolvedValueOnce({
+        verdict: "problems",
+        problems: ["script:1:32 — Property 'gett' does not exist. Did you mean 'get'? (TS2551)"],
+      })
+      .mockResolvedValueOnce({ verdict: "unchecked", reason: "typechecker unavailable" });
+    const harness = makeProcessor({ stream, run, typecheckScript });
+
+    await requestScript(stream, harness);
+
+    await vi.waitFor(() => expect(completion(stream)).toBeDefined());
+    expect(typecheckScript).toHaveBeenCalledTimes(2);
+    expect(completion(stream)?.payload).toMatchObject({
+      error: expect.stringContaining("Did you mean 'get'"),
+    });
+    expect(stream.events.some((event) => event.type === T.started)).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("a THROWING checker runs the script — the gate must never fail a script for its own failure", async () => {
     const stream = capabilityHostStream();
     const ran: string[] = [];
