@@ -106,41 +106,25 @@ export async function deployWithSecrets(input: {
   /** Extra `wrangler deploy` args (e.g. `["--env", name]` for env-block configs). */
   extraDeployArgs?: string[];
 }) {
+  const deployArgs = [
+    "exec",
+    "wrangler",
+    "deploy",
+    "--config",
+    input.builtConfig,
+    ...(input.extraDeployArgs ?? []),
+  ];
   const secretsDir = mkdtempSync(join(tmpdir(), "deploy-secrets-"));
   try {
     const secretsFile = join(secretsDir, "secrets.json");
     writeFileSync(secretsFile, JSON.stringify(input.secretValues), { mode: 0o600 });
-    run("pnpm", buildWranglerDeployArgs({ ...input, secretsFile }), {
+    run("pnpm", [...deployArgs, "--secrets-file", secretsFile], {
       cwd: input.cwd,
       env: input.credentials,
     });
   } finally {
     rmSync(secretsDir, { recursive: true, force: true });
   }
-}
-
-/** Build the exact Wrangler upload command used by {@link deployWithSecrets}. */
-export function buildWranglerDeployArgs(input: {
-  builtConfig: string;
-  extraDeployArgs?: string[];
-  secretsFile: string;
-}): string[] {
-  return [
-    "exec",
-    "wrangler",
-    "deploy",
-    // The repo provisions and verifies resources before code upload. Leaving
-    // Wrangler's hidden auto-provision pass enabled repeats those management
-    // API reads and can block an otherwise valid upload when that control
-    // plane is degraded (AI Search returned code 7001 on 2026-07-16). The
-    // upload itself still validates every configured binding fail-closed.
-    "--no-experimental-provision",
-    "--config",
-    input.builtConfig,
-    ...(input.extraDeployArgs ?? []),
-    "--secrets-file",
-    input.secretsFile,
-  ];
 }
 
 /**
