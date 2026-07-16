@@ -1,13 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import {
-  deploymentItxForTrustedInternal,
-  itxForScope,
-  StreamSubscriptionRpcTarget,
-} from "../../rpc-targets.ts";
+import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import type {
@@ -99,6 +94,30 @@ const SEARCH_INDEX_SUBSCRIPTION_KEY = "platform-search-index";
  * here are storage/runtime implementation methods, and the append/read methods
  * that touch SQLite/KV must remain synchronous.
  */
+type StreamSubscriberAuthorityRootFactory = (args: {
+  ctx: DurableObjectState;
+  projectId: string | null;
+}) => unknown;
+
+let streamSubscriberAuthorityRootFactory: StreamSubscriberAuthorityRootFactory | undefined;
+let streamDurableObjectConstructed = false;
+
+/**
+ * Selects the local ITX authority host for a Worker embedding the shared stream
+ * Durable Object. Call once during module initialization, before any instance
+ * can be constructed; late or repeated replacement is a configuration error.
+ */
+export function configureStreamSubscriberAuthorityRoot(
+  factory: StreamSubscriberAuthorityRootFactory,
+): void {
+  if (streamDurableObjectConstructed || streamSubscriberAuthorityRootFactory !== undefined) {
+    throw new Error(
+      "stream subscriber authority root must be configured exactly once before DO construction",
+    );
+  }
+  streamSubscriberAuthorityRootFactory = factory;
+}
+
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
@@ -132,17 +151,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
-        authorityRoot: () => {
-          const projectId = this.name.projectId;
-          return projectId === null
-            ? deploymentItxForTrustedInternal({ ctx: this.ctx })
-            : itxForScope({
-                auth: trustedInternalAuthContext(),
-                ctx: this.ctx,
-                path: "/",
-                projectId,
-              });
-        },
+        authorityRoot: () => this.createSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -165,8 +174,29 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   #coreProcessorState: CoreProcessorState;
 
+  /**
+   * Creates the local authority root used by configured stream deliveries.
+   *
+   * The stream implementation is also embedded by the standalone streams
+   * playground, whose project root intentionally acks the two platform feeds
+   * as no-ops. Keep that application boundary explicit: every host registers
+   * and constructs its own root locally, while only the selected receiver
+   * capability crosses Workers RPC.
+   */
+  protected createSubscriberAuthorityRoot(): unknown {
+    const factory = streamSubscriberAuthorityRootFactory;
+    if (factory === undefined) {
+      throw new Error("stream subscriber authority root host was not configured");
+    }
+    return factory({
+      ctx: this.ctx,
+      projectId: this.name.projectId,
+    });
+  }
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    streamDurableObjectConstructed = true;
     this.#coreProcessorState = this.#readCoreProcessorState();
 
     // The first boot appends the stream's birth certificate; every wake

@@ -26,7 +26,13 @@ import {
   workerBuildingResponse,
 } from "./domains/workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
-import { UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
+import {
+  deploymentItxForTrustedInternal,
+  itxForScope,
+  UnauthenticatedOsRpcTarget,
+} from "./rpc-targets.ts";
+import { trustedInternalAuthContext } from "./auth.ts";
+import { configureStreamSubscriberAuthorityRoot } from "./domains/streams/stream-durable-object.ts";
 import { defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
@@ -42,6 +48,17 @@ import {
 import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
+
+configureStreamSubscriberAuthorityRoot(({ ctx, projectId }) =>
+  projectId === null
+    ? deploymentItxForTrustedInternal({ ctx })
+    : itxForScope({
+        auth: trustedInternalAuthContext(),
+        ctx,
+        path: "/",
+        projectId,
+      }),
+);
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;

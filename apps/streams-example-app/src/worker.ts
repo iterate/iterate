@@ -9,6 +9,7 @@ import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
 import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
+import { configureStreamSubscriberAuthorityRoot } from "~/domains/streams/stream-durable-object.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
 import type { Stream, StreamPushEventBatch } from "~/itx-api.generated.ts";
@@ -21,11 +22,8 @@ const workerVersionHeader = "x-iterate-worker-version";
  * The playground's stand-ins for the platform's project-scoped push sinks.
  *
  * Every project-scoped stream births independent `project-worker` and
- * `platform-search-index` feeds. Their delivery expressions resolve
- * `ctx.exports.ItxEntrypoint`, call `get()`, and evaluate respectively
- * `["processEventBatch"]` and `["indexStreamSearchBatch"]` against this root
- * (see ~/domains/streams/subscriber-sinks.ts). The playground hosts the real
- * `StreamDurableObject` but deliberately has neither receiver, so it explicitly
+ * `platform-search-index` feeds. The playground hosts the real stream Durable
+ * Object but deliberately has neither receiver, so its explicit local root
  * acks both feeds as no-ops. Omitting either method leaves that feed retrying
  * and eventually appends error/park facts to every fresh playground stream.
  */
@@ -38,6 +36,14 @@ class PlaygroundItxRoot extends WorkersRpcTarget {
     // Project search belongs to OS; the standalone playground has no projection.
   }
 }
+
+/**
+ * The shared stream runtime with this application's explicit authority host.
+ * Delivery stays in-process until an expression selects a receiver; it never
+ * loops through `ItxEntrypoint`, and it never accidentally constructs OS's
+ * project root inside the standalone playground.
+ */
+configureStreamSubscriberAuthorityRoot(() => new PlaygroundItxRoot());
 
 export class ItxEntrypoint extends WorkerEntrypoint {
   get() {
