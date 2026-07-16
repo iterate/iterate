@@ -270,9 +270,10 @@ The merge met the semantic gates:
 Root typecheck, lint, formatting, and recursive workspace tests pass from a
 clean detached candidate. The full OS suite passes 1,979 tests with one
 intentional skip across 190 files. The project-bootstrap correction passes its
-six-test partial-failure/retry matrix. The exact-current-main cumulative gate is
-complete; the corrected full preview and destructive rollout runbook remain
-before this tree is a shipping candidate.
+six-test partial-failure/retry matrix and its exact deployed onboarding and
+Stream acceptance matrix. The exact-current-main cumulative gate is complete;
+telemetry normalization, the automated preview rerun, and the destructive
+rollout runbook remain before this tree is a shipping candidate.
 
 Latest `origin/main` `8a10191f4` was merged as `6d77a8fe5`; it removes completed
 task artifacts and does not change Stream runtime. Post-merge OS typecheck and
@@ -288,12 +289,20 @@ boundary remains a release blocker.
 A later preview retry exposed a separate creation deadlock after a code update.
 `ProjectProcessor` committed four universal sibling birth batches and then
 waited for all four sibling processors while those processors could re-enter
-the same Project Durable Object through indexing. The local correction awaits
+the same Project Durable Object through indexing. The correction awaits
 the durable appends only; each public processor facade performs read-through
 catch-up at point of use. A partial-failure regression test also found and fixed
 the root capability-host subscription's missing idempotency key. Its focused
-six-test matrix passes, but the fix still requires a deployed onboarding rerun
-and a telemetry-clean complete preview before it can be called resolved.
+six-test matrix passes. Exact source commit `0e1e944699ecfec83a3ed9f73e36389a7934bfea`
+was deployed to leased `preview_9` as version
+`2d8df9ad-3da3-4318-941d-62d3d2e257e9`: the immediate four-facade onboarding
+boundary passed without retry, followed by 37 passing deployed Stream tests and
+one intentional skip. Exact-version telemetry contained no timeout or recursive
+deadlock match, closing this bootstrap defect functionally. The preview remains
+release-blocked by 357 known capability-returning `ItxEntrypoint.get`
+exceptions, 341 R2 missing-key HEAD error spans, 49 cancellations, and several
+warning classes across that full matrix. The distinction matters: the deadlock
+is fixed, while the operation is not yet telemetry-clean.
 
 ## Replacement Architecture
 
@@ -390,10 +399,13 @@ fallback fails the collapse goal even if benchmarks are green.
 3. Completed: exact-current-main cumulative baseline, clean activation A/B,
    deployed callback-adapter comparison, actual singular-wire comparison, and
    immutable raw-evidence archives.
-4. Pending: eliminate or explicitly classify the `ItxEntrypoint.get` error
-   rows, record the destructive rollout/rollback procedure, then freeze the
-   public API, benchmark corpus, and correctness matrix as the replacement
-   oracle.
+4. Completed: deploy the recursive-bootstrap correction and pass immediate
+   onboarding plus the full Stream acceptance matrix with no timeout/deadlock
+   telemetry.
+5. Pending: remove the `ItxEntrypoint.get` and expected R2 probe error rows,
+   resolve or explicitly model cancellations and warning classes, record the
+   destructive rollout/rollback procedure, then freeze the public API,
+   benchmark corpus, and correctness matrix as the replacement oracle.
 
 ### Phase 1: Build one feature-complete vertical slice
 

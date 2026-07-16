@@ -115,7 +115,7 @@ explicitly reported by Cloudflare as `outcome: canceled` with `Network
 connection lost`; they coincide with WebSocket E2E activity and remain
 separately classified from Stream RPC.
 
-### Latest preview bootstrap finding
+### Latest preview bootstrap result
 
 The next draft-PR preview attempt timed out its OS test job after 240.2 seconds.
 The sequential onboarding smoke was stuck inside project creation. Trace
@@ -125,16 +125,42 @@ The merged explicit-birth path had created a recursive RPC lineage:
 `ProjectProcessor` waited for four sibling processors whose delivery and search
 indexing could re-enter the same Project Durable Object.
 
-The local correction preserves the durable sibling appends but removes sibling
+The correction preserves the durable sibling appends but removes sibling
 processor completion from project birth. Each public processor facade performs
 read-through catch-up at point of use. A new partial-failure test also exposed
 and fixed a missing idempotency key on the root capability-host subscription;
 replay now leaves all four sibling batches duplicate-free. The focused six-test
-processor suite passes. The deployed admin fixture now requests
+processor suite passes. The deployed admin fixture requests
 `waitUntilReady: false` and immediately snapshots all four read-through facades;
 the onboarding smoke logs before the create call so this class of wedge is
-visible. This is not closed until the exact correction is deployed, those flows
-pass, and the complete preview telemetry is coherent.
+visible.
+
+The runtime from exact source commit `0e1e944699ecfec83a3ed9f73e36389a7934bfea`
+was then deployed directly to leased `preview_9` as Worker version
+`2d8df9ad-3da3-4318-941d-62d3d2e257e9`; production remained untouched. The
+focused deployed onboarding boundary passed once in 14.10 seconds with no
+retry. A seven-file deployed Stream matrix then passed 37 tests with one
+intentional skip and no retries in 336.38 seconds. It exercised replay, live,
+state-only and ephemeral subscriptions, unsubscribe, cross-posting, teardown,
+wakeup, recovery, malformed subscribers, ancestor repair, and Cap'n Web
+callback replacement. The live callback benchmark used the Node host around
+completed network work, not a Worker-local clock, and measured p50 238.2 ms and
+p95 498.4 ms across 20 samples. This is an acceptance observation, not a
+current-main comparison.
+
+The bootstrap timeout is therefore closed functionally: exact-version telemetry
+for both deployed windows contained zero `timeout`, `timed out`, `deadlock`, or
+`recursive` matches and every application `itx.*` span in the focused flow had
+`itx.outcome=ok`. The preview is not telemetry-clean. The focused flow still
+produced 11 native `ItxEntrypoint.get` exceptions, five cancellations, and 14 R2
+missing-key HEAD error spans. Across the full Stream matrix there were 357 of
+the known capability-returning `ItxEntrypoint.get` exceptions, 341 R2 HEAD miss
+error spans, and 49 canceled native spans. Deliberate negative tests explain the
+remaining Stream exceptions, but search-sync warnings, unknown `slackBotToken`
+configuration warnings, and `max_instances_reached` warnings also remain.
+Shipping stays blocked until successful capability returns and expected R2
+probes stop surfacing as errors and the cancellations and warnings are either
+removed or explicitly modelled outside error telemetry.
 
 ### Exact current-main checkpoint
 

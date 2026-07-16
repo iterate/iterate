@@ -5349,3 +5349,81 @@ lifecycle logs are archived at
 SHA-256
 `788ab90ed9112529096ef33da67a919d2c54e306a53f907f76183909e0a7d251`.
 Production remains untouched.
+
+## 2026-07-16: Exact Deployed Bootstrap And Stream Acceptance
+
+The runtime from exact source commit
+`0e1e944699ecfec83a3ed9f73e36389a7934bfea` was deployed directly to the
+existing PR #1902 lease on `preview_9`. Cloudflare assigned OS Worker version
+`2d8df9ad-3da3-4318-941d-62d3d2e257e9`. The deployment smoke passed: the
+dashboard redirected as expected, event documentation returned 200, the OS API
+returned its expected unauthenticated 400, and the auth Workers RPC smoke
+returned its expected 404. No production worker or data was touched.
+
+The focused deployed acceptance test ran the admin project fixture at its fast
+creation boundary, immediately reading the capability-host, scheduler,
+config-repository, and email-router processor facades. It passed one test in
+14.10 seconds with no retry during 2026-07-16 23:07:12-23:07:40 UTC. This is the
+deployed counterpart of the recursive-bootstrap regression test: project birth
+returned after the four durable sibling appends, and point-of-use read-through
+made every facade coherent.
+
+The full relevant deployed matrix then ran these seven files:
+
+- `streams.e2e.test.ts`
+- `stream-lifecycle.e2e.test.ts`
+- `stream-security.e2e.test.ts`
+- `stream-recovery.e2e.test.ts`
+- `stream-wire.e2e.test.ts`
+- `stream-ancestor-announcements.e2e.test.ts`
+- `itx-subscribe.e2e.test.ts`
+
+All seven files passed: 37 tests passed, one intentional test was skipped, no
+test retried, and host elapsed time was 336.38 seconds during
+23:12:42-23:18:39 UTC. The matrix covered replay, live, state-only, and
+ephemeral subscriptions; unsubscribe; cross-post provenance, transforms, and
+cycles; teardown and wakeup; validation and recovery; kill; malformed
+subscribers; ancestor self-heal; Cap'n Web callback survival and replacement;
+and directional silence. The ephemeral subscriber originated zero frames.
+
+`stream-wire` also recorded 20 live callback samples. Node measured from before
+the Worker append request until the Durable Object to Worker to WebSocket
+callback completed, producing p50 238.2 ms and p95 498.4 ms. No Worker-local
+wall clock was used because Cloudflare can freeze isolate time between network
+I/O. These numbers are deployed acceptance observations, not a current-main
+comparison.
+
+Telemetry was queried from both `otel` and `cloudflare-workers` through
+`/workers/observability/telemetry/{keys,values,query}`, filtered to service
+`os-preview-9`, exact version `2d8df9ad-3da3-4318-941d-62d3d2e257e9`, and the
+two host-time windows. A text search for `timeout|timed out|deadlock|recursive`
+returned zero rows for the full matrix. Every application `itx.*` span in the
+focused flow had `itx.outcome=ok`.
+
+The functional bootstrap defect is closed, but the preview is not
+telemetry-clean:
+
+| Window             | Abnormal telemetry                                                                                       |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| Focused onboarding | 11 native `ItxEntrypoint.get` exceptions, five canceled native spans, 14 R2 missing-key HEAD error spans |
+| Full Stream matrix | 357 `ItxEntrypoint.get` exceptions, 341 R2 missing-key HEAD error spans, 49 canceled native spans        |
+
+Every one of the 357 `ItxEntrypoint.get` exceptions had fingerprint
+`b4d28d67058b74c0c62752a73fe65c25`; this is the already reproduced forwarded
+capability-session teardown defect. The 341 R2 rows were expected object probes
+reported as error spans with fingerprint `692f...`. The 49 cancellations were
+distributed across Project processor/methodless calls, Stream alarms,
+subscription and processor-state calls, ITX gets, and one GET. Deliberate
+negative assertions account for the remaining Stream exceptions and all 16
+application `itx.outcome=error` rows. Search-sync skipped/failed warnings,
+unknown `slackBotToken` configuration warnings, and `max_instances_reached`
+warnings also remain.
+
+The direct deployment proves that the recursive wait was removed and that the
+corrected external behavior survives production-shaped Workers RPC. It does not
+satisfy the repository's operational release gate. Successful capability
+returns and expected R2 probes must stop contributing to error telemetry, and
+the cancellations and warnings require bounded explanations or fixes before
+shipping. The normal preview CI retry also remains pending because GitHub's REST
+API returned 503 before Depot could deploy; that control-plane failure is
+separate from this exact-version runtime proof.
