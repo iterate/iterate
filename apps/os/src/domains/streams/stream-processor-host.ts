@@ -142,8 +142,8 @@ export type StreamProcessorHost<Live extends object = Record<string, unknown>> =
    * ingest them now. Call before serving a read that must reflect a write the
    * caller just made (read-your-writes): push delivery is asynchronous. Ingest
    * is checkpoint-filtered and serialized, so racing a live sink is safe.
-   * Failures are logged and swallowed — the read then serves the last
-   * successfully ingested state, exactly as it would have without the pull.
+   * Failures reject: a foreground operation that asked for current state must
+   * never silently serve an older checkpoint or the schema default.
    */
   catchUp(name: string): Promise<void>;
   /**
@@ -456,7 +456,11 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       return processor;
     },
 
-    catchUp: (name) => catchUpInternal(name, { rethrow: false }),
+    // This is the foreground/read-your-writes door. Background live-state
+    // assembly calls catchUpInternal(..., { rethrow: false }) directly so it
+    // can retain the last coherent projection while logging a failed refresh;
+    // callers of the public door must receive the failure.
+    catchUp: (name) => catchUpInternal(name, { rethrow: true }),
 
     handleAlarm(alarmInfo) {
       return tracing.enterSpan("alarm processor keepalive", async (span) => {

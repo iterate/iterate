@@ -106,7 +106,9 @@ describe("revival", () => {
       }),
     });
     await h.stream.append({ type: POISON, payload: {} });
-    await h.deliverAll(); // batch fails (swallowed); keepalive saw the failure
+    await expect(h.deliverAll()).rejects.toThrow("poisoned batch");
+    // The foreground caller sees the failure, and the keepalive independently
+    // owns the bounded recovery sequence below.
 
     // Every revival re-pulls the poison batch, fails, and backs off further.
     for (const expected of [1, 2, 3].map((n) => revivalBackoffMs(n))) {

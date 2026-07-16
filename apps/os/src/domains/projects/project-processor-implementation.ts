@@ -3,25 +3,14 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
-import { childAgentParentPath } from "../../lib/agent-paths.ts";
 import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { capabilityHostBirthEvents } from "../capability-host/capability-host-birth.ts";
+import { agentBirthEvents } from "../agents/agent-birth.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
-import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
-import { TelegramAgentProcessorContract } from "../integrations/telegram-agent-processor-contract.ts";
-import {
-  slackConnectionFromAgentPath,
-  telegramConnectionFromAgentPath,
-} from "../integrations/utils.ts";
-import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
-import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
-import { githubAgentSubscriptionConfiguredEvent } from "../repos/github-agent-mechanics.ts";
-import { isGithubAgentPath } from "../repos/github-agent-utils.ts";
+import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
@@ -263,26 +252,13 @@ export class ProjectProcessor extends StreamProcessor<
             // sees this same child-stream-created event through its stream
             // delivery and applies itx.agents.defaults (see
             // config-repo-template/worker.ts and agents/agent-defaults.ts).
-            // Slack/Telegram-agent wiring requires the full routed-path shape
-            // — the connection segment is what replies authenticate with.
-            // Child-agent paths are checked FIRST: the routed-agent predicates
-            // are shape-loose (Slack matches any >=6-segment path under its
-            // connection, email matches by prefix), and a child under a routed
-            // agent must not inherit its transcriber.
-            const isChildAgent = childAgentParentPath(childPath) !== null;
-            const isSlack = !isChildAgent && slackConnectionFromAgentPath(childPath) !== null;
-            const isTelegram = !isChildAgent && telegramConnectionFromAgentPath(childPath) !== null;
             await appendTo(
               childPath,
               // Stable idempotency keys: retried deliveries and re-created
               // child streams collapse into one durable subscription set.
-              ...agentSubscriptionEvents({
-                childPath,
-                email: !isChildAgent && isEmailAgentPath(childPath),
-                github: !isChildAgent && isGithubAgentPath(childPath),
+              ...agentBirthEvents({
+                agentPath: childPath,
                 projectId: this.deps.itx.projectId,
-                slack: isSlack,
-                telegram: isTelegram,
               }),
             );
             return;
@@ -344,57 +320,6 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
-}
-
-/**
- * The MECHANICS an agent stream is born with: the processor subscriptions
- * that give it an LLM loop, a capability host, and (for Slack/Telegram/email
- * threads) its domain transcriber. Policy — prompt, model, mounts, boot context —
- * comes from the project worker via itx.agents.defaults
- * (agents/agent-defaults.ts).
- */
-function agentSubscriptionEvents(input: {
-  childPath: string;
-  email?: boolean;
-  github?: boolean;
-  projectId: string;
-  slack?: boolean;
-  telegram?: boolean;
-}) {
-  const durableObjectName = DurableObjectNameCodec.stringify({
-    projectId: input.projectId,
-    path: input.childPath,
-  });
-  const subscription = (processorSlug: string) =>
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
-      processor: ["agents", ["get", input.childPath], "processor"],
-      processorSlug,
-    });
-  return [
-    // Capability inheritance is an explicit part of the birth certificate.
-    // A real child agent inherits its parent agent; routed/top-level agents
-    // inherit root directly. Namespace prefixes never become implicit hosts.
-    ...capabilityHostBirthEvents({
-      ancestorPath: childAgentParentPath(input.childPath) ?? "/",
-      path: input.childPath,
-      projectId: input.projectId,
-    }),
-    // One agent processor owns history, scheduling, and the Cloudflare AI call.
-    subscription(AgentProcessorContract.slug),
-    ...(input.slack ? [subscription(SlackAgentProcessorContract.slug)] : []),
-    ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug)] : []),
-    ...(input.email ? [subscription(EmailAgentProcessorContract.slug)] : []),
-    ...(input.github
-      ? [
-          githubAgentSubscriptionConfiguredEvent({
-            agentPath: input.childPath,
-            projectId: input.projectId,
-          }),
-        ]
-      : []),
-  ];
 }
 
 function recordStream<

@@ -51,6 +51,7 @@ import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import { agentBirthEvents } from "./domains/agents/agent-birth.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -3962,6 +3963,9 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
             files: options.files,
             projectId: this.props.projectId,
           });
+    // This is an agent OUTPUT door, not a lifecycle door: a script can only
+    // reach it after its explicit capability host has started execution. Keep
+    // the latency-critical reply append free of repeated birth-key lookups.
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
       payload: { message: trimmed, ...(files === undefined ? {} : { files }) },
@@ -4071,6 +4075,23 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
+  /**
+   * Commit through the agent lifecycle door. The mechanics prefix is a stable,
+   * idempotent birth certificate, so a fresh agent receives ancestry and all
+   * required processor subscriptions in the same atomic append as the action
+   * that made it real; an existing agent pays only idempotency lookups.
+   */
+  async #append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const birthEvents = agentBirthEvents({
+      agentPath: this.#path,
+      projectId: this.#props.projectId,
+    });
+    const committed = await this.stream.append(...birthEvents, ...events);
+    // Stream.append is input-aligned, including idempotency hits, so callers
+    // receive exactly their domain events rather than the mechanics prefix.
+    return committed.slice(birthEvents.length);
+  }
+
   /** The agent's web-chat door (what the user sees). */
   get chat(): AgentChatRpcTarget {
     return new AgentChatRpcTarget({
@@ -4114,7 +4135,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
             files: fileInputs,
             projectId: this.#props.projectId,
           });
-    const [event] = await this.stream.append({
+    const [event] = await this.#append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: actor.type === "agent" ? "developer" : "user",
@@ -4177,7 +4198,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         payload: { model: defaults.model },
       });
     }
-    await this.stream.append(...events);
+    await this.#append(...events);
   }
 
   /**
@@ -4223,7 +4244,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         "agent.setStatus requires at least one non-empty field (title, note, shortStatus, icon, blocked).",
       );
     }
-    const [event] = await this.stream.append({
+    const [event] = await this.#append({
       type: "events.iterate.com/agent/status-changed",
       payload: patch,
     });
@@ -4255,7 +4276,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     timeoutMs?: number;
   }): Promise<StreamEvent> {
     const actor = this.#contextActor();
-    const [sent] = await this.stream.append({
+    const [sent] = await this.#append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: actor.type === "agent" ? "developer" : "user",
@@ -4297,7 +4318,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
     });
     const actor = this.#contextActor();
-    const [event] = await this.stream.append({
+    const [event] = await this.#append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: actor.type === "agent" ? "developer" : "user",

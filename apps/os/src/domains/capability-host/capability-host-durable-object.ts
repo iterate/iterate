@@ -16,6 +16,7 @@ import {
   type CapabilityHostAncestor,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
@@ -110,21 +111,33 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     };
   }
 
-  invokeCapabilityFromDescendant(input: {
+  /**
+   * A Durable Object incarnation starts with only the processor's schema
+   * default in memory. Pull the journal before every stateful public operation
+   * so eviction can never turn a durably born host back into an unconfigured
+   * one, and so an asynchronous stream wake is not a read-your-writes race.
+   */
+  async #catchUp(): Promise<void> {
+    await this.#processorHost.catchUp(CapabilityHostProcessorContract.slug);
+  }
+
+  async invokeCapabilityFromDescendant(input: {
     args?: unknown[];
     path: string[];
     visitedScopePaths: string[];
   }): Promise<unknown> {
-    return this.#capabilityHostProcessor.invokeCapability(
+    await this.#catchUp();
+    return await this.#capabilityHostProcessor.invokeCapability(
       { args: input.args, path: input.path },
       input.visitedScopePaths,
     );
   }
 
-  describeCapabilitiesFromDescendant(
+  async describeCapabilitiesFromDescendant(
     visitedScopePaths: string[],
   ): Promise<CapabilityDescription[]> {
-    return this.#capabilityHostProcessor.describeCapabilities(visitedScopePaths);
+    await this.#catchUp();
+    return await this.#capabilityHostProcessor.describeCapabilities(visitedScopePaths);
   }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
@@ -147,29 +160,35 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`
   // doesn't deep-instantiate the processor's inferred signatures (TS2589).
-  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    return this.#capabilityHostProcessor.invokeCapability(input);
+  async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    await this.#catchUp();
+    return await this.#capabilityHostProcessor.invokeCapability(input);
   }
 
-  provideCapability(
+  async provideCapability(
     input: ProvideCapabilityInput,
   ): Promise<{ path: string[]; providedAtOffset: number }> {
-    return this.#capabilityHostProcessor.provideCapability(input);
+    await this.#catchUp();
+    return await this.#capabilityHostProcessor.provideCapability(input);
   }
 
-  revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
-    return this.#capabilityHostProcessor.revokeCapability(input);
+  async revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
+    await this.#catchUp();
+    await this.#capabilityHostProcessor.revokeCapability(input);
   }
 
-  runScript(code: string): Promise<RunScriptResult> {
-    return this.#capabilityHostProcessor.runScript(code);
+  async runScript(code: string): Promise<RunScriptResult> {
+    await this.#catchUp();
+    return await this.#capabilityHostProcessor.runScript(code);
   }
 
-  describeCapabilities(): Promise<CapabilityDescription[]> {
-    return this.#capabilityHostProcessor.describeCapabilities();
+  async describeCapabilities(): Promise<CapabilityDescription[]> {
+    await this.#catchUp();
+    return await this.#capabilityHostProcessor.describeCapabilities();
   }
 
   async capabilityHostAncestorPath(): Promise<string | null> {
+    await this.#catchUp();
     return this.#capabilityHostProcessor.ancestorPath();
   }
 }

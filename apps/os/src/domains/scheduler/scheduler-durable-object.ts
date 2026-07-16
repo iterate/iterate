@@ -142,9 +142,10 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return new StreamProcessorRpcTarget(this.#schedulerProcessor);
   }
 
-  // catchUp swallows failures by design (it serves stale state to reads), so
-  // the write path adds a hard wait: the command only returns once the fold
-  // provably includes the event it just appended.
+  // The command returns only once the fold provably includes the event it just
+  // appended. catchUp closes any delivery race; waitUntilEvent fences the
+  // specific write rather than merely trusting the stream head observed by a
+  // preceding pull.
   async #ingestThrough(offset: number): Promise<void> {
     await this.#processorHost.catchUp(PROCESSOR_SLUG);
     await this.#schedulerProcessor.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
