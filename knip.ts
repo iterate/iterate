@@ -17,10 +17,10 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
       "e2e/tui-test/data-layer-smoke.ts",
-      // The sidecar worker entries (wrangler.{builder,typechecker,script-executor}.jsonc,
-      // generated and gitignored — knip cannot see the configs that
-      // reference them).
+      // The sidecar worker entries (generated wrangler.*.jsonc files are
+      // gitignored, so knip cannot see the configs that reference them).
       "src/builder.ts",
+      "src/script-executor-bootstrap.ts",
       "src/script-executor.ts",
       "src/typechecker.ts",
       // Local operational commands mounted by scripts/cli.ts.
