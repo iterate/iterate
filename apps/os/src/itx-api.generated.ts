@@ -319,8 +319,9 @@ export interface CfBrowserCapability {
 }
 
 /**
- * One agent: message loops and agent-local dynamic tools. Chain calls
- * directly off `get` — `await itx.agents.get("researcher").message(task)`.
+ * One agent: message loops and agent-local dynamic tools. For an
+ * already-created agent, chain calls directly off `get` —
+ * `await itx.agents.get("researcher").message(task)`.
  * Unknown members dispatch through the agent scope's capability host, so
  * `agents.get(path).someTool(args)` and
  * `agents.get(path).capabilityHost.someTool(args)` are equivalent; inside
@@ -547,10 +548,10 @@ export interface AgentCollection {
    * the calling scope — `".."` climbs). The returned handle is a plain,
    * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
    * `itx.agents.get(path).message(text)` or `.someTool(args)` in one
-   * expression — over workerd RPC (the script lane); dynamic members resolve
-   * through the prototype-chain fallback. See Agent's class comment
-   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the
-   * guard.
+   * expression for an already-created agent — over workerd RPC (the script
+   * lane); dynamic members resolve through the prototype-chain fallback. See
+   * Agent's class comment for the mechanism and
+   * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
    */
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
