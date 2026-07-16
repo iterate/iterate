@@ -237,55 +237,14 @@ export class ProjectProcessor extends StreamProcessor<
               ),
             ),
           ]);
-          const [capabilityHostBirth, schedulerBirth, configRepoBirth, emailRouterBirth] =
-            await siblingBirths;
-
-          const capabilityHostOffset = capabilityHostBirth.reduce(
-            (maximum, event) => Math.max(maximum, event.offset),
-            0,
-          );
-          const schedulerOffset = schedulerBirth.reduce(
-            (maximum, event) => Math.max(maximum, event.offset),
-            0,
-          );
-          const configRepoOffset = configRepoBirth.reduce(
-            (maximum, event) => Math.max(maximum, event.offset),
-            0,
-          );
-          const emailRouterOffset = emailRouterBirth.reduce(
-            (maximum, event) => Math.max(maximum, event.offset),
-            0,
-          );
-          if (
-            capabilityHostOffset === 0 ||
-            schedulerOffset === 0 ||
-            configRepoOffset === 0 ||
-            emailRouterOffset === 0
-          ) {
-            throw new Error("project birth saga committed an incomplete sibling birth batch");
-          }
-
-          // `projects.create()` waits for this Project processor to finish the
-          // birth reaction. Do not let that boundary race the sibling
-          // processors it created: once the Project birth is processed, every
-          // universally available project capability must have folded its own
-          // complete birth batch too.
-          await Promise.all([
-            timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
-              this.deps.itx.capabilityHost.processor.waitUntilProcessed({
-                offset: capabilityHostOffset,
-              }),
-            ),
-            timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
-              this.deps.itx.scheduler.processor.waitUntilProcessed({ offset: schedulerOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-config-repo-birth", () =>
-              this.deps.itx.repo.processor.waitUntilProcessed({ offset: configRepoOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-email-router-birth", () =>
-              this.deps.itx.email.processor.waitUntilProcessed({ offset: emailRouterOffset }),
-            ),
-          ]);
+          // This processor owns the durable sibling APPENDS, not their
+          // execution. Waiting for sibling processors here is a recursive RPC
+          // cycle: their stream delivery calls project.processEventBatch(),
+          // whose search-index fan-in re-enters this same Project Durable
+          // Object while it is suspended on those siblings. The outer
+          // projects.create() command performs the read-through birth barrier
+          // after this frame commits, from a fresh and bounded RPC lineage.
+          await siblingBirths;
         });
         break;
       }
