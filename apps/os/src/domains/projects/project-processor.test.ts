@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
+import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
 const PROJECT_CREATED = {
@@ -14,8 +15,14 @@ const PROJECT_CREATED = {
   },
 };
 
-function makeHarness(options: { capabilityHostBirthBarrier?: Promise<void> } = {}) {
+function makeHarness(
+  options: {
+    capabilityHostBirthBarrier?: Promise<void>;
+    workerResponses?: Response[];
+  } = {},
+) {
   const network = new MemoryStreamNetwork();
+  let workerFetchCalls = 0;
   const processorWaits: { offset: number; processor: string }[] = [];
   let resolveProcessorWaitsStarted!: () => void;
   const processorWaitsStarted = new Promise<void>((resolve) => {
@@ -35,7 +42,13 @@ function makeHarness(options: { capabilityHostBirthBarrier?: Promise<void> } = {
     repo: { processor: { waitUntilProcessed: waitUntilProcessed("repo") } },
     scheduler: { processor: { waitUntilProcessed: waitUntilProcessed("scheduler") } },
     streams: { get: (path: string) => network.get(path) },
-    worker: { fetch: async () => ({}) },
+    worker: {
+      fetch: async () => {
+        const response = options.workerResponses?.[workerFetchCalls];
+        workerFetchCalls += 1;
+        return response ?? new Response(null, { status: 204 });
+      },
+    },
     search: { ensureIndex: async () => ({ created: true }) },
   } as unknown as ProjectRpcTarget;
   const stream = network.get("/");
@@ -51,6 +64,7 @@ function makeHarness(options: { capabilityHostBirthBarrier?: Promise<void> } = {
     processorWaits,
     processorWaitsStarted,
     stream,
+    workerFetchCalls: () => workerFetchCalls,
   };
 }
 
@@ -136,8 +150,13 @@ describe("ProjectProcessor bootstrap", () => {
     await expect(driver.deliver()).rejects.toThrow("more than one project/created");
   });
 
-  it("marks the project ready only after the config repo is ready and its worker responds", async () => {
-    const { driver, network, stream } = makeHarness();
+  it("waits through a cold-build response before marking the project ready", async () => {
+    const { driver, network, stream, workerFetchCalls } = makeHarness({
+      workerResponses: [
+        workerBuildingResponse(),
+        Response.json({ app: "hello", projectId: "prj_test" }),
+      ],
+    });
     await stream.append(PROJECT_CREATED);
     await driver.deliver();
 
@@ -168,6 +187,7 @@ describe("ProjectProcessor bootstrap", () => {
     expect(network.eventsAt("/").map((event) => event.type)).toContain(
       "events.iterate.com/project/ready",
     );
+    expect(workerFetchCalls()).toBe(2);
   });
 });
 

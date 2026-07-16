@@ -11,6 +11,7 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
+import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
@@ -389,15 +390,23 @@ async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void>
       // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
       // protocol needs (docs/dynamic-worker-dispatch.md).
       const response = await itx.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
-      // This probe only cares that the project worker accepted the request. The
-      // returned Response can be a Cap'n Web RPC stub, and keeping that stub
-      // alive after the probe succeeds is exactly the lifecycle pattern these
-      // stream tests are trying to avoid: a short-lived readiness check should
-      // not retain a remote object until the whole project bootstrap session
-      // ends. Dispose when the runtime supplies Symbol.dispose; local/miniflare
-      // Response objects without that hook are a no-op here.
-      disposeRpcResult(response);
-      return;
+      try {
+        if (response.headers.get(WORKER_BUILDING_HEADER) === "1") {
+          throw new Error("Default project worker is still building");
+        }
+        if (!response.ok) {
+          throw new Error(
+            `Default project worker readiness probe returned HTTP ${response.status}`,
+          );
+        }
+        return;
+      } finally {
+        // The returned Response can be a Cap'n Web RPC stub, and keeping that
+        // stub alive after the probe finishes is exactly the lifecycle pattern
+        // these stream tests are trying to avoid. Dispose on every attempt;
+        // local/miniflare Response objects without the hook are a no-op here.
+        disposeRpcResult(response);
+      }
     } catch (error) {
       lastError = error;
       if (attempt === PROJECT_WORKER_READY_ATTEMPTS) break;
