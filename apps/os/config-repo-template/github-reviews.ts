@@ -52,7 +52,7 @@ export async function processGithubReviewEvent(input: {
       repo: target.repo,
     }),
   ]);
-  const projectSlug = projectSnapshot.state.createRequest?.slug;
+  const projectSlug = projectSnapshot.state.birthCertificate?.config.slug;
   if (projectSlug === undefined) throw new Error("GitHub reviews require a created project");
   const live = liveResponse.data;
   const liveLabels = live.labels.map((label) => label.name.toLowerCase());
@@ -183,12 +183,15 @@ export async function processGithubReviewEvent(input: {
   // therefore cannot leave GitHub saying "reviewing" forever. The absolute
   // Check Run deadline makes webhook redelivery idempotent: resetting this
   // keyed schedule cannot extend the review's lifetime.
-  // A review is its own agent workload. Keeping it off the conversational PR
-  // stream prevents a push-triggered review from cancelling or coalescing with
-  // the human multi-step code-work turn. Defaults are keyed to this exact path
-  // so the normal child-birth reaction deduplicates instead of overwriting them.
-  const [defaults] = await Promise.all([
-    input.itx.agents.defaults.forPath(reviewAgentPath),
+  // A review is its own explicitly created agent workload. Keeping it off the
+  // conversational PR stream prevents a push-triggered review from cancelling
+  // or coalescing with the human multi-step code-work turn.
+  const reviewAgent = input.itx.agents.get(reviewAgentPath);
+  const reviewAgentSnapshot = await reviewAgent.processor.snapshot();
+  await Promise.all([
+    reviewAgentSnapshot.state.birthCertificate === null
+      ? reviewAgent.create({})
+      : Promise.resolve(),
     setGithubReviewDetailsUrl({
       check,
       detailsUrl,
@@ -209,11 +212,9 @@ export async function processGithubReviewEvent(input: {
       }),
     }),
   ]);
-  await input.itx.streams.get(reviewAgentPath).append(
-    ...defaults.events,
+  await reviewAgent.stream.append(
     {
-      // Roster identity for the sidebar: same shape the conversational PR
-      // agent stamps on route-configured, so review children do not fall back
+      // Roster identity for the sidebar, so review children do not fall back
       // to a truncated repos/g~… path label.
       type: "events.iterate.com/agent/status-changed",
       idempotencyKey: `status-identity:${externalId}`,

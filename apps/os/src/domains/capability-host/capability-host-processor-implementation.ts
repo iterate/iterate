@@ -130,10 +130,9 @@ export type CapabilityHostAncestor = {
 
 const MAX_CAPABILITY_ANCESTOR_DEPTH = 32;
 
-type AncestorDeclaration = {
-  configuredAtOffset: number;
-  path: string | null;
-};
+type CapabilityHostBirthCertificate = NonNullable<
+  ProcessorState<CapabilityHostProcessorContract>["birthCertificate"]
+>;
 
 /**
  * RUNNER-backed reads of the committed fold. Under registry drive the runner
@@ -189,7 +188,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
       /** Injected clock (expiry decisions); production defaults to Date.now. */
       now?: () => number;
-      /** Resolves only the path recorded by ancestor-configured. */
+      /** Resolves only the path recorded in the host's birth certificate. */
       resolveAncestor?: (path: string) => CapabilityHostAncestor;
       /**
        * Compiles a mount's `types` string, returning problems (empty = it
@@ -233,12 +232,18 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     state,
   }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/capability-host/ancestor-configured": {
-        const path =
-          event.payload.ancestorPath === null ? null : normalizePath(event.payload.ancestorPath);
+      case "events.iterate.com/capability-host/created": {
+        if (state.birthCertificate !== null) {
+          throw new Error("capability host received more than one created event");
+        }
+        const ancestorPath = event.payload.config.ancestorPath;
         return {
           ...state,
-          ancestor: { configuredAtOffset: event.offset, path },
+          birthCertificate: {
+            config: {
+              ancestorPath: ancestorPath === null ? null : normalizePath(ancestorPath),
+            },
+          },
         };
       }
       case "events.iterate.com/capability-host/capability-provided": {
@@ -358,6 +363,20 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async #reconcileScriptObligations(
     args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
+    if (args.state.birthCertificate === null) {
+      for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
+        const error =
+          execution.status === "started"
+            ? `Script execution cannot be reconciled: capability host at ${this.#path} has not been created, despite having started evidence. It may have partially executed; it was NOT re-run.`
+            : `Script was NOT executed: capability host at ${this.#path} has not been created.`;
+        console.error("[capability-host] settling script execution on an uncreated host", {
+          executionId,
+          error,
+        });
+        await this.#appendCompletion({ executionId, error });
+      }
+      return;
+    }
     const now = (this.#now ?? Date.now)();
     const settle: { executionId: string; error: string }[] = [];
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
@@ -411,7 +430,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     try {
       input.runInBackground(() =>
         this.#executeScript({
-          ancestor: input.state.ancestor,
+          birthCertificate: this.#requireBirthCertificate(input.state.birthCertificate),
           capabilities: input.state.capabilities,
           code: input.execution.code,
           executionId: input.executionId,
@@ -436,6 +455,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async provideCapability(input: ProvideCapabilityInput) {
+    await this.#assertCreated();
     const { path } = input;
     assertCapabilityPath(path);
     const key = liveKey(path);
@@ -574,6 +594,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
+    await this.#assertCreated();
     assertCapabilityPath(path);
     const { state } = await this.#reads.snapshot();
     const current = state.capabilities.find((record) => samePath(record.path, path));
@@ -604,14 +625,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // here with "invalid capability path segment".
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
     const { state } = await this.#reads.snapshot();
-    const ancestorDeclaration = this.#requireAncestorDeclaration(state.ancestor);
+    const birthCertificate = this.#requireBirthCertificate(state.birthCertificate);
     const hit = resolveLongestPrefix(state.capabilities, path);
     if (!hit) {
       // Not declared at THIS scope. Ask only the ancestor named in this host's
       // durable declaration. Path prefixes are names, not capability scopes.
       // Resolution reads live state every call, so revoking a child mount
       // transparently re-exposes whatever the declared ancestor still has.
-      const ancestor = this.#ancestorFor(ancestorDeclaration);
+      const ancestor = this.#ancestorFor(birthCertificate);
       if (ancestor !== undefined) {
         return await ancestor.invokeCapability(
           { args, path },
@@ -685,14 +706,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     const { state } = await this.#reads.snapshot();
     return await this.#describeCapabilitiesFrom(
       state.capabilities,
-      this.#requireAncestorDeclaration(state.ancestor),
+      this.#requireBirthCertificate(state.birthCertificate),
       visitedScopePaths,
     );
   }
 
   async #describeCapabilitiesFrom(
     records: CapabilityRecord[],
-    ancestorDeclaration: AncestorDeclaration,
+    birthCertificate: CapabilityHostBirthCertificate,
     visitedScopePaths: string[] = [],
   ): Promise<CapabilityDescription[]> {
     const local: CapabilityDescription[] = records.map((record) => ({
@@ -703,7 +724,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       type: record.type,
       types: record.types,
     }));
-    const ancestor = this.#ancestorFor(ancestorDeclaration);
+    const ancestor = this.#ancestorFor(birthCertificate);
     if (ancestor === undefined) return local;
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
     const inherited = await ancestor.describeCapabilities(
@@ -729,8 +750,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return [...visitedScopePaths, this.#path];
   }
 
-  #ancestorFor(declaration: AncestorDeclaration): CapabilityHostAncestor | undefined {
-    const ancestorPath = declaration.path;
+  #ancestorFor(
+    birthCertificate: CapabilityHostBirthCertificate,
+  ): CapabilityHostAncestor | undefined {
+    const ancestorPath = birthCertificate.config.ancestorPath;
     if (ancestorPath === null) return undefined;
     if (ancestorPath === this.#path) {
       throw new Error(`capability-host "${this.#path}" cannot be its own ancestor`);
@@ -746,20 +769,22 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   async ancestorPath(): Promise<string | null> {
     const { state } = await this.#reads.snapshot();
-    return this.#requireAncestorDeclaration(state.ancestor).path;
+    return this.#requireBirthCertificate(state.birthCertificate).config.ancestorPath;
   }
 
-  #requireAncestorDeclaration(declaration: AncestorDeclaration | undefined): AncestorDeclaration {
-    if (declaration === undefined) {
-      throw new Error(`capability-host "${this.#path}" has no ancestor declaration`);
+  #requireBirthCertificate(
+    birthCertificate: CapabilityHostBirthCertificate | null,
+  ): CapabilityHostBirthCertificate {
+    if (birthCertificate === null) {
+      throw new Error(`capability host at ${this.#path} has not been created`);
     }
-    return declaration;
+    return birthCertificate;
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
     const { state } = await this.#reads.snapshot();
     this.#pruneExecutionClaims(state);
-    this.#requireAncestorDeclaration(state.ancestor);
+    this.#requireBirthCertificate(state.birthCertificate);
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     const [requested] = await this.append({
@@ -806,6 +831,11 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return { completedEvent: event, executionId, result: payload.result ?? null };
   }
 
+  async #assertCreated(): Promise<void> {
+    const { state } = await this.#reads.snapshot();
+    this.#requireBirthCertificate(state.birthCertificate);
+  }
+
   async #waitForScriptCompletion(executionId: string) {
     let completed: StreamEvent | undefined;
     await this.#reads.waitUntilEvent({
@@ -834,7 +864,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async #typecheckScriptForRun(
     code: string,
     records: CapabilityRecord[],
-    ancestorDeclaration: AncestorDeclaration,
+    birthCertificate: CapabilityHostBirthCertificate,
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.#typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
@@ -877,7 +907,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         async (span) => {
           span.setAttribute("iterate.capability_host.local_capability_count", records.length);
           span.setAttribute("iterate.capability_host.ancestor_declared", true);
-          const described = await this.#describeCapabilitiesFrom(records, ancestorDeclaration);
+          const described = await this.#describeCapabilitiesFrom(records, birthCertificate);
           span.setAttribute("iterate.capability_host.reachable_capability_count", described.length);
           return described;
         },
@@ -905,7 +935,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async #executeScript(input: {
-    ancestor: AncestorDeclaration | undefined;
+    birthCertificate: CapabilityHostBirthCertificate;
     capabilities: CapabilityRecord[];
     code: string;
     executionId: string;
@@ -916,28 +946,19 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     let durableAttemptEvidenceCommitted = false;
     await tracing.enterSpan("capability_host.script_execution", async (span) => {
       span.setAttribute("iterate.capability_host.script_chars", input.code.length);
-      span.setAttribute("iterate.capability_host.ancestor_declared", input.ancestor !== undefined);
+      span.setAttribute("iterate.capability_host.ancestor_declared", true);
       span.setAttribute(
         "iterate.capability_host.local_capability_count",
         input.capabilities.length,
       );
       try {
-        if (input.ancestor === undefined) {
-          span.setAttribute("iterate.capability_host.script_outcome", "ancestor_not_declared");
-          await this.#appendAndFoldCompletion({
-            executionId: input.executionId,
-            error: `Script was NOT executed: capability-host "${this.#path}" has no ancestor declaration.`,
-          });
-          durableAttemptEvidenceCommitted = true;
-          return;
-        }
         // The typecheck gate runs BEFORE the started evidence: it has no side
         // effects, so a rejected script provably never ran (requested →
         // completed, no started event) and the reconciler doctrine is untouched.
         const checked = await this.#typecheckScriptForRun(
           input.code,
           input.capabilities,
-          input.ancestor,
+          input.birthCertificate,
         );
         if (checked.rejection !== null) {
           span.setAttribute("iterate.capability_host.script_outcome", "typecheck_rejected");

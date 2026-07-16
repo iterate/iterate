@@ -67,7 +67,7 @@ test.skipIf(shouldSkipPetshopE2e())(
     // pinned to petshop (the mint POST and the API call both go there).
     // Configuring `refresh` is the trust event.
     using connectionSecret = project.secrets.get(connectionPath);
-    await connectionSecret.update({
+    await connectionSecret.create({
       egress: { urls: [petshop] },
       material: { privateKey },
       refresh: {

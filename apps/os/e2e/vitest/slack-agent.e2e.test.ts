@@ -12,12 +12,14 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
-import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   INTEGRATION_DIRECTORY_STREAM_PATH,
 } from "../../src/domains/integrations/utils.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "../../src/domains/integrations/integration-router-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -47,7 +49,7 @@ test.skipIf(signingSecret === null)(
     // connection stream (router subscription + connected fact) + global team
     // directory claim (the storage the OAuth callback writes).
     using secret = project.secrets.get(SLACK_BOT_TOKEN_SECRET_PATH);
-    await secret.update({
+    await secret.create({
       egress: { urls: ["https://slack.com"] },
       material: `xoxb-e2e-fake-${RUN_SUFFIX}`,
     });
@@ -58,14 +60,12 @@ test.skipIf(signingSecret === null)(
     );
     using seededIntegrationStream = project.streams.get(SLACK_INTEGRATION_STREAM_PATH);
     await seededIntegrationStream.append(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: DurableObjectNameCodec.stringify({
-          projectId,
-          path: SLACK_INTEGRATION_STREAM_PATH,
-        }),
-        idempotencyKey: `slack-router-subscription:${projectId}:${CONNECTION}`,
-        processor: ["integrations", "slack", ["get", CONNECTION], "processor"],
+      buildIntegrationRouterCreatedEvent({ connection: CONNECTION, slug: "slack" }),
+      buildIntegrationRouterSubscriptionConfiguredEvent({
+        connection: CONNECTION,
+        projectId,
         processorSlug: "slack",
+        slug: "slack",
       }),
       {
         type: "events.iterate.com/slack/connected",

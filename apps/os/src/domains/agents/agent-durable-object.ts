@@ -12,10 +12,6 @@ import { SlackAgentProcessor } from "../integrations/slack-agent-processor-imple
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
 import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
-import {
-  slackConnectionFromAgentPath,
-  telegramConnectionFromAgentPath,
-} from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
 import { connectionOctokit } from "../integrations/github-api.ts";
@@ -124,21 +120,12 @@ export class AgentDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      callSlackApi: async (method, body) => {
+      callSlackApi: async ({ body, connection, method }) => {
         // Only best-effort UX side effects (reactions, thread status) ride
         // this dep — the agent's actual REPLY goes through
         // itx.integrations.slack in its script, which fails loudly on its
-        // own. The agent path carries the named connection
-        // (/agents/slack/{connection}/{channel}/ts-{ts}); without it there
-        // is no bot token, so skip rather than wedge the checkpoint.
-        const connection = slackConnectionFromAgentPath(this.#name.path);
-        if (connection === null) {
-          console.error("[slack-agent] agent path carries no connection; skipping Slack call", {
-            method,
-            path: this.#name.path,
-          });
-          return;
-        }
+        // own. The facet birth certificate supplies the named connection;
+        // the stream path is deliberately unrelated to processor config.
         try {
           await callProjectSlackWebApi({
             body,
@@ -154,9 +141,7 @@ export class AgentDurableObject extends DurableObject<Env> {
           });
         }
       },
-      fetchSlackChannelName: async (channel) => {
-        const connection = slackConnectionFromAgentPath(this.#name.path);
-        if (connection === null) return null;
+      fetchSlackChannelName: async ({ channel, connection }) => {
         try {
           const result = (await callProjectSlackWebApi({
             body: { channel },
@@ -176,15 +161,11 @@ export class AgentDurableObject extends DurableObject<Env> {
         }
       },
       storeSlackFiles: (input) => {
-        // Downloads ride the named connection's bot-token secret, exactly
-        // like the side-effect calls above — same no-connection skip rule.
-        const connection = slackConnectionFromAgentPath(this.#name.path);
-        if (connection === null) {
-          throw new Error(`agent path carries no Slack connection: ${this.#name.path}`);
-        }
+        // Downloads ride the named connection from the facet birth
+        // certificate, exactly like the side-effect calls above.
         return storeSlackFilesForAgent({
           agentPath: this.#name.path,
-          connection,
+          connection: input.connection,
           files: input.files,
           projectId: this.#name.projectId,
           storageKey: input.storageKey,
@@ -212,20 +193,9 @@ export class AgentDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      agentPath: this.#name.path,
-      callTelegramApi: async (method, body) => {
+      callTelegramApi: async ({ body, connection, method }) => {
         // Only best-effort UX side effects (the typing chat action) ride
-        // this dep. The agent path carries the named connection
-        // (/agents/telegram/{connection}/chat-{chatId}); without it there
-        // is no bot token, so skip rather than wedge the checkpoint.
-        const connection = telegramConnectionFromAgentPath(this.#name.path);
-        if (connection === null) {
-          console.error(
-            "[telegram-agent] agent path carries no connection; skipping Telegram call",
-            { method, path: this.#name.path },
-          );
-          return;
-        }
+        // this dep. The facet birth certificate supplies the connection.
         try {
           await callProjectTelegramBotApi({
             body,
@@ -241,14 +211,10 @@ export class AgentDurableObject extends DurableObject<Env> {
           });
         }
       },
-      sendTelegramMessage: async (body) => {
+      sendTelegramMessage: async ({ body, connection }) => {
         // The journaled send (telegram/send-requested): deliberately NO
         // catch — a failed delivery must reject the batch, hold the
         // checkpoint, and be retried until the message-sent marker exists.
-        const connection = telegramConnectionFromAgentPath(this.#name.path);
-        if (connection === null) {
-          throw new Error(`agent path carries no Telegram connection: ${this.#name.path}`);
-        }
         const result = await callProjectTelegramBotApi({
           body,
           connection,

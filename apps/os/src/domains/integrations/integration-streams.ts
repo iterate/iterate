@@ -6,10 +6,8 @@
 // authority; caller-facing confinement stays in rpc-targets.ts.
 
 import { itxEnv } from "../../env.ts";
-import type { ItxExpression } from "../../itx/expression.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,
@@ -130,44 +128,6 @@ export async function lookupConnectionClaim(
   return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
 }
 
-/**
- * The desired durable subscription from an integration connection journal to
- * its router processor. Both connect and ingress use this one builder: connect
- * arms a fresh stream, while every webhook idempotently reconciles connections
- * that predate the current itx expression shape.
- *
- * The idempotency key fingerprints the persisted capability name itself. A
- * future expression or processor-slug change therefore appends one replacement
- * configuration per connection automatically, without a hand-written data
- * migration. The key is stream-local, so it needs no project/path prefix.
- */
-export function buildIntegrationRouterSubscriptionConfiguredEvent(input: {
-  connection: string;
-  processorSlug: string;
-  projectId: string;
-  slug: string;
-}) {
-  const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
-  const processor = [
-    "integrations",
-    input.slug,
-    ["get", input.connection],
-    "processor",
-  ] satisfies ItxExpression;
-  return buildDurableObjectProcessorSubscriptionConfiguredEvent({
-    durableObjectName: DurableObjectNameCodec.stringify({
-      projectId: input.projectId,
-      path: streamPath,
-    }),
-    idempotencyKey: `integration-router-subscription:${JSON.stringify({
-      processor,
-      processorSlug: input.processorSlug,
-    })}`,
-    processor,
-    processorSlug: input.processorSlug,
-  });
-}
-
 /** The outcome of routing one inbound webhook: delivered to a connection, or
  * `ignored` because no project has claimed its external id (the caller ACKs the
  * ignored case with a 200 — see the webhook handlers' cardinal rule). */
@@ -178,42 +138,45 @@ type RouteIntegrationWebhookResult =
 /**
  * Route one validly-signed webhook to the project + connection that claimed its
  * `(slug, externalId)`, by appending a provider-shaped event to that
- * connection's stream. Providers with a connection-stream router also supply
- * its processor slug: the same append then reconciles the desired durable
- * subscription BEFORE the webhook fact, so old parked connections repair on
- * their next delivery. `ignored` (no live claim) lets the door ACK-and-drop.
- * This is the generic core of the webhook door (D4): per-provider code does
- * only the signature verify, external-id extract, and event shaping; routing is
- * one function for every integration.
+ * connection's stream. This function deliberately appends ONLY the ingress
+ * fact: connection setup owns any router birth and subscription. `ignored` (no
+ * live claim) lets the door ACK-and-drop. This is the generic core of the
+ * webhook door (D4): per-provider code does only the signature verify,
+ * external-id extract, and event shaping; routing is one function for every
+ * integration.
  */
 export async function routeIntegrationWebhook(input: {
   event: { idempotencyKey: string; payload: Record<string, unknown>; type: string };
   externalId: string;
-  routerProcessorSlug?: string;
+  /**
+   * Birth certificate that must already exist on the claimed connection
+   * stream. Webhook routers pass this so ingress can never commit work before
+   * the processor has been explicitly created. Providers without an inbound
+   * stream processor (currently GitHub) omit it.
+   */
+  routerCreatedEventType?: string;
   slug: string;
 }): Promise<RouteIntegrationWebhookResult> {
   const claim = await lookupConnectionClaim(input.slug, input.externalId);
   if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
   const streamPath = integrationConnectionStreamPath(input.slug, claim.connection);
-  await integrationStreamStub(claim.projectId, streamPath).append(
-    ...(input.routerProcessorSlug === undefined
-      ? []
-      : [
-          buildIntegrationRouterSubscriptionConfiguredEvent({
-            connection: claim.connection,
-            processorSlug: input.routerProcessorSlug,
-            projectId: claim.projectId,
-            slug: input.slug,
-          }),
-        ]),
-    {
-      ...input.event,
-      // Preserve the trusted routing decision on the durable fact. Downstream
-      // userspace can select the exact account that received the webhook
-      // instead of accidentally acting through the project's first connection.
-      payload: { ...input.event.payload, connection: claim.connection },
-    },
-  );
+  if (
+    input.routerCreatedEventType !== undefined &&
+    (await latestStreamEventOfTypes(claim.projectId, streamPath, [
+      input.routerCreatedEventType,
+    ])) === null
+  ) {
+    throw new Error(
+      `${input.slug} router ${claim.connection} for project ${claim.projectId} has not been created`,
+    );
+  }
+  await integrationStreamStub(claim.projectId, streamPath).append({
+    ...input.event,
+    // Preserve the trusted routing decision on the durable fact. Downstream
+    // userspace can select the exact account that received the webhook
+    // instead of accidentally acting through the project's first connection.
+    payload: { ...input.event.payload, connection: claim.connection },
+  });
   return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }
 

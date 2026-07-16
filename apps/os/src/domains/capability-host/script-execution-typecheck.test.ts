@@ -21,12 +21,25 @@ import {
 } from "./capability-host-processor-implementation.ts";
 
 const T = {
-  ancestorConfigured: "events.iterate.com/capability-host/ancestor-configured",
+  created: "events.iterate.com/capability-host/created",
   provided: "events.iterate.com/capability-host/capability-provided",
   requested: "events.iterate.com/capability-host/script-execution-requested",
   started: "events.iterate.com/capability-host/script-execution-started",
   completed: "events.iterate.com/capability-host/script-execution-completed",
 } as const;
+
+function capabilityHostStream(ancestorPath: string | null = null): MemoryStream {
+  const stream = new MemoryStream();
+  stream.events.push({
+    type: T.created,
+    idempotencyKey: `capability-host/created:test:${stream.path}`,
+    payload: { config: { ancestorPath } },
+    createdAt: new Date().toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+  return stream;
+}
 
 type Harness = {
   processor: CapabilityHostProcessor;
@@ -72,10 +85,10 @@ function makeProcessor(options: {
 }
 
 async function requestScript(stream: MemoryStream, harness: Harness) {
-  if (!stream.events.some((event) => event.type === T.ancestorConfigured)) {
+  if (!stream.events.some((event) => event.type === T.created)) {
     await stream.append({
-      type: T.ancestorConfigured,
-      payload: { ancestorPath: null },
+      type: T.created,
+      payload: { config: { ancestorPath: null } },
     });
   }
   await stream.append({
@@ -96,7 +109,7 @@ function completion(stream: MemoryStream) {
 beforeEach(() => resetRecordedSpans());
 
 describe("script execution typecheck gate", () => {
-  it("settles a directly journaled request on an unconfigured host without running it", async () => {
+  it("settles a directly journaled request on an uncreated host without running it", async () => {
     const stream = new MemoryStream();
     const run = vi.fn(async () => null);
     const harness = makeProcessor({ stream, run });
@@ -114,7 +127,7 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() =>
       expect(completion(stream)?.payload).toMatchObject({
         executionId: "exec-unconfigured",
-        error: expect.stringContaining("has no ancestor declaration"),
+        error: expect.stringContaining("has not been created"),
       }),
     );
     expect(stream.events.some((event) => event.type === T.started)).toBe(false);
@@ -122,7 +135,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("a problems verdict settles as an error completion — never started, never run", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const harness = makeProcessor({
       stream,
       typecheckScript: async () => ({
@@ -146,7 +159,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("a clean verdict runs the script normally", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -184,8 +197,8 @@ describe("script execution typecheck gate", () => {
       typecheckScript,
     });
     await stream.append({
-      type: T.ancestorConfigured,
-      payload: { ancestorPath: "/" },
+      type: T.created,
+      payload: { config: { ancestorPath: "/" } },
     });
     await requestScript(stream, processor);
 
@@ -214,7 +227,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("an unchecked verdict runs the script (permissive on unknowns)", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -232,7 +245,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("a THROWING checker runs the script — the gate must never fail a script for its own failure", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -251,7 +264,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("no checker wired (node harness) runs the script", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const harness = makeProcessor({
       stream,
@@ -267,7 +280,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("the checker sees this scope's mounts AND inherited capabilities", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream("/");
     const seen: CapabilityDescription[][] = [];
     const inherited: CapabilityDescription = {
       path: ["tools", "weather"],
@@ -289,10 +302,6 @@ describe("script execution typecheck gate", () => {
       },
     });
     await stream.append({
-      type: "events.iterate.com/capability-host/ancestor-configured",
-      payload: { ancestorPath: "/" },
-    });
-    await stream.append({
       type: T.provided,
       payload: { path: ["local"], type: "live", types: "export type Local = { ping(): void };" },
     });
@@ -311,8 +320,8 @@ describe("script execution typecheck gate", () => {
     const run = vi.fn(async () => "ok");
     const harness = makeProcessor({ stream, run });
     await stream.append({
-      type: T.ancestorConfigured,
-      payload: { ancestorPath: null },
+      type: T.created,
+      payload: { config: { ancestorPath: null } },
     });
     await harness.runner.catchUp();
 
@@ -343,8 +352,8 @@ describe("script execution typecheck gate", () => {
     const run = vi.fn(async () => "ok");
     const harness = makeProcessor({ stream, run });
     await stream.append({
-      type: T.ancestorConfigured,
-      payload: { ancestorPath: null },
+      type: T.created,
+      payload: { config: { ancestorPath: null } },
     });
     await harness.runner.catchUp();
     // This fact wins the next offset but is deliberately not delivered yet.
@@ -383,8 +392,8 @@ describe("script execution typecheck gate", () => {
     const run = vi.fn(async () => "ok");
     const harness = makeProcessor({ stream, run });
     await stream.append({
-      type: T.ancestorConfigured,
-      payload: { ancestorPath: null },
+      type: T.created,
+      payload: { config: { ancestorPath: null } },
     });
     await harness.runner.catchUp();
 
@@ -397,7 +406,7 @@ describe("script execution typecheck gate", () => {
   });
 
   it("a rejected execution deletes its obligation — the reconciler never re-runs it", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const harness = makeProcessor({
       stream,
       typecheckScript: async () => ({ verdict: "problems", problems: ["script:1 — nope (TS1)"] }),

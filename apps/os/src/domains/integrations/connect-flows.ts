@@ -42,11 +42,14 @@ import {
 import {
   appendConnectionDirectoryEvent,
   appendConnectionDirectoryEvents,
-  buildIntegrationRouterSubscriptionConfiguredEvent,
   integrationStreamStub,
   latestStreamEventOfTypes,
   lookupConnectionClaim,
 } from "./integration-streams.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "./integration-router-events.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";
@@ -307,17 +310,24 @@ async function recordConnection(input: {
 }): Promise<void> {
   const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
   for (const secret of input.secrets) {
-    await itxEnv.SECRET.getByName(
+    const secretStub = itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({ projectId: input.projectId, path: secret.path }),
-    ).update({
+    );
+    const secretInput = {
       egress: { urls: [...secret.egressUrls] },
       material: secret.material,
       ...(secret.refresh ? { refresh: secret.refresh } : {}),
-    });
+    };
+    if ((await secretStub.describe()).created) await secretStub.update(secretInput);
+    else await secretStub.create(secretInput);
   }
   await integrationStreamStub(input.projectId, streamPath).append(
     ...(input.processorSubscription
       ? [
+          buildIntegrationRouterCreatedEvent({
+            connection: input.connection,
+            slug: input.slug,
+          }),
           buildIntegrationRouterSubscriptionConfiguredEvent({
             connection: input.connection,
             projectId: input.projectId,

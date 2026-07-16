@@ -22,35 +22,26 @@ test(
 
     const agentPath = `/agents/web/ancestry-${crypto.randomUUID()}`;
     using agent = itx.agents.get(agentPath);
-    await agent.configure({});
+    await agent.create({});
 
-    // configure() is an agent lifecycle door. The entire mechanics certificate
-    // must precede its first policy fact in the SAME append; relying on the
-    // root project's asynchronous child-stream-created reaction recreates the
-    // onboarding race this test guards.
+    // Agent creation commits the explicit relationship and both processor
+    // subscriptions in one batch. No physical path prefix is consulted.
     const events = await agent.stream.getEvents({});
-    const ancestor = events.find(
-      (event) => event.type === "events.iterate.com/capability-host/ancestor-configured",
+    const capabilityHostBirth = events.find(
+      (event) => event.type === "events.iterate.com/capability-host/created",
     );
     const processorSubscriptions = events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );
-    const firstPolicy = events.find(
-      (event) =>
-        event.type === "events.iterate.com/agents/context-added" ||
-        event.type === "events.iterate.com/agent/llm-provider-selected",
-    );
-
-    expect(ancestor).toMatchObject({ payload: { ancestorPath: "/" } });
+    expect(capabilityHostBirth).toMatchObject({
+      payload: { config: { ancestorPath: "/" } },
+    });
     expect(
       processorSubscriptions.map(
         (event) =>
           (event.payload?.delivery as { processorSlug?: string } | undefined)?.processorSlug,
       ),
     ).toEqual(expect.arrayContaining(["capability-host", "agent"]));
-    expect(firstPolicy).toBeDefined();
-    expect(ancestor!.offset).toBeLessThan(firstPolicy!.offset);
-    expect(processorSubscriptions.every((event) => event.offset < firstPolicy!.offset)).toBe(true);
 
     // The same durable declaration must be authoritative after the agent host
     // itself is evicted, without waiting for an asynchronous wake delivery.

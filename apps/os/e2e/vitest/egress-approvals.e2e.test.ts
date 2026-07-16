@@ -169,7 +169,7 @@ test("enrolled approval keys make unsigned grants inert; a signed grant releases
       slug: `egress-approvals-signed-${crypto.randomUUID()}`,
     });
     // The signed message binds the real prj_… id (what the DO verifies with).
-    const projectId = (await project.processor.snapshot()).state.createRequest!.projectId;
+    const projectId = (await project.__describe()).projectId;
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 

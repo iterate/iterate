@@ -5,10 +5,9 @@ import { CapabilityHostProcessorContract } from "./capability-host-processor-con
 /**
  * The durable birth certificate for one capability host.
  *
- * A host is not usable until both facts are committed: its one explicit
- * ancestor (including explicit `null` at a root) and the processor
- * subscription that folds that declaration. Stable idempotency keys make the
- * helper safe across the synchronous creator and the stream-birth reactor.
+ * A host is not usable until both facts are committed: its birth certificate,
+ * containing one explicit ancestor (including `null` at a root), and the
+ * processor subscription that folds it.
  */
 export function capabilityHostBirthEvents(input: {
   ancestorPath: string | null;
@@ -26,9 +25,9 @@ export function capabilityHostBirthEvents(input: {
   });
   return [
     CapabilityHostProcessorContract.buildEvent({
-      type: "events.iterate.com/capability-host/ancestor-configured",
-      idempotencyKey: `capability-host/ancestor-configured:${durableObjectName}`,
-      payload: { ancestorPath },
+      type: "events.iterate.com/capability-host/created",
+      idempotencyKey: `capability-host/created:${input.projectId}:${path}`,
+      payload: { config: { ancestorPath } },
     }),
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName,

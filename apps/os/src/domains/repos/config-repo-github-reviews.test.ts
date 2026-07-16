@@ -53,6 +53,7 @@ function webhook(input?: {
 }
 
 function harness(input?: {
+  agentBirthCertificate?: unknown | null;
   checkRuns?: (args: { page: number; ref: string }) => unknown[];
   liveDraft?: boolean;
   liveHead?: string;
@@ -106,19 +107,17 @@ function harness(input?: {
     },
   };
   const getConnection = vi.fn(() => ({ octokit }));
+  const createAgent = vi.fn().mockResolvedValue(undefined);
+  const snapshotAgent = vi.fn().mockResolvedValue({
+    state: { birthCertificate: input?.agentBirthCertificate ?? null },
+  });
   const getAgent = vi.fn(() => ({
     capabilityHost: { kill: killCapabilityHost },
+    create: createAgent,
     kill: killAgent,
+    processor: { snapshot: snapshotAgent },
+    stream: { append },
   }));
-  const defaultsForPath = vi.fn().mockResolvedValue({
-    events: [
-      {
-        type: "events.iterate.com/agent/configured",
-        idempotencyKey: "stock-defaults",
-        payload: { systemPrompt: "prompt" },
-      },
-    ],
-  });
   const readFile = vi.fn().mockResolvedValue({
     commitOid: "rules-commit",
     content:
@@ -126,9 +125,8 @@ function harness(input?: {
     path: CONFIG.rulesPath,
   });
   const set = vi.fn().mockResolvedValue({});
-  const getStream = vi.fn(() => ({ append }));
   const itx = {
-    agents: { defaults: { forPath: defaultsForPath }, get: getAgent },
+    agents: { get: getAgent },
     integrations: { github: { get: getConnection } },
     // Scalar Workers RPC properties are promises at the caller even though
     // the generated project surface describes their resolved value.
@@ -136,27 +134,26 @@ function harness(input?: {
     processor: {
       snapshot: vi.fn().mockResolvedValue({
         offset: 1,
-        state: { createRequest: { projectId: "prj_test", slug: "widgets-project" } },
+        state: { birthCertificate: { config: { slug: "widgets-project" } } },
       }),
     },
     repo: { readFile },
     scheduler: { cancel, set },
-    streams: { get: getStream },
   } as unknown as Project;
   return {
     append,
     cancel,
     create,
-    defaultsForPath,
+    createAgent,
     getConnection,
     getAgent,
-    getStream,
     itx,
     killAgent,
     killCapabilityHost,
     listForRef,
     readFile,
     set,
+    snapshotAgent,
     update,
   };
 }
@@ -188,12 +185,11 @@ describe("config-repo GitHub reviews", () => {
       payload: { content: string; llmRequestPolicy: object };
     };
     expect(task.idempotencyKey).toBe("iterate-review:prj_test:42:7:head:head-b");
-    expect(h.getStream).toHaveBeenCalledWith(
+    expect(h.getAgent).toHaveBeenCalledWith(
       "/agents/repos/route/pull-requests/7/iterate-reviews/100",
     );
-    expect(h.defaultsForPath).toHaveBeenCalledWith(
-      "/agents/repos/route/pull-requests/7/iterate-reviews/100",
-    );
+    expect(h.createAgent).toHaveBeenCalledWith({});
+    expect(h.snapshotAgent).toHaveBeenCalledOnce();
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({
         check_run_id: 100,
@@ -206,6 +202,18 @@ describe("config-repo GitHub reviews", () => {
     // the task is proven structurally instead.
     expect(task.payload.content).toContain("100");
     expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+  });
+
+  it("reuses an already-created review agent on webhook redelivery", async () => {
+    const h = harness({ agentBirthCertificate: { config: {} } });
+
+    await expect(
+      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+    ).resolves.toBe("queued");
+
+    expect(h.snapshotAgent).toHaveBeenCalledOnce();
+    expect(h.createAgent).not.toHaveBeenCalled();
+    expect(h.append).toHaveBeenCalledOnce();
   });
 
   it("does not extend the Check Run deadline when a webhook is redelivered", async () => {
@@ -304,7 +312,7 @@ describe("config-repo GitHub reviews", () => {
 
     expect(h.getConnection).toHaveBeenCalledWith("install-42");
     expect(h.create).not.toHaveBeenCalled();
-    expect(h.defaultsForPath).not.toHaveBeenCalled();
+    expect(h.createAgent).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
     expect(h.set).not.toHaveBeenCalled();
   });
@@ -519,7 +527,7 @@ describe("config-repo GitHub reviews", () => {
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({ check_run_id: 90, conclusion: "cancelled" }),
     );
-    expect(h.defaultsForPath).not.toHaveBeenCalled();
+    expect(h.createAgent).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
   });
 

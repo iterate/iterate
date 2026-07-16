@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { checkItxScript, type Typechecker } from "../../typecheck/virtual-project.ts";
-import { childAgentParentPath } from "../../../lib/agent-paths.ts";
+import { agentCreationForPath } from "../agent-defaults.ts";
 import fixture from "./boop-web-2026-07-15t21-56-48-076z-slow-script-execution.json";
 
 test("boop web stream: tiny script avoids namespace ancestors and source-checking static itx types", async () => {
@@ -14,10 +14,18 @@ test("boop web stream: tiny script avoids namespace ancestors and source-checkin
   expect(Date.parse(message.createdAt) - Date.parse(requested.createdAt)).toBe(5_267);
   expect(Date.parse(completed.createdAt) - Date.parse(requested.createdAt)).toBe(5_288);
 
-  // `/agents/web` is route syntax, not a capability host. At birth this null
-  // semantic parent becomes one explicit root ancestor declaration; the old
-  // path-prefix rule activated `/agents/web` and `/agents` on the cold path.
-  expect(childAgentParentPath(fixture.agentPath)).toBeNull();
+  // `/agents/web` is route syntax, not a capability host. The creator records
+  // root directly in the birth certificate; no path segment participates in
+  // capability inheritance or adds another cold Durable Object hop.
+  const creation = agentCreationForPath({
+    agentPath: fixture.agentPath,
+    capabilityHostAncestorPath: "/",
+    projectId: fixture.projectId,
+  });
+  expect(
+    creation.events.find((event) => event.type === "events.iterate.com/capability-host/created")
+      ?.payload,
+  ).toEqual({ config: { ancestorPath: "/" } });
 
   let files: Record<string, string> | undefined;
   const recordingTypechecker: Typechecker = {

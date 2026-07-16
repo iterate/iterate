@@ -10,10 +10,10 @@ describe("capability host birth certificate", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual([
-      "events.iterate.com/capability-host/ancestor-configured",
+      "events.iterate.com/capability-host/created",
       "events.iterate.com/stream/subscription-configured",
     ]);
-    expect(events[0].payload).toEqual({ ancestorPath: "/" });
+    expect(events[0].payload).toEqual({ config: { ancestorPath: "/" } });
     expect(events[1].payload.delivery.expression).toEqual([
       "capabilityHosts",
       ["get", "/agents/web/thread"],
@@ -26,7 +26,7 @@ describe("capability host birth certificate", () => {
     expect(
       capabilityHostBirthEvents({ ancestorPath: null, path: "/", projectId: "prj_test" })[0]
         .payload,
-    ).toEqual({ ancestorPath: null });
+    ).toEqual({ config: { ancestorPath: null } });
   });
 
   it("rejects a self-cycle at the declaration boundary", () => {

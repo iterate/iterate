@@ -27,21 +27,29 @@ const HOME = "/agents/test";
 const SLUG = CapabilityHostProcessorContract.slug;
 
 const T = {
-  ancestorConfigured: "events.iterate.com/capability-host/ancestor-configured",
+  created: "events.iterate.com/capability-host/created",
   requested: "events.iterate.com/capability-host/script-execution-requested",
   started: "events.iterate.com/capability-host/script-execution-started",
   completed: "events.iterate.com/capability-host/script-execution-completed",
   revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
-const ROOT_ANCESTOR = {
-  type: T.ancestorConfigured,
-  payload: { ancestorPath: "/" },
-} as const;
+function capabilityHostStream(path = "/"): MemoryStream {
+  const stream = new MemoryStream(path);
+  stream.events.push({
+    type: T.created,
+    idempotencyKey: `capability-host/created:test:${stream.path}`,
+    payload: { config: { ancestorPath: path === "/" ? null : "/" } },
+    createdAt: new Date().toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+  return stream;
+}
 
 function makeHarness() {
   const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
-  const stream = new MemoryStream(HOME);
+  const stream = capabilityHostStream(HOME);
   stream.now = () => clock.now;
 
   const kv = new Map<string, unknown>();
@@ -72,12 +80,6 @@ function makeHarness() {
       throw new Error("must not run in this scenario");
     },
   };
-
-  // Every production host has a durable, explicit ancestor declaration
-  // before it can execute. Seed the realistic agent-to-root declaration as
-  // the first journal fact; MemoryStream appends synchronously before its
-  // resolved promise is observed.
-  void stream.append(ROOT_ANCESTOR);
 
   let registry!: StreamProcessorRegistry;
   let processor!: CapabilityHostProcessor;

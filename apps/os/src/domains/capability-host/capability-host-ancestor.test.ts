@@ -8,7 +8,7 @@ import {
   type CapabilityHostAncestor,
 } from "./capability-host-processor-implementation.ts";
 
-const ANCESTOR_CONFIGURED = "events.iterate.com/capability-host/ancestor-configured" as const;
+const CAPABILITY_HOST_CREATED = "events.iterate.com/capability-host/created" as const;
 
 function makeProcessor(input: {
   path: string;
@@ -52,8 +52,8 @@ describe("explicit capability-host ancestors", () => {
       stream,
     });
     await stream.append({
-      type: ANCESTOR_CONFIGURED,
-      payload: { ancestorPath: "/" },
+      type: CAPABILITY_HOST_CREATED,
+      payload: { config: { ancestorPath: "/" } },
     });
     await runner.catchUp();
 
@@ -80,7 +80,7 @@ describe("explicit capability-host ancestors", () => {
       stream,
     });
     await stream.append(
-      { type: ANCESTOR_CONFIGURED, payload: { ancestorPath: "/" } },
+      { type: CAPABILITY_HOST_CREATED, payload: { config: { ancestorPath: "/" } } },
       {
         type: "events.iterate.com/capability-host/capability-provided",
         payload: { path: ["local"], type: "live" },
@@ -107,13 +107,13 @@ describe("explicit capability-host ancestors", () => {
     });
 
     await expect(processor.invokeCapability({ path: ["projectTool"] })).rejects.toThrow(
-      'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
+      "capability host at /agents/web/unconfigured-conversation has not been created",
     );
     await expect(processor.describeCapabilities()).rejects.toThrow(
-      'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
+      "capability host at /agents/web/unconfigured-conversation has not been created",
     );
     await expect(processor.runScript("async () => null")).rejects.toThrow(
-      'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
+      "capability host at /agents/web/unconfigured-conversation has not been created",
     );
     expect(resolveAncestor).not.toHaveBeenCalled();
     expect(stream.events).toEqual([]);
@@ -137,12 +137,12 @@ describe("explicit capability-host ancestors", () => {
       stream: streamB,
     }));
     await streamA.append({
-      type: ANCESTOR_CONFIGURED,
-      payload: { ancestorPath: "/agents/b" },
+      type: CAPABILITY_HOST_CREATED,
+      payload: { config: { ancestorPath: "/agents/b" } },
     });
     await streamB.append({
-      type: ANCESTOR_CONFIGURED,
-      payload: { ancestorPath: "/agents/a" },
+      type: CAPABILITY_HOST_CREATED,
+      payload: { config: { ancestorPath: "/agents/a" } },
     });
     await runnerA.catchUp();
     await runnerB.catchUp();

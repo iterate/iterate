@@ -5,7 +5,7 @@
  * Model-authored scripts run in dynamic workers whose `itx` is a workerd RPC
  * stub (`env.ITX` loopback), and models write the natural one-liners:
  *
- *   await itx.agents.get("researcher").message(task);   // child agent, relative path
+ *   await itx.agents.get("researcher").message(task);   // already-created child agent
  *   await itx.agents.get(path).someTool(args);
  *   await itx.capabilityHosts.get(path).runScript(code); // existing host
  *
@@ -52,6 +52,11 @@ test(
     const agentPath = "/agents/pipeline-target";
     const marker = crypto.randomUUID().slice(0, 8);
 
+    // Creation is explicit. This call itself is pipelined through get(); the
+    // rest of the test proves the other methods still pipeline on the
+    // already-created handle.
+    await itx.agents.get(agentPath).create({});
+
     // A DURABLE dynamic capability on the agent's scope (an itx-expression
     // method alias: calling it appends to the proof stream). Durable rather
     // than live because the script below runs server-side, long after this
@@ -82,8 +87,8 @@ test(
         }>()
         .vars({ agentPath, marker, proofType: PROOF_TYPE })
         .execute(async (itx, vars) => {
-          // 1. THE one-liner every prompt teaches. message() on the pipelined
-          //    result of get(); the first message also births the agent.
+          // 1. message() on the pipelined result of get(). The agent was born
+          //    explicitly above; message is an ordinary post-birth command.
           const sent = await itx.agents.get(vars.agentPath).message("pipelined hello");
 
           // 2. A dynamic capability DIRECTLY on the fetched handle: proofAppend
@@ -182,6 +187,7 @@ test(
     // Promise.all — dependent calls ride one round trip instead of
     // await-per-hop.
     using capnwebAgent = itx.agents.get("/agents/fanout-capnweb");
+    await capnwebAgent.create({});
     const [sentA, sentB, description] = await Promise.all([
       capnwebAgent.message("capnweb fanout A"),
       capnwebAgent.message("capnweb fanout B"),
@@ -213,6 +219,7 @@ test(
       }>(`
       async (itx) => {
         using agent = itx.agents.get("/agents/fanout-workerd");
+        await agent.create({});
         const [a, b, desc] = await Promise.all([
           agent.message("workerd fanout A"),
           agent.message("workerd fanout B"),
@@ -230,12 +237,13 @@ test(
 );
 
 test(
-  "the child-agent delegation one-liner pipelines from an agent scope (relative path + message)",
+  "explicit child-agent delegation pipelines from an agent scope (relative path + create + message)",
   { timeout: 120_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "handle-pipeline-rel" });
     using itx = handle.itx();
     const parentPath = "/agents/pipeline-parent";
+    await itx.agents.get(parentPath).create({});
 
     // Run from the PARENT AGENT's scope, so the script's itx resolves relative
     // paths against it and message() stamps the parent as the sender — the
@@ -249,7 +257,9 @@ test(
     });
     const run = (
       await itxScript(parentHost).execute(async (itx) => {
-        const sent = await itx.agents.get("researcher").message("pipelined delegation");
+        const researcher = itx.agents.get("researcher");
+        await researcher.create({});
+        const sent = await researcher.message("pipelined delegation");
         return {
           actor: sent.payload?.actor,
           offset: sent.offset,

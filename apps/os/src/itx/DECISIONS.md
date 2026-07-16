@@ -332,16 +332,14 @@ been circling:
   dispatches; the code payload only crosses RPC inside the loader's
   cold-isolate miss callback. The DO is where the worker's source of truth
   lives, nothing more.
-- **Project creation is event-sourced, fire-and-return.** `createProject`
-  appends `project/create-requested` and returns the (purely computed)
-  summary immediately — no waiting. The ProjectProcessor — slug `project`,
-  hosted on the DO — runs the idempotent steps (D1 projection, iterate-config
-  repo, example secret, agents root) and leaves the trail: `created`,
-  `repo-initialized`, `create-completed`, plus a cross-post of
-  create-requested to the global namespace's `/projects` stream. Callers
-  redirect to the project page right away and watch
-  `itx.project.processor.snapshot()` (phase: creating → ready) for
-  progress — the processor is a public RpcTarget getter on the DO, and
+- **Project creation is event-sourced and explicitly born.** `projects.create`
+  appends `project/created` (the processor birth certificate) plus its
+  subscription, then waits until the project processor has consumed that
+  batch. The processor explicitly births the root capability host, scheduler,
+  config repo, and email router; `project/ready` records completion. The
+  default call waits for readiness, while `waitUntilReady: false` returns
+  after birth so the dashboard can render progress from live processor state.
+  The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd
   itself does not pipeline calls through property accesses on raw stubs

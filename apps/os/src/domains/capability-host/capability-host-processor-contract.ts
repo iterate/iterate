@@ -58,6 +58,13 @@ const CapabilityRevokedPayload = z.strictObject({
   providedAtOffset: z.number().int().nonnegative().optional(),
 }) satisfies z.ZodType<RevokeCapabilityInput, unknown>;
 
+const CapabilityHostBirthCertificate = z.strictObject({
+  config: z.strictObject({
+    /** The one scope this host inherits from; null explicitly terminates the chain. */
+    ancestorPath: z.string().trim().min(1).nullable(),
+  }),
+});
+
 /**
  * How stale a script-execution-requested's intent may be before the
  * reconciler settles it as expired instead of running it. Recovery can
@@ -75,17 +82,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   // signals (see `consumes`).
   processorDeps: [CoreProcessorContract],
   stateSchema: z.object({
-    /**
-     * The one explicitly declared scope this host inherits from. Absence means
-     * the host has not been born correctly and read/execution operations fail;
-     * `path: null` explicitly terminates inheritance (normally at project root).
-     */
-    ancestor: z
-      .object({
-        configuredAtOffset: z.number().int().nonnegative(),
-        path: z.string().nullable(),
-      })
-      .optional(),
+    birthCertificate: CapabilityHostBirthCertificate.nullable().default(null),
     capabilities: z.array(CapabilityRecord).default([]),
     /**
      * The host's open script OBLIGATIONS, keyed by executionId — the "what
@@ -108,20 +105,18 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       .default({}),
   }),
   events: {
-    "events.iterate.com/capability-host/ancestor-configured": {
+    "events.iterate.com/capability-host/created": {
       description:
-        "Declares the one capability scope this host inherits from, or null when inheritance terminates. The durable declaration replaces path-prefix inference.",
-      payloadSchema: z.strictObject({
-        ancestorPath: z.string().trim().min(1).nullable(),
-      }),
+        "Creates a capability-host processor and declares its one explicit ancestor. Paths are addresses, not an implicit inheritance chain.",
+      payloadSchema: CapabilityHostBirthCertificate,
       examples: [
         {
           description: "A top-level agent inherits project-scoped mounts directly from root.",
-          payload: { ancestorPath: "/" },
+          payload: { config: { ancestorPath: "/" } },
         },
         {
           description: "The project root explicitly terminates capability inheritance.",
-          payload: { ancestorPath: null },
+          payload: { config: { ancestorPath: null } },
         },
       ],
     },
@@ -223,7 +218,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
-    "events.iterate.com/capability-host/ancestor-configured",
+    "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-execution-requested",
@@ -247,7 +242,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
-    "events.iterate.com/capability-host/ancestor-configured",
+    "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-execution-requested",
@@ -259,6 +254,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<CapabilityHostProcessorContract>`,
- * `ConsumedEvent<CapabilityHostProcessorContract>`, `ProcessorEvent<CapabilityHostProcessorContract, T>`.
+ * `ConsumedEvent<CapabilityHostProcessorContract>`.
  */
 export type CapabilityHostProcessorContract = typeof CapabilityHostProcessorContract;

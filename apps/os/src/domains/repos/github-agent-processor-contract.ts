@@ -12,7 +12,7 @@ import {
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { GithubAgentBirthCertificate, RepoProcessorContract } from "./repo-processor-contract.ts";
 
 const PullRequestProjection = z.object({
   author: z.string().optional(),
@@ -61,16 +61,10 @@ export const GithubAgentProcessorContract = defineProcessorContract({
   version: "0.3.0",
   description: "Handles GitHub-specific behavior for one routed pull-request agent stream.",
   stateSchema: z.object({
-    connection: z.string().optional(),
+    birthCertificate: GithubAgentBirthCertificate.nullable().default(null),
     conversationActive: z.boolean().default(false),
-    installationId: z.string().optional(),
-    number: z.number().optional(),
-    owner: z.string().optional(),
     pullRequest: PullRequestProjection.nullable().default(null),
     recentActivity: z.array(PullRequestActivity).default([]),
-    repo: z.string().optional(),
-    repoPath: z.string().optional(),
-    streamPath: z.string().optional(),
   }),
   events: {
     "events.iterate.com/github-agent/repository-collaborator-verified": {
@@ -88,7 +82,7 @@ export const GithubAgentProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract, RepoProcessorContract, CoreProcessorContract],
   consumes: [
     "events.iterate.com/github-agent/repository-collaborator-verified",
-    "events.iterate.com/github-agent/route-configured",
+    "events.iterate.com/github-agent/created",
     "events.iterate.com/github/webhook-received",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
     // processor; the payload's processorSlug names which). MUST be consumed

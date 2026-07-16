@@ -5,9 +5,9 @@ import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.t
 // projectId — it just has to be a legal projectId so stringify/parse run.
 const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
-// Every workspace lives under this prefix — the domain-prefix convention every
-// other domain already follows (`/secrets/...`, `/repos/...`, `/sandboxes/...`),
-// so a project path names exactly one kind of object.
+// Every workspace lives under this collection prefix, matching the addressing
+// convention used by `/secrets/...`, `/repos/...`, and `/sandboxes/...`. The
+// prefix does not itself declare or create a stream processor.
 const WORKSPACE_PATH_PREFIX = "/workspaces";
 
 /**

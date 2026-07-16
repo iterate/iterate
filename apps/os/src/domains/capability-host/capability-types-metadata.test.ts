@@ -15,6 +15,19 @@ import { CapabilityHostProcessor } from "./capability-host-processor-implementat
 
 const PROVIDED = "events.iterate.com/capability-host/capability-provided";
 
+function capabilityHostStream(): MemoryStream {
+  const stream = new MemoryStream();
+  stream.events.push({
+    type: "events.iterate.com/capability-host/created",
+    idempotencyKey: `capability-host/created:test:${stream.path}`,
+    payload: { config: { ancestorPath: null } },
+    createdAt: new Date().toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+  return stream;
+}
+
 type Harness = {
   processor: CapabilityHostProcessor;
   runner: StreamProcessorRunner<CapabilityHostProcessorContract>;
@@ -39,16 +52,17 @@ async function provideDelivered(harness: Harness, input: ProvideCapabilityInput)
 /** REAL runner drive (the production registry's driver): the processor's
  * fold reads and read-your-writes waits go through the runner's committed
  * progress, exactly as the hosting DO wires registry.reads(...). */
-function makeProcessor(options: {
+async function makeProcessor(options: {
   stream: MemoryStream;
   itx?: unknown;
+  path?: string;
   validateCapabilityTypes?: (types: string) => Promise<string[]>;
-}): Harness {
+}): Promise<Harness> {
   let runner!: Harness["runner"];
   const processor = new CapabilityHostProcessor({
     stream: options.stream,
     itx: (options.itx ?? {}) as Project,
-    path: "/",
+    path: options.path ?? "/",
     projectId: null,
     scriptExecutionEntrypoint: {
       run: () => {
@@ -63,13 +77,40 @@ function makeProcessor(options: {
     },
   });
   runner = new StreamProcessorRunner({ processor, stream: options.stream });
+  await runner.catchUp();
   return { processor, runner };
 }
 
+describe("CapabilityHostProcessor birth", () => {
+  it("throws when a second capability-host birth certificate is reduced", async () => {
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream });
+    await stream.append({
+      type: "events.iterate.com/capability-host/created",
+      payload: { config: { ancestorPath: null } },
+    });
+
+    await expect(harness.runner.catchUp()).rejects.toThrow(
+      "capability host received more than one created event",
+    );
+  });
+
+  it("rejects reads through an uncreated container instead of inferring a parent", async () => {
+    const harness = await makeProcessor({
+      stream: new MemoryStream("/agents"),
+      path: "/agents",
+    });
+
+    await expect(
+      harness.processor.invokeCapability({ path: ["projectTool", "ping"], args: [] }),
+    ).rejects.toThrow("capability host at /agents has not been created");
+  });
+});
+
 describe("provide-time types validation", () => {
   it("rejects authored types that do not compile, appending nothing", async () => {
-    const stream = new MemoryStream();
-    const { processor } = makeProcessor({
+    const stream = capabilityHostStream();
+    const { processor } = await makeProcessor({
       stream,
       validateCapabilityTypes: async () => ["types:1 — Cannot find name 'Streem'. (TS2304)"],
     });
@@ -85,8 +126,8 @@ describe("provide-time types validation", () => {
   });
 
   it("journals authored types that compile", async () => {
-    const stream = new MemoryStream();
-    const harness = makeProcessor({ stream, validateCapabilityTypes: async () => [] });
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream, validateCapabilityTypes: async () => [] });
     await provideDelivered(harness, {
       expression: ["streams"],
       path: ["root"],
@@ -98,8 +139,8 @@ describe("provide-time types validation", () => {
   });
 
   it("skips validation when no validator is wired (node harness)", async () => {
-    const stream = new MemoryStream();
-    const harness = makeProcessor({ stream });
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream });
     await provideDelivered(harness, {
       expression: ["streams"],
       path: ["unchecked"],
@@ -114,8 +155,8 @@ describe("connect-time auto-typing", () => {
   const SELF_DESCRIBED = "export type Capability = { forecast(): Promise<string> };";
 
   it("stamps an expression mount's types from the capability's own __describe", async () => {
-    const stream = new MemoryStream();
-    const harness = makeProcessor({
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({
       stream,
       itx: { weather: { __describe: async () => ({ types: SELF_DESCRIBED }) } },
       validateCapabilityTypes: async () => [],
@@ -130,8 +171,8 @@ describe("connect-time auto-typing", () => {
   });
 
   it("leaves the mount untyped when self-reported types fail to compile", async () => {
-    const stream = new MemoryStream();
-    const harness = makeProcessor({
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({
       stream,
       itx: { weather: { __describe: async () => ({ types: "broken (" }) } },
       validateCapabilityTypes: async () => ["types:1 — expected declaration (TS1128)"],
@@ -146,8 +187,8 @@ describe("connect-time auto-typing", () => {
   });
 
   it("leaves the mount untyped when describing throws, without blocking the provide", async () => {
-    const stream = new MemoryStream();
-    const harness = makeProcessor({
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({
       stream,
       itx: {
         weather: {

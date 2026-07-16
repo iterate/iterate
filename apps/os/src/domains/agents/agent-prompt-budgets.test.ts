@@ -17,7 +17,7 @@ import {
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import {
   EMAIL_AGENT_SYSTEM_PROMPT,
-  agentDefaultsForPath,
+  agentCreationForPath,
   slackAgentSystemPrompt,
   telegramAgentSystemPrompt,
 } from "./agent-defaults.ts";
@@ -71,7 +71,11 @@ test("no platform prompt embeds the type surface", () => {
 });
 
 test("the boot-context input stays facts-and-pointers sized", () => {
-  const policy = agentDefaultsForPath({ agentPath: "/agents/test", projectId: "prj_test" });
+  const policy = agentCreationForPath({
+    agentPath: "/agents/test",
+    capabilityHostAncestorPath: "/",
+    projectId: "prj_test",
+  });
   const bootContext = policy.events.find(
     (event) =>
       event.type === "events.iterate.com/agents/context-added" &&
@@ -87,7 +91,11 @@ test("every docs name referenced in prompts and boot context resolves", () => {
   // Dialed-by-name strings are the bug class where a rename silently strands
   // the prompt (see the #1816/#1818 incident): every `docs.get({ name: "…" })`
   // literal must resolve to a real example id or type declaration name.
-  const policy = agentDefaultsForPath({ agentPath: "/agents/test", projectId: "prj_test" });
+  const policy = agentCreationForPath({
+    agentPath: "/agents/test",
+    capabilityHostAncestorPath: "/",
+    projectId: "prj_test",
+  });
   const bootContent = policy.events
     .map((event) => (event.payload as { content?: string }).content ?? "")
     .join("\n");
