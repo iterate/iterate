@@ -358,6 +358,42 @@ describe("script execution typecheck gate", () => {
     ).toMatchObject({ "iterate.capability_host.request_offset": 3 });
   });
 
+  it("drives its committed request when an unconsumed tail suppresses at-head reconciliation", async () => {
+    class RequestWithUnconsumedTailStream extends MemoryStream {
+      override async append(...inputs: Parameters<MemoryStream["append"]>) {
+        const appended = await super.append(...inputs);
+        if (inputs.some((input) => input.type === T.requested)) {
+          // Reproduces the production ordering: a subscriber lifecycle/agent
+          // status fact wins the next offset, but this processor does not
+          // consume it. The request is durably folded without receiving the
+          // runner's consumed-at-head reconciliation pulse.
+          await super.append({
+            type: "events.iterate.com/agents/user-message-sent",
+            payload: {},
+          });
+        }
+        return appended;
+      }
+    }
+
+    const stream = new RequestWithUnconsumedTailStream();
+    const run = vi.fn(async () => "ok");
+    const harness = makeProcessor({ stream, run });
+    await stream.append({
+      type: T.ancestorConfigured,
+      payload: { ancestorPath: null },
+    });
+    await harness.runner.catchUp();
+
+    const result = harness.processor.runScript("async () => null");
+    await vi.waitFor(() => expect(completion(stream)).toBeDefined());
+    expect(run).toHaveBeenCalledTimes(1);
+
+    await harness.runner.catchUp();
+    await expect(result).resolves.toMatchObject({ result: "ok" });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("a rejected execution deletes its obligation — the reconciler never re-runs it", async () => {
     const stream = new MemoryStream();
     const harness = makeProcessor({

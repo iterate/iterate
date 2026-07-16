@@ -203,6 +203,13 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    */
   catchUp(name: string): Promise<void>;
   /**
+   * Start a journal-backed obligation attempt through the named runner's
+   * recovery keepalive. For synchronous domain verbs that have already
+   * committed their desired state and must not wait for the push lane's next
+   * at-head reconcile pulse.
+   */
+  runInBackground(name: string, work: () => Promise<unknown>): void;
+  /**
    * Wire this to the host DO's `alarm()` handler — REQUIRED on every hosting
    * class. The fire routes to EVERY runner (each keepalive self-gates on its
    * own persisted armed time), so a DO sharing the alarm with its own
@@ -486,6 +493,10 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     },
 
     catchUp,
+
+    runInBackground(name, work) {
+      requireEntry(name).runner.runInBackground(work);
+    },
 
     handleAlarm(alarmInfo) {
       return tracing.enterSpan("alarm processor keepalive", async (span) => {

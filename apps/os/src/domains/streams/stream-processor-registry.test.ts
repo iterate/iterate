@@ -266,6 +266,24 @@ describe("catchUp", () => {
 });
 
 // =============================================================================
+// Foreground obligation handoff
+// =============================================================================
+
+describe("runInBackground", () => {
+  it("routes committed obligation work through the named runner's recovery keepalive", async () => {
+    const h = makeHarness();
+
+    h.registry.runInBackground("alpha-proc", hang);
+    await h.settle();
+
+    const keepaliveAt = h.clock.now + KEEPALIVE_ALARM_LEAD_MS;
+    expect(h.registry.getAlarmSlice("keepalive:alpha-proc")).toBe(keepaliveAt);
+    expect(h.alarm.at).toBe(keepaliveAt);
+    expect(h.registry.getAlarmSlice("keepalive:beta-proc")).toBeNull();
+  });
+});
+
+// =============================================================================
 // The single-DO-alarm multiplex
 // =============================================================================
 

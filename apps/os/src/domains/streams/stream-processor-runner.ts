@@ -522,6 +522,21 @@ export class StreamProcessorRunner<
     });
   }
 
+  /**
+   * Start consequential work outside a delivery hook on this runner's own
+   * keepalive/recovery lane. The caller must still represent the desired
+   * outcome durably and reconcile it after eviction; this method supplies the
+   * same bounded recovery plumbing as `processEvent`'s `runInBackground`.
+   *
+   * This is intentionally a narrow escape hatch for synchronous domain verbs
+   * that first journal an obligation and then want to drive that exact
+   * committed obligation without waiting for an unrelated future consumed
+   * event to provide another at-head pulse.
+   */
+  runInBackground(work: () => Promise<unknown>): void {
+    this.#runInBackground(work);
+  }
+
   /** Release delivery resources. Idempotent; a disposed runner rejects new work. */
   dispose(): void {
     this.#disposed = true;

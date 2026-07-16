@@ -90,6 +90,12 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       typecheckScript: (input) =>
         checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
+      // runScript has already journaled and folded the requested obligation;
+      // launch it through the SAME recovery-backed runner lane as an at-head
+      // reconcile, without waiting for the subscription transport to produce
+      // another consumed event.
+      runScriptInBackground: (work) =>
+        this.#registry.runInBackground(CapabilityHostProcessorContract.slug, work),
     }),
     { recovery: true },
   );

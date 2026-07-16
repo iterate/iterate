@@ -175,6 +175,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         code: string;
       }) => Promise<ScriptExecutionCheck>)
     | undefined;
+  #runScriptInBackground: (work: () => Promise<unknown>) => void;
   #liveCapabilities = new Map<string, LiveCapability>();
   #reads: CapabilityHostProcessorReads;
 
@@ -206,6 +207,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         capabilities: CapabilityDescription[];
         code: string;
       }) => Promise<ScriptExecutionCheck>;
+      /**
+       * Starts a committed script obligation on the hosting runner's recovery
+       * lane. Production injects the registry runner; tests may use the base
+       * processor keepalive.
+       */
+      runScriptInBackground?: (work: () => Promise<unknown>) => void;
     },
   ) {
     super(args);
@@ -217,6 +224,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#resolveAncestor = args.resolveAncestor;
     this.#validateCapabilityTypes = args.validateCapabilityTypes;
     this.#typecheckScript = args.typecheckScript;
+    this.#runScriptInBackground =
+      args.runScriptInBackground ?? ((work) => this.runInBackground(work));
   }
 
   protected override reduce({
@@ -300,6 +309,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   /** Script executions alive in THIS incarnation — the "actual" half of the
    * reconciliation below. */
   readonly #liveExecutions = new Set<string>();
+  /**
+   * Requests this incarnation has already claimed. A claim outlives the async
+   * attempt once started/completed evidence commits, until a later committed
+   * snapshot proves the obligation is gone. That closes the narrow window in
+   * which a fast execution can append its completion before runScript's
+   * request-offset barrier returns: the still-requested published fold must
+   * not launch the same script a second time.
+   */
+  readonly #claimedExecutions = new Set<string>();
 
   /**
    * The at-head reconcile (was `onCaughtUp`): `processEvent` invokes it under
@@ -345,15 +363,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
       if (this.#liveExecutions.has(executionId)) continue;
       if (execution.status === "requested" && now < execution.expiresAt) {
-        this.#liveExecutions.add(executionId);
-        // The head fold handed to this reconcile, NOT an instance read: the
-        // typecheck gate must see capabilities provided in the same delivery
-        // as the request or it would judge the script against a stale scope.
-        const capabilities = args.state.capabilities;
-        const ancestor = args.state.ancestor;
-        args.runInBackground(() =>
-          this.#executeScript({ ancestor, capabilities, code: execution.code, executionId }),
-        );
+        // A prior attempt in this incarnation may already have committed its
+        // started/completed evidence while this fold still shows requested.
+        if (this.#claimedExecutions.has(executionId)) continue;
+        this.#driveRequestedScript({
+          execution,
+          executionId,
+          state: args.state,
+          runInBackground: args.runInBackground,
+        });
         continue;
       }
       settle.push({
@@ -372,6 +390,48 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         error,
       });
       await this.#appendCompletion({ executionId, error });
+    }
+  }
+
+  /**
+   * Turn one durable `requested` fact into an incarnation-local attempt.
+   * `#claimedExecutions` is the shared fence between the ordinary at-head
+   * reconciler and runScript's foreground handoff, so either path may win but
+   * this incarnation can launch the script only once.
+   */
+  #driveRequestedScript(input: {
+    execution: { code: string; expiresAt: number };
+    executionId: string;
+    state: ProcessorState<CapabilityHostProcessorContract>;
+    runInBackground: (work: () => Promise<unknown>) => void;
+  }): void {
+    if (this.#claimedExecutions.has(input.executionId)) return;
+    this.#claimedExecutions.add(input.executionId);
+    this.#liveExecutions.add(input.executionId);
+    try {
+      input.runInBackground(() =>
+        this.#executeScript({
+          ancestor: input.state.ancestor,
+          capabilities: input.state.capabilities,
+          code: input.execution.code,
+          executionId: input.executionId,
+        }),
+      );
+    } catch (error) {
+      this.#liveExecutions.delete(input.executionId);
+      this.#claimedExecutions.delete(input.executionId);
+      throw error;
+    }
+  }
+
+  /** Drop incarnation claims only from a COMMITTED fold that no longer has
+   * their obligation. Called from runScript's runner-backed snapshots, never
+   * from an in-flight delivery state that could still fail its commit. */
+  #pruneExecutionClaims(state: ProcessorState<CapabilityHostProcessorContract>): void {
+    for (const executionId of this.#claimedExecutions) {
+      if (state.scriptExecutions[executionId] === undefined) {
+        this.#claimedExecutions.delete(executionId);
+      }
     }
   }
 
@@ -698,6 +758,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   async runScript(code: string): Promise<RunScriptResult> {
     const { state } = await this.#reads.snapshot();
+    this.#pruneExecutionClaims(state);
     this.#requireAncestorDeclaration(state.ancestor);
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
@@ -717,6 +778,28 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       span.setAttribute("iterate.capability_host.request_offset", requested.offset);
       await this.#reads.waitUntilEvent({ offset: requested.offset });
     });
+    // The offset barrier proves the requested fact and every preceding scope
+    // mutation are durably folded. Drive that exact obligation now through
+    // the runner's recovery lane. Do not wait for another consumed event to
+    // produce an at-head reconcile pulse: an unconsumed concurrent tail (or a
+    // reconnect after eviction) may otherwise add an arbitrary transport
+    // round trip to a synchronous runScript call. If the self-pull already
+    // reconciled at head, #claimedExecutions makes this a no-op.
+    const { state: requestedState } = await this.#reads.snapshot();
+    this.#pruneExecutionClaims(requestedState);
+    const execution = requestedState.scriptExecutions[executionId];
+    if (
+      execution !== undefined &&
+      execution.status === "requested" &&
+      (this.#now ?? Date.now)() < execution.expiresAt
+    ) {
+      this.#driveRequestedScript({
+        execution,
+        executionId,
+        state: requestedState,
+        runInBackground: this.#runScriptInBackground,
+      });
+    }
     const event = await completed;
     const payload = event.payload as CompletedPayload;
     if (payload.error !== undefined) throw new Error(String(payload.error));
@@ -827,6 +910,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     code: string;
     executionId: string;
   }) {
+    // Once either started evidence or a terminal completion commits, retrying
+    // this request in the same incarnation is unsafe. Before that boundary a
+    // failed attempt is provably side-effect-free and may release its claim.
+    let durableAttemptEvidenceCommitted = false;
     await tracing.enterSpan("capability_host.script_execution", async (span) => {
       span.setAttribute("iterate.capability_host.script_chars", input.code.length);
       span.setAttribute("iterate.capability_host.ancestor_declared", input.ancestor !== undefined);
@@ -843,6 +930,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
               error: `Script was NOT executed: capability-host "${this.#path}" has no ancestor declaration.`,
             }),
           );
+          durableAttemptEvidenceCommitted = true;
           return;
         }
         // The typecheck gate runs BEFORE the started evidence: it has no side
@@ -861,6 +949,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
               error: checked.rejection!,
             }),
           );
+          durableAttemptEvidenceCommitted = true;
           return;
         }
         // Started-evidence lands durably BEFORE the script body runs, so the
@@ -877,6 +966,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
             payload: { executionId: input.executionId },
           }),
         );
+        durableAttemptEvidenceCommitted = true;
         try {
           const result = await tracing.enterSpan(
             "capability_host.script_loopback",
@@ -905,6 +995,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         }
       } finally {
         this.#liveExecutions.delete(input.executionId);
+        if (!durableAttemptEvidenceCommitted) {
+          this.#claimedExecutions.delete(input.executionId);
+        }
       }
     });
   }
