@@ -18,6 +18,7 @@ import type { CapabilityHostProcessorContract } from "./capability-host-processo
 import {
   CapabilityHostProcessor,
   type CapabilityHostAncestor,
+  type CapabilityHostProcessorReads,
 } from "./capability-host-processor-implementation.ts";
 
 const T = {
@@ -59,6 +60,10 @@ function makeProcessor(options: {
     code: string;
   }) => Promise<ScriptExecutionCheck>;
   runScriptInBackground?: (work: () => Promise<unknown>) => void;
+  waitUntilEvent?: (
+    input: Parameters<CapabilityHostProcessorReads["waitUntilEvent"]>[0],
+    fallback: () => Promise<void>,
+  ) => Promise<void>;
 }): Harness {
   let runner!: Harness["runner"];
   const processor = new CapabilityHostProcessor({
@@ -85,8 +90,11 @@ function makeProcessor(options: {
     runScriptInBackground: options.runScriptInBackground,
     reads: {
       snapshot: () => runner.snapshot(),
-      waitUntilEvent: (input) =>
-        "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
+      waitUntilEvent: (input) => {
+        const fallback = () =>
+          "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input);
+        return options.waitUntilEvent?.(input, fallback) ?? fallback();
+      },
     },
   });
   runner = new StreamProcessorRunner({ processor, stream: options.stream });
@@ -365,7 +373,7 @@ describe("script execution typecheck gate", () => {
     );
   });
 
-  it("self-pulls its committed request without waiting for a subscription wake", async () => {
+  it("launches from its durable request append without waiting for a subscription wake", async () => {
     const stream = new MemoryStream();
     const run = vi.fn(async () => "ok");
     const harness = makeProcessor({ stream, run });
@@ -378,8 +386,8 @@ describe("script execution typecheck gate", () => {
     const result = harness.processor.runScript("async () => null");
 
     // MemoryStream never wakes processors. Reaching completion proves
-    // runScript pulled its committed request through the runner and drove the
-    // reconciler without the subscription round-trip.
+    // runScript launched directly from its durable request append without the
+    // subscription round-trip.
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(run).toHaveBeenCalledTimes(1);
 
@@ -392,9 +400,30 @@ describe("script execution typecheck gate", () => {
         ?.attributes,
     ).toMatchObject({ "iterate.capability_host.completion_offset": 4 });
     expect(
-      recordedSpans.find((span) => span.name === "capability_host.script_request_consume")
+      recordedSpans.find((span) => span.name === "capability_host.script_request_append")
         ?.attributes,
     ).toMatchObject({ "iterate.capability_host.request_offset": 2 });
+  });
+
+  it("does not put a foreground launch behind the request-fold chain", async () => {
+    const stream = capabilityHostStream();
+    const run = vi.fn(async () => "ok");
+    const requestFold = vi.fn(async () => {
+      throw new Error("the request-fold lane is blocked");
+    });
+    const harness = makeProcessor({
+      stream,
+      run,
+      waitUntilEvent: (input, fallback) =>
+        "offset" in input && input.offset === 2 ? requestFold() : fallback(),
+    });
+    await harness.runner.catchUp();
+
+    await expect(harness.processor.runScript("async () => null")).resolves.toMatchObject({
+      result: "ok",
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(requestFold).not.toHaveBeenCalled();
   });
 
   it("keeps concurrent request launches in their foreground RPC owners", async () => {
@@ -427,7 +456,7 @@ describe("script execution typecheck gate", () => {
     ).toEqual(Array.from({ length: 20 }, () => "foreground"));
   });
 
-  it("folds unseen journal events before consuming its own request", async () => {
+  it("preserves earlier journal ordering around its committed request", async () => {
     const stream = new MemoryStream();
     const run = vi.fn(async () => "ok");
     const harness = makeProcessor({ stream, run });
@@ -445,7 +474,7 @@ describe("script execution typecheck gate", () => {
     expect((await harness.runner.snapshot()).offset).toBeGreaterThanOrEqual(3);
     await expect(result).resolves.toMatchObject({ result: "ok" });
     expect(
-      recordedSpans.find((span) => span.name === "capability_host.script_request_consume")
+      recordedSpans.find((span) => span.name === "capability_host.script_request_append")
         ?.attributes,
     ).toMatchObject({ "iterate.capability_host.request_offset": 3 });
   });

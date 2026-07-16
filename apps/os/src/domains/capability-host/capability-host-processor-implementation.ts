@@ -319,9 +319,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   readonly #liveExecutions = new Set<string>();
   /**
    * Incarnation-local launch ownership. A foreground reservation exists before
-   * its journal request, so committed-state pruning must never infer that its
-   * absence from a snapshot makes it stale. Once launched, foreground and
-   * reconcile owners remain until the committed fold removes the obligation.
+   * its journal request and remains through the append continuation, so
+   * committed-state pruning must never infer that its absence from a snapshot
+   * makes it stale. Once launched, foreground and reconcile owners remain
+   * until the committed fold removes the obligation.
    */
   readonly #executionOwners = new Map<string, "foreground-reserved" | "foreground" | "reconcile">();
   /**
@@ -847,11 +848,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     const executionId = crypto.randomUUID();
     const now = this.#now ?? Date.now;
     const expiresAt = now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
-    // Reserve before the request append. The offset self-pull can reach an
-    // at-head reconcile before this foreground continuation resumes; without
-    // the reservation that reconcile launches later requests inside the
-    // earlier caller's Cloudflare request lineage, eventually exhausting the
-    // subrequest-depth limit under fan-out.
+    // Reserve before the request append. Push delivery can fold the request
+    // before this foreground continuation resumes; without the reservation,
+    // that reconcile could acquire the same obligation and launch it from an
+    // unrelated delivery lineage.
     this.#executionOwners.set(executionId, "foreground-reserved");
     const completionAbort = new AbortController();
     // Register before the request append so a very fast completion cannot
@@ -868,51 +868,39 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
     try {
-      const [requested] = await this.#awaitJournalAppend(
-        this.append({
-          type: "events.iterate.com/capability-host/script-run-requested",
-          payload: { code, executionId, expiresAt },
-        }),
-        expiresAt,
-        `record the request for script execution "${executionId}"`,
-      );
-      if (requested === undefined) {
-        throw new Error(`script execution "${executionId}" request append returned no event`);
-      }
-      // Fold the exact committed request and everything before it. The claim
-      // keeps this request out of the reconciler while the serialized self-pull
-      // is in flight, so its worker will retain this foreground RPC as owner.
-      await tracing.enterSpan("capability_host.script_request_consume", async (span) => {
+      await tracing.enterSpan("capability_host.script_request_append", async (span) => {
+        const events = await this.#awaitJournalAppend(
+          this.append({
+            type: "events.iterate.com/capability-host/script-run-requested",
+            payload: { code, executionId, expiresAt },
+          }),
+          expiresAt,
+          `record the request for script execution "${executionId}"`,
+        );
+        const requested = events[0];
+        if (requested === undefined) {
+          throw new Error(`script execution "${executionId}" request append returned no event`);
+        }
         span.setAttribute("iterate.capability_host.request_offset", requested.offset);
-        await this.#reads.waitUntilEvent({
-          offset: requested.offset,
-          timeoutMs: Math.max(1, expiresAt - now()),
-        });
+        return requested;
       });
 
-      const { state: requestedState } = await this.#reads.snapshot();
-      const execution = requestedState.scriptExecutions[executionId];
-      if (
-        execution !== undefined &&
-        execution.status === "requested" &&
-        now() < execution.expiresAt
-      ) {
-        if (this.#executionOwners.get(executionId) !== "foreground-reserved") {
-          throw new Error(`script execution "${executionId}" lost its foreground reservation`);
-        }
-        this.#executionOwners.set(executionId, "foreground");
-        this.#startOwnedScript({
-          execution,
-          executionId,
-          launchOwner: "foreground",
-          state: requestedState,
-          runInBackground: this.#runScriptInBackground,
-        });
-      } else {
-        // A committed completion may already have removed the obligation.
-        // The completion waiter below remains the single return path.
-        this.#executionOwners.delete(executionId);
+      // The append is the durable recovery boundary. Starting the exact
+      // obligation now keeps foreground latency independent of subscriber
+      // delivery and the runner's serialized catch-up chain. If this
+      // incarnation dies after the append but before/during the launch, the
+      // journaled request is what a later at-head reconcile adopts.
+      if (this.#executionOwners.get(executionId) !== "foreground-reserved") {
+        throw new Error(`script execution "${executionId}" lost its foreground reservation`);
       }
+      this.#executionOwners.set(executionId, "foreground");
+      this.#startOwnedScript({
+        execution: { code, expiresAt },
+        executionId,
+        launchOwner: "foreground",
+        state,
+        runInBackground: this.#runScriptInBackground,
+      });
     } catch (error) {
       completionAbort.abort(error);
       void observedCompletion;

@@ -102,10 +102,10 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       typecheckScript: (input) =>
         checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
-      // runScript has already journaled and folded the requested obligation;
-      // launch it through the SAME recovery-backed runner lane as an at-head
-      // reconcile, without waiting for the subscription transport to produce
-      // another consumed event.
+      // runScript has already journaled the requested obligation; launch it
+      // through the SAME recovery-backed runner lane as an at-head reconcile,
+      // without making foreground execution wait for the serialized stream
+      // delivery/catch-up lane to fold that request.
       runScriptInBackground: (work) =>
         this.#registry.runInBackground(CapabilityHostProcessorContract.slug, work),
     }),
