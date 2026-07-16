@@ -1,10 +1,20 @@
 // GitHub-router/agent test fixtures over the canonical in-memory stream
-// harness (../streams/test-helpers.ts). The repo/GitHub suites pin the
-// harness clock to the epoch (`now: () => 0`): they pair processor clocks
-// like `now: () => 10` with ~epoch createdAt stamps, so the 👀-ack freshness
-// gate sees a small positive age.
+// harness (../streams/test-helpers.ts).
+
+import { MemoryStreamNetwork as CanonicalMemoryStreamNetwork } from "../streams/test-helpers.ts";
 
 export { MemoryStream } from "../streams/test-helpers.ts";
+
+/**
+ * The canonical network with its clock pinned to the epoch: the GitHub agent
+ * suite pairs processor clocks like `now: () => 10` with ~epoch createdAt
+ * stamps, so the 👀-ack freshness gate sees a small positive age.
+ */
+export class MemoryStreamNetwork extends CanonicalMemoryStreamNetwork {
+  constructor() {
+    super(() => 0);
+  }
+}
 
 export const GITHUB_LINK = {
   connection: "install-789",

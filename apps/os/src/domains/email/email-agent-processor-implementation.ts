@@ -110,13 +110,17 @@ export class EmailAgentProcessor extends StreamProcessor<
     blockProcessorWhile(async () => {
       // Door-stored attachments become signed AgentFileAttachments so images
       // are directly visible to the model and documents are itx.files
-      // readable. A failed resolution degrades to the plain transcription
-      // (the YAML already names the files) rather than wedging the processor.
+      // readable. Resolution can fail PERMANENTLY (the file may be gone from
+      // the bucket), so throwing would wedge this frame forever; instead the
+      // message goes through WITH an explicit loss note — never a silent
+      // drop — and the stored paths in the transcription still let the agent
+      // reach any surviving bytes via itx.files.get(path).
       const stored = (event.payload.message.attachments ?? []).filter(
         (attachment): attachment is StoredInboundAttachment & { size: number } =>
           typeof attachment.path === "string",
       );
       let files: AgentFileAttachment[] | undefined;
+      let attachmentFailureNote: string | undefined;
       if (stored.length > 0 && this.deps.resolveStoredAttachments != null) {
         try {
           files = await this.deps.resolveStoredAttachments(
@@ -129,6 +133,9 @@ export class EmailAgentProcessor extends StreamProcessor<
           );
         } catch (error) {
           console.error("[email-agent] failed to resolve stored attachments", { error });
+          attachmentFailureNote = `[${stored.length} attachment(s) could not be loaded: ${
+            error instanceof Error ? error.message : String(error)
+          }]`;
         }
       }
       // Normalized email is developer context; actor and refs retain the
@@ -140,7 +147,10 @@ export class EmailAgentProcessor extends StreamProcessor<
         idempotencyKey: this.idempotencyKey("received-to-agent-context", event),
         payload: {
           role: "developer",
-          content: inboundEmailAgentInput(event.payload),
+          content:
+            attachmentFailureNote === undefined
+              ? inboundEmailAgentInput(event.payload)
+              : `${inboundEmailAgentInput(event.payload)}\n\n${attachmentFailureNote}`,
           actor: {
             type: "email" as const,
             ...(fromAddress == null ? {} : { address: fromAddress }),

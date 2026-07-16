@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 
 /**
  * The GitHub repository one repo mirrors to: a named GitHub connection (the
@@ -34,16 +37,19 @@ export const RepoProcessorContract = defineProcessorContract({
   stateSchema: z.object({
     artifactName: z.string().nullable().default(null),
     /** An open creation OBLIGATION: `create-requested` folded, `created` not
-     * yet. The end-of-batch reconciler compares this pair at head — never
-     * event-time state, which a journal refold replays with `created` still
-     * false (docs/writing-stream-processors.md, "Refold safety"). */
+     * yet. The at-head reconcile (processEvent under `delivery.caughtUp`)
+     * compares this pair over the final
+     * fold — never event-time state, which a journal refold replays with
+     * `created` still false (docs/writing-stream-processors.md, "Refold
+     * safety"). */
     createRequested: z.boolean().default(false),
     created: z.boolean().default(false),
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),
     /** A GitHub default-branch import obligation. The webhook is first
-     * normalized into `github-import-requested`; the at-head reconciler then
-     * drives the vendor sync without holding the stream checkpoint. */
+     * normalized into `github-import-requested`; the at-head reconcile
+     * (processEvent under `delivery.caughtUp`) then drives the vendor sync
+     * without holding the stream checkpoint. */
     githubImport: z
       .object({
         branch: z.string(),
@@ -484,6 +490,24 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-import-failed",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/stream/created",
+    // Core lifecycle RE-CHECK signals (see the agent contract for the full
+    // rationale): neither folds into state, but their at-head delivery gives
+    // the create/github-import reconcile a guaranteed consumed-at-head turn —
+    // `stream/woken` on a stream (re)start, `subscriber-connected` on a runner
+    // (re)attach.
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): its ordinary delivery is
+    // the guaranteed at-head turn where the obligation reconcile
+    // (`processEvent` under `delivery.caughtUp`) re-drives the repo's open
+    // obligations — an unfinished creation (never re-run once `repo/created`
+    // folded; see #reconcileObligations) and an open GitHub import (safely
+    // re-driven: the sync is an idempotent current-head fast-forward). Reduce
+    // ignores it, and it is absent from `emits`: the recovery adapter appends
+    // it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/repo/created",

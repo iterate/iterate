@@ -36,6 +36,15 @@ const MAX_ACTIVITY_SUMMARY_LENGTH = 1_200;
 const MAX_PULL_REQUEST_BODY_LENGTH = 4_000;
 const RECENT_ACTIVITY_LIMIT = 12;
 
+/** A fresh same-drive conversation bridge — see `#batchConversation`. */
+function newBatchConversation(): {
+  active: boolean;
+  mayActivate: boolean;
+  verifiedMentionOffsets: Set<number>;
+} {
+  return { active: false, mayActivate: false, verifiedMentionOffsets: new Set() };
+}
+
 export class GithubAgentProcessor extends StreamProcessor<
   GithubAgentProcessorContract,
   {
@@ -57,17 +66,17 @@ export class GithubAgentProcessor extends StreamProcessor<
 > {
   readonly contract = GithubAgentProcessorContract;
 
-  /** Transient context for one serialized ingest batch. It bridges an
-   * inconclusive mention's async collaborator check to immediate follow-ups
-   * already folded in that same batch; durable activation still comes only
-   * from the verified audit fact appended by the mention. */
-  #batchConversation:
-    | {
-        active: boolean;
-        mayActivate: boolean;
-        verifiedMentionOffsets: Set<number>;
-      }
-    | undefined;
+  /** Transient context for one catch-up-to-head DRIVE (the runner's strict
+   * per-event ordering — event N's blocking work completes before event N+1's
+   * processEvent — is what makes it sound). It bridges an inconclusive
+   * mention's async collaborator check to immediate follow-ups delivered in
+   * the same drive, before the mention's durable verification fact has come
+   * back around through delivery; durable activation still comes only from
+   * that verified audit fact. Reset at the head event (`processEvent` under
+   * `delivery.caughtUp`) and at route boundaries — from head onward,
+   * follow-ups are gated by the FOLDED `conversationActive`, which the
+   * verified fact's own delivery has had time to establish. */
+  #batchConversation = newBatchConversation();
 
   protected override reduce({
     event,
@@ -97,42 +106,33 @@ export class GithubAgentProcessor extends StreamProcessor<
     }
   }
 
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<GithubAgentProcessorContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    const orderedWork: Array<() => Promise<unknown>> = [];
-    this.#batchConversation = {
-      active: false,
-      mayActivate: false,
-      verifiedMentionOffsets: new Set(),
-    };
-    try {
-      // Preserve the base class's event-bound append/provenance lanes, but
-      // collect their blocking work instead of starting every webhook side
-      // effect concurrently. Conversation authorization and visible replies
-      // must observe GitHub's event order.
-      await super.processEventBatch({
-        ...args,
-        blockProcessorWhile: (work) => orderedWork.push(work),
-      });
-    } catch (error) {
-      this.#batchConversation = undefined;
-      throw error;
-    }
-    if (orderedWork.length === 0) {
-      this.#batchConversation = undefined;
-      return;
-    }
-    args.blockProcessorWhile(async () => {
-      try {
-        for (const work of orderedWork) await work();
-      } finally {
-        this.#batchConversation = undefined;
-      }
-    });
+  /**
+   * Dispatch, then — at head — the end of one drive: from there the mention's
+   * verified audit fact has its own delivery turn to fold
+   * `conversationActive` before any post-head follow-up arrives, so the
+   * same-drive bridge must not outlive the drive — an unbounded bridge would
+   * let this incarnation's in-memory trust answer for follow-ups the DURABLE
+   * fold should be gating. (The legacy processEventBatch override cleared it
+   * per delivered batch; the head event under `delivery.caughtUp` is the
+   * runner's equivalent boundary, and the strict per-event ordering the
+   * runner guarantees replaces that override's hand-rolled sequential
+   * execution of the collected blocking work.)
+   */
+  protected override processEvent(
+    args: Parameters<StreamProcessor<GithubAgentProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    this.#dispatchEvent(args);
+    // At head: bound the same-drive trust bridge to this drive. Runs AFTER
+    // the dispatch switch captured its bridge reference, so the head event's
+    // own (follow-up-less) collaborator-check closures keep mutating the old
+    // bridge while the NEXT drive starts clean. A batch whose tail is a type
+    // this processor does not consume defers the reset to the next
+    // consumed-at-head event; that is benign — the durable verified fact
+    // folds `conversationActive` either way.
+    if (args.delivery.caughtUp) this.#batchConversation = newBatchConversation();
   }
 
-  protected override processEvent({
+  #dispatchEvent({
     append,
     blockProcessorWhile,
     event,
@@ -142,13 +142,9 @@ export class GithubAgentProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/github-agent/route-configured": {
         if (!hasCurrentRoute(previousState) || !sameRoute(previousState, event.payload)) {
-          // A stream can be repaired/relinked. Same-batch trust from the old
+          // A stream can be repaired/relinked. Same-drive trust from the old
           // route must never cross that reset boundary.
-          this.#batchConversation = {
-            active: false,
-            mayActivate: false,
-            verifiedMentionOffsets: new Set(),
-          };
+          this.#batchConversation = newBatchConversation();
         }
         // Small stable boot fact. Every actual trigger repeats current
         // coordinates so a relink cannot leave the model relying on stale
@@ -209,15 +205,16 @@ export class GithubAgentProcessor extends StreamProcessor<
         const possibleMention =
           MENTION_TRIGGERING_ACTIONS.has(action) && AGENT_MENTION_PATTERN.test(mentionText);
         if (possibleMention && isNonBotActivity(body)) {
-          // This is only a same-batch candidate. `active` remains false until
-          // the ordered async trust check below succeeds.
-          if (batchConversation !== undefined) {
-            batchConversation.mayActivate = true;
-          }
+          // This is only a same-drive candidate. `active` remains false until
+          // the async trust check AND the verification/message append below
+          // both succeed (the runner completes this event's blocking work
+          // before the next event's processEvent, so the whole sequence is
+          // ordered ahead of any follow-up's gate).
+          batchConversation.mayActivate = true;
         }
         const possibleFollowUp =
           !possibleMention &&
-          (state.conversationActive || batchConversation?.mayActivate === true) &&
+          (state.conversationActive || batchConversation.mayActivate) &&
           isConversationComment(body, action);
 
         if (!possibleMention && !possibleFollowUp) return;
@@ -225,9 +222,9 @@ export class GithubAgentProcessor extends StreamProcessor<
         const senderType = readString(sender?.type);
 
         blockProcessorWhile(async () => {
-          // A same-batch follow-up is only a candidate until the preceding
+          // A same-drive follow-up is only a candidate until the preceding
           // mention's ordered collaborator check has positively activated it.
-          if (possibleFollowUp && !state.conversationActive && batchConversation?.active !== true) {
+          if (possibleFollowUp && !state.conversationActive && !batchConversation.active) {
             return;
           }
           const webhookTrustedHuman = isTrustedHumanActivity(body);
@@ -241,14 +238,8 @@ export class GithubAgentProcessor extends StreamProcessor<
             !mentioned && trustedHuman && possibleFollowUp && isConversationComment(body, action);
           if (!mentioned && !conversationFollowUp) return;
 
-          if (mentioned && batchConversation !== undefined) {
-            batchConversation.active = true;
-            if (collaboratorVerified) {
-              batchConversation.verifiedMentionOffsets.add(event.offset);
-            }
-          }
           let turnState = state;
-          for (const sourceOffset of batchConversation?.verifiedMentionOffsets ?? []) {
+          for (const sourceOffset of batchConversation.verifiedMentionOffsets) {
             turnState = markInstructionSourceTrusted(turnState, sourceOffset);
           }
           if (collaboratorVerified) {
@@ -297,6 +288,23 @@ export class GithubAgentProcessor extends StreamProcessor<
               },
             },
           );
+          // Same-drive trust mutates ONLY AFTER the verification/message
+          // append has durably resolved. Mutating before it (the codex-review
+          // P1) let a FAILED frame leave `active` set: the cursor stays before
+          // the mention, but on the same-incarnation retry the collaborator
+          // check can come back false (access revoked / 404) while a trusted
+          // follow-up still passes the gate above on the stale in-memory
+          // trust — and renders the revoked mention as a trusted instruction
+          // source. Post-append, a failed frame leaves trust unset, the
+          // follow-up never runs, and the retry re-verifies from scratch (the
+          // legacy processEventBatch's `finally` cleanup, expressed as
+          // don't-set-until-durable).
+          if (mentioned) {
+            batchConversation.active = true;
+            if (collaboratorVerified) {
+              batchConversation.verifiedMentionOffsets.add(event.offset);
+            }
+          }
         });
         return;
       }
