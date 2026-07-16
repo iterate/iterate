@@ -5096,6 +5096,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
   readonly #props: ProjectRpcTargetProps;
+  // One project target backs one stream's cached push connection. Keep its
+  // derived search rewrites ordered without putting them on the authoritative
+  // delivery acknowledgement path.
+  #streamSearchIndexTail: Promise<void> = Promise.resolve();
 
   constructor(props: ProjectRpcTargetProps) {
     super();
@@ -5477,10 +5481,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       }
       throw error;
     }
-    // This is awaited before the delivery is acknowledged, so the stream's
-    // ordered push lane also orders rewrites of each R2 segment object. The
-    // method catches its own failures because search remains a derived mirror.
-    await this.#indexStreamSearch(batch);
+    // Search is a derived mirror, so it must neither extend nor reject the
+    // authoritative delivery acknowledgement. The cached project target is
+    // private to this stream's push connection; its tail preserves the same
+    // per-stream ordering after the acknowledgement returns.
+    this.#streamSearchIndexTail = this.#streamSearchIndexTail.then(() =>
+      this.#indexStreamSearch(batch),
+    );
+    this.#props.ctx.waitUntil(this.#streamSearchIndexTail);
   }
 
   /**
@@ -5584,10 +5592,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * SPIKE platform step: mirror the batch's stream events into the itx.search
    * corpus (domains/search/search-index.ts) as fixed 100-offset segment
    * documents. It is idempotent (segment docs are deterministic rewrites),
-   * awaited as part of ordered delivery, and MUST NOT throw — only the worker
-   * delegation may reject into the spine's retry. Re-reading each touched
-   * segment's full range means a transient failure self-heals on the next
-   * batch in that segment (see indexStreamEventBatch).
+   * queued in delivery order under waitUntil, and MUST NOT throw — only the
+   * worker delegation may reject into the spine's retry. Re-reading each
+   * touched segment's full range means a transient failure self-heals on the
+   * next batch in that segment (see indexStreamEventBatch).
    */
   async #indexStreamSearch(batch: StreamPushEventBatch): Promise<void> {
     if (batch.projectId === null) return;

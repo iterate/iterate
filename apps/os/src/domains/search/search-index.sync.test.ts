@@ -56,6 +56,28 @@ describe("passive project search sync", () => {
     expect(searchBinding.get).toHaveBeenCalledWith("00000000000000000000000000000002");
     expect(searchBinding.createJob).toHaveBeenCalledOnce();
   });
+
+  it("retries the instance lookup after a transient probe failure", async () => {
+    searchBinding.list
+      .mockRejectedValueOnce(new Error("temporary AI Search control-plane failure"))
+      .mockResolvedValueOnce({
+        result: [{ id: "00000000000000000000000000000004" }],
+        result_info: { total_count: 1 },
+      });
+    searchBinding.createJob.mockResolvedValue({});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await triggerProjectSearchSyncDebounced("prj_00000000000000000000000000000004");
+      await triggerProjectSearchSyncDebounced("prj_00000000000000000000000000000004");
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(searchBinding.list).toHaveBeenCalledTimes(2);
+    expect(searchBinding.get).toHaveBeenCalledWith("00000000000000000000000000000004");
+    expect(searchBinding.createJob).toHaveBeenCalledOnce();
+  });
 });
 
 describe("automatic stream indexing", () => {

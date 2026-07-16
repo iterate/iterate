@@ -64,7 +64,11 @@ const pageFiles = fs
 let afterOffset = 0;
 let eventCount = 0;
 
-for (const name of pageFiles) {
+for (const [index, name] of pageFiles.entries()) {
+  const expectedName = `${String(index + 1).padStart(8, "0")}.json`;
+  if (name !== expectedName) {
+    throw new Error(`export page sequence has a gap: expected ${expectedName}, found ${name}`);
+  }
   const page = JSON.parse(fs.readFileSync(pathModule.join(outputDir, name), "utf8"));
   if (!Array.isArray(page?.events)) throw new Error(`${name} has no events array`);
   for (const event of page.events) {

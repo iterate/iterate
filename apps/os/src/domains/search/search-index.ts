@@ -130,6 +130,9 @@ export async function triggerProjectSearchSyncDebounced(projectId: string): Prom
     });
     if (!result.some((instance) => instance.id === id)) return;
   } catch (error) {
+    // A failed control-plane lookup did not trigger anything, so it must not
+    // consume the debounce window. Let the next passive write retry promptly.
+    lastPassiveSyncTrigger.delete(projectId);
     console.warn("search sync instance lookup failed", {
       projectId,
       error: String(error).slice(0, 200),
@@ -180,12 +183,12 @@ export async function indexPinnedStreamEvent(input: {
  *
  * That full re-read is also what makes this safe to run as a best-effort
  * first-party step on the shared project-worker delivery (root
- * `processEventBatch`) instead of its own checkpointed lane. The step is
- * awaited so adjacent deliveries cannot rewrite one R2 object concurrently,
- * but a transient R2 failure is logged rather than failing the authoritative
- * stream delivery; the NEXT batch in the same segment heals it by re-reading
- * and rewriting the whole segment. Only a segment that goes permanently quiet
- * right after a failed write stays short until
+ * `processEventBatch`) instead of its own checkpointed lane. The project
+ * target queues adjacent batches in order under waitUntil, so they cannot
+ * rewrite one R2 object concurrently and indexing does not delay the delivery
+ * acknowledgement. A transient R2 failure is logged; the NEXT batch in the
+ * same segment heals it by re-reading and rewriting the whole segment. Only a
+ * segment that goes permanently quiet right after a failed write stays short until
  * `itx.search.indexStream`/reindex — acceptable for a derived, rebuildable
  * corpus.
  */
