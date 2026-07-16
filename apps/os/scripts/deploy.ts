@@ -5,15 +5,16 @@
  *   pnpm run deploy --env prd
  *
  * Runs the shared pipeline (scripts/lib/deploy-app.ts). Steps, all fail-fast:
- *   1. Before touching a deployed resource, assert that the retired auth
- *      service token is absent. Then verify required secrets, bake the static
- *      auth JWKS, validate the exact runtime config, and ensure upload-time
- *      resource prerequisites.
+ *   1. Before touching a deployed resource, assert that every retired Worker
+ *      secret is absent and that the removed auth service token is absent
+ *      from Doppler. Then verify required secrets, bake the static auth JWKS,
+ *      validate the exact runtime config, and ensure resource prerequisites.
  *   2. Deploy the builder and typechecker prerequisites. Deploy the full
  *      script executor when its OS-owned authority classes already exist;
  *      otherwise preserve or create its authority-free service identity.
  *   3. `vite build` with CLOUDFLARE_ENV=<env>; the build output's
- *      wrangler.json is flattened for that env from freshly generated config.
+ *      wrangler.json is flattened for that env from freshly generated config,
+ *      including its declarative Durable Object exports.
  *   4. `wrangler deploy --config <built config> --secrets-file <doppler>` —
  *      secrets land atomically with the product code and its declarative
  *      Durable Object exports.
@@ -53,6 +54,12 @@ import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 
 const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+const RETIRED_WORKER_SECRETS = [
+  RETIRED_AUTH_SERVICE_TOKEN,
+  "APP_CONFIG_GEMINI_API_KEY",
+  "APP_CONFIG_LOGS",
+  "APP_CONFIG_X_AI_API_KEY",
+] as const;
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 const SCRIPT_EXECUTOR_AUTHORITY_CLASSES = [
   "CapabilityHostDurableObject",
@@ -167,11 +174,13 @@ export default async function deploy(
         secretName: RETIRED_AUTH_SERVICE_TOKEN,
         secrets: ctx.secrets,
       });
-      await assertWorkerSecretAbsent({
-        cf: ctx.cf,
-        workerName: ctx.env.osWorkerName,
-        secretName: RETIRED_AUTH_SERVICE_TOKEN,
-      });
+      for (const secretName of RETIRED_WORKER_SECRETS) {
+        await assertWorkerSecretAbsent({
+          cf: ctx.cf,
+          workerName: ctx.env.osWorkerName,
+          secretName,
+        });
+      }
 
       // Baked at deploy time, so it's the one secret not in secrets.required.
       secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({

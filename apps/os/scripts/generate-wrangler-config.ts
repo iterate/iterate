@@ -91,13 +91,12 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: env.cloudflareAiGatewayTransport,
-    ...(env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
-      ? {}
-      : {
-          APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(
-            env.cloudflareAiGatewayResponseCacheTtlSeconds,
-          ),
-        }),
+    // Wrangler inherits missing top-level vars into env blocks. Keep the key
+    // explicit everywhere; an empty value means the response cache is off.
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS:
+      env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
+        ? ""
+        : String(env.cloudflareAiGatewayResponseCacheTtlSeconds),
   };
 }
 
@@ -204,10 +203,6 @@ const DO_EXPORTS = {
       { type: "durable-object", storage: "sqlite" },
     ]),
   ),
-  // Sandboxes became pets with one container class per instance type (#1747);
-  // the old implicit-size class is retired (old sandboxes were ephemeral by
-  // design and their R2 snapshots age out).
-  CloudflareSandboxDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
