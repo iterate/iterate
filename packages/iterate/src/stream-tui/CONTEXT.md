@@ -3,10 +3,10 @@
 This folder contains the modules behind the published `iterate chat` OpenTUI
 agent chat CLI. The TUI is a thin terminal client on the shared itx client
 stack: it holds one `Agent` capability from `connectItx`
-(apps/os/src/client.ts), folds the agent stream with the SAME shared
+(apps/os/src/itx-client.ts), folds the agent stream with the SAME shared
 reducer the web feed uses (`planAgentUiOps` from
 `@iterate-com/ui/components/events/agent-ui-reducer`), and sends user messages
-through `agent.sendMessage`.
+through `agent.message`.
 
 ## Language
 

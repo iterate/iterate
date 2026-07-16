@@ -34,9 +34,11 @@ import { githubAgentPath } from "./github-agent-utils.ts";
 const HOME = await githubAgentPath({ ...GITHUB_LINK, repoPath: "/repos/config" }, 7);
 const SLUG = GithubAgentProcessorContract.slug;
 
-const ROUTE_EVENT = {
-  type: "events.iterate.com/github-agent/route-configured" as const,
-  payload: { ...GITHUB_LINK, number: 7, repoPath: "/repos/config", streamPath: HOME },
+const BIRTH_EVENT = {
+  type: "events.iterate.com/github-agent/created" as const,
+  payload: {
+    config: { ...GITHUB_LINK, number: 7, repoPath: "/repos/config" },
+  },
 };
 
 /** An inconclusive-association mention — the trigger whose trust needs the
@@ -185,7 +187,7 @@ describe("eviction recovery end to end", () => {
     // the revival alarm is armed, and the cursor is held BEFORE the mention.
     // The frame never resolves — do not await it.
     h.verify.impl = () => new Promise<never>(() => {});
-    await h.stream.append(ROUTE_EVENT, MENTION_EVENT);
+    await h.stream.append(BIRTH_EVENT, MENTION_EVENT);
     const woken = await h.wake();
     void Promise.resolve(
       woken.sink({

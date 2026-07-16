@@ -9,6 +9,21 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
     state,
   }: Parameters<StreamProcessor<SecretProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/secret/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("secret received more than one created event");
+        }
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          egress: event.payload.config.egress,
+          encryptedMaterial:
+            event.payload.config.encryptedMaterial === undefined
+              ? null
+              : { ...event.payload.config.encryptedMaterial, offset: event.offset },
+          refresh: event.payload.config.refresh,
+          updatedOffset: event.offset,
+        };
       case "events.iterate.com/secret/updated":
         return {
           ...state,
@@ -38,5 +53,20 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
       default:
         return state;
     }
+  }
+
+  protected override processEvent({
+    appendTo,
+    blockProcessorWhile,
+    event,
+  }: Parameters<StreamProcessor<SecretProcessorContract>["processEvent"]>[0]): undefined {
+    if (event.type !== "events.iterate.com/secret/created") return;
+    blockProcessorWhile(() =>
+      appendTo("/", {
+        type: "events.iterate.com/secret/created",
+        idempotencyKey: this.idempotencyKey("catalog-created", event),
+        payload: event.payload,
+      }),
+    );
   }
 }

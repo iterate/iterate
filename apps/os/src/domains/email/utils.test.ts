@@ -8,7 +8,6 @@ import {
   emailDomainForDeployment,
   fallbackInboundMessageKey,
   emailAgentPath,
-  emailThreadIdFromAgentPath,
   emailThreadReplyAddress,
   isEmailAgentPath,
   normalizeMessageId,
@@ -39,18 +38,11 @@ describe("emailAddressForProject", () => {
 });
 
 describe("email thread addressing", () => {
-  test("round-trips threadId through reply address, agent path, and back", () => {
+  test("builds the reply address and conventional agent address", () => {
     expect(emailThreadReplyAddress({ slug: "acme", domain: "iterate.app", threadId: "42" })).toBe(
       "acme+t42@iterate.app",
     );
     expect(emailAgentPath("42")).toBe("/agents/email/t42");
-    expect(emailThreadIdFromAgentPath("/agents/email/t42")).toBe("42");
-  });
-
-  test("emailThreadIdFromAgentPath rejects non-thread paths", () => {
-    expect(emailThreadIdFromAgentPath("/agents/email")).toBeNull();
-    expect(emailThreadIdFromAgentPath("/agents/slack/c123/ts-1")).toBeNull();
-    expect(emailThreadIdFromAgentPath("/agents/email/t42/child")).toBeNull();
   });
 
   test("isEmailAgentPath matches /agents/email and below", () => {

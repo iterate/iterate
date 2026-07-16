@@ -109,9 +109,11 @@ function CollectSecretCard() {
   const submit = useMutation({
     mutationFn: async (value: string): Promise<SavedOutcome> => {
       const secret = itx.secrets.get(search.path);
-      // Material and egress land in ONE update, so the secret is born already
+      // Material and egress land in one birth or update, so the secret is
       // pinned to its hosts — no window where it exists but cannot be used.
-      await secret.update({ material: value, egress: { urls: search.egress } });
+      const secretInput = { material: value, egress: { urls: search.egress } };
+      if (existing.created === true) await secret.update(secretInput);
+      else await secret.create(secretInput);
       // describe() is read-your-writes (the secret DO catches up its own fold
       // before snapshotting), so one assertion — no wait — is the honest
       // "stored and usable" check before anything is announced.

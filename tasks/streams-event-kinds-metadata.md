@@ -16,7 +16,7 @@ Explicitly deferred — parked here so it isn't lost.
 Three kinds of events fall out of the audit's unification:
 
 1. **Configuration facts** — desired state: `subscription-configured`, keyed
-   system-role `agents/context-added`, `agent/llm-provider-selected`,
+   system-role `agents/context-added`, `agent/configured`,
    `tool-provider-registered`, jsonata rules. Reducers fold these into "what
    should be true".
 2. **Presence facts** — incarnation observations: created/woken/connected.

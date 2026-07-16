@@ -53,9 +53,9 @@ streams system materializes every path prefix as a stream (a new stream
 announces itself to all ancestors), so a nested path like
 `/sandboxes/lite/main` would mint a meaningless intermediate "folder" stream
 (`/sandboxes/lite`) that shows up in listings but is not a sandbox. The path
-scheme otherwise follows the domain-prefix convention (`/secrets/...`,
-`/repos/...`, `/agents/...`): a project path names exactly one kind of
-object, and every sandbox is discoverable as a stream under `/sandboxes/`.
+scheme otherwise follows the collection-prefix convention (`/secrets/...`,
+`/repos/...`, `/agents/...`). The prefix makes sandbox addresses
+discoverable; it does not implicitly create a processor on any stream.
 
 The image is the **stock Cloudflare sandbox image**
 (`sandbox/Dockerfile` is a one-line `FROM docker.io/cloudflare/sandbox:<sdk-version>`

@@ -730,18 +730,24 @@ pre-existing flakes that round 3 fixes:
   whose first dynamic-worker build on a **cold `WORKER_BUILD_CACHE` KV** (freshly
   created per slot) adds latency that widens this window on the first run.
 
+### Push-lane deployment-version barrier
+
+- **Guarded: deploy→test race: `Durable Object reset because its code was
+updated`.** `wrangler deploy` can return while Cloudflare is still propagating
+  the new code. This produced a rollout-wide failure on commit `1796831c`: the
+  onboarding smoke reset on its first attempt, 30 Vitest tests retried, and 19
+  still failed. A retry was not a sufficient boundary. OS `/api/health` now
+  reports its `CF_VERSION_METADATA` id, and the preview orchestrator parses the
+  final `Current Version ID` from the deploy (the main Worker follows its two
+  sidecars) and requires that exact version to remain continuously visible for
+  ten seconds before the test phase can create a project. A plain 2xx no longer
+  counts as post-deploy readiness. The next fully settled run then exposed a
+  separate deterministic problem: E2E fixtures still relying on implicit
+  processor births. Those fixtures now create their agents, repos, secrets,
+  and integration routers explicitly.
+
 ### Observed, not yet fixed
 
-- **Push-lane deploy→test race: `Durable Object reset because its code was
-updated`.** The push-triggered cloudflare-previews lane starts tests seconds
-  after `wrangler deploy` returns; Cloudflare propagates the new code
-  asynchronously, and a DO that booted on the old version mid-test gets reset
-  when its node picks up the new one (`itx.e2e.test.ts › Project egress
-intercept…` failed BOTH vitest attempts 11s apart inside the window, commit
-  204d4ed8d). The marathon lane is immune by construction (preflight deploy →
-  uncounted warmup → counted runs). A real fix for the push lane would gate
-  the test phase on observing the new deployment version at the edge rather
-  than a sleep; vitest's `retry: 1` usually absorbs it today.
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
 does not mark non-matching one-time handlers as used` failed once in the
   Depot `Test / test` lane with `fetch failed: bad port` — the listen(0)

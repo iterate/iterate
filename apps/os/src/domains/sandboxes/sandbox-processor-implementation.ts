@@ -22,10 +22,13 @@ export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorCon
     const terminal = state.status === "destroyed";
     switch (event.type) {
       case "events.iterate.com/sandbox/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("Sandbox processor received more than one sandbox/created event");
+        }
         return {
           ...state,
-          status: terminal ? state.status : ("created" as const),
-          instanceType: event.payload.instanceType,
+          birthCertificate: event.payload,
+          status: "created" as const,
         };
       case "events.iterate.com/sandbox/started":
         return terminal ? state : { ...state, status: "running" as const };

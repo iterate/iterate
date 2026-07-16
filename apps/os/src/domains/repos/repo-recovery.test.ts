@@ -1,6 +1,6 @@
-// Repo creation as an at-head obligation, plus eviction recovery: the repo
+// Repo artifact readiness as an at-head obligation, plus eviction recovery: the repo
 // processor's `onCaughtUp` reconciliation of the two durable obligations —
-// creation (blocking, NEVER re-run once `repo/created` folded: the seed
+// creation (blocking, NEVER re-run once `repo/ready` folded: the seed
 // force-push would clobber user commits) and GitHub imports (background,
 // safely RE-driven: the sync is an idempotent current-head fast-forward).
 //
@@ -13,7 +13,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS } from "../streams/stream-processor-keepalive.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
+import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
@@ -32,15 +32,15 @@ const createdArtifact = {
   defaultBranch: "main",
   remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--L3JlcG9zL2NvbmZpZw.git",
 };
-const createRequested = {
-  type: "events.iterate.com/repo/create-requested" as const,
-  payload: { projectId: PROJECT_ID, path: HOME },
+const repoCreated = {
+  type: "events.iterate.com/repo/created" as const,
+  payload: { config: {} },
 };
 
 function makeHarness() {
   const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
-  const stream = new MemoryStream(HOME);
-  stream.now = () => clock.now;
+  const network = new MemoryStreamNetwork(() => clock.now);
+  const stream = network.get(HOME);
 
   const kv = new Map<string, unknown>();
   const alarm: { at: number | null } = { at: null };
@@ -167,8 +167,8 @@ function makeHarness() {
   return harness;
 }
 
-describe("RepoProcessor create lane (creation as an at-head obligation)", () => {
-  it("creates the artifact once at head and journals repo/created", async () => {
+describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)", () => {
+  it("creates the artifact once at head and journals repo/ready", async () => {
     const h = makeHarness();
     const createCalls: unknown[] = [];
     h.create.impl = async (input) => {
@@ -176,22 +176,28 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
       return createdArtifact;
     };
 
-    await h.stream.append(createRequested);
+    await h.stream.append(repoCreated);
     await h.deliverPending();
 
     expect(createCalls).toEqual([{ path: HOME, projectId: PROJECT_ID }]);
-    const created = h.stream.events.filter(
-      (event) => event.type === "events.iterate.com/repo/created",
-    );
-    expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({
-      idempotencyKey: "repo/created",
+    const ready = h.stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
+    expect(ready).toHaveLength(1);
+    expect(ready[0]).toMatchObject({
+      idempotencyKey: "repo/ready",
       payload: { ...createdArtifact, path: HOME, projectId: PROJECT_ID },
     });
 
     await h.deliverPending();
-    expect(h.state()).toMatchObject({ createRequested: true, created: true });
+    expect(h.state()).toMatchObject({ birthCertificate: { config: {} }, ready: true });
     expect(createCalls).toHaveLength(1);
+  });
+
+  it("throws when a second repo birth certificate is reduced", async () => {
+    const h = makeHarness();
+    h.create.impl = async () => createdArtifact;
+    await h.stream.append(repoCreated, repoCreated);
+
+    await expect(h.deliverPending()).rejects.toThrow("repo received more than one created event");
   });
 
   it("defers creation while the fold is behind the head, then creates once caught up", async () => {
@@ -201,10 +207,10 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
       createCalls.push(input);
       return createdArtifact;
     };
-    const [requested] = await h.stream.append(createRequested);
+    const [requested] = await h.stream.append(repoCreated);
 
     // The production wake lane is consumes-filtered but stamped with the RAW
-    // stream head, so a frame can deliver create-requested while naming a
+    // stream head, so a frame can deliver repo/created while naming a
     // head PAST it — the mid-catch-up shape. No at-head pulse fires, so the
     // creation obligation must stay untouched.
     const woken = await h.wake();
@@ -227,7 +233,7 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
     expect(createCalls).toHaveLength(1);
   });
 
-  it("refold: a journal that already contains repo/created never re-creates", async () => {
+  it("refold: a journal that already contains repo/ready never re-creates", async () => {
     const h = makeHarness();
     const createCalls: unknown[] = [];
     h.create.impl = async (input) => {
@@ -235,7 +241,7 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
       return createdArtifact;
     };
 
-    await h.stream.append(createRequested);
+    await h.stream.append(repoCreated);
     await h.deliverPending();
     await h.deliverPending();
     expect(createCalls).toHaveLength(1);
@@ -243,9 +249,9 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
     const stateBeforeRefold = h.state();
 
     // A fresh incarnation replaying the WHOLE journal (durable progress
-    // erased): the refold replays `create-requested` with event-time state in
-    // which `created` is still false, but the at-head fold has absorbed the
-    // journaled `repo/created` fact — createRepoArtifact, whose seeding
+    // erased): the refold replays `repo/created` with event-time state in
+    // which `ready` is still false, but the at-head fold has absorbed the
+    // journaled `repo/ready` fact — createRepoArtifact, whose seeding
     // force-pushes the seed commit over user commits, must provably not run.
     h.kv.clear();
     h.crash();
@@ -266,7 +272,7 @@ describe("eviction recovery end to end", () => {
     // onCaughtUp's creation obligation, the attempt rides the keepalive, the
     // revival alarm is armed. The frame never resolves — do not await it.
     h.create.impl = () => new Promise<never>(() => {});
-    await h.stream.append(createRequested);
+    await h.stream.append(repoCreated);
     const woken = await h.wake();
     void Promise.resolve(
       woken.sink({
@@ -279,7 +285,7 @@ describe("eviction recovery end to end", () => {
     ).catch(() => undefined);
     await h.settle();
     expect(h.alarm.at).not.toBeNull();
-    expect(h.stream.events.some((event) => event.type === "events.iterate.com/repo/created")).toBe(
+    expect(h.stream.events.some((event) => event.type === "events.iterate.com/repo/ready")).toBe(
       false,
     );
 
@@ -307,19 +313,22 @@ describe("eviction recovery end to end", () => {
     // still-open creation obligation in the fold and completes it — exactly
     // once, under the stable obligation key.
     await h.deliverPending();
-    const created = h.stream.events.filter(
-      (event) => event.type === "events.iterate.com/repo/created",
-    );
-    expect(created).toHaveLength(1);
-    expect(created[0]!.idempotencyKey).toBe("repo/created");
+    const ready = h.stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
+    expect(ready).toHaveLength(1);
+    expect(ready[0]!.idempotencyKey).toBe("repo/ready");
     expect(createCalls).toEqual([{ path: HOME, projectId: PROJECT_ID }]);
 
     await h.deliverPending();
-    expect(h.state()).toMatchObject({ createRequested: true, created: true });
+    expect(h.state()).toMatchObject({ birthCertificate: { config: {} }, ready: true });
   });
 
   it("re-drives a GitHub import owed at zero lag: revived fact → onCaughtUp re-runs the idempotent sync", async () => {
     const h = makeHarness();
+    await h.stream.append(repoCreated, {
+      type: "events.iterate.com/repo/ready",
+      payload: { ...createdArtifact, path: HOME, projectId: PROJECT_ID },
+    });
+    await h.deliverPending();
     // Incarnation 1 starts the import and HANGS mid-sync: the started fact is
     // journaled, the attempt rides the keepalive, the revival alarm is armed.
     h.sync.impl = () => new Promise<never>(() => {});
