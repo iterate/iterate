@@ -65,31 +65,43 @@ These are the only incremental experiments worth considering before the
 replacement. Each change must remain independently revertible and must not add
 another long-lived state machine.
 
-### 1. Processor-barrier fast path and framed catch-up
+### 1. Scanned-through frames in `StreamProcessorRunner`
 
 Explicit domain-object birth makes append-to-processor-readiness a common
-latency path. A generic `catchUp()` to the Stream head followed by
-`waitUntilProcessed(offset)` can fetch unrelated tail events, perform an empty
-lookahead read, and take an ignored final snapshot. Project creation now waits
-for four sibling processors in parallel, so this path is no longer obscure.
+latency path. Project creation waits for four sibling processors in parallel,
+so this path is no longer obscure.
 
-First add an already-processed fast path: inspect the processor checkpoint and
-return without a Stream RPC when live push already reached the target. Remove
-the final snapshot from the void public operation.
+Main's #2002 runner already implements the important warm fast path:
+`waitUntilEvent({ offset })` loads progress and returns immediately when the
+acknowledged cursor already covers the target. Keep that implementation; do
+not add a second barrier state machine or an ignored final snapshot.
 
-Otherwise use one private frame operation carrying:
+The integration gap is the private frame contract. This branch's Stream pump
+advances a configured connection across selector gaps and sends:
 
 - selected events,
-- `deliveryThroughOffset`, and
-- an immutable `observedHead`.
+- `deliveryThroughOffset`, the highest contiguous raw offset scanned, and
+- `streamMaxOffset`, the immutable head observed for that frame.
 
-The processor advances through `deliveryThroughOffset`, including selector
-gaps, without an empty sentinel read. Compare two cold-path variants: fold to
-the frame's captured head, or stop at the requested offset. A target-bounded
-fold must not report a false head or run at-head reconciliation while later
-events exist; it ships only if tests prove deferred reconciliation is eventually
-re-driven. This distinction matters because agent and repo reconciliation has
-consequential side effects.
+The pre-merge runner receives only selected events plus the raw head. Whenever
+its acknowledged cursor remains below that head it compensates with a trailing
+type-unfiltered self-pull, re-reading and hydrating journal rows the Stream just
+scanned. That is avoidable RPC, SQLite, parsing, and payload work on sparse
+processors and birth barriers.
+
+Port `deliveryThroughOffset` into `StreamProcessorRunner`. A successful frame
+must reduce/process selected events, durably advance both progress cursors
+through the scanned offset, and treat `deliveryThroughOffset >=
+streamMaxOffset` as at-head. If no consumed event carries the at-head pass, run
+the event-less reconciliation that production proved necessary; otherwise an
+obligation can strand forever behind an unconsumed tail. Only after those
+invariants are green may the trailing unfiltered self-pull be removed.
+
+Then compare cold barriers that scan to the captured head with a target-bounded
+variant. A target-bounded fold must not report a false head or run at-head
+reconciliation while later events exist, and deferred reconciliation must be
+provably re-driven. Agent and repo reconciliation has consequential side
+effects, so a smaller read is not worth ambiguous liveness.
 
 Measure warm and cold agent, capability-host, repo, scheduler, secret, and full
 project births from a Node host, including continuous writers and forced kills.
@@ -131,8 +143,16 @@ recovery, and no source-DO duration or hibernation regression.
 
 The merge is semantic, not a choice of conflict sides:
 
+- Keep main's `StreamProcessorRunner`, registry, two-cursor progress model,
+  and deletion of `StreamProcessorHost`; do not resurrect the old host to make
+  conflicts easier.
+- Port the compact `deliveryThroughOffset` frame into the runner and retain
+  event-less at-head reconciliation before deleting its fallback self-pull.
 - Keep one public `append`; explicit births request offsets-only results and do
-  not reintroduce full-event responses or a public `appendAck`.
+  not reintroduce default full-event responses or a public `appendAck`.
+- Do not publish overloads or a conditional generic `append`: Cap'n Web proxy
+  projection cannot preserve either result-selection shape. Keep the wire
+  union and put any type-narrow convenience in generated client code.
 - Reimplement recovery through schema-v8's chunk-aware journal APIs. Recovery
   must preserve oversized rows, `evicted_offset_floor`, explicit offset
   assignment, and the packed `coreState` checkpoint envelope; it must not port
@@ -202,9 +222,10 @@ so sparse selectors cannot stall cursors.
 `LiveSessions`, `ProcessorLinks`, and `DurableOutbox` share frame reading but
 not a mode-branching pump. Live delivery must not acquire a storage round trip
 or Promise per frame. Processor links use the receiver's durable checkpoint as
-their one cursor. The outbox persists an exact claim before RPC and retains
-retry, poison isolation, and alarm recovery. There is exactly one authoritative
-cursor owner in each mode.
+their one cursor; the already-landed `StreamProcessorRunner` is that receiver
+and should be simplified in place rather than replaced. The outbox persists an
+exact claim before RPC and retains retry, poison isolation, and alarm recovery.
+There is exactly one authoritative cursor owner in each mode.
 
 `RecoveryAdmin` is a cold administrative path. Export incarnation checks,
 cursor invalidation, and restore generation fences must not add branches to
@@ -213,15 +234,18 @@ boundaries.
 
 ## Collapse Budget
 
-The current implementation has about 5,085 delivery-coordination lines, 88
-private members, and 13 semi-independent state machines. A feature-complete
-replacement should target:
+Before #2002, the implementation had about 5,085 delivery-coordination lines,
+88 private members, and 13 semi-independent state machines. #2002 deletes the
+old host but adds the runner, registry, two-cursor durability, and keepalive
+adapters. Recount the integrated tree before approving a replacement; do not
+claim the old total as the post-merge baseline. The feature-complete target
+remains:
 
-| Measure                 |  Current estimate |  Replacement gate |
-| ----------------------- | ----------------: | ----------------: |
-| Delivery coordination   | about 5,085 lines | 3,300-3,600 lines |
-| Private members         |          about 88 |        at most 45 |
-| Explicit state machines |          about 13 |         at most 8 |
+| Measure                 | Pre-#2002 estimate |  Replacement gate |
+| ----------------------- | -----------------: | ----------------: |
+| Delivery coordination   |  about 5,085 lines | 3,300-3,600 lines |
+| Private members         |           about 88 |        at most 45 |
+| Explicit state machines |           about 13 |         at most 8 |
 
 The old kernel is deleted in the same cutover. A dispatcher between old and new
 kernels, schema migration, dual writes, compatibility aliases, or a hidden
@@ -308,8 +332,9 @@ Correctness must prove:
 ## Decision Order
 
 1. Integrate current main and establish the post-birth baseline.
-2. Implement and measure the processor-barrier fast path and framed catch-up;
-   accept target-bounded folding only with reconciliation proof.
+2. Port scanned-through frames into the runner, remove the duplicate self-pull,
+   and measure birth plus sparse-delivery latency; accept target-bounded folding
+   only with reconciliation proof.
 3. Decide whether the small packed-activation change is worth shipping.
 4. Measure the keyed homogeneous insert on end-to-end large batches.
 5. Build the replacement vertical slice and compare it against the frozen

@@ -6,6 +6,37 @@ The latest merge commit is `1c918c190d`. The last Stream runtime change is
 `886b5ecf1`; later commits are documentation, test-harness, and main merges.
 Production has not been deployed, erased, or otherwise changed.
 
+## 2026-07-16 Integration Update
+
+Current `origin/main` is `c05c9d9b0`, the #2002 processor runner and registry
+redesign. PR #2038 (explicit processor births) is still open and conflicts with
+that redesign, so this branch has deliberately not merged main early.
+
+A disposable integration worktree first merged the latest explicit-birth head
+into this branch. After adapting the new agent checkpoint shape, explicit
+append result modes, and birth barriers, root typecheck passed and 631 focused
+Stream, processor, recovery, project, repo, integration, and generated-API
+tests passed. Merging current main on top exposes 40 conflicted files and 193
+conflict regions because #2002 deletes `StreamProcessorHost` while the birth PR
+changes processors on that old surface. The resolution rule is semantic:
+
+- keep main's runtime-neutral `StreamProcessorRunner` and registry;
+- port explicit birth and readiness barriers onto runner-owned progress;
+- preserve this branch's `deliveryThroughOffset` frame contract, which lets a
+  filtered delivery advance across scanned gaps without a second journal pull;
+- preserve event-less at-head reconciliation for a frame that reaches head
+  without a consumed event, so obligations cannot strand behind an unconsumed
+  tail; and
+- regenerate the public API rather than resolving generated files by hand.
+
+The API preflight also rejected two attractive TypeScript-only designs.
+Cap'n Web's remote proxy projection collapses overloads to one signature and
+cannot preserve a conditional generic return selected by `{ return: ... }`.
+The wire therefore remains one `append` method with a union result. Callers
+that request committed events or offsets narrow that result explicitly; any
+future ergonomic wrapper belongs in generated client code, not as a second
+public append verb.
+
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
 source of truth for experiment setup, immutable revisions, raw sample paths,
