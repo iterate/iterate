@@ -16,7 +16,7 @@
 // =============================================================================
 
 import { z } from "zod";
-import type { StreamEvent } from "../streams/schemas.ts";
+import type { StreamEvent } from "iterate/stream-events";
 import { StreamProcessor, type ProcessorReads } from "iterate/stream-processor";
 import {
   cachedEventSchema,

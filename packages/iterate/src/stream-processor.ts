@@ -235,7 +235,7 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
     ingestStartedAtMs: number;
     atMs: number;
   }): void;
-  /** The key derivation — `<slug>/<key>[@<path>:<offset>]` — byte-preserved from the legacy engine. */
+  /** The key derivation: `<slug>/<key>[@<path>:<offset>]`. */
   idempotencyKey(key: string, whileProcessing?: Pick<StreamEvent, "offset" | "path">): string;
   /** The `source.processor` provenance stamp for runner-authored raw appends. */
   processorStamp(whileProcessing?: Pick<StreamEvent, "offset" | "type">): ProcessorSourceStamp;
@@ -559,7 +559,7 @@ export abstract class StreamProcessor<
     });
   }
 
-  // keepAliveWhile is fire-and-forget from the host's point of view (it only
+  // keepAliveWhile is fire-and-forget (it only
   // keeps the runtime alive while the work runs), so this bridges the work's
   // result/failure back into a promise the caller can await.
   async #runKeepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {

@@ -81,7 +81,10 @@ rules live in the project config repo. The small policy object stays in
 `github-reviews.ts`. There is no
 `githubAgent.automaticReview` default, no `github-agent/configure` review fact,
 and no platform review scheduler or watchdog. The userspace reaction owns its
-own timeout terminalizer.
+own stream processor, but this proof of concept deliberately creates no Check
+Run or timeout terminalizer. A typed finalizer with bounded timeout and
+recovery belongs in a later increment rather than in instructions the agent
+may or may not follow.
 
 The seeded config repo contains a complete userspace reaction and these knobs:
 
@@ -97,11 +100,9 @@ const GITHUB_REVIEW_RULES = [
 
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
-  osBaseUrl: "https://os.iterate.com",
-  repositories: [] as string[], // empty means reviews are off
+  repositories: Array<string>(), // empty means reviews are off
   rules: GITHUB_REVIEW_RULES,
   skipLabel: "iterate:skip-review",
-  timeoutSeconds: 30 * 60,
 } satisfies GithubReviewConfig;
 ```
 
@@ -111,9 +112,10 @@ repository—or leave the list empty—to turn them off. The worker reacts to
 PRs. `iterate:skip-review` disables one PR and wins if both labels exist;
 `iterate:review` requests the current head explicitly, including a fresh run
 when that head was already reviewed. Adding `iterate:skip-review` immediately
-cancels App-owned work for the live head; removing it reviews the current
-head. Closing the pull request or converting it to draft also immediately
-cancels current-head review work. Label authorization is GitHub's normal
+interrupts the current agent request; removing it reviews the current head.
+Closing the pull request or converting it to draft also interrupts the current
+review request. The task requires the agent to revalidate the live head and
+controls before publishing anything. Label authorization is GitHub's normal
 repository authorization; the agent maintains no command state of its own.
 
 Each rule has a stable `id`, one or more `files` glob patterns, and an
@@ -147,62 +149,53 @@ eligible routed webhook it:
 
 1. Uses the exact routed GitHub connection and signed-webhook App identity;
    automatic policy never guesses the first installation.
-2. Fetches the live PR and drops stale, closed, draft, or disabled deliveries
-   before they can create a check or queue an agent turn.
-3. Serializes the typed rules from `worker.ts` into the trusted review task.
-4. Cancels the previous revision's running App-owned checks, then creates or
-   recovers an `Iterate Review` Check Run for the immutable head. Check lookup
-   is fully paginated.
-5. Sets the Check Run's details URL to the existing OS pull-request thread and
-   arms a userspace timeout before waking the model, anchored to the Check
-   Run's absolute start-time deadline so webhook redelivery cannot extend it.
-6. Appends one request-keyed `events.iterate.com/agents/message-received` task
-   to the existing PR stream with `interrupt-current-request`, so a newer push
-   supersedes obsolete automatic review work.
-7. Lets the persistent agent use earlier review attempts, replies, and explicit
-   human dispositions to avoid re-raising already accepted or suppressed
-   findings without evidence that they should be reconsidered.
+2. Validates the canonical pull-request stream path, trusted webhook metadata,
+   repository scope, and trigger controls without making GitHub or model calls.
+3. Atomically appends a wake subscription and one request-keyed review event to
+   that stream. Automatic deliveries share a stable key for the head; explicit
+   label requests have distinct keys so they can rerun the same head.
+4. Hosts the canonical SDK stream-processor registry in one userspace dynamic
+   worker Durable Object for that pull-request stream.
+5. Lets the stateless review processor consume the request and make one short,
+   blocking append of trusted developer context to the persistent PR agent.
+   That context uses `interrupt-current-request`, so a newer push supersedes
+   obsolete review work.
+6. Lets the persistent agent read the complete diff and use earlier review
+   attempts, replies, and explicit human dispositions to avoid re-raising
+   already accepted or suppressed findings without evidence that they should
+   be reconsidered.
 
-The task's idempotency key collapses at-least-once automatic webhook delivery;
-explicit label requests get distinct identities so they can rerun the same
-head. The deterministic external ID includes the stable project ID,
-installation, pull request, and request identity. Recovery also requires the
-App slug transcribed by the signed-webhook boundary, so another project or
-actor cannot reuse an old check or marker to suppress policy.
+The request and processor-output idempotency keys collapse at-least-once
+delivery. The processor itself calls no GitHub or model API, folds no lint
+finding state, and schedules no background work. Its only effect is on the
+typed, checkpointed append lane, so it needs no separate recovery alarm.
 
-No project Durable Object is required. The pull-request stream is the durable
-agent history; GitHub Check Runs are the visible attempt ledger; and the
-userspace scheduler is only the timeout terminalizer.
+There is one userspace dynamic-worker Durable Object identity for the
+pull-request stream, keyed by the canonical path and the processor's durable
+key. It stores only the canonical runner's checkpoint and empty processor
+snapshot; the pull-request stream remains the journal and persistent agent
+conversation. There is no stream per review and no second, review-domain
+Durable Object.
 
-### Visible lifecycle and consolidated review
+### Consolidated review result
 
-The config worker creates the Check Run and timeout before waking the model.
-GitHub's **View more details** link opens the persistent OS pull-request agent
-thread.
-On a newer push it cancels the prior head's still-running App-owned check. On a
-skip-label event it cancels live-head checks immediately. Useful review content
-remains agent-owned: the task tells the agent to read the complete diff and
-revalidate the live head and controls immediately before its handoff. A clean
-result posts no review or comment and completes the visible Check Run.
-Actionable findings are posted as exactly one `COMMENT` review before the
-trusted check is terminalized and its timeout cancelled:
-
-- `success`: review completed with no actionable findings and no PR comment;
-- `neutral`: review completed with findings;
-- `cancelled`: a newer head superseded it;
-- `failure`: the review itself failed.
-
-If the agent never reaches that handoff, the userspace scheduler completes the
-check as `timed_out`; a later push or explicit label request can retry.
+Useful review content remains agent-owned. The task tells the agent to read the
+complete diff and revalidate the live head, draft/closed state, labels, and
+newer requests immediately before publication. A clean result posts no review
+or comment. Actionable findings are posted as exactly one `COMMENT` review
+containing the summary and all inline comments. A cancellation request or
+superseding push must produce no stale publication.
 
 The one review may contain a summary and multiple exact-line comments. A
 hidden head marker makes retried tool loops idempotent, but only when that
 marker is on a review authored by the configured Iterate App. Identical text
 from any other user or bot is untrusted.
 
-This uses GitHub's [Check Runs API](https://docs.github.com/en/rest/checks/runs),
-not the older commit-status API. Check Runs are GitHub App-native, appear in
-the PR checks rollup, and support rich output and annotations.
+This proof of concept makes the rule catalog structural but leaves enforcement
+prompt-mediated: it does not yet expose a typed `finish` capability that
+validates rule IDs, changed lines, glob scope, suppressions, or terminal
+outcomes. That is the smallest next increment if the experiment proves useful;
+it is also the right boundary for a bounded timeout and deterministic recovery.
 
 A trusted conversational request such as `@iterate review this again` still
 works like any other mention: the same PR agent uses its judgment and Octokit

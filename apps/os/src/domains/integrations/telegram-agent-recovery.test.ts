@@ -18,12 +18,12 @@
 
 import { describe, expect, it } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/stream-processor-keepalive";
-import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processor-contracts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/stream-processor-registry";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { TelegramAgentProcessor } from "./telegram-agent-processor-implementation.ts";
 

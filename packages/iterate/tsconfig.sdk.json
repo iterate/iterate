@@ -13,6 +13,9 @@
     "declaration": true,
     "emitDeclarationOnly": true,
     "outDir": "dist",
+    // capnweb's published declarations use variadic tuple syntax that TS 5.9
+    // rejects internally. Source and emitted SDK declarations remain checked;
+    // this skips only dependency declaration bodies.
     "skipLibCheck": true,
     "types": ["node"]
   }

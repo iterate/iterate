@@ -30,7 +30,7 @@ import {
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../../schemas.ts";
+import type { StreamEvent } from "iterate/stream-events";
 
 /** Kind prefix for pretty chat rows settled by the agent lens. */
 export const AGENT_KIND_PREFIX = "agent.";

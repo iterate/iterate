@@ -5,17 +5,17 @@
 // instead of through a subscription runner. Token-bucket rate limiting lives in
 // the circuit-breaker processor.
 //
-// Contract files are the schema/type layer: plumbing modules (types.ts, the
-// processor host) import payload schemas from here, and processors that
+// Contract files are the schema/type layer: plumbing modules import payload
+// schemas from here, and processors that
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/stream-processor-revival";
+import {
+  defineProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "iterate/processor-contracts";
 import { ItxExpression } from "../../itx/expression.ts";
 import { EventSelector } from "./event-selector.ts";
-import { defineProcessorContract } from "iterate/processor-contracts";
-
-export { STREAM_PROCESSOR_REVIVED_EVENT_TYPE };
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
 // the core reducer starts deriving NEW state from already-reduced events

@@ -1,6 +1,6 @@
 // Table tests for the host-side self-measured metrics: own-append loop
 // correlation, ingest accounting, and the ping-derived clock-offset
-// correction. Host wiring is covered by stream-processor-host.test.ts and
+// correction. Registry wiring is covered by stream-processor-registry.test.ts and
 // the browser store's tests.
 
 import { describe, expect, it } from "vitest";

@@ -10,14 +10,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
-import type { Stream } from "../../itx-api.generated.ts";
-import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processor-contracts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/stream-processor-registry";
 import { StreamProcessorRunner, type ProcessorProgress } from "iterate/stream-processor-runner";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,

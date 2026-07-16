@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { extractCloudflareChunkDeltas } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { StreamEvent } from "iterate/stream-events";
 import { AgentProcessorContract } from "~/domains/agents/agent-processor-contract.ts";
 import {
   buildAgentLlmRequestBody,
   flattenMessageToText,
 } from "~/domains/agents/agent-processor-implementation.ts";
-import { StreamEvent } from "~/domains/streams/schemas.ts";
 
 // The agent processor never journals an LLM request's input — it REBUILDS it
 // from committed history on every attempt (buildAgentLlmRequestBody), keyed by

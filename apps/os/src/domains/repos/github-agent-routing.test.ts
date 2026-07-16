@@ -3,8 +3,8 @@
 // driven through the real registry + durableObjectRecovery path.
 
 import { describe, expect, it } from "vitest";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamProcessorRunner } from "iterate/stream-processor-runner";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   GITHUB_LINK,
   MemoryStream,

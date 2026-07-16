@@ -3,8 +3,8 @@ import { parse as parseYaml } from "yaml";
 import { XIcon } from "lucide-react";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Button } from "@iterate-com/ui/components/button";
+import { StreamEventInput, type StreamEvent } from "iterate/stream-events";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
-import { StreamEventInput, type StreamEvent } from "~/domains/streams/schemas.ts";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 

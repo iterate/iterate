@@ -349,10 +349,11 @@ the send-and-wait convenience.
 `StreamDurableObject` owns the journal (DO SQLite); its storage methods stay
 synchronous internally while the public `Stream` capability is async through
 an RpcTarget. Processors are hosted by their domain DO via
-`createStreamProcessorHost(...)` — `host.add((deps) => new SomeProcessor(deps))`
-— and receive a full public `Stream` capability, never raw DO stubs.
-Subscription handshakes are identity-only: the stream tells the host which
-`subscriptionKey` to open; the host answers with the one public
+`createStreamProcessorRegistry(...)` —
+`registry.register(new SomeProcessor({ stream, path, projectId }))` — and
+receive a full public `Stream` capability, never raw DO stubs.
+Subscription handshakes are identity-only: the stream tells the registry which
+`subscriptionKey` to open; the registry answers with the one public
 `subscribe({ subscriptionKey, configured: true })` verb on its own stream
 capability, handing the stream a live `processEventBatch` callback (the same
 live-capability shape as itx provision). State is a fold of the journal; the
@@ -360,9 +361,9 @@ live-capability shape as itx provision). State is a fold of the journal; the
 `domains/streams/README.md`; the doctrine is
 `docs/domain-objects-and-stream-processors.md`.
 
-The browser stream mirror is a second host of the same engine: the dashboard
-keeps a local event table plus derived tables and runs real `StreamProcessor`
-contracts in the browser host, with announcements preserved
+The browser stream mirror uses the same runner: the dashboard keeps a local
+event table plus derived tables and runs real `StreamProcessor` contracts in
+the browser, with announcements preserved
 (`domains/streams/client-libraries/browser/`).
 
 ## Workers RPC types patch

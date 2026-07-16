@@ -14,10 +14,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import { defineProcessorContract } from "iterate/processor-contracts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/stream-events";
+import {
+  defineProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "iterate/processor-contracts";
 import { StreamProcessor } from "iterate/stream-processor";
 import { ProcessorKeepalive, type KeepaliveRecord } from "iterate/stream-processor-keepalive";
 import {
@@ -26,6 +27,7 @@ import {
   type ProcessorProgressStore,
   type ProcessorRecovery,
 } from "iterate/stream-processor-runner";
+import type { Stream } from "../../itx-api.generated.ts";
 
 const REQUESTED = "events.iterate.com/test-task/requested";
 const COMPLETED = "events.iterate.com/test-task/completed";
@@ -366,7 +368,7 @@ function makeHarness(args: HarnessArgs = {}) {
       }
       return opened.checkpointOffset;
     },
-    /** The PRODUCTION wake lane's exact shape (stream-processor-host.ts:522):
+    /** The production wake lane's exact shape:
      * only CONSUMED types are delivered, but the frame is stamped with the
      * RAW journal head — an unconsumed durable tail leaves the frame behind
      * `streamMaxOffset` with nothing else ever delivering the difference. */

@@ -300,24 +300,31 @@ at-least-once redelivery a no-op.
 
 ```ts
 export class RepoDurableObject extends DurableObject<Env> {
-  readonly #host = createStreamProcessorHost(this.ctx, {
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
     stream: new StreamRpcTarget({ auth, projectId, path }),
+    path,
+    projectId,
     version: workerVersion(this.env),
   });
-  readonly #repoProcessor = this.#host.add((deps) => new RepoProcessor({ ...deps, github }));
+  readonly #repoProcessor = this.#registry.register(
+    new RepoProcessor({ stream: this.#registry.stream, path, projectId, github }),
+    { recovery: true },
+  );
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest) {
-    return this.#host.wakeStreamSubscriber(args);
+    return this.#registry.wakeStreamSubscriber(args);
+  }
+
+  alarm(info: AlarmInvocationInfo) {
+    return this.#registry.handleAlarm(info);
   }
 }
 ```
 
-`add` registers the processor under its `contract.slug`, stores checkpoints in
-DO KV, and gives the processor the host's own public `Stream` capability —
-processors never hold raw DO stubs. The browser stream mirror
-(`client-libraries/browser/`) is a second host of the same engine: it runs
-real `StreamProcessor` subclasses against wa-sqlite with the same
-announcements and checkpoints.
+`register` builds the canonical runner under the processor's `contract.slug`
+and stores progress in DO KV. The optional recovery adapter is required when
+consequential background work must survive eviction. The browser stream mirror
+(`client-libraries/browser/`) runs the same runner against wa-sqlite.
 
 ## The browser mirror: one download, many processors
 
@@ -370,21 +377,22 @@ by a compatibility vector over all members) are mirror-level.
 
 ## File map
 
-| File                         | Role                                                                                                                                |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `stream-durable-object.ts`   | The stream: append commit point, core processor, birth certificate, the dial (pokes, push expressions, webhooks), `acceptCrossPost` |
-| `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                         |
-| `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                                  |
-| `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                         |
-| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                            |
-| `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                                      |
-| `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                                      |
-| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                                        |
-| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                                               |
-| `stream-processor-host.ts`   | Hosts processors in a DO; answers pokes with `{checkpoint, sink, …}`                                                                |
-| `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas (incl. `crossPostedFrom` provenance)                                                 |
-| `utils.ts`                   | Stream path resolution + wake-subscription event builder                                                                            |
-| `client-libraries/`          | Browser mirror host and browser-side processors                                                                                     |
+| File                                                | Role                                                                                                                                |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `stream-durable-object.ts`                          | The stream: append commit point, core processor, birth certificate, the dial (pokes, push expressions, webhooks), `acceptCrossPost` |
+| `core-processor-contract.ts`                        | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                         |
+| `stream-storage.ts`                                 | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                                  |
+| `stream-subscribers.ts`                             | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                         |
+| `subscriber-sinks.ts`                               | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                            |
+| `subscriber-math.ts`                                | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                                      |
+| `event-selector.ts`                                 | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                                      |
+| `packages/iterate/src/processor-contracts.ts`       | `defineProcessorContract` + event-type → payload-schema resolution machinery                                                        |
+| `packages/iterate/src/stream-processor.ts`          | The `StreamProcessor` authoring API                                                                                                 |
+| `packages/iterate/src/stream-processor-runner.ts`   | Canonical delivery, checkpoint, and recovery-independent runtime                                                                    |
+| `packages/iterate/src/stream-processor-registry.ts` | Durable Object registry; routes wakes and builds runner durability adapters                                                         |
+| `packages/iterate/src/stream-events.ts`             | `StreamEvent` / `StreamEventInput` zod schemas (including cross-post provenance)                                                    |
+| `utils.ts`                                          | Stream path resolution + wake-subscription event builder                                                                            |
+| `client-libraries/`                                 | Browser mirror host and browser-side processors                                                                                     |
 
 Public capability surface (`Stream`, `StreamEventBatch`, `ProcessEventBatch`,
 …) is defined in `src/domains/streams/rpc-types.ts` (and projected into the

@@ -25,7 +25,7 @@
 
 import { z } from "zod";
 import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../schemas.ts";
+import type { StreamEvent } from "iterate/stream-events";
 import type { AnyHostedProcessor } from "iterate/processor-host-capabilities";
 import type {
   StreamProcessorDeliveryFrame,

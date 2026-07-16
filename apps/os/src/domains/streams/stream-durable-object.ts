@@ -1,5 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
+import type { StreamEvent, StreamEventInput } from "iterate/stream-events";
+import { StreamEventInput as StreamEventInputSchema } from "iterate/stream-events";
+import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/stream-runtime-metrics";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
@@ -11,8 +14,6 @@ import type {
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import {
   assertValidStreamRecoveryLog,
   STREAM_RECOVERY_FORMAT,
@@ -34,7 +35,6 @@ import {
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
-import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/stream-runtime-metrics";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,

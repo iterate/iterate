@@ -42,7 +42,6 @@ export default defineConfig([
       "src/stream-processor.ts",
       "src/stream-processor-keepalive.ts",
       "src/stream-processor-registry.ts",
-      "src/stream-processor-revival.ts",
       "src/stream-processor-runner.ts",
       "src/stream-runtime-metrics.ts",
       "src/subscriber-metrics.ts",

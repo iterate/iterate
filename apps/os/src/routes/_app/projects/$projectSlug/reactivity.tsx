@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ActivityIcon, PlusIcon, RadioIcon, TimerIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
+import type { StreamEvent } from "iterate/stream-events";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 import {

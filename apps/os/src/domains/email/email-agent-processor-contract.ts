@@ -5,11 +5,11 @@
 // core stream contract (the platform revival fact).
 
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/processor-contracts";
 import {
-  CoreProcessorContract,
+  defineProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+} from "iterate/processor-contracts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { EmailAgentBirthCertificate, EmailProcessorContract } from "./email-processor-contract.ts";
 

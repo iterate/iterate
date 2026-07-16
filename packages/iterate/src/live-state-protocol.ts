@@ -1,5 +1,5 @@
 /**
- * Wire types for the live-state channel: what a server engine pushes down a
+ * Wire types for the live-state channel: what a server LiveState pushes down a
  * subscription. A subscription always delivers one `snapshot` first (the full
  * current state), then a stream of `patch`es — each the minimal structural diff
  * since the previous revision. `useLiveState` reassembles these into the live

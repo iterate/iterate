@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { StreamEvent } from "./schemas.ts";
+import { StreamEvent } from "iterate/stream-events";
 
 export const STREAM_RECOVERY_FORMAT = "iterate-stream-recovery" as const;
 export const STREAM_RECOVERY_VERSION = 1 as const;

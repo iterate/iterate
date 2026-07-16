@@ -7,11 +7,11 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/stream-events";
 import { defineProcessorContract } from "iterate/processor-contracts";
 import { StreamProcessor, type StreamProcessorContract } from "iterate/stream-processor";
 import { StreamProcessorRunner } from "iterate/stream-processor-runner";
+import type { Stream } from "../../itx-api.generated.ts";
 
 const CounterContract = defineProcessorContract({
   slug: "test-counter",

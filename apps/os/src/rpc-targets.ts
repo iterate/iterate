@@ -28,6 +28,12 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import type { LiveUpdate } from "iterate/live-state-protocol";
+import { LiveState, type LiveStateSubscription } from "iterate/live-state";
+import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/stream-events";
+import type { ProcessorReads } from "iterate/stream-processor";
+import type { StreamProcessorRegistry } from "iterate/stream-processor-registry";
+import type { StreamThroughputMetrics } from "iterate/stream-runtime-metrics";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -143,7 +149,6 @@ import type {
   DynamicWorkerRef,
   ProjectWorker,
 } from "./domains/workers/schemas.ts";
-import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import { rethrowStreamUnavailable } from "./domains/streams/stream-unavailable.ts";
 import {
@@ -170,7 +175,6 @@ import {
   openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
-import type { ProcessorReads } from "iterate/stream-processor";
 import type {
   CapabilityDescription,
   Description,
@@ -296,10 +300,6 @@ import type {
   ConnectionRuntimeState,
   SubscriptionRuntimeState,
 } from "./domains/streams/stream-subscribers.ts";
-import type { StreamThroughputMetrics } from "iterate/stream-runtime-metrics";
-import type { StreamProcessorRegistry } from "iterate/stream-processor-registry";
-import type { LiveUpdate } from "iterate/live-state-protocol";
-import { LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";

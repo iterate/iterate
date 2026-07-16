@@ -148,11 +148,11 @@ type RegistryEntry = {
 
 export type StreamProcessorRegistry<Live extends object = Record<string, unknown>> = {
   readonly stream: Stream;
-  /** The node's live-state engine; a `.liveState` RpcTarget exposes getState()/subscribe() over it. */
+  /** The node's LiveState; a `.liveState` RpcTarget exposes getState()/subscribe() over it. */
   readonly live: LiveState<Live>;
   /**
    * Reassemble the live state from current inputs — the ONE writer for the
-   * engine. Call it after mutating any non-runner live-state input (the
+   * LiveState. Call it after mutating any non-runner live-state input (the
    * streams index, the demo counter); a runner's own committed-state change
    * calls it automatically via `observeStateChanges`. On a cold DO (a
    * runner's progress not yet loaded) it defers to an async
@@ -360,7 +360,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     }
   }
 
-  // The node's live-state engine. Seeded empty; assembled from runner state
+  // The node's LiveState. Seeded empty; assembled from runner state
   // on the first `loadAndRefreshLive`
   // and kept fresh by each runner's committed-state observer. The empty seed
   // and the primary-runner fallback are the two places the registry must

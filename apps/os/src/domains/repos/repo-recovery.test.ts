@@ -13,12 +13,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/stream-processor-keepalive";
-import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processor-contracts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/stream-processor-registry";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import { GITHUB_LINK } from "./github-agent-test-helpers.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";

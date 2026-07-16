@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processor-contracts";
-import type { StreamEvent } from "../../schemas.ts";
+import type { StreamEvent } from "iterate/stream-events";
 import { StreamProcessor } from "iterate/stream-processor";
 import {
   StreamProcessorRunner,

@@ -1,6 +1,6 @@
+import { buildEvent } from "iterate/processor-contracts";
 import type { ItxExpression } from "../../itx/expression.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
-import { buildEvent } from "iterate/processor-contracts";
 
 /**
  * Stream capabilities expose `.at(relativePath)` to code that should stay

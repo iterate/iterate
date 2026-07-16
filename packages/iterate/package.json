@@ -38,7 +38,6 @@
     "./stream-processor": "./src/stream-processor.ts",
     "./stream-processor-keepalive": "./src/stream-processor-keepalive.ts",
     "./stream-processor-registry": "./src/stream-processor-registry.ts",
-    "./stream-processor-revival": "./src/stream-processor-revival.ts",
     "./stream-processor-runner": "./src/stream-processor-runner.ts",
     "./stream-runtime-metrics": "./src/stream-runtime-metrics.ts",
     "./subscriber-metrics": "./src/subscriber-metrics.ts",
@@ -51,69 +50,9 @@
         "import": "./dist/index.mjs",
         "types": "./dist/index.d.mts"
       },
-      "./durable-object-processor-durability": {
-        "import": "./dist/durable-object-processor-durability.mjs",
-        "types": "./dist/durable-object-processor-durability.d.ts"
-      },
-      "./live-state": {
-        "import": "./dist/live-state.mjs",
-        "types": "./dist/live-state.d.ts"
-      },
-      "./live-state-diff": {
-        "import": "./dist/live-state-diff.mjs",
-        "types": "./dist/live-state-diff.d.ts"
-      },
-      "./live-state-protocol": {
-        "import": "./dist/live-state-protocol.mjs",
-        "types": "./dist/live-state-protocol.d.ts"
-      },
-      "./processor-contracts": {
-        "import": "./dist/processor-contracts.mjs",
-        "types": "./dist/processor-contracts.d.ts"
-      },
-      "./processor-host-capabilities": {
-        "import": "./dist/processor-host-capabilities.mjs",
-        "types": "./dist/processor-host-capabilities.d.ts"
-      },
-      "./rpc-retain": {
-        "import": "./dist/rpc-retain.mjs",
-        "types": "./dist/rpc-retain.d.ts"
-      },
       "./sdk": {
         "import": "./dist/sdk.mjs",
         "types": "./dist/sdk.d.ts"
-      },
-      "./stream-events": {
-        "import": "./dist/stream-events.mjs",
-        "types": "./dist/stream-events.d.ts"
-      },
-      "./stream-processor": {
-        "import": "./dist/stream-processor.mjs",
-        "types": "./dist/stream-processor.d.ts"
-      },
-      "./stream-processor-keepalive": {
-        "import": "./dist/stream-processor-keepalive.mjs",
-        "types": "./dist/stream-processor-keepalive.d.ts"
-      },
-      "./stream-processor-registry": {
-        "import": "./dist/stream-processor-registry.mjs",
-        "types": "./dist/stream-processor-registry.d.ts"
-      },
-      "./stream-processor-revival": {
-        "import": "./dist/stream-processor-revival.mjs",
-        "types": "./dist/stream-processor-revival.d.ts"
-      },
-      "./stream-processor-runner": {
-        "import": "./dist/stream-processor-runner.mjs",
-        "types": "./dist/stream-processor-runner.d.ts"
-      },
-      "./stream-runtime-metrics": {
-        "import": "./dist/stream-runtime-metrics.mjs",
-        "types": "./dist/stream-runtime-metrics.d.ts"
-      },
-      "./subscriber-metrics": {
-        "import": "./dist/subscriber-metrics.mjs",
-        "types": "./dist/subscriber-metrics.d.ts"
       },
       "./worker": {
         "import": "./dist/worker.mjs",

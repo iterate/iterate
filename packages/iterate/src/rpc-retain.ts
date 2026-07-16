@@ -5,7 +5,7 @@
 // carried it returned (a live subscription's push). Retaining it means: dup the
 // underlying stub while the transport supports it, and dispose the dup on close.
 // The stream event-delivery lane (`retainProcessEventBatch`) and the live-state
-// engine both build on these primitives instead of re-deriving the dance.
+// LiveState both build on these primitives instead of re-deriving the dance.
 
 /** An RPC callback after retention: still callable, plus disposable and (best-effort) broken-transport aware. */
 export type RetainedCallback<Arg> = ((arg: Arg) => unknown) &
@@ -28,7 +28,7 @@ export function retainCallback<Arg>(callback: (arg: Arg) => unknown): RetainedCa
     };
   const retained = (retainable.dup?.() ?? retainable) as typeof retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
-  // Idempotent by contract: owners often dispose from several paths (engine
+  // Idempotent by contract: owners often dispose from several paths (LiveState
   // drop + connection teardown), and a double release of the underlying dup
   // would free someone else's reference.
   let disposed = false;

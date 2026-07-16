@@ -5,6 +5,9 @@ import {
   StreamEventInput as StreamEventInputSchema,
 } from "./stream-events.js";
 
+/** Durable fact appended when recovery revives a stream processor. */
+export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
+
 /**
  * Merge one processor configuration patch into its current configuration.
  *

@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/processor-contracts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
-  CoreProcessorContract,
+  defineProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+  type ProcessorState,
+} from "iterate/processor-contracts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;

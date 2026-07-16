@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { ItxExpressionStep } from "../../itx/expression.ts";
-import { defineProcessorContract } from "iterate/processor-contracts";
 import {
-  CoreProcessorContract,
+  defineProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+} from "iterate/processor-contracts";
+import { ItxExpressionStep } from "../../itx/expression.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,

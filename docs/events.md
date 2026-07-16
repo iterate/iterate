@@ -183,7 +183,8 @@ In OS, events are handled by stream processors. Each domain under
 
 - A `*-processor-contract.ts` file for event schemas and the pure reducer.
 - A `*-processor-implementation.ts` file for side effects.
-- A Durable Object that hosts those processors with `createStreamProcessorHost`.
+- A Durable Object that registers those processors with
+  `createStreamProcessorRegistry`.
 
 The Stream Durable Object owns the journal. Domain Durable Objects host
 processors against public `Stream` capabilities, not raw stream internals.

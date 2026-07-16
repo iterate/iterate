@@ -8,10 +8,10 @@
 // here the checker is a stub and the subject is the gate's plumbing.
 
 import { describe, expect, it, vi } from "vitest";
+import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import type { Project } from "../../itx-api.generated.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
-import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {

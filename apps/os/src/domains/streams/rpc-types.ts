@@ -5,7 +5,7 @@
  * contract and the server-side host/subscriber machinery build against.
  */
 import type { LiveUpdate } from "iterate/live-state-protocol";
-import type { StreamEvent } from "./schemas.ts";
+import type { StreamEvent } from "iterate/stream-events";
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;

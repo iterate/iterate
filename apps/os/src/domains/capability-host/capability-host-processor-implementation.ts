@@ -1,8 +1,8 @@
 import { StreamProcessor, type StreamProcessorConstructorArgs } from "iterate/stream-processor";
 import type { ProcessorState } from "iterate/processor-contracts";
+import type { StreamEvent } from "iterate/stream-events";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type {

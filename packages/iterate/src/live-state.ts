@@ -9,7 +9,7 @@ import type { LiveUpdate } from "./live-state-protocol.js";
 
 /** Handle returned by `LiveState.subscribe` — the ownership + liveness surface for one subscriber. */
 export type LiveStateSubscription = {
-  /** Still registered on a live engine? A dead DO incarnation also makes the call reject. */
+  /** Still registered on this LiveState? A dead DO incarnation also makes the call reject. */
   ping(): boolean;
   unsubscribe(): void;
   [Symbol.dispose](): void;
@@ -29,7 +29,7 @@ const DEFAULT_DEBOUNCE_MS = 100;
  *   so the diff short-circuits unchanged branches by identity — O(changed), not
  *   O(size). See `diff.ts`.
  * - Diffing and broadcasting happen only while a subscriber exists; a dormant
- *   engine just holds its value and schedules nothing.
+ *   LiveState just holds its value and schedules nothing.
  *
  * All subscribers ride ONE revision line: a new subscriber gets a full snapshot
  * at the current revision, and every flush pushes the same patch to everyone. A

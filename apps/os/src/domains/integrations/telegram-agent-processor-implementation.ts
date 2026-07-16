@@ -26,9 +26,9 @@
 //   journal is exactly-once, the send is at-least-once).
 
 import { stringify as stringifyYaml } from "yaml";
-import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import { StreamProcessor } from "iterate/stream-processor";
-import type { StreamEvent } from "../streams/schemas.ts";
+import type { StreamEvent } from "iterate/stream-events";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   integrationConnectionStreamPath,
   readRecord,

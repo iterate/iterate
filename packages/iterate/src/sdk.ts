@@ -32,7 +32,6 @@ export type * from "./itx-api.generated";
 export * from "./processor-contracts.js";
 export * from "./stream-processor.js";
 export * from "./stream-processor-registry.js";
-export * from "./stream-processor-revival.js";
 export * from "./stream-processor-runner.js";
 export {
   StreamEvent as StreamEventSchema,
@@ -44,13 +43,6 @@ export { z } from "zod";
 /** The one binding the platform supplies to every dynamic worker: `get()`
  * for capability method calls, `fetch()` for HTTP into sibling workers. */
 type IterateEnv = { ITX: ItxBinding };
-
-// Plain Node test runners expose the `cloudflare:workers` module shim without
-// its runtime base classes. Falling back to inert bases keeps contracts and
-// pure processor code importable there; a deployed worker always receives
-// the real workerd classes and therefore never takes this lane.
-const DurableObjectBase = DurableObject ?? class {};
-const WorkerEntrypointBase = WorkerEntrypoint ?? class {};
 
 /**
  * Forward a request to one of the project's dynamic workers (an "app") —
@@ -134,7 +126,7 @@ async function invokeCapability(
  */
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
-> extends WorkerEntrypointBase<Env> {
+> extends WorkerEntrypoint<Env> {
   /** See `fetchDynamicWorker` at module level: a real fetch hop into a
    * sibling dynamic worker — the only lane that can carry WebSocket upgrades
    * and streaming bodies (RPC serializes; sockets can't cross it). */
@@ -171,9 +163,7 @@ export class IterateWorkerEntrypoint<
  * capability-dispatch contracts — on a DurableObject, so state survives
  * across requests and WebSockets can be served from `fetch`.
  */
-export class IterateDurableObject<
-  Env extends IterateEnv = IterateEnv,
-> extends DurableObjectBase<Env> {
+export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends DurableObject<Env> {
   /** A real fetch hop into a sibling dynamic worker — see
    * `IterateWorkerEntrypoint.fetchDynamicWorker`. */
   protected async fetchDynamicWorker(

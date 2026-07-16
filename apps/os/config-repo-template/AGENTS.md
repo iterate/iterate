@@ -43,11 +43,13 @@ Project-defined stream processors use the same three pieces as built-ins:
 `defineProcessorContract(...)`, a class extending `StreamProcessor`, and a
 stateful worker class that registers it with `createStreamProcessorRegistry`
 and exposes `wakeStreamSubscriber`. The GitHub review processor is the seeded
-copyable example. Its consequential work is blocking, so it needs no recovery
-alarm; processors with consequential background work must enable registry
-recovery and forward `alarm`. Keep consequential output on the typed `append`
-lane so the runtime stamps processor provenance and checkpoints only after
-blocking work settles.
+copyable example. Its only effect is one short, idempotent context append on
+the blocking lane; GitHub and model work belongs to the persistent agent. It
+therefore has no background obligation and needs no recovery alarm. A processor
+extended with consequential background work must enable registry recovery and
+forward `alarm`. Keep consequential output on the typed `append` lane so the
+runtime stamps processor provenance and checkpoints only after blocking work
+settles.
 
 The example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless, extends

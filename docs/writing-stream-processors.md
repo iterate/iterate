@@ -196,19 +196,17 @@ few lines, and it doubles as scenario 4 below:
 References: the "refold: …" tests in `slack-processors.test.ts` (agent
 status/ack + router ack/forwards) and `github-agent.test.ts` (repo creation).
 
-## What the host gives you for free (and what it demands)
+## What the registry gives you for free (and what it demands)
 
-`createStreamProcessorHost` backs both primitives with a **keepalive**
-(`stream-processor-keepalive.ts`): while any registered work is in flight, a
-durable DO alarm sits ~10s ahead of it. An incarnation that dies owing work
-gets its alarm fired in a fresh incarnation, which **revives** the host:
-
-1. append one `events.iterate.com/stream-processor-host/revived` fact to the
-   stream (journaled evidence; also cold-boots the stream DO, whose `woken`
-   fan-out restores the spine's deliveries);
-2. pull every hosted processor through its pending events (unfiltered, unlike
-   wake-mode push) — the fact guarantees at least one batch, so **every
-   reconciler runs**.
+`createStreamProcessorRegistry` builds the canonical runner and durable
+two-cursor progress store for every registered processor. Recovery is explicit:
+`registry.register(processor, { recovery: true })` also backs consequential
+background work with a **keepalive** (`stream-processor-keepalive.ts`). While
+registered work is in flight, a durable DO alarm sits ~10s ahead of it. An
+incarnation that dies owing work gets its alarm fired in a fresh incarnation,
+which appends one `events.iterate.com/stream/processor-revived` fact. Ordinary
+wake delivery of that consumed fact gives the processor an at-head
+reconciliation turn.
 
 Recovery therefore has exactly one entrypoint — batch delivery — and the
 journal narrates the whole episode: `…llm-request-requested` →
@@ -225,16 +223,16 @@ immediately. Wedged work that never settles (a hung promise no deadline owns)
 trips a busy-fire cap after ~15 minutes and decays into the same backoff.
 Enforcement lives in DO KV _below_ the fold — deliberately: a poisoned fold
 cannot be asked to fold its own pause fact. Journal facts about crash loops
-(`error-occurred`, key `processor-host-crash-loop:<version>`) are evidence,
+(`error-occurred`, key `processor-crash-loop:<version>`) are evidence,
 not enforcement.
 
 What hosting code must do:
 
-- **Wire `alarm()`** on every DO class that hosts processors:
-  `alarm() { return this.#processorHost.handleAlarm(); }`. A host without it
-  has no revival.
+- **Wire `alarm()`** on every DO class with a recovery-enabled processor:
+  `alarm(info) { return this.#registry.handleAlarm(info); }`. Without it there
+  is no revival.
 - **Share the alarm through slices** if the DO schedules its own work: state
-  desires via `host.setAlarmSlice(name, atMs)`; tolerate early fires; re-arm
+  desires via `registry.setAlarmSlice(name, atMs)`; tolerate early fires; re-arm
   inside your handler (see `SchedulerDurableObject`).
 - **Worker-hosted processors** (push-lane subscribers with stream-owned
   cursors, e.g. the project worker) have no alarm and no keepalive: their
@@ -244,42 +242,11 @@ What hosting code must do:
 
 ## Testing: every failure above is a few lines of plain node
 
-The harness (`createProcessorHostHarness` in
-`apps/os/src/domains/streams/test-helpers.ts`) boots the REAL host and REAL
-processors over fake substrates: an in-memory journal, a fake
-`DurableObjectState`, a mutable virtual clock, and eviction as an operator.
-
-```ts
-const h = createProcessorHostHarness({
-  build: (host, ctx) => ({
-    agent: host.add(
-      (deps) =>
-        new AgentProcessor({
-          ...deps,
-          now: () => ctx.clock.now,
-          // incarnation 1 hangs (the request the deploy kills); incarnation 2 answers
-          ai: {
-            run: async () =>
-              ctx.incarnation === 1 ? new Promise(() => {}) : { response: "recovered!" },
-          },
-        }),
-    ),
-  }),
-});
-
-await h.stream.append(
-  {
-    type: "events.iterate.com/agent/created",
-    idempotencyKey: "agent/created:test",
-    payload: { config: { systemPrompt: "Test agent", llm: { model: TEST_MODEL } } },
-  },
-  userMessage("hello?"),
-);
-await h.stream.waitForEvent({ eventTypes: [llmRequestStarted], timeoutMs: 5000 });
-h.crash(); // THE DEPLOY: memory dies; journal, checkpoints, alarm survive
-await h.advance(15_000); // the alarm fires; the real revival pass runs
-await h.stream.waitForEvent({ eventTypes: [outputAdded], timeoutMs: 5000 });
-```
+Registry recovery tests instantiate `createStreamProcessorRegistry` over an
+in-memory stream, fake `DurableObjectState`, and mutable clock. Eviction means
+discarding the registry and constructing another over the same durable
+substrates. See `agent-eviction-recovery.test.ts`, `repo-recovery.test.ts`, and
+`durable-object-processor-durability.test.ts` for the executable patterns.
 
 The rules that keep these tests honest:
 
@@ -306,7 +273,7 @@ The rules that keep these tests honest:
 
 Scenarios every obligation-carrying processor should have (crib from
 `agent-eviction-recovery.test.ts`, `capability-host-recovery.test.ts`,
-`stream-processor-host.test.ts`):
+`stream-processor-registry.test.ts`):
 
 1. eviction mid-attempt → revival settles it and the domain retries/reports;
 2. eviction before any attempt → provably-never-ran work starts late (or
