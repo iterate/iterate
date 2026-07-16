@@ -15,15 +15,13 @@ export type StreamSearchIndexRequest = {
   offsets: readonly number[];
 };
 
-type Waiter = {
-  resolve(): void;
-  reject(error: unknown): void;
-};
-
 type Lane = {
   offsets: Set<number>;
   running: boolean;
-  waiters: Waiter[];
+  waiters: Array<{
+    resolve(): void;
+    reject(error: unknown): void;
+  }>;
 };
 
 export class StreamSearchIndexCoordinator {
@@ -39,7 +37,7 @@ export class StreamSearchIndexCoordinator {
 
   index(request: StreamSearchIndexRequest): Promise<void> {
     if (request.offsets.length === 0) return Promise.resolve();
-    const key = laneKey(request);
+    const key = `${request.projectId}\0${request.path}`;
     let lane = this.#lanes.get(key);
     if (lane === undefined) {
       lane = { offsets: new Set(), running: false, waiters: [] };
@@ -72,8 +70,4 @@ export class StreamSearchIndexCoordinator {
     lane.running = false;
     if (this.#lanes.get(key) === lane) this.#lanes.delete(key);
   }
-}
-
-function laneKey(request: Pick<StreamSearchIndexRequest, "path" | "projectId">): string {
-  return `${request.projectId}\0${request.path}`;
 }

@@ -30,6 +30,11 @@ import {
   secretReferencePathsFromRequest,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
+import { indexStreamOffsets, triggerProjectSearchSyncDebounced } from "../search/search-index.ts";
+import {
+  StreamSearchIndexCoordinator,
+  type StreamSearchIndexRequest,
+} from "../search/stream-search-index-coordinator.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
@@ -62,11 +67,6 @@ import { StreamDatabase, type TouchInput } from "./stream-database.ts";
 import { AgentStatusDatabase, type AgentStatusTouchInput } from "./agent-status-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
-import { indexStreamOffsets, triggerProjectSearchSyncDebounced } from "../search/search-index.ts";
-import {
-  StreamSearchIndexCoordinator,
-  type StreamSearchIndexRequest,
-} from "../search/stream-search-index-coordinator.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
