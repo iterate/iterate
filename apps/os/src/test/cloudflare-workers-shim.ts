@@ -11,11 +11,19 @@ export class RpcPromise {}
 export class RpcProperty {}
 export class ServiceStub {}
 // Base classes some VALUE-imported modules extend at load time (e.g.
-// rpc-targets.ts pulls in egress.ts's WorkerEntrypoint subclass). Class
-// bodies never run in node tests — the subclasses just need a constructable
-// base so their module can evaluate.
+// rpc-targets.ts pulls in egress.ts's WorkerEntrypoint subclass). DurableObject
+// also assigns the two runtime fields needed by the stream append-boundary
+// test; platform behavior still needs preview proof in real workerd.
 export class WorkerEntrypoint {}
-export class DurableObject {}
+export class DurableObject<Env = unknown> {
+  protected readonly ctx: DurableObjectState;
+  protected readonly env: Env;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+}
 export const env = {};
 
 export type RecordedSpan = {

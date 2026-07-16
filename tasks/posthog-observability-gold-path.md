@@ -184,6 +184,47 @@ would need reconnect/rotation or an out-of-band exporter.
 
 ## PostHog investigation experience
 
+### Bounded committed-stream feed
+
+The first server-side PostHog slice should remain a small observational sink,
+not become a second stream-delivery system:
+
+- Every newly committed stream row enters an unsampled best-effort capture.
+  One synchronous append becomes one PostHog `/batch/` attempt, however many
+  rows it commits; bounded saturation and oversize are explicit failed
+  attempts rather than network requests.
+- Project the committed rows to `{offset, committedAt}` before async work. The
+  exporter must have no API through which a payload, path, event type,
+  idempotency key, metadata, or source lineage can reach PostHog.
+- Index the fixed `iterate stream event committed` event by `project_id`, an
+  opaque `stream_id`, offset, worker, and project/deployment scope. Set
+  `$process_person_profile: false` and disable geo-IP enrichment.
+- Preserve the stream commit point: PostHog work is scheduled after synchronous
+  fan-out and never changes the append result. In a Durable Object, pending I/O
+  keeps the object active; `waitUntil()` does not extend its lifetime.
+- Bound resource use to four in-flight captures per isolate, a 5-second
+  request timeout, and a 4 MB batch body. An over-limit append is rejected as
+  one observable telemetry unit rather than silently split into more requests.
+- Give every attempt a `posthog.capture_stream_events` Cloudflare custom span.
+  Success means PostHog returned 2xx (`accepted`), not proven ingestion.
+  Timeout/network outcomes are `unknown`; saturation, oversize, and HTTP
+  rejection are `failed`. Structured warning/error lines are rate-limited by
+  failure class while the unsampled spans retain attempt volume.
+
+This is deliberately **best-effort**. It excludes idempotency hits because they
+are not new commits, and it does not replay recovery imports. A saturated
+isolate or oversized append drops that append's analytics attempt; a timeout
+may have reached PostHog. If the product later requires guaranteed arrival,
+design an explicit bounded durable cursor or Queue project with its own failure
+and cost model. Do not quietly turn this slice into an alarm-owned SQLite
+outbox.
+
+No Analytics Engine, coordinator Durable Object, stream alarm arbitration, or
+custom dashboard is part of this slice. Cloudflare's native trace viewer and
+PostHog's live event feed are the operator surfaces. Semantic event facets and
+deep links can follow only once their bounded privacy/query contracts are
+proven.
+
 For an unexpected browser or Worker failure an operator should be able to:
 
 1. open one grouped, symbolicated PostHog issue;

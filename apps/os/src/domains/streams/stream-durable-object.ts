@@ -35,6 +35,10 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
+import {
+  captureCommittedStreamEvents,
+  posthogApiKeyFromStreamEnv,
+} from "./stream-event-posthog.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
@@ -87,6 +91,7 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  */
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
+  readonly #posthogApiKey = posthogApiKeyFromStreamEnv(this.env);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)
@@ -315,7 +320,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.length,
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
-
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
     // live connection pumps re-arm, lagging wake subscribers get poked,
@@ -334,6 +338,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     // so a stream that just went quiet sheds its durable delivery sessions
     // and lets both DOs hibernate.
     this.#subscribers.armOrClearIdleTimer();
+
+    const posthogApiKey = this.#posthogApiKey;
+    if (posthogApiKey !== undefined) {
+      this.#runInBackground(() =>
+        captureCommittedStreamEvents({
+          apiKey: posthogApiKey,
+          // Project inside the background failure boundary. The exporter
+          // cannot retain raw envelopes, payloads, or paths.
+          events: newEvents.map(({ createdAt, offset }) => ({
+            committedAt: createdAt,
+            offset,
+          })),
+          projectId: this.name.projectId,
+          streamId: this.ctx.id.toString(),
+          workerName: this.env.WORKER_SELF,
+        }),
+      );
+    }
 
     return events;
   }
