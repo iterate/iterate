@@ -5021,3 +5021,122 @@ browser `GET /api` failures in the same preview are separate Cloudflare
 `outcome: canceled` / `Network connection lost` rows during WebSocket E2E.
 
 Production remains untouched.
+
+## 2026-07-16: Landing Experiments, Latest Main, And Transport Decision
+
+Freshly fetched `origin/main` advanced to
+`8a10191f4d50055f263d61b6acd5c81d4da7013d`, which only removes completed task
+artifacts. It was merged into the draft branch as `6d77a8fe5`. Post-merge OS
+typecheck and all 545 Stream-domain tests across 40 files passed. The merge does
+not invalidate checkpoint 16 because it changes no Stream or Worker runtime.
+Branch commit `d0e92dc38` then added one deployed-benchmark readiness boundary:
+after `project.__describe()`, the harness awaits `project.repo.create()` before
+committing Worker source. Nine setup attempts without that boundary failed
+because the repository did not yet exist; all three immediate boundary probes
+passed. This is harness correctness, not a production optimization.
+
+### Generic flattened expression dispatch: hold
+
+An isolated same-version experiment compared the current retained
+`ItxEntrypoint.get()` authority-root walk with one scoped entrypoint that
+evaluates the complete persisted expression. Exact experiment commit was
+`9625de3ca95ca5232f189a7dde616afa9e39aff7`; the change added 148 lines and
+removed 24 across six files. Both modes ran in the same deployment, selected by
+fresh project ID, and all elapsed time was measured by Node around completed
+network I/O.
+
+Twenty processes passed, ten per arm. Pooled singleton p50/p95/mean improved
+14.46%/18.02%/18.64%. The 100-event lane improved p50 9.78% and p95 4.99%, but
+mean regressed 25.41% because one flattened sample took 4.678 seconds. A seeded
+20,000-iteration process-cluster bootstrap gave these results:
+
+| Metric         | Median improvement |       95% interval | P(flattened faster) |
+| -------------- | -----------------: | -----------------: | ------------------: |
+| Singleton p50  |             12.31% |  -11.89% to 41.85% |              0.7685 |
+| Singleton mean |             18.27% |   -6.74% to 37.26% |              0.9305 |
+| Batch p50      |             12.47% |  -11.78% to 40.09% |              0.7713 |
+| Batch mean     |            -22.34% | -110.29% to 24.18% |              0.2783 |
+
+The confidence intervals cross zero, the batch tail is worse, and the
+prototype did not eliminate or attribute the `ItxEntrypoint.get` error rows.
+Hold it outside the shipping branch. Repeat only with tighter pairing and
+per-mode telemetry attribution. Evidence is archived at
+`/Users/jonastemplestein/stream-flattened-dispatch-evidence-2026-07-16.tar.gz`,
+SHA-256
+`95ca6ed5e9192af51affc183a182faf26355cbb71942c7a4af9d09df9603c494`.
+
+### Singular public callback: keep
+
+A separate deployed receiver-adapter experiment kept exactly one batched
+Stream-to-Worker RPC in both arms and compared a handwritten batch loop with
+the SDK's public singular `processEvent(event)` adapter. Each event carried
+3,840 bytes. Six durable processes produced 180 singleton and 72 batch samples
+per arm; four ephemeral processes produced 80 singleton and 32 batch samples
+per arm.
+
+Durable singleton p50 was neutral at 77.607 ms versus 78.247 ms; the adapter's
+p95 and mean improved 12.51% and 4.82%. Durable 100-event p50 regressed 6.12%,
+p95 regressed 30.62%, and mean improved 5.12%; the paired median was -1.88%.
+Ephemeral singleton p50 improved 2.23% with noisy tails. Ephemeral batch point
+estimates improved p50/p95/mean 4.66%/30.36%/4.59%, while the paired median was
+-1.39%. These mixed near-zero paired results show parity, not a material
+adapter gain or cost.
+
+Discarding the callback promise was separately rejected for durable delivery.
+At iteration 25, source append acknowledged but output did not become durable
+within 60 seconds. `ctx.waitUntil()` cannot replace the Stream cursor
+acknowledgement. The accepted boundary is one public event callback, one
+private transport batch, and an ordered promise chain only when a callback is
+actually asynchronous. Evidence is archived at
+`/Users/jonastemplestein/stream-process-event-adapter-evidence-2026-07-16.tar.gz`,
+SHA-256
+`16e18816359f3bc080de3e167029901dc1aab70b5ce4822df1bdca9af31ebf90`.
+
+### Actual singular Worker RPC transport: reject
+
+The final experiment changed the wire itself. Two first attempts established
+correctness constraints before measurement:
+
+- Cross-posting each callback result back through Stream RPC deadlocked a
+  reentrant delivery cycle during ten-event warmup and timed out after 60
+  seconds. Call `log_c73bf101b84e4d5abe29a4854d1e70f6`, trace
+  `a0cb7141bbf8dad4f94dfbfa92d6f209`.
+- Storing the expected cursor in the project Worker entrypoint parked at offset 7. A stateless Worker entrypoint is instantiated for each separate RPC
+  request, so instance fields do not survive from one event request to the
+  next. Trace `f06bfa86dcb9467d5197852ccb3a0d40`.
+
+The final candidate made each callback request stateless while validating and
+returning its cursor. Exact experiment commit `85707d87a` was deployed as exact
+OS Worker version `6334e382-76d5-47a4-9c1c-3d76a29c3573` on preview 6. Twelve
+processes passed, six per arm, with 120 singleton observations and 30 batches
+of 25 x 3,840-byte events per arm. That is 870 measured events per arm. The
+matrix interleaved modes, and the seeded 20,000-iteration bootstrap resampled
+whole process clusters.
+
+| Workload        | Batched p50 | Singular p50 | Singular multiple | Batched p95 | Singular p95 | Singular multiple |
+| --------------- | ----------: | -----------: | ----------------: | ----------: | -----------: | ----------------: |
+| One event       |   62.805 ms |    83.870 ms |             1.34x |  116.483 ms |   144.291 ms |             1.24x |
+| 25 x 3,840 byte |   69.015 ms |   488.241 ms |             7.07x |  101.380 ms |   836.411 ms |             8.25x |
+
+For the 25-event lane, batching improved pooled p50/p95/mean by
+85.86%/87.88%/84.27%. The process-cluster median p50 improvement was 85.91%
+with a 95% interval of 72.04%-88.51% and `P(batched faster) = 1.0`. The
+singleton p50 interval crossed zero, but its mean interval still favored
+batching by 1.28%-38.88%. There is no performance case for singular wire calls.
+
+Exact-run telemetry strengthens the transport conclusion. Six singular windows
+contained 3,186 native `jsrpc` spans versus 1,579 for batching, and 1,564
+project dynamic-worker calls versus 408, a 3.83x multiplier. Every queried span
+reported the exact deployed Worker version. The same window contained 119
+error-level `default.get` / `get` rows: 66 in singular windows and 53 in batched
+windows. They match the existing transient ITX entrypoint-session fingerprint
+and do not scale with event-call volume, so singular transport is not their
+exclusive source. They remain unexplained release-blocking telemetry.
+
+Raw logs, failed smokes, exact queries, a reproducible aggregator, pooled
+statistics, and process-cluster intervals are archived at
+`/Users/jonastemplestein/stream-singular-worker-rpc-evidence-2026-07-16.tar.gz`,
+SHA-256
+`21a797eeb6e8fa63f639f037cbc8f3f52b6dad82066ec4e7b5a61c73bc4e7606`.
+Preview 6's manual lease was released after collection. No experiment code was
+merged into the shipping branch. Production remains untouched.

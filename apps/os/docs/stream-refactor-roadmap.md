@@ -27,9 +27,10 @@ an options envelope and response serialization, but they are private transport
 details. There is no public `appendAck` operation.
 
 Subscribers implement `processEvent(event)`. Bounded batching remains a private
-RPC transport detail because deployed measurements rejected one RPC per event
-by up to 13x while proving public per-event callbacks can retain batch
-throughput.
+RPC transport detail. In the exact same-build deployed matrix, 25 x 3,840-byte
+events took 69.015 ms p50 in one batch RPC and 488.241 ms over 25 singular
+Worker RPCs, a 7.07x slowdown; earlier lanes reached 13x. The public singular
+adapter remains neutral when both versions retain one batched wire call.
 
 Processor methods such as `waitUntilProcessed` are orchestration utilities,
 not additional Stream fundamentals. Domain-object birth belongs in domain
@@ -120,8 +121,8 @@ The bounded correction flushes caught-up state once at activation, then starts
 a fresh debounce window for the new `woken` fact. A clean five-process-per-arm,
 300-sample-per-process A/B improved pooled p50/p95/mean by
 7.45%/5.82%/4.56%; all five paired p50s improved. One noisy process left p99
-inconclusive. Ship this correction after deployed proof. Packing one record is
-now optional and still has only a 0.26-0.28 ms ceiling; keep it only if a
+inconclusive. Retain this correction. Packing one record is now optional and
+still has only a 0.26-0.28 ms ceiling; keep it only if a
 separate cold suite improves p50 and mean at least 5% without p95/p99 loss.
 
 ### 3. Typed post-commit deltas
@@ -164,28 +165,35 @@ This is higher upside than the keyed insert but also higher risk. Do not start
 it until the landing branch is either frozen or copied to an isolated
 experiment worktree.
 
-### 6. Flatten internal expression dispatch
+### 6. Flatten internal expression dispatch (hold)
 
-The current Stream dial calls `ItxEntrypoint.get()`, retains the transient
-authority root, and walks a persisted expression over that RPC session. The
-latest preview emitted 3,248 error-level `get` invocations, mostly during E2E.
-Current workerd source says orderly capability release resolves the JS-RPC
-session as `OK`; cancellation or actor abort maps to an exception. The cached
-push root is therefore both a latency opportunity and a telemetry suspect.
+The scoped entrypoint experiment is complete. It evaluated the whole persisted
+expression server-side instead of retaining the transient authority root and
+walking the expression across that session. Twenty successful processes gave
+promising point estimates: singleton p50 improved 14.46%, and 100-event batch
+p50 improved 9.78%. The process-cluster intervals did not clear zero:
+singleton p50's median improvement was 12.31% with a 95% interval of
+-11.89%-41.85%, and batch p50's was 12.47% with an interval of
+-11.78%-40.09%. One 4.678-second flattened sample made batch mean 25.41%
+worse.
 
-Add one internal scoped entrypoint method that evaluates the complete
-expression and payload server-side. Push calls then return only an
-acknowledgement and retain no session; wake calls may return the live sink and
-tie only that returned capability to the existing idle-teardown lifetime. This
-preserves generic expressions and removes more RPC turns than the older direct
-Project Worker special case.
+Hold the 148-line implementation outside the shipping branch. It did not
+eliminate or attribute the `ItxEntrypoint.get` exception telemetry, so it fails
+both the performance-confidence and operational gates. Repeat only with a
+tighter paired design and per-mode telemetry attribution; do not create a
+canonical-expression special case or second delivery protocol.
 
-Run both paths in one deployment with randomized ABBA pairs, fresh projects,
-and Node-host end-to-end timing. Require at least 5% paired p50/capacity
-improvement, no more than 2% p95/p99 regression, exact retry/recovery and
-capability disposal, and a clean or explicitly classified `get` telemetry
-delta. Reject any design that adds a second delivery protocol or
-canonical-expression branch.
+### 7. Preserve batched transport behind singular callbacks (complete)
+
+The receiver adapter and actual-wire experiments settle this boundary. One
+public `processEvent(event)` callback is as fast as an explicit batch callback
+when the SDK loops locally over one private batch RPC. Durable delivery must
+await each returned callback promise before acknowledging the frame; discarding
+it lost durable completion in a deployed test. Actual one-RPC-per-event
+transport is 7.07x slower at p50 for 25 PCM frames, doubles native `jsrpc`
+spans, and multiplies dynamic-worker calls 3.83x. A stateful callback also
+failed because stateless Worker entrypoint instances do not persist across
+separate RPC requests. This direction is closed.
 
 ## Parallel Kernel Spike Result
 
@@ -244,6 +252,14 @@ one intentional skip. Later bootstrap/idempotency fixes pass 544 Stream tests
 and deployed preview proof. The exact-current-main cumulative gate is complete;
 the corrected full preview and destructive rollout runbook remain before this
 tree is a shipping candidate.
+
+Latest `origin/main` `8a10191f4` was merged as `6d77a8fe5`; it removes completed
+task artifacts and does not change Stream runtime. Post-merge OS typecheck and
+all 545 Stream-domain tests pass. The branch also includes the activation
+checkpoint correction and the benchmark repository-readiness boundary. A
+complete preview test retry passed, but thousands of error-level
+`ItxEntrypoint.get` rows remain unclassified. That telemetry, rather than a
+missing performance experiment, is the current release blocker.
 
 ## Replacement Architecture
 
@@ -337,11 +353,13 @@ fallback fails the collapse goal even if benchmarks are green.
    branch without reviving `StreamProcessorHost`.
 2. Completed: root typecheck, lint, formatting, recursive tests, focused Stream
    tests, and affected cross-domain tests pass.
-3. Pending: capture one exact-main cumulative baseline, the complete
-   birth/recovery matrix, and a deployed
-   birth-to-ready baseline with immutable revisions and raw logs.
-4. Pending: freeze the public API, benchmark corpus, and correctness matrix at
-   those revisions.
+3. Completed: exact-current-main cumulative baseline, clean activation A/B,
+   deployed callback-adapter comparison, actual singular-wire comparison, and
+   immutable raw-evidence archives.
+4. Pending: eliminate or explicitly classify the `ItxEntrypoint.get` error
+   rows, record the destructive rollout/rollback procedure, then freeze the
+   public API, benchmark corpus, and correctness matrix as the replacement
+   oracle.
 
 ### Phase 1: Build one feature-complete vertical slice
 
@@ -413,20 +431,25 @@ Correctness must prove:
 
 ## Decision Order
 
-1. Establish the post-birth exact-main baseline for the already integrated
-   scanned-through runner.
-2. Measure birth plus sparse-delivery latency and verify the expected reduction
-   in Stream reads/RPC turns; accept target-bounded folding only with
-   reconciliation proof.
-3. Deploy the activation catch-up flush; decide separately whether the smaller
-   packed-activation ceiling is worth another format change.
-4. Measure the keyed homogeneous insert on end-to-end large batches.
-5. Build the replacement vertical slice and compare it against the frozen
-   oracle.
-6. Prove flattened internal expression dispatch; retain the direct Project
-   Worker prototype only as a performance ceiling.
+1. Resolve the `ItxEntrypoint.get` error telemetry, rerun the complete preview,
+   and obtain explicit destructive rollout/rollback approval. Do not add more
+   runtime mechanisms to the shipping branch meanwhile.
+2. Choose ship-current or replace-now. If shipping current, land the measured
+   branch and stop broad experimentation. If replacing, freeze this exact tree
+   and its evidence as the oracle.
+3. Make typed post-commit deltas the first clarity change. Keep it only if it
+   deletes duplicate parsing and reduces code without changing ownership.
+4. Run integrated sparse scan-and-claim in an isolated worktree. It has the
+   highest remaining measured ceiling, but must pass deployed sparse, dense,
+   singleton, poison, and recovery gates.
+5. Measure keyed homogeneous insert only if large keyed batches matter enough
+   to justify another SQL shape. Measure the packed activation record only if
+   roughly 0.26-0.28 ms is material.
+6. For a big-bang replacement, build the feature-complete vertical slice and
+   compare it against the frozen oracle before porting secondary transports.
 
-This order lands the highest-confidence latency improvement first, then moves
-engineering effort toward reducing the kernel rather than adding more
-coordination to an implementation already beyond its intended complexity
-budget.
+Flattened expression dispatch, singular Worker transport, legacy KV, generic
+credit pull, and broad coalescing are closed at current evidence. This order
+spends the next engineering effort on deleting duplicate work or collapsing
+ownership, not adding coordination to a kernel already beyond its intended
+complexity budget.

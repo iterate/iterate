@@ -1,13 +1,16 @@
 # Stream Performance Handoff
 
 Snapshot captured on 2026-07-15 and updated on 2026-07-16 after semantically
-integrating `origin/main` through `7495c6802` into draft PR
+integrating `origin/main` through `8a10191f4` into draft PR
 [#1902](https://github.com/iterate/iterate/pull/1902). The integrated history
 includes the #2002 processor runner/registry redesign, #2038 explicit processor
 births, #2040 native trace roots for Stream retry alarms, and #2046's
-runtime-neutral inspector UI. Exact merged candidate `b2712ad09` has now been
-benchmarked against exact current main `7495c6802`. Production has not been
-deployed, erased, or otherwise changed.
+runtime-neutral inspector UI. Exact runtime candidate `b2712ad09` has been
+benchmarked against exact runtime main `7495c6802`; later commit `c263535fe`
+fixes the isolated activation checkpoint regression, merge `6d77a8fe5` accepts
+main's task-document cleanup, and `d0e92dc38` makes the deployed benchmark wait
+for repository readiness. No later commit changes the measured steady-state
+Stream runtime. Production has not been deployed, erased, or otherwise changed.
 
 ## 2026-07-16 Integration Update
 
@@ -201,6 +204,43 @@ not inflate this shipping PR. A durable archive is at
 `~/stream-kernel-redesign-experiments-2026-07-16.tar.gz` (80 KiB), SHA-256
 `7ced9e22f851344f471619b8db41496d7ed1485ccdf515de8e982fa63373cf05`.
 
+### Final transport and dispatch experiments
+
+Three final deployed experiments narrow the landing decisions:
+
+- The public singular `processEvent(event)` adapter is neutral against an
+  explicit receiver batch loop when both use the same private batched RPC.
+  Durable delivery must await a returned callback promise before acknowledging
+  the frame; a deliberate discard-promise variant lost durable progress after
+  iteration 25 and is rejected. Ephemeral delivery may avoid a promise when
+  the callback is synchronous because it has no durable cursor to acknowledge.
+- Flattening a generic itx expression into one scoped entrypoint produced
+  positive singleton point estimates, but 20 process-cluster samples were not
+  decisive. Singleton p50's median improvement was 12.31% with a 95% interval
+  from -11.89% to 41.85%; 100-event batch mean regressed 25.41% after a 4.678
+  second sample. The implementation adds 148 lines and did not classify the
+  `ItxEntrypoint.get` error rows, so it is held outside the shipping branch.
+- Actual singular Worker RPC transport is decisively worse. An exact deployed
+  six-process-per-arm matrix delivered 25 x 3,840-byte PCM frames in 69.015 ms
+  p50 with one batched RPC and 488.241 ms with 25 singular RPCs: singular is
+  7.07x slower at p50 and 8.25x at p95. The process-cluster 95% interval for
+  batching's p50 gain is 72.04%-88.51%. Singular transport also produced 3,186
+  native `jsrpc` spans versus 1,579 and 1,564 dynamic-worker calls versus 408.
+
+The singular-wire experiment also established two correctness boundaries. A
+cross-posted acknowledgement deadlocked a reentrant Stream cycle. A cursor
+stored in the project Worker entrypoint parked at offset 7 because a stateless
+Worker entrypoint is instantiated once per separate RPC request. The final
+stateless callback variant was correct but retained the 7.07x PCM cost. The
+decision is therefore firm: singular public callback, bounded private batch
+wire, ordered durable acknowledgement.
+
+All 12 matrix processes and 1,740 measured events passed, but the exact window
+still contained 119 error-level `default.get` rows matching the known transient
+ITX entrypoint-session fingerprint. The error count did not scale with singular
+event calls, so singular delivery is not its exclusive cause. The rows remain
+unexplained and release-blocking. Preview 6 was released after the audit.
+
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
 source of truth for experiment setup, immutable revisions, raw sample paths,
@@ -275,18 +315,23 @@ output Stream DO -> Node comparison found paired-median changes of 1.95%
 faster for durable singleton delivery, 0.70% slower for durable 1,000 x 640 B,
 0.30% faster for ephemeral singleton delivery, and 0.97% faster for ephemeral
 1,000 x 640 B. Those are neutral parity results, which is the desired outcome:
-the cleaner public callback does not sacrifice the PCM workload, while one RPC
-per event was decisively rejected.
+the cleaner public callback does not sacrifice the PCM workload. A later exact
+same-build comparison of transport shape found one 25-event private batch RPC
+85.86% faster at p50 than 25 singular Worker RPCs (69.015 ms versus 488.241
+ms), so public callback granularity and wire granularity must remain separate.
 
 ## Known Tails And Limits
 
 The enlarged forced-reactivation `head()` lane was 19.12% slower p50 and
-66.04% slower p95 in checkpoint 15. The full-suite lane was slightly faster,
-and two larger isolated controls previously improved reactivation p50/p95.
-The only cleanly attributed cold cost is the required canonical-name KV read:
-about +0.261 ms p50, +0.825 ms p95, and +0.280 ms mean. Treat the latest large
-tail as unresolved platform/activation variance, not as a proven regression
-caused by one current mechanism.
+66.04% slower p95 in checkpoint 15; checkpoint 16 was neutral at p50 and
+66.69% slower at p95. This was not left as unexplained variance. The branch
+carried replayed checkpoint lag across abrupt incarnations, then appended one
+new `woken` fact per incarnation until the 64-event threshold flushed it. A
+clean isolated correction improved p50/p95/mean 7.45%/5.82%/4.56% across
+1,500 observations per arm and won all five paired p50 rounds. One noisy
+process leaves p99 inconclusive. The only other cleanly attributed cold cost
+is the required canonical-name KV read: about +0.261 ms p50, +0.825 ms p95,
+and +0.280 ms mean.
 
 The low-count full-suite replay row improved p50 but regressed p95. It is
 superseded for acceptance purposes by the dedicated 1,000-observation replay
@@ -386,11 +431,11 @@ StreamDurableObject
   `-- subscriber-sinks                  RPC/webhook transport and ownership
 ```
 
-Against integrated main `c2582c200`, the working tree differs by 136 files and
-`+22,165/-3,170` lines before this final documentation update. That number is
+Against current main `8a10191f4`, branch head before this documentation update
+differs by 137 files and `+22,987/-3,162` lines. That number is
 dominated by this evidence ledger, tests, generated API output, and call-site
 migration. The Stream domain has 25 changed non-test production files at
-`+4,446/-1,239`, net +3,207 lines.
+`+4,517/-1,233`, net +3,284 lines.
 
 After the current-main integration, the eight largest runtime
 coordination/storage/runner files total 8,437 lines. The old pre-runner estimate
@@ -423,20 +468,21 @@ acceptable only because the project explicitly permits wiping production.
 
 ## Rejected Directions
 
-| Direction                                | Result                                                                       | Disposition                            |
-| ---------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------- |
-| True legacy Durable Object KV journal    | 0.9%-35.9% slower p50 across tested lanes; more segmentation/recovery code   | Reject                                 |
-| Explicit legacy-KV `storage.sync()`      | Slower; waits for ActorCache flush rather than shaping it                    | Reject                                 |
-| Segmented/normalized/JSON-table journals | Narrow wins, broad append/read regressions, added formats and recovery paths | Reject                                 |
-| Per-event RPC transport                  | Up to 13x slower durable push and severe deployed PCM tails                  | Keep per-event API, private batch wire |
-| Actor or Worker append coalescers        | Burst wins, 8.8%-16.3% singleton tax and changed transaction semantics       | Reject as default                      |
-| Larger hosted-processor frames           | Throughput/tail trade did not clear the gate                                 | Reject                                 |
-| One hosted-delivery capability/session   | 8%-17% slower handshake paths plus more ownership code                       | Reject                                 |
-| `kv.list()` activation snapshot          | Fewer statements but neutral/slower real workerd                             | Reject                                 |
-| Direct cross-post dial cache             | Mixed/no durable gain after full path                                        | Reverted                               |
-| Exact-type wake preselection             | Did not improve the real consumer lane                                       | Reject                                 |
-| Unconditional retained tail              | Fast but +58.6% post-GC heap                                                 | Replaced by demand-bound tail          |
-| JSON/column envelope rewrites            | Local promise failed deployed Worker-consumer gate or deep-input correctness | Reject                                 |
+| Direction                                | Result                                                                        | Disposition                            |
+| ---------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------- |
+| True legacy Durable Object KV journal    | 0.9%-35.9% slower p50 across tested lanes; more segmentation/recovery code    | Reject                                 |
+| Explicit legacy-KV `storage.sync()`      | Slower; waits for ActorCache flush rather than shaping it                     | Reject                                 |
+| Segmented/normalized/JSON-table journals | Narrow wins, broad append/read regressions, added formats and recovery paths  | Reject                                 |
+| Per-event RPC transport                  | Exact PCM matrix: 7.07x p50 and 8.25x p95 slowdown; earlier lanes up to 13x   | Keep per-event API, private batch wire |
+| Actor or Worker append coalescers        | Burst wins, 8.8%-16.3% singleton tax and changed transaction semantics        | Reject as default                      |
+| Larger hosted-processor frames           | Throughput/tail trade did not clear the gate                                  | Reject                                 |
+| One hosted-delivery capability/session   | 8%-17% slower handshake paths plus more ownership code                        | Reject                                 |
+| `kv.list()` activation snapshot          | Fewer statements but neutral/slower real workerd                              | Reject                                 |
+| Direct cross-post dial cache             | Mixed/no durable gain after full path                                         | Reverted                               |
+| Exact-type wake preselection             | Did not improve the real consumer lane                                        | Reject                                 |
+| Unconditional retained tail              | Fast but +58.6% post-GC heap                                                  | Replaced by demand-bound tail          |
+| JSON/column envelope rewrites            | Local promise failed deployed Worker-consumer gate or deep-input correctness  | Reject                                 |
+| Flattened generic expression dispatch    | Positive point estimates, zero-crossing intervals, worse batch mean, +148 LOC | Hold outside shipping branch           |
 
 The detailed reasons, revisions, samples, and collapse paths are in the ledger.
 Do not restart these experiments without a materially different mechanism.
@@ -521,26 +567,22 @@ failed receiver retry. Time append/birth through observed readiness on the
 Node host. This lane is required to isolate the compact frame's contribution,
 not to support the cumulative headline.
 
-The highest-value delivery experiment is now a generic flattened internal
-entrypoint. The current dial first calls
-`ctx.exports.ItxEntrypoint(...).get()`, retains the returned transient
-`ProjectRpcTarget`, and then walks the delivery expression across that RPC
-session. A scoped entrypoint method can instead evaluate the whole expression
-server-side in one call. Push delivery returns no capability, so its session
-can end normally after every acknowledgement; wake delivery may still return
-the live sink whose lifetime is already bounded by idle teardown. This keeps
-generic expressions while removing the cached authority-root session and
-several RPC turns.
+Generic flattened expression dispatch has now been measured and does not clear
+its shipping gate. Its singleton point estimate was positive, but the
+process-cluster p50 interval crossed zero; one 4.678-second batch made batch
+mean 25.41% worse, and the extra scoped entrypoint did not classify the
+`ItxEntrypoint.get` errors. Hold the 148-line prototype. Repeat it only if the
+error fingerprint can be attributed by dispatch mode and a tighter paired
+matrix can be run without adding a second protocol.
 
-Compare generic root-walking and flattened calls in one deployment with
-randomized ABBA pairs, fresh projects, Node-host end-to-end timing, and
-singleton, PCM, fan-in, reactivation, recovery, agent-status, and search-index
-lanes. Require at least 5% paired p50/capacity improvement, no more than 2%
-p95/p99 regression, exact capability disposal, and elimination or explicit
-classification of the `ItxEntrypoint.get` exception rows. The older direct
-Project Worker prototype remains useful as a ceiling, not as the preferred
-architecture: it improved one deployed PCM p50 but regressed p95 and required a
-canonical-expression special case.
+The highest-value bounded clarity change is now the typed post-commit delta:
+carry the reducer's parsed subscription-control fact across the synchronous
+commit boundary instead of schema-parsing it again. It should remove work and
+code without changing persistence, transport, or recovery. The highest-upside
+isolated performance experiment is the transactional-outbox spike's integrated
+sparse scan-and-claim query. It may remove duplicate materialization, but must
+remain in an experiment worktree until deployed sparse, dense, singleton,
+poison, and recovery gates pass.
 
 The best cold-start experiment is one physical activation KV record containing
 canonical name plus optional core checkpoint. It removes one point read without
@@ -584,9 +626,11 @@ evidence to decide.
    branch using the current implementation as an oracle. Do not maintain both
    kernels or add compatibility dispatch.
 3. If shipping current, treat the exact-current-main checkpoint and activation
-   diagnosis as complete. Keep the PR draft until the flattened-dispatch
-   experiment classifies the `ItxEntrypoint.get` errors and the wipe/rollback
-   runbook is in the PR body, then stop broad benchmarking.
+   diagnosis as complete. The flattened-dispatch and actual singular-RPC
+   experiments are also complete and do not belong in the shipping diff. Keep
+   the PR draft until the `ItxEntrypoint.get` errors are eliminated or explicitly
+   classified outside error telemetry, the complete preview is green, and the
+   wipe/rollback runbook is in the PR body. Then stop broad benchmarking.
 4. If replacing now, freeze the public API and benchmark corpus. The
    replacement must pass the current Stream suite, crash matrix, post-GC replay
    profile, and deployed Worker-consumer lanes before the current code is
@@ -648,6 +692,19 @@ size: 1.0 MB compressed
 sha256: 9650aca809c12e09152ba5f5dcefb048c4e20106f7d136fd08eabe38fd98fe9b
 ```
 
+The final dispatch and callback experiments are archived at:
+
+```text
+/Users/jonastemplestein/stream-flattened-dispatch-evidence-2026-07-16.tar.gz
+sha256: 95ca6ed5e9192af51affc183a182faf26355cbb71942c7a4af9d09df9603c494
+
+/Users/jonastemplestein/stream-process-event-adapter-evidence-2026-07-16.tar.gz
+sha256: 16e18816359f3bc080de3e167029901dc1aab70b5ce4822df1bdca9af31ebf90
+
+/Users/jonastemplestein/stream-singular-worker-rpc-evidence-2026-07-16.tar.gz
+sha256: 21a797eeb6e8fa63f639f037cbc8f3f52b6dad82066ec4e7b5a61c73bc4e7606
+```
+
 High-value live paths:
 
 | Evidence                      | Path                                                                                 |
@@ -657,6 +714,9 @@ High-value live paths:
 | Checkpoint 16 archive         | `~/stream-performance-evidence-2026-07-16.tar.gz`                                    |
 | Checkpoint 16 live analysis   | `~/stream-performance-evidence-2026-07-16-current-main/analysis.{txt,json}`          |
 | Activation checkpoint A/B     | `~/stream-activation-checkpoint-evidence-2026-07-16-clean/{RESULTS.md,activation-*}` |
+| Flattened dispatch A/B        | `~/stream-flattened-dispatch-evidence-2026-07-16/{README.md,aggregate.json}`         |
+| Singular callback adapter     | `~/stream-process-event-adapter-evidence-2026-07-16/{README.md,*aggregate.json}`     |
+| Singular Worker RPC matrix    | `~/stream-singular-worker-rpc-evidence-2026-07-16/{README.md,aggregate.json}`        |
 | Shipping replay profile       | `/private/tmp/replay-workerd-profile-shipping-release-focused.cpuprofile`            |
 | Shipping replay summary       | `/private/tmp/replay-workerd-profile-shipping-release-focused-summary.json`          |
 | Deployed final callback proof | `/tmp/payload-release-deployed-{durable,ephemeral}-886b5ecf1-r*.log`                 |
@@ -695,6 +755,8 @@ Give another agent this document and ask it to read, in order:
 3. The coherent-kernel experimental source and tests in the separate worktree.
 4. `~/stream-performance-evidence-2026-07-16-current-main/analysis.txt` and the
    shipping replay summary JSON.
+5. The `README.md` and aggregate JSON in the flattened-dispatch,
+   process-event-adapter, and singular-worker-RPC evidence directories.
 
 Ask it to answer these concrete questions:
 
