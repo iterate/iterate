@@ -1889,6 +1889,7 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       slug: `stream-worker-consumer-${IMPLEMENTATION}-${runId}`,
     });
     await project.__describe();
+    await project.repo.create();
 
     const processEventWorkerSource = `
       import { IterateWorkerEntrypoint } from "iterate/sdk";
