@@ -30,9 +30,11 @@ import {
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
+import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
+import { TelegramProcessorContract } from "../integrations/telegram-processor-contract.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
@@ -140,8 +142,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // instances addressed at `/integrations/slack/{connection}` (the host stream
   // is this DO's own path stream), where the OAuth connect flow configured
   // its subscription; registering it on every instance is harmless.
-  // Registration is the point: the registry wakes the router by slug; nothing
-  // dials the facet handle directly anymore (status is a journal fold).
+  // Registration routes wake delivery by slug; #slackReads below exposes the
+  // same runner's committed fold to the public processor inspection handle.
   protected readonly slackRouterRegistration = this.#registry.register(
     new SlackProcessor({
       stream: this.#stream,
@@ -170,6 +172,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       },
     }),
   );
+  readonly #slackReads = this.#registry.reads(this.slackRouterRegistration);
 
   // The Telegram webhook router — same hosting shape as the Slack router: it
   // only ever WAKES on `/integrations/telegram/{connection}` instances, where
@@ -183,6 +186,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   );
+  readonly #telegramReads = this.#registry.reads(this.telegramRouterRegistration);
 
   // The email thread router — same hosting shape as the Slack router: it only
   // ever WAKES on the Durable Object instance addressed at
@@ -204,6 +208,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
   /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     return this.#registry.handleAlarm(alarmInfo);
+  }
+
+  get slackProcessor() {
+    return new StreamProcessorRpcTarget(this.#slackReads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(SlackProcessorContract.slug),
+    });
+  }
+
+  get telegramProcessor() {
+    return new StreamProcessorRpcTarget(this.#telegramReads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(TelegramProcessorContract.slug),
+    });
   }
 
   get emailProcessor() {

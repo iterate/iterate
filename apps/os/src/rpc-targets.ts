@@ -145,6 +145,7 @@ import type {
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
+import { rethrowStreamUnavailable } from "./domains/streams/stream-unavailable.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -467,9 +468,21 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // TypeScript infers through the generated DurableObjectStub<StreamDurableObject>
   // type and would publish the DO's internal core-processor/runtime-state
   // implementation instead of the RPC API.
+  //
+  // Plain-data methods `.catch(rethrowStreamUnavailable)`: a stub rejection
+  // caused by the DO incarnation dying mid-call (kill/eviction/deploy reset)
+  // carries workerd's lifecycle flags HERE and nowhere downstream — capnweb
+  // strips them — so this is the one hop that can tag "retryable, the stream
+  // reboots on the next call" (`stream-unavailable: …`) apart from an
+  // app-level rejection. Untagged, a kill mid-append crossed the wire as a
+  // plain `Error("kill requested")` and the browser mirror's retry classifier
+  // had to treat it as fatal (the stream-browser double-kill e2e's old CI
+  // fixme). Stub-returning methods (readEvents, subscribe) stay bare — a
+  // `.catch` would collapse the returned stub — and their data legs already
+  // ride the tagged methods.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events);
+    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -487,7 +500,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.durableObjectStub.getEvent(args);
+    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -498,7 +511,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.durableObjectStub.getEvents(args);
+    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -523,14 +536,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.durableObjectStub.waitForEvent(args);
+    return this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.durableObjectStub.getProcessorRuntimeState(args);
+    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -554,7 +567,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.durableObjectStub.runtimeState();
+    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -3154,7 +3167,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
                 path: `/integrations/slack/${connection}`,
                 projectId: this.props.projectId,
               }),
-            ) as unknown as ProcessorHostStub,
+            ) as unknown as ProjectRouterProcessorHostStub,
+          processorFacade: (host) => host.slackProcessor,
         });
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
@@ -3266,7 +3280,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
                 path: `/integrations/telegram/${connection}`,
                 projectId: this.props.projectId,
               }),
-            ) as unknown as ProcessorHostStub,
+            ) as unknown as ProjectRouterProcessorHostStub,
+          processorFacade: (host) => host.telegramProcessor,
         });
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
@@ -3568,7 +3583,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
             path: EMAIL_INTEGRATION_STREAM_PATH,
             projectId: this.props.projectId,
           }),
-        ) as unknown as ProcessorHostStub,
+        ) as unknown as ProjectRouterProcessorHostStub,
+      processorFacade: (host) => host.emailProcessor,
     });
   }
 
@@ -6448,6 +6464,16 @@ type ProcessorHostStub = {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
 };
 
+/** The Project DO hosts three integration routers alongside its primary
+ * Project processor. Their public handles must select the matching runner-
+ * backed read facade; the default `processor` property intentionally remains
+ * the Project processor. */
+type ProjectRouterProcessorHostStub = ProcessorHostStub & {
+  emailProcessor: PromiseLike<unknown>;
+  slackProcessor: PromiseLike<unknown>;
+  telegramProcessor: PromiseLike<unknown>;
+};
+
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
  *
@@ -6469,21 +6495,27 @@ type ProcessorHostStub = {
  * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
  * exists to close for `ingest`).
  */
-class ProcessorRelayRpcTarget<State>
+class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements WakeableStreamProcessorRpc<State>
 {
   readonly #auth: ItxAuth;
-  readonly #host: () => ProcessorHostStub;
+  readonly #host: () => Host;
+  readonly #processorFacade: (host: Host) => PromiseLike<unknown>;
 
-  constructor(args: { auth: ItxAuth; host: () => ProcessorHostStub }) {
+  constructor(args: {
+    auth: ItxAuth;
+    host: () => Host;
+    processorFacade?: (host: Host) => PromiseLike<unknown>;
+  }) {
     super();
     this.#auth = args.auth;
     this.#host = args.host;
+    this.#processorFacade = args.processorFacade ?? ((host) => host.processor);
   }
 
   async #processor(): Promise<StreamProcessorRpc<State>> {
-    return (await this.#host().processor) as StreamProcessorRpc<State>;
+    return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
   }
 
   async snapshot() {
