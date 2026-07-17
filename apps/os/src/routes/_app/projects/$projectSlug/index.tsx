@@ -56,7 +56,7 @@ function ProjectHomePage() {
     (itx) => itx.liveState,
     (state) => state.reduced,
     [project.id],
-    { address: { projectId: project.id } },
+    { slug: project.id },
   );
   const ready = lifecycle.value?.ready ?? false;
   // Onboarding phase: the completion event has not been appended yet. This

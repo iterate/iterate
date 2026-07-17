@@ -686,15 +686,15 @@ function createStreamRuntime(
   ) {
     if (opts?.evictTransport || error instanceof StepTimeoutError) {
       console.warn(
-        `[stream ${args.streamPath} ${slug}] evicting suspect transport (${step})`,
+        `[stream ${args.streamPath} ${slug}] reporting transport suspicion (${step})`,
         error,
       );
-      // Prefer the suspect connection's own identity-bound evictor (it can
-      // only evict the exact socket the suspicion accumulated against); fall
-      // back to the config-level, age-guarded evictor when the factory
-      // couldn't bind identity or the failing step had no connection yet.
-      const evict = opts?.suspect?.evictTransport ?? transport.resetTransport;
-      evict?.();
+      // Report suspicion to the shared session socket's verifier — the mirror no
+      // longer owns or evicts a socket. Prefer the suspect connection's own
+      // reporter; fall back to the config-level resetTransport when the factory
+      // couldn't wire one or the failing step had no connection yet.
+      const reportSuspicion = opts?.suspect?.reportTransportSuspicion ?? transport.resetTransport;
+      reportSuspicion?.();
     }
     scheduleReconnect(`${step}: ${errorMessage(error)}`, delayMs);
   }

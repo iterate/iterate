@@ -26,6 +26,7 @@ import {
 } from "./stream-subscribers.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
+import { STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX } from "./stream-unavailable.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -371,6 +372,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
       includeEphemeral: args.includeEphemeral,
     });
+  }
+
+  /** The committed head used to pin a recoverable public wait's replay cursor. */
+  getMaxOffset(): number {
+    return this.#coreProcessorState.maxOffset;
   }
 
   // ===========================================================================
@@ -1210,7 +1216,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       settled = true;
       found.reject(
         new Error(
-          `Timed out waiting for stream event after ${args.timeoutMs}ms ` +
+          `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
             `(saw ${seenCount} events; recent types: ${recentTypes.join(", ") || "none"}).`,
         ),
       );

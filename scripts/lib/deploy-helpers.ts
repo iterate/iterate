@@ -165,6 +165,58 @@ export async function assertWorkerSecretAbsent(input: {
 }
 
 /**
+ * Remove an explicit allowlist of retired secrets from an existing Worker and
+ * prove they are absent afterwards. This belongs only in destructive
+ * erase/handover flows; normal deploys use {@link assertWorkerSecretAbsent}
+ * and never mutate credential state.
+ */
+export async function removeWorkerSecrets(input: {
+  cf: (path: string, init?: RequestInit) => Promise<unknown>;
+  workerName: string;
+  secretNames: readonly string[];
+}): Promise<string[]> {
+  const scriptPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/secrets`;
+  let current: z.infer<typeof SecretBindings>;
+  try {
+    current = SecretBindings.parse(await input.cf(scriptPath));
+  } catch (error) {
+    if (error instanceof CloudflareApiError && error.status === 404) {
+      console.log(`Worker not created; no retired secrets to remove: ${input.workerName}`);
+      return [];
+    }
+    throw error;
+  }
+
+  const retired = new Set(input.secretNames);
+  const present = current
+    .map((binding) => binding.name)
+    .filter((name) => retired.has(name))
+    .sort();
+  for (const secretName of present) {
+    await input.cf(`${scriptPath}/${encodeURIComponent(secretName)}`, { method: "DELETE" });
+    console.log(`removed retired Worker secret: ${input.workerName}/${secretName}`);
+  }
+
+  if (present.length === 0) {
+    console.log(`retired Worker secrets absent: ${input.workerName}`);
+    return [];
+  }
+
+  const remaining = SecretBindings.parse(await input.cf(scriptPath));
+  const stale = remaining
+    .map((binding) => binding.name)
+    .filter((name) => retired.has(name))
+    .sort();
+  if (stale.length > 0) {
+    throw new Error(
+      `Retired Worker secrets remain after deletion: ${input.workerName}/${stale.join(", ")}`,
+    );
+  }
+  console.log(`verified retired Worker secrets absent: ${input.workerName}`);
+  return present;
+}
+
+/**
  * Refuse to deploy when the resolved Doppler config contains a forbidden
  * secret. Checking the already-resolved config catches direct and inherited
  * values without issuing a second download or exposing the value.

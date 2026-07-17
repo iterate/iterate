@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { InfoRow } from "~/components/info-row.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoIde } from "~/components/repo-ide/repo-ide.lazy.tsx";
 import {
@@ -36,16 +35,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, repoPathFromSplat(params._splat)),
     }),
-  component: ProjectRepoDetailPage,
+  component: ProjectRepoDetailContent,
 });
-
-function ProjectRepoDetailPage() {
-  return (
-    <ItxBoundary>
-      <ProjectRepoDetailContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectRepoDetailContent() {
   const params = Route.useParams();

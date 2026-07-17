@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -19,16 +18,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, "/"),
     }),
-  component: ProjectStreamsIndexPage,
+  component: ProjectStreamsIndexContent,
 });
-
-function ProjectStreamsIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectStreamsIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectStreamsIndexContent() {
   const { project } = Route.useLoaderData();
