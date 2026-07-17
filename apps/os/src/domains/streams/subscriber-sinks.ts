@@ -312,7 +312,7 @@ export function retainWakeHandshakeResponse(args: {
 export function createSubscriberDial(deps: {
   /** The stream's projectId; `null` = global stream (deployment authority root). */
   projectId: string | null;
-  /** The Durable Object's `ctx.exports` (the in-worker loopback registry). */
+  /** The Durable Object's `ctx.exports`, used only for project-egress webhooks. */
   exports: unknown;
   /** Creates a fresh in-process, stream-delivery-authorized itx root. */
   createAuthorityRoot(): unknown;
@@ -410,7 +410,7 @@ export function createSubscriberDial(deps: {
  * a property step naming the method, and the dial turns it into a CALL step
  * so the invocation happens receiver-bound on the remote side. Reading the
  * method as a property and applying it locally worked in-process but DETACHED
- * the method from `this` across the real loopback RPC hop on deployed workerd
+ * the method from `this` across Workers RPC to the selected remote receiver
  * (thermo round 2, blocker 1: every cross-post delivery failed with "Cannot read
  * properties of undefined (reading 'auth')"). Config validation enforces the
  * tail shape at append time; this re-check protects hand-edited state.

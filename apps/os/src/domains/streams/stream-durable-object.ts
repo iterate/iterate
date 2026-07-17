@@ -111,7 +111,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
-        createAuthorityRoot: () => this.createSubscriberAuthorityRoot(),
+        createAuthorityRoot: () => this.#createSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -135,11 +135,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   #coreProcessorState: CoreProcessorState;
 
   /**
-   * Creates the local root used by stream-configured delivery expressions.
-   * The standalone streams playground overrides this host boundary with its
-   * no-op project worker; OS always uses the narrowly branded delivery auth.
+   * Creates a fresh in-isolate root for one stream delivery evaluation. It
+   * carries narrowly branded delivery auth and owns no Workers RPC lifetime.
    */
-  protected createSubscriberAuthorityRoot(): unknown {
+  #createSubscriberAuthorityRoot(): unknown {
     const auth = streamDeliveryAuthContext();
     return this.name.projectId === null
       ? deploymentItxForInternal({ auth, ctx: this.ctx })
