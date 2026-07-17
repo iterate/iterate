@@ -11,10 +11,6 @@ const ProjectGroupBirthPayload = z.object({
     slug: z.string(),
   }),
 });
-const StreamGroupBirthPayload = z.object({
-  path: z.string(),
-  projectId: z.string(),
-});
 
 /** The ordinary durable subscription appended to every new project stream. */
 export function posthogSubscriptionEvent() {
@@ -77,6 +73,10 @@ function projectGroupIdentifyEvent(args: {
   workerName: string;
 }) {
   const { batch, distinctId, projectId, workerName } = args;
+  // Only the root birth certificate owns group creation. An ID-only update on
+  // every stream birth would replace PostHog's current group property map and
+  // erase this event's name/slug; pre-rollout projects get no compatibility
+  // record here.
   const projectBirth = batch.events.find((event) => {
     if (
       batch.path !== "/" ||
@@ -88,24 +88,11 @@ function projectGroupIdentifyEvent(args: {
     }
     return ProjectGroupBirthPayload.safeParse(event.payload).success;
   });
-  const streamBirth = batch.events.find((event) => {
-    if (
-      event.path !== batch.path ||
-      event.offset !== 1 ||
-      event.type !== "events.iterate.com/stream/created"
-    ) {
-      return false;
-    }
-    const birth = StreamGroupBirthPayload.safeParse(event.payload);
-    return birth.success && birth.data.path === batch.path && birth.data.projectId === projectId;
-  });
-  const event = projectBirth ?? streamBirth;
-  if (event === undefined) return undefined;
+  if (projectBirth === undefined) return undefined;
 
-  const project =
-    projectBirth === undefined ? undefined : ProjectGroupBirthPayload.parse(projectBirth.payload);
+  const project = ProjectGroupBirthPayload.parse(projectBirth.payload);
 
-  const timestamp = normalizeEventTimestamp(event.createdAt);
+  const timestamp = normalizeEventTimestamp(projectBirth.createdAt);
   // PostHog recommends an immutable ID as the group key and uses `name` as
   // the UI label. This value is explicitly the slug at project creation;
   // project slugs can change independently later.
@@ -115,10 +102,7 @@ function projectGroupIdentifyEvent(args: {
     properties: {
       $geoip_disable: true,
       $group_key: projectId,
-      $group_set:
-        project === undefined
-          ? { id: projectId }
-          : { id: projectId, name: project.config.slug, slug: project.config.slug },
+      $group_set: { id: projectId, name: project.config.slug, slug: project.config.slug },
       $group_type: "project",
       $is_server: true,
       distinct_id: distinctId,
@@ -129,7 +113,7 @@ function projectGroupIdentifyEvent(args: {
       workerName,
       projectId,
       batch.path,
-      event.offset,
+      projectBirth.offset,
       timestamp,
     ]),
   };

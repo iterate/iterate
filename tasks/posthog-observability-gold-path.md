@@ -265,12 +265,14 @@ Each occurrence also contains indexed coordinates:
 Every occurrence carries PostHog's first-class `$groups: { project: <id> }`.
 The group key is the immutable project id, following PostHog's requirement that
 group keys be unique identifiers rather than display names. An authentic
-`stream/created` row emits an idempotent `$groupidentify` with that id, ensuring
-the group exists before the stream's grouped occurrences arrive even when the
-project predates this feed. The authentic root `project/created` birth
-certificate enriches that same group with the creation-time slug and that slug
-as PostHog's display `name`, so operators can find one project group by either
-identifier without creating parallel entities.
+root `project/created` birth certificate emits the one `$groupidentify`, with
+both the immutable ID and the creation-time slug (also used as PostHog's
+display `name`), so operators can find one project group by either identifier
+without creating parallel entities. Ordinary `stream/created` rows deliberately
+do not emit ID-only group updates: a later PostHog group payload becomes the
+current property map and would erase the root record's `name` and `slug`.
+Projects born before this rollout remain outside this first-class group-creation
+path; there is no partial compatibility record, lookup, or backfill.
 Project slugs are mutable; synchronizing a later rename needs an authoritative
 directory event and is not falsely claimed by this birth-only feed. The event
 must be first-hand,

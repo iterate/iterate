@@ -184,7 +184,7 @@ describe("first-party PostHog stream integration", () => {
     });
   });
 
-  it("creates the project group when any new stream first exports events", async () => {
+  it("does not overwrite project group metadata from ordinary stream births", async () => {
     const created = streamEvent({
       type: "events.iterate.com/stream/created",
       offset: 1,
@@ -199,16 +199,8 @@ describe("first-party PostHog stream integration", () => {
       fetch: acceptingFetch(requests),
     });
 
-    expect(requests[0]!.batch).toHaveLength(2);
+    expect(requests[0]!.batch).toHaveLength(1);
     expect(requests[0]!.batch[0]).toMatchObject({
-      event: "$groupidentify",
-      properties: {
-        $group_key: "prj_123",
-        $group_set: { id: "prj_123" },
-        $group_type: "project",
-      },
-    });
-    expect(requests[0]!.batch[1]).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
       properties: { stream_event: JSON.parse(JSON.stringify(created)) },
     });
