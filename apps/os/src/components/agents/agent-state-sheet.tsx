@@ -93,7 +93,8 @@ export function AgentStateSheet({
             <SheetTitle>{agentTitle(agent)}</SheetTitle>
             <SheetDescription>Agent state, runtime facts, and subagents.</SheetDescription>
           </SheetHeader>
-          <div className="flex flex-col gap-4 p-4">
+          {/* pr-10 keeps the card's pencil/star clear of the sheet's close X. */}
+          <div className="flex flex-col gap-4 p-4 pr-10">
             <AgentDetailCard
               agent={agent}
               nowMs={nowMs}
