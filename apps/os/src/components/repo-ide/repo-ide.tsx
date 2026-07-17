@@ -30,6 +30,8 @@ import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
 import {
+  fallbackTaskCommitMessage,
+  listRepoTaskChanges,
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
   repoTaskAssignmentHeadPaths,
@@ -38,6 +40,8 @@ import {
 import {
   commitPlan,
   effectiveEntry,
+  fileChangeForEntry,
+  textContentForEntry,
   useWorkingTree,
   workingTreeStore,
   type FileEntry,
@@ -224,6 +228,85 @@ export function RepoIde({
     },
   });
 
+  /** Tasks view: commit only task-path changes, leave unrelated working-tree edits. */
+  const commitTasks = useMutation({
+    mutationFn: async (message: string | undefined) => {
+      const previousTaskContents =
+        queryClient.getQueryData<Record<string, string>>([
+          "itx",
+          "repo-task-files",
+          projectId,
+          repoPath,
+          files.commitOid,
+        ]) ?? {};
+      // One snapshot drives the RPC payload, the generated message, and the
+      // post-commit cleanup, so all three describe the same change set. An
+      // empty message summarizes deterministically — no AI call sits between
+      // an autosave firing and the commit.
+      const listed = listRepoTaskChanges(
+        store.changes,
+        new Set([...headPaths, ...Object.keys(previousTaskContents)]),
+        previousTaskContents,
+      );
+      if (listed.length === 0) return null;
+      const typed = message?.trim() ?? "";
+
+      const result = await itx.repos.get(repoPath).commitFiles({
+        message: typed === "" ? fallbackTaskCommitMessage(listed) : typed,
+        changes: listed.map((change) => fileChangeForEntry(change.path, change.entry)),
+      });
+
+      // Seed the new HEAD's task + file-list caches before clearing overlays so
+      // brand-new tasks never vanish and non-task working edits migrate onto
+      // the post-commit store even if invalidateQueries is still stale.
+      const nextTaskContents = { ...previousTaskContents };
+      const nextPathSet = new Set(headPaths);
+      for (const { path, entry } of listed) {
+        if (entry.type === "delete") {
+          delete nextTaskContents[path];
+          nextPathSet.delete(path);
+          continue;
+        }
+        nextPathSet.add(path);
+        const content = textContentForEntry(entry);
+        if (content !== undefined) nextTaskContents[path] = content;
+      }
+      queryClient.setQueryData<Record<string, string>>(
+        ["itx", "repo-task-files", projectId, repoPath, result.commitOid],
+        nextTaskContents,
+      );
+      queryClient.setQueryData(["itx", "repo-files", projectId, repoPath], {
+        commitOid: result.commitOid,
+        paths: [...nextPathSet].sort((left, right) => left.localeCompare(right)),
+      });
+
+      // Equality-guarded: a slot the user re-edited while the RPC was in
+      // flight no longer matches its committed entry and survives to migrate.
+      store.clearCommitted(new Map(listed.map((change) => [change.path, change.entry])));
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-files", projectId, repoPath],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-log", projectId, repoPath],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-task-files", projectId, repoPath],
+      });
+      store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
+      return result;
+    },
+    onSuccess: (result) => {
+      if (result === null) return;
+      toast.success(
+        result.noChanges
+          ? "No task changes to commit."
+          : `Committed ${result.changedPaths.length} task file(s) (${result.commitOid.slice(0, 7)}).`,
+      );
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not commit tasks.");
+    },
+  });
   const assignTaskAgent = async (task: RepoTask, pendingRenameFromPath?: string) => {
     const assignment = prepareRepoTaskAssignment(task, repoPath);
     const renamedFromPath =
@@ -453,6 +536,8 @@ export function RepoIde({
             onSetWorking={(path, entry) => store.setWorking(path, entry)}
             onDelete={removePath}
             onAssignAgent={assignTaskAgent}
+            commitPending={commitTasks.isPending}
+            onCommitTaskChanges={commitTasks.mutateAsync}
           />
         </Suspense>
       ) : (
