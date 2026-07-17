@@ -33,7 +33,7 @@ import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
-  trustedInternalAuthContext,
+  STREAM_DELIVERY_PRINCIPAL,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -2941,8 +2941,11 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
 
 /** Iterate's fixed first-party PostHog stream receiver. */
 class PostHogIntegrationRpcTarget extends RpcTarget {
-  constructor(readonly props: { projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
+    if (props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
+      throw new Error("PostHog ingestion is available only to stream delivery");
+    }
   }
 
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
@@ -3046,7 +3049,10 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
 
   /** @internal Iterate's fixed first-party event feed. */
   get posthog(): PostHogIntegrationRpcTarget {
-    return new PostHogIntegrationRpcTarget({ projectId: this.props.projectId });
+    return new PostHogIntegrationRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
@@ -5738,8 +5744,8 @@ export function itxForScope(props: {
  * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
  * walks the same shape a project stream's does.
  */
-export function deploymentItxForTrustedInternal(props: { ctx: CfExecutionContext }) {
-  return new SessionRpcTarget({ auth: trustedInternalAuthContext(), ctx: props.ctx });
+export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
+  return new SessionRpcTarget(props);
 }
 
 async function projectProcessorState(projectId: string) {

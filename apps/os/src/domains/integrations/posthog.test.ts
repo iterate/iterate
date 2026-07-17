@@ -186,6 +186,36 @@ describe("first-party PostHog stream integration", () => {
     expect(JSON.stringify(requests[0])).toContain("owner@example.com");
   });
 
+  it("creates the project group when any new stream first exports events", async () => {
+    const created = streamEvent({
+      type: "events.iterate.com/stream/created",
+      offset: 1,
+      idempotencyKey: undefined,
+      metadata: undefined,
+      source: undefined,
+      payload: { projectId: "prj_123", path: "/agents/ada" },
+    });
+    const requests: CapturedRequest[] = [];
+
+    await capturePosthogStreamEventBatch(captureArgs([created]), {
+      fetch: acceptingFetch(requests),
+    });
+
+    expect(requests[0]!.batch).toHaveLength(2);
+    expect(requests[0]!.batch[0]).toMatchObject({
+      event: "$groupidentify",
+      properties: {
+        $group_key: "prj_123",
+        $group_set: { id: "prj_123" },
+        $group_type: "project",
+      },
+    });
+    expect(requests[0]!.batch[1]).toMatchObject({
+      event: POSTHOG_STREAM_EVENT,
+      properties: { stream_event: JSON.parse(JSON.stringify(created)) },
+    });
+  });
+
   it("keeps source identity stable on retry and distinct between deployments", async () => {
     const first: CapturedRequest[] = [];
     const retry: CapturedRequest[] = [];

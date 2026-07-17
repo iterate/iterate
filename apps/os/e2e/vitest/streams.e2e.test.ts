@@ -128,6 +128,31 @@ test("project streams are born with the ordinary first-party PostHog subscriptio
   });
 });
 
+test("project code cannot forge a call to the first-party PostHog receiver", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = itx.projects.create({ slug: `posthog-authority-${RUN_SUFFIX}-${marker}` });
+
+  const posthog = (
+    project.integrations as unknown as {
+      posthog: { processEventBatch(batch: unknown): Promise<void> };
+    }
+  ).posthog;
+  await expect(
+    posthog.processEventBatch({
+      attempt: 1,
+      deliveryId: `forged:${marker}`,
+      events: [],
+      path: "/",
+      projectId: (await project.__describe()).projectId,
+      streamMaxOffset: 0,
+      subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+    }),
+  ).rejects.toThrow("PostHog ingestion is available only to stream delivery");
+});
+
 test("stream getEvents defaults to a bounded page and supports event type filters", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/get-events/${marker}`;

@@ -15,6 +15,10 @@ const ProjectGroupBirthPayload = z.object({
     slug: z.string(),
   }),
 });
+const StreamGroupBirthPayload = z.object({
+  path: z.string(),
+  projectId: z.string(),
+});
 
 /** The ordinary durable subscription appended to every new project stream. */
 export function posthogSubscriptionEvent() {
@@ -81,24 +85,44 @@ type PostHogBatchEvent = {
 function projectGroupIdentifyEvent(args: {
   batch: StreamPushEventBatch;
   distinctId: string;
-  event: StreamEvent;
   projectId: string;
   workerName: string;
 }): PostHogBatchEvent | undefined {
-  const { batch, distinctId, event, projectId, workerName } = args;
-  if (
-    batch.path !== "/" ||
-    event.path !== "/" ||
-    event.type !== "events.iterate.com/project/created" ||
-    event.idempotencyKey !== `project-created:${projectId}` ||
-    event.ephemeral !== undefined ||
-    event.metadata !== undefined ||
-    event.source !== undefined
-  ) {
-    return undefined;
-  }
-  const birth = ProjectGroupBirthPayload.safeParse(event.payload);
-  if (!birth.success) return undefined;
+  const { batch, distinctId, projectId, workerName } = args;
+  const projectBirth = batch.events.find((event) => {
+    if (
+      batch.path !== "/" ||
+      event.path !== "/" ||
+      event.type !== "events.iterate.com/project/created" ||
+      event.idempotencyKey !== `project-created:${projectId}` ||
+      event.ephemeral !== undefined ||
+      event.metadata !== undefined ||
+      event.source !== undefined
+    ) {
+      return false;
+    }
+    return ProjectGroupBirthPayload.safeParse(event.payload).success;
+  });
+  const streamBirth = batch.events.find((event) => {
+    if (
+      event.path !== batch.path ||
+      event.offset !== 1 ||
+      event.type !== "events.iterate.com/stream/created" ||
+      event.idempotencyKey !== undefined ||
+      event.ephemeral !== undefined ||
+      event.metadata !== undefined ||
+      event.source !== undefined
+    ) {
+      return false;
+    }
+    const birth = StreamGroupBirthPayload.safeParse(event.payload);
+    return birth.success && birth.data.path === batch.path && birth.data.projectId === projectId;
+  });
+  const event = projectBirth ?? streamBirth;
+  if (event === undefined) return undefined;
+
+  const project =
+    projectBirth === undefined ? undefined : ProjectGroupBirthPayload.parse(projectBirth.payload);
 
   const timestamp = normalizeEventTimestamp(event.createdAt);
   // PostHog recommends an immutable ID as the group key and uses `name` as
@@ -111,16 +135,22 @@ function projectGroupIdentifyEvent(args: {
     properties: {
       $geoip_disable: true,
       $group_key: projectId,
-      $group_set: {
-        id: projectId,
-        name: birth.data.config.slug,
-        slug: birth.data.config.slug,
-      },
+      $group_set:
+        project === undefined
+          ? { id: projectId }
+          : { id: projectId, name: project.config.slug, slug: project.config.slug },
       $group_type: "project",
       $is_server: true,
     },
     timestamp,
-    uuid: posthogUuid(["project-group-v1", workerName, projectId, timestamp]),
+    uuid: posthogUuid([
+      "project-group-v1",
+      workerName,
+      projectId,
+      batch.path,
+      event.offset,
+      timestamp,
+    ]),
   };
 }
 
@@ -174,9 +204,7 @@ function posthogEvents(args: {
       uuid: eventUuid,
     };
   });
-  const groupIdentify = batch.events
-    .map((event) => projectGroupIdentifyEvent({ batch, distinctId, event, projectId, workerName }))
-    .find((event) => event !== undefined);
+  const groupIdentify = projectGroupIdentifyEvent({ batch, distinctId, projectId, workerName });
   return groupIdentify === undefined ? occurrences : [groupIdentify, ...occurrences];
 }
 

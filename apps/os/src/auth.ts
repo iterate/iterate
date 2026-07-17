@@ -2,12 +2,14 @@
 //
 // The whole model is one line: you are either an admin (may reach any project)
 // OR you hold a list of project ids and may reach exactly those. There is no
-// per-capability gating anywhere downstream — once the connect door lets you
-// into a project context, everything inside it is confined BY CONSTRUCTION:
+// product-capability gating anywhere downstream — once the connect door lets
+// you into a project context, everything inside it is confined BY CONSTRUCTION:
 // host capabilities name only that project, agents reach their project through
 // an explicit host-owned member, and public durable addresses are only dynamic
 // worker/facet descriptions. So authority lives in the ItxAuthContext every
-// authenticated RPC target carries, and nowhere else.
+// authenticated RPC target carries. The one non-product lane is the
+// host-minted `stream-delivery` principal: it makes transport receivers
+// unreachable from project code without changing project authorization.
 //
 // Credential lanes (see resolveItxAuth):
 //   from-server-cookie — the browser lane: a short-lived, signed operator
@@ -177,6 +179,13 @@ class ItxAuthContext implements ItxAuth {
 
 export function trustedInternalAuthContext(): ItxAuthContext {
   return new ItxAuthContext({ isAdmin: true, principal: "trusted-internal" });
+}
+
+/** Authority minted only while the stream spine evaluates a delivery expression. */
+export const STREAM_DELIVERY_PRINCIPAL = "stream-delivery";
+
+export function streamDeliveryAuthContext(): ItxAuthContext {
+  return new ItxAuthContext({ isAdmin: true, principal: STREAM_DELIVERY_PRINCIPAL });
 }
 
 export function userPrincipalOf(auth: ItxAuth): UserPrincipal | undefined {
