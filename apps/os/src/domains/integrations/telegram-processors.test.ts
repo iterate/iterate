@@ -113,6 +113,37 @@ describe("TelegramProcessor (webhook router)", () => {
     expect(network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`)).toEqual([]);
   });
 
+  it("does not let a denied /new command rotate an allowed user's live chat session", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const processor = newTelegramRouter({ stream, path: stream.path, projectId: "prj_1" });
+    const driver = driveProcessor(processor, stream);
+    await stream.append(
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({ date: 1000, messageId: 1, text: "/new" }),
+      },
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: ["999"] },
+      },
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({ date: 2000, messageId: 2, text: "/new" }),
+      },
+    );
+
+    await driver.deliver();
+
+    expect(driver.state.sessionsByChat[`chat-${CHAT_ID}`]).toEqual([
+      {
+        date: 1000,
+        messageId: 1,
+        sessionPath: `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`,
+      },
+    ]);
+  });
+
   it("denies updates without a human sender identity", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);

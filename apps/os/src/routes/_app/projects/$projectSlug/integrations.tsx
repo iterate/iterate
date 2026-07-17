@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -414,17 +414,19 @@ function ProjectIntegrationsContent() {
           <AccountConnectionsItem />
         </ItemGroup>
         {telegramAccessConnection === null ? null : (
-          <TelegramAccessSheet
-            connection={telegramAccessConnection}
-            onOpenChange={(open) => {
-              if (open) return;
-              void navigate({
-                replace: true,
-                search: (previous) => ({ ...previous, telegramAccess: undefined }),
-              });
-            }}
-            projectSlug={project.slug}
-          />
+          <Suspense fallback={<TelegramAccessSheetLoading />}>
+            <TelegramAccessSheet
+              connection={telegramAccessConnection}
+              onOpenChange={(open) => {
+                if (open) return;
+                void navigate({
+                  replace: true,
+                  search: (previous) => ({ ...previous, telegramAccess: undefined }),
+                });
+              }}
+              projectSlug={project.slug}
+            />
+          </Suspense>
         )}
       </section>
 
@@ -808,6 +810,22 @@ function TelegramAccessSheet({
             </Button>
           </SheetFooter>
         </form>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function TelegramAccessSheetLoading() {
+  return (
+    <Sheet open>
+      <SheetContent side="right">
+        <SheetHeader>
+          <SheetTitle>Telegram user access</SheetTitle>
+          <SheetDescription>Loading this bot's access policy…</SheetDescription>
+        </SheetHeader>
+        <div className="p-4">
+          <Skeleton className="h-40 w-full" />
+        </div>
       </SheetContent>
     </Sheet>
   );

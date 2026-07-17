@@ -256,6 +256,14 @@ export function buildTelegramAccessSettingsUrl(input: {
   return url.toString();
 }
 
+/** Ids ride stream paths and processor state as strings; the Bot API wants
+ * Telegram's original integers back wherever JavaScript can represent them
+ * safely. */
+export function coerceTelegramId(id: string): number | string {
+  const numeric = Number(id);
+  return Number.isSafeInteger(numeric) ? numeric : id;
+}
+
 /**
  * The routed agent stream path for one Slack thread of one named connection.
  * Stable wire shape: `/agents/slack/{connection}/{channel}/ts-{threadTs}`.

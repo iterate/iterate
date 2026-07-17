@@ -6,7 +6,12 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
-import { readRecord, telegramChatStreamPath, webhookAckIsFresh } from "./utils.ts";
+import {
+  coerceTelegramId,
+  readRecord,
+  telegramChatStreamPath,
+  webhookAckIsFresh,
+} from "./utils.ts";
 import {
   TelegramProcessorContract,
   type TelegramProcessorState,
@@ -53,6 +58,8 @@ export class TelegramProcessor extends StreamProcessor<
         // the exact same thread model with no extra event type.
         const connection = state.birthCertificate?.config.connection;
         if (connection === undefined) return state;
+        const senderId = telegramSenderIdFromUpdate(event.payload.body);
+        if (senderId === undefined || !state.allowedUserIds.includes(senderId)) return state;
         const sessionStart = telegramSessionStartFromUpdate(event.payload.body, {
           connection,
         });
@@ -144,7 +151,7 @@ export class TelegramProcessor extends StreamProcessor<
           await this.deps.sendTelegramMessage({
             connection,
             body: {
-              chat_id: coerceTelegramApiId(target.chatId),
+              chat_id: coerceTelegramId(target.chatId),
               text: telegramAccessDeniedMessage({ settingsUrl, userId: senderId }),
             },
           });
@@ -406,11 +413,6 @@ function telegramSenderIdFromUpdate(body: unknown): string | undefined {
     readRecord(readRecord(update?.chat_join_request)?.from);
   if (sender?.is_bot === true) return undefined;
   return readTelegramId(sender?.id);
-}
-
-function coerceTelegramApiId(id: string): number | string {
-  const numeric = Number(id);
-  return Number.isSafeInteger(numeric) && String(numeric) === id ? numeric : id;
 }
 
 function telegramAccessDeniedMessage(input: { settingsUrl: string; userId: string }): string {
