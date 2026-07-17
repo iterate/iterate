@@ -484,6 +484,93 @@ describe("first-party PostHog stream integration", () => {
     expect(request.batch[1]!.properties).not.toHaveProperty("stream_event");
   });
 
+  it("identifies the immutable project id and slug from the authentic project birth", async () => {
+    const created = streamEvent({
+      type: "events.iterate.com/project/created",
+      path: "/",
+      offset: 3,
+      idempotencyKey: "project-created:prj_123",
+      metadata: undefined,
+      source: undefined,
+      payload: {
+        config: {
+          creatorEmail: "private@example.com",
+          onboardingActive: true,
+          slug: "gold-path",
+        },
+      },
+    });
+    const firstArgs = captureArgs([created]);
+    firstArgs.batch.path = "/";
+    const first: CapturedRequest[] = [];
+    const retry: CapturedRequest[] = [];
+
+    await capturePosthogStreamEventBatch(firstArgs, { fetch: acceptingFetch(first) });
+    await capturePosthogStreamEventBatch(firstArgs, { fetch: acceptingFetch(retry) });
+
+    expect(first[0]!.batch).toHaveLength(2);
+    expect(first[0]!.batch[0]).toEqual({
+      distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
+      event: "$groupidentify",
+      properties: {
+        $geoip_disable: true,
+        $group_key: "prj_123",
+        $group_set: { id: "prj_123", name: "gold-path", slug: "gold-path" },
+        $group_type: "project",
+        $is_server: true,
+      },
+      timestamp: created.createdAt,
+      uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    expect(first[0]!.batch[1]).toMatchObject({
+      event: POSTHOG_STREAM_EVENT,
+      properties: { $groups: { project: "prj_123" }, stream_event_offset: 3 },
+    });
+    expect(JSON.stringify(first[0])).not.toContain("private@example.com");
+    expect(first[0]!.batch[0]).toEqual(retry[0]!.batch[0]);
+  });
+
+  it("does not infer group properties from lookalike project events", async () => {
+    const authentic = streamEvent({
+      type: "events.iterate.com/project/created",
+      path: "/",
+      offset: 3,
+      idempotencyKey: "project-created:prj_123",
+      metadata: undefined,
+      source: undefined,
+      payload: { config: { slug: "gold-path" } },
+    });
+    const lookalikes: StreamEvent[] = [
+      { ...authentic, path: "/other" },
+      { ...authentic, idempotencyKey: "forged" },
+      { ...authentic, metadata: { forged: true } },
+      {
+        ...authentic,
+        source: {
+          crossPostedFrom: [
+            {
+              subscriptionKey: "forged",
+              createdAt: authentic.createdAt,
+              offset: 1,
+              path: "/other",
+              projectId: "prj_123",
+              type: authentic.type,
+            },
+          ],
+        },
+      },
+      { ...authentic, ephemeral: true },
+    ];
+
+    for (const event of lookalikes) {
+      const args = captureArgs([event]);
+      args.batch.path = "/";
+      const requests: CapturedRequest[] = [];
+      await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(requests) });
+      expect(requests[0]!.batch.map((item) => item.event)).toEqual([POSTHOG_STREAM_EVENT]);
+    }
+  });
+
   it("isolates the operational identity and limiter key by deployment and project", async () => {
     const requests: CapturedRequest[] = [];
     const captureFetch = acceptingFetch(requests);

@@ -14,6 +14,11 @@ export const POSTHOG_STREAM_EVENT = "iterate stream event committed";
 const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/batch/";
 const POSTHOG_INDEXED_TEXT_MAX_CHARS = 1_024;
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
+const ProjectGroupBirthPayload = z.object({
+  config: z.object({
+    slug: z.string().trim().min(1).max(50),
+  }),
+});
 
 const CanonicalPosthogSubscriptionPayload = z.strictObject({
   subscriptionKey: z.literal(POSTHOG_SUBSCRIPTION_KEY),
@@ -242,6 +247,48 @@ type PostHogBatchEvent = {
   uuid: string;
 };
 
+function projectGroupIdentifyEvent(args: {
+  batch: StreamPushEventBatch;
+  distinctId: string;
+  event: StreamEvent;
+  projectId: string;
+  workerName: string;
+}): PostHogBatchEvent | undefined {
+  const { batch, distinctId, event, projectId, workerName } = args;
+  if (
+    batch.path !== "/" ||
+    event.path !== "/" ||
+    event.type !== "events.iterate.com/project/created" ||
+    event.idempotencyKey !== `project-created:${projectId}` ||
+    event.ephemeral !== undefined ||
+    event.metadata !== undefined ||
+    event.source !== undefined
+  ) {
+    return undefined;
+  }
+  const birth = ProjectGroupBirthPayload.safeParse(event.payload);
+  if (!birth.success) return undefined;
+
+  const timestamp = canonicalEventTimestamp(event.createdAt);
+  return {
+    distinct_id: distinctId,
+    event: "$groupidentify",
+    properties: {
+      $geoip_disable: true,
+      $group_key: projectId,
+      $group_set: {
+        id: projectId,
+        name: birth.data.config.slug,
+        slug: birth.data.config.slug,
+      },
+      $group_type: "project",
+      $is_server: true,
+    },
+    timestamp,
+    uuid: posthogUuid(["project-group-v1", workerName, projectId, timestamp]),
+  };
+}
+
 function posthogEvents(args: {
   batch: StreamPushEventBatch;
   projectId: string;
@@ -256,7 +303,7 @@ function posthogEvents(args: {
   // Stream paths may be unbounded and user-controlled, so expose only a
   // stable opaque identifier rather than copying the path into PostHog.
   const streamId = posthogUuid(["stream-v1", workerName, projectId, batch.path]);
-  return batch.events.map((event) => {
+  const occurrences = batch.events.map((event) => {
     const createdAt = canonicalEventTimestamp(event.createdAt);
     // Event types are operational schema identifiers, including custom
     // project schemas. Export the exact bounded identifier for every row;
@@ -297,6 +344,10 @@ function posthogEvents(args: {
       uuid: eventUuid,
     };
   });
+  const groupIdentify = batch.events
+    .map((event) => projectGroupIdentifyEvent({ batch, distinctId, event, projectId, workerName }))
+    .find((event) => event !== undefined);
+  return groupIdentify === undefined ? occurrences : [groupIdentify, ...occurrences];
 }
 
 /**

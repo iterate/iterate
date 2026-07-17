@@ -262,12 +262,15 @@ Each occurrence contains bounded, reviewed coordinates:
 
 Every occurrence carries PostHog's first-class `$groups: { project: <id> }`.
 The group key is the immutable project id, following PostHog's requirement that
-group keys be unique identifiers rather than mutable names. A slug is not a
-second group key or alias. This feed deliberately does not emit `$groupidentify`
-from independent stream deliveries: those deliveries are unordered, so cached
-slug values could overwrite newer group metadata. If project name/slug
-properties are added, one authoritative project-lifecycle hook must update the
-same id-keyed group when the directory changes.
+group keys be unique identifiers rather than display names. The authentic root
+`project/created` birth certificate additionally emits one idempotent
+`$groupidentify` occurrence for that same key. Its `$group_set` records the id
+and immutable canonical slug (also as PostHog's conventional `name` display
+property), so operators can find one project group by either identifier. The
+event must be first-hand, durable, unannotated, on `/`, and carry the reserved
+`project-created:<id>` idempotency key; lookalike or cross-posted events cannot
+write group properties. No directory lookup, mutable alias, or per-batch group
+update exists, and creator email or other birth payload fields are never sent.
 
 PostHog only links identified events to groups, so every event uses one stable
 synthetic operational identity per deployment/project. This creates no
