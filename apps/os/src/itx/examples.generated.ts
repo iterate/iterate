@@ -140,10 +140,11 @@ if (vars.action === "list") {
   });
   const active = new Map();
   for (const event of events) {
-    const id = typeof event.payload.id === "string" ? event.payload.id : "";
+    const payload = event.payload || {};
+    const id = typeof payload.id === "string" ? payload.id : "";
     if (!id) continue;
     if (event.type === "events.iterate.com/location-reminder/requested") {
-      active.set(id, { ...event.payload, status: "requested" });
+      active.set(id, { ...payload, status: "requested" });
     }
     if (
       event.type === "events.iterate.com/location-reminder/cancelled" ||
@@ -152,13 +153,13 @@ if (vars.action === "list") {
       active.delete(id);
     }
     if (event.type === "events.iterate.com/location-reminder/armed" && active.has(id)) {
-      active.set(id, { ...active.get(id), ...event.payload, status: "armed" });
+      active.set(id, { ...active.get(id), ...payload, status: "armed" });
     }
     if (
       event.type === "events.iterate.com/location-reminder/arming-failed" &&
       active.has(id)
     ) {
-      active.set(id, { ...active.get(id), ...event.payload, status: "failed" });
+      active.set(id, { ...active.get(id), ...payload, status: "failed" });
     }
   }
   return { reminders: [...active.values()] };
