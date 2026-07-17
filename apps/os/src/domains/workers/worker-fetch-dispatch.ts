@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
+import { OVERLAY_OPT_OUT_HEADER, workerBuildingPageHtml } from "./worker-serve-overlay.ts";
 
 /**
  * The fetch lane: how HTTP (and only HTTP) reaches dynamic workers.
@@ -56,32 +57,20 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
  */
 export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
 
-/** The one cold-build response every fetch-lane hop answers with: an
- * auto-refreshing page for browsers, retry-after + the marker header for
- * programmatic clients. */
+/** The one cold-build response every fetch-lane hop answers with: a polling
+ * page for browsers (meta refresh for no-JS clients), retry-after + the
+ * marker header for programmatic clients. */
 export function workerBuildingResponse(): Response {
-  return new Response(
-    `<!doctype html>
-      <html>
-        <head>
-          <meta http-equiv="refresh" content="3" />
-          <title>Building…</title>
-        </head>
-        <body>
-          <main data-spinner="true">
-            <p>Your worker is building — this page retries automatically.</p>
-          </main>
-        </body>
-      </html>`,
-    {
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "retry-after": "2",
-        [WORKER_BUILDING_HEADER]: "1",
-      },
-      status: 503,
+  return new Response(workerBuildingPageHtml(), {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "retry-after": "2",
+      [WORKER_BUILDING_HEADER]: "1",
+      // Platform chrome, not a worker page — the overlay stays out.
+      [OVERLAY_OPT_OUT_HEADER]: "1",
     },
-  );
+    status: 503,
+  });
 }
 
 export function withWorkerFetchDispatchHeader(

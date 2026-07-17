@@ -13,6 +13,7 @@ import {
   isWebSocketUpgradeRequest,
   withWorkerFetchDispatchHeader,
 } from "./worker-fetch-dispatch.ts";
+import { withWorkerServeInfo } from "./worker-serve-overlay.ts";
 import {
   loadResolvedWorker,
   resolveCachedArtifact,
@@ -149,14 +150,26 @@ export class DynamicWorkerRunner {
     traceRole?: DynamicWorkerTraceRole;
   }): Promise<Response> {
     return this.#trace(ref, "fetch", traceRole, async (span) => {
-      const response =
-        ref.type === "stateful"
-          ? await (
-              env.WORKER.getByName(
-                statefulWorkerDurableObjectName(this.#projectId, ref),
-              ) as unknown as Fetcher
-            ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }))
-          : await (await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs)).fetch(request);
+      let response: Response;
+      if (ref.type === "stateful") {
+        // Stateful responses only get the header STRIPPED (below): the outer
+        // DO owns facet versioning, and this hop cannot know which build the
+        // facet is actually running.
+        response = await (
+          env.WORKER.getByName(
+            statefulWorkerDurableObjectName(this.#projectId, ref),
+          ) as unknown as Fetcher
+        ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
+        response = withWorkerServeInfo(response, undefined);
+      } else {
+        const { resolved, worker } = await this.#load(ref, buildBudgetMs);
+        const entrypoint = worker.getEntrypoint(ref.entrypoint, {
+          props: ref.props ?? {},
+        }) as Fetcher;
+        // The serve header is trusted platform output on the fetch lane —
+        // stamped (and any user-set value dropped) at this authority boundary.
+        response = withWorkerServeInfo(await entrypoint.fetch(request), resolved.serveInfo);
+      }
       span.setAttribute("http.response.status_code", response.status);
       return response;
     });

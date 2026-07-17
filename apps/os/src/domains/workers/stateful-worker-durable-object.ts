@@ -3,7 +3,8 @@ import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import { takeWorkerFetchDispatch, workerBuildingResponse } from "./worker-fetch-dispatch.ts";
-import { isWorkerBuildInProgressError } from "./worker-loader.ts";
+import { isWorkerBuildFailedError, isWorkerBuildInProgressError } from "./worker-loader.ts";
+import { workerBuildFailedResponse } from "./worker-serve-overlay.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
@@ -58,11 +59,12 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     try {
       facet = await this.#facet(taken.dispatch.ref, taken.dispatch.buildBudgetMs);
     } catch (error) {
-      // Answer the building case HERE rather than relying on the error name
-      // surviving the Durable Object fetch hop back to the dispatching
-      // entrypoint — same retryable building page every fetch-lane hop serves.
-      if (!isWorkerBuildInProgressError(error)) throw error;
-      return workerBuildingResponse();
+      // Answer the building/failed cases HERE rather than relying on the
+      // error name surviving the Durable Object fetch hop back to the
+      // dispatching entrypoint — same pages every fetch-lane hop serves.
+      if (isWorkerBuildInProgressError(error)) return workerBuildingResponse();
+      if (isWorkerBuildFailedError(error)) return workerBuildFailedResponse(error);
+      throw error;
     }
     return await (facet as Fetcher).fetch(taken.request);
   }

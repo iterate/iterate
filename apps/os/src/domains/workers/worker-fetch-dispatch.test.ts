@@ -53,8 +53,13 @@ describe("worker fetch dispatch header", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get(WORKER_BUILDING_HEADER)).toBe("1");
     expect(response.headers.get("retry-after")).not.toBeNull();
+    // Platform chrome never gets the overlay injected on top.
+    expect(response.headers.get("x-iterate-overlay")).toBe("1");
     const body = await response.text();
-    expect(body).toContain('http-equiv="refresh"');
+    // JS clients poll for the building marker to clear; no-JS clients fall
+    // back to the meta refresh.
+    expect(body).toContain(WORKER_BUILDING_HEADER);
+    expect(body).toContain('<noscript><meta http-equiv="refresh"');
     expect(body).toContain('data-spinner="true"');
   });
 

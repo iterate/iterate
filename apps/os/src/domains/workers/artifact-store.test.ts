@@ -83,4 +83,26 @@ describe("KvWorkerBuildArtifactStore", () => {
       expect(key.startsWith(`${PREFIX}/`)).toBe(true);
     }
   });
+
+  it("round-trips a build failure with a short TTL", async () => {
+    const kv = new FakeKv();
+    const failure = { at: "2026-07-17T00:00:00.000Z", commitOid: "c0ffee", message: "boom" };
+    expect(await store(kv).getBuildFailure("abc123")).toBeNull();
+    await store(kv).putBuildFailure("abc123", failure);
+    expect(await store(kv).getBuildFailure("abc123")).toEqual(failure);
+    // Deliberately short-lived: a transient failure must heal on its own.
+    expect(kv.putTtls[0]).toBeLessThanOrEqual(10 * 60);
+    expect(kv.putTtls[0]).toBeGreaterThan(0);
+  });
+
+  it("round-trips the last-good pointer with cache-lifetime TTL", async () => {
+    const kv = new FakeKv();
+    const record = { at: "2026-07-17T00:00:00.000Z", buildKey: "abc123", commitOid: "c0ffee" };
+    expect(await store(kv).getLastGood("worker-x")).toBeNull();
+    await store(kv).putLastGood("worker-x", record);
+    expect(await store(kv).getLastGood("worker-x")).toEqual(record);
+    // The pointer must not outlive the artifacts it can point at, and must
+    // not be immortal either.
+    expect(kv.putTtls[0]).toBeGreaterThan(0);
+  });
 });
