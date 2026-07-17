@@ -157,7 +157,7 @@ function SessionPrewarm() {
  * no `<ProjectScope>` above it (the sidebar, ⌘K, admin) — the scope is only the
  * ambient-slug convenience.
  */
-export function ProjectScope({ slug, children }: { slug: string; children: ReactNode }) {
+export function ProjectScope({ slug, children }: { slug: string; children?: ReactNode }) {
   return createElement(
     ProjectScopeContext,
     { value: slug },

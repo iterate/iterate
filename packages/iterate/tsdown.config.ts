@@ -4,6 +4,13 @@ export default defineConfig([
   {
     entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
+    // react + react-query are PEERS for the library entries (the consumer's
+    // app must own one copy), but the published CLI/TUI is its own process and
+    // must not depend on a package manager auto-installing peers — inline them
+    // into this bundle only.
+    deps: {
+      alwaysBundle: ["react", "@tanstack/react-query"],
+    },
     dts: {
       resolver: "tsc",
     },

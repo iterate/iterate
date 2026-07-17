@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 /** @jsxImportSource @opentui/react */
-// oxlint-disable react/only-export-components -- CLI entrypoint, not a Vite Fast Refresh module.
 /**
  * React/OpenTUI terminal chat with one project agent.
  *
@@ -10,57 +9,31 @@
  * `useItxSubscription` owns reconnect, watchdog, and re-subscribe recovery),
  * folding stream events through the shared agent-ui reducer
  * (@iterate-com/ui). Sends go through `agent.message` on the same socket.
- * This file owns only terminal runtime state and rendering — OpenTUI is just
- * another React renderer, so the hooks (TanStack Query included) run here
- * unchanged.
+ * This file owns the app shell and terminal runtime state; the presentational
+ * components live in ./chat-view.tsx. OpenTUI is just another React renderer,
+ * so the hooks (TanStack Query included) run here unchanged.
  */
-import { StyledText, bg, fg } from "@opentui/core";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type {
-  AgentUiActivity,
-  AgentUiItem,
-  AgentUiMessageItem,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
   configureIterateSession,
   connectItx,
   useItxSubscription,
   type Itx,
-  type ItxSubscriptionStatus,
 } from "../itx/itx-react.ts";
+import {
+  ONBOARDING_AGENT_PATH,
+  onboardingAgentCreateInput,
+} from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
 import { resolveItxAuth } from "./itx-auth.ts";
-import {
-  formatActivitySummary,
-  formatLiveActivityLabel,
-  formatStepLine,
-  streamingTail,
-} from "./feed-format.ts";
+import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
+import { COLORS } from "./chat-colors.ts";
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
 }
-
-const COLORS = {
-  bg: "#0b0f14",
-  surface: "#27272a",
-  border: "#3f3f46",
-  accent: "#22c55e",
-  warning: "#facc15",
-  danger: "#ef4444",
-  text: "#e5e7eb",
-  textSecondary: "#9ca3af",
-  textBody: "#d1d5db",
-  textMuted: "#6b7280",
-  agent: "#a78bfa",
-} as const;
-
-// The onboarding agent is born server-side at project creation with its own
-// system prompt; the TUI must never birth a prompt-less stand-in for it. The
-// path is public contract (also the `iterate chat` default agent path).
-const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -86,33 +59,40 @@ function publishFeed() {
 }
 
 /**
- * Establish the live agent feed on the shared socket: ensure the agent exists
- * (explicit birth only for scratch agents — see ONBOARDING_AGENT_PATH), then
- * subscribe from the feed model's resume cursor. useItxSubscription re-runs
- * this on every recovery, so the cursor read is per-(re)subscribe and replay
- * overlap is folded out by the model's offset dedupe.
+ * Establish the live agent feed on the shared socket: ensure the agent exists,
+ * then subscribe from the feed model's resume cursor. The onboarding agent is
+ * deliberately NOT born at project bootstrap (a birth costs a real LLM turn) —
+ * opening its chat births it, in the web dashboard and here alike, with the
+ * same explicit birth batch. useItxSubscription re-runs this on every
+ * recovery, so the cursor read is per-(re)subscribe and replay overlap is
+ * folded out by the model's offset dedupe.
  */
 async function subscribeAgentFeed(itx: Itx) {
-  const snapshot = await itx.agents.get(args.agentPath).processor.snapshot();
-  if (snapshot.state.birthCertificate === null) {
-    if (args.agentPath === ONBOARDING_AGENT_PATH) {
-      throw new Error(
-        "this project's onboarding agent has not been born yet — open the project in the dashboard once, then retry",
+  // ONE agent path stub per (re)subscribe cycle, released once the
+  // subscription handle exists — on the process-long keeper socket an
+  // undisposed stub per recovery cycle would grow the import table forever.
+  const agent = itx.agents.get(args.agentPath);
+  try {
+    const snapshot = await agent.processor.snapshot();
+    if (snapshot.state.birthCertificate === null) {
+      await agent.create(
+        args.agentPath === ONBOARDING_AGENT_PATH ? onboardingAgentCreateInput(args.projectId) : {},
       );
     }
-    await itx.agents.get(args.agentPath).create({});
+    return await agent.stream.subscribe({
+      processEventBatch: (batch) => {
+        if (model.applyEvents(batch.events)) publishFeed();
+      },
+      replayAfterOffset: model.snapshot().lastOffset,
+      subscriber: { description: "iterate chat TUI" },
+    });
+  } finally {
+    (agent as Partial<Disposable>)[Symbol.dispose]?.();
   }
-  return await itx.agents.get(args.agentPath).stream.subscribe({
-    processEventBatch: (batch) => {
-      if (model.applyEvents(batch.events)) publishFeed();
-    },
-    replayAfterOffset: model.snapshot().lastOffset,
-    subscriber: { description: "iterate chat TUI" },
-  });
 }
 
 // ---------------------------------------------------------------------------
-// Rendering
+// The app shell
 // ---------------------------------------------------------------------------
 
 function AgentChatApp() {
@@ -124,6 +104,25 @@ function AgentChatApp() {
     () => feedSnapshot,
   );
   const subscription = useItxSubscription(subscribeAgentFeed, [], { slug: args.projectId });
+  // The browser parks non-transport subscribe failures behind refresh buttons
+  // and page reloads; a terminal has neither, and the TUI's failures here are
+  // overwhelmingly transient (claims catching up right after project creation,
+  // a Durable Object rebooting through a deploy). Retry on the old TUI's
+  // linear backoff. A parked terminal-auth failure just re-reads the same
+  // rejected promise — the keeper dials nothing while parked — so looping is
+  // harmless there too.
+  const retryAttemptRef = useRef(0);
+  useEffect(() => {
+    if (subscription.status === "live") {
+      retryAttemptRef.current = 0;
+      return;
+    }
+    if (subscription.status !== "error") return;
+    retryAttemptRef.current += 1;
+    const delay = Math.min(1_000 * retryAttemptRef.current, 15_000);
+    const timer = setTimeout(subscription.refresh, delay);
+    return () => clearTimeout(timer);
+  }, [subscription.status, subscription.refresh]);
   const [notice, setNotice] = useState("");
   const [composerValue, setComposerValue] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
@@ -144,7 +143,12 @@ function AgentChatApp() {
       clearComposer();
       setNotice("sending…");
       connectItx(args.projectId)
-        .then((itx) => itx.agents.get(args.agentPath).message(message))
+        .then((itx) => {
+          const agent = itx.agents.get(args.agentPath);
+          return Promise.resolve(agent.message(message)).finally(() =>
+            (agent as Partial<Disposable>)[Symbol.dispose]?.(),
+          );
+        })
         .then(() => setNotice(""))
         .catch((error: unknown) => {
           setNotice(`send failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -156,6 +160,7 @@ function AgentChatApp() {
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={COLORS.bg}>
       <ChatHeader
+        title={`${args.projectId} ${args.agentPath}`}
         status={subscription.status}
         detail={subscription.error}
         notice={notice}
@@ -212,183 +217,6 @@ function AgentChatApp() {
       </box>
     </box>
   );
-}
-
-function ChatHeader(props: {
-  status: ItxSubscriptionStatus;
-  detail: string | undefined;
-  notice: string;
-  eventCount: number;
-}) {
-  const statusLabel =
-    props.status === "live"
-      ? "live"
-      : props.status === "connecting"
-        ? "connecting"
-        : `error (${props.detail ?? "unknown"})`;
-  const statusColor =
-    props.status === "live"
-      ? COLORS.accent
-      : props.status === "connecting"
-        ? COLORS.warning
-        : COLORS.danger;
-  const meta = [
-    `${props.eventCount} event${props.eventCount === 1 ? "" : "s"}`,
-    statusLabel,
-    props.notice,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <box
-      width="100%"
-      height={3}
-      border
-      borderStyle="single"
-      borderColor={COLORS.border}
-      backgroundColor={COLORS.surface}
-      flexDirection="row"
-      paddingLeft={1}
-      paddingRight={1}
-      gap={1}
-    >
-      <text width={6} content={getBrandMarkText()} />
-      <text flexGrow={1} fg={COLORS.text} content={`${args.projectId} ${args.agentPath}`} />
-      <text fg={COLORS.textSecondary} content={meta} />
-      <text width={2} fg={statusColor}>
-        ●
-      </text>
-    </box>
-  );
-}
-
-function FeedItem(props: { item: AgentUiItem }) {
-  const item = props.item;
-  if (item.kind === "activity") return <SettledActivity activity={item} />;
-  if (item.kind === "user" || item.kind === "assistant") return <Message item={item} />;
-  if (item.kind === "child-stream-created") {
-    return <text fg={COLORS.textMuted}>✦ child stream created: {item.childPath}</text>;
-  }
-  return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
-}
-
-function Message(props: { item: AgentUiMessageItem }) {
-  const isUser = props.item.kind === "user";
-  return (
-    <box flexDirection="column">
-      <text fg={isUser ? COLORS.accent : COLORS.agent}>
-        {isUser ? "you ›" : "agent ›"}
-        <span fg={COLORS.textMuted}> {formatClock(props.item.timestampMs)}</span>
-      </text>
-      <text fg={COLORS.textBody}>{props.item.text}</text>
-    </box>
-  );
-}
-
-function SettledActivity(props: { activity: AgentUiActivity }) {
-  return (
-    <box flexDirection="column">
-      <text fg={COLORS.textMuted}>✦ {formatActivitySummary(props.activity)}</text>
-      {props.activity.steps.map((step) => (
-        <text key={step.id} fg={COLORS.textMuted}>
-          {"  "}· {formatStepLine(step)}
-        </text>
-      ))}
-    </box>
-  );
-}
-
-/** Shared 100ms clock for live "Running code 0.9s" — useSyncExternalStore,
- * not useState+setInterval, so the snapshot is stable between ticks. */
-let liveCodeClockNow = Date.now();
-const liveCodeClockListeners = new Set<() => void>();
-let liveCodeClockTimer: ReturnType<typeof setInterval> | undefined;
-
-function subscribeLiveCodeClock(onStoreChange: () => void) {
-  liveCodeClockListeners.add(onStoreChange);
-  liveCodeClockNow = Date.now();
-  if (liveCodeClockTimer == null) {
-    liveCodeClockTimer = setInterval(() => {
-      liveCodeClockNow = Date.now();
-      for (const listener of liveCodeClockListeners) listener();
-    }, 100);
-  }
-  // Notify after subscribe returns so the first snapshot is current wall time
-  // (updating the scalar alone does not re-render useSyncExternalStore).
-  // Skip if already unsubscribed (Strict Mode remount / codeRunning flip).
-  queueMicrotask(() => {
-    if (liveCodeClockListeners.has(onStoreChange)) onStoreChange();
-  });
-  return () => {
-    liveCodeClockListeners.delete(onStoreChange);
-    if (liveCodeClockListeners.size === 0 && liveCodeClockTimer != null) {
-      clearInterval(liveCodeClockTimer);
-      liveCodeClockTimer = undefined;
-    }
-  };
-}
-
-function getLiveCodeClockSnapshot() {
-  // Idle: refresh only when a full tick has elapsed so remounts aren't stuck
-  // on a stale freeze, but consecutive getSnapshot calls stay Object.is-stable.
-  if (liveCodeClockTimer == null) {
-    const wall = Date.now();
-    if (wall - liveCodeClockNow >= 100) liveCodeClockNow = wall;
-  }
-  return liveCodeClockNow;
-}
-
-function LiveActivity(props: { activity: AgentUiActivity }) {
-  // Tick while code runs so "Running code 0.9s" counts up without waiting
-  // for feed events (script execution often emits nothing mid-run).
-  const codeRunning =
-    props.activity.steps.some((step) => step.kind === "code" && step.status === "running") ||
-    props.activity.phase === "script";
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      if (!codeRunning) return () => {};
-      return subscribeLiveCodeClock(onStoreChange);
-    },
-    [codeRunning],
-  );
-  const nowMs = useSyncExternalStore(subscribe, getLiveCodeClockSnapshot, getLiveCodeClockSnapshot);
-
-  const lastStep = props.activity.steps.findLast((step) => step.status === "running");
-  const thinking = lastStep?.kind === "llm" ? streamingTail(lastStep.thinkingText) : "";
-  const streamed =
-    lastStep?.kind === "llm"
-      ? streamingTail(lastStep.responseText)
-      : lastStep?.kind === "code"
-        ? streamingTail(lastStep.code)
-        : "";
-  return (
-    <box flexDirection="column">
-      <text fg={COLORS.warning}>✦ {formatLiveActivityLabel(props.activity, nowMs)}</text>
-      {props.activity.steps.map((step) => (
-        <text key={step.id} fg={COLORS.textMuted}>
-          {"  "}· {formatStepLine(step)}
-        </text>
-      ))}
-      {thinking === "" ? null : <text fg={COLORS.textMuted}>{thinking}</text>}
-      {streamed === "" ? null : <text fg={COLORS.textSecondary}>{streamed}</text>}
-    </box>
-  );
-}
-
-function getBrandMarkText() {
-  return new StyledText([
-    fg("#000000")(bg(COLORS.surface)("▐")),
-    bg("#000000")(fg("#ffffff")(" 𝑖 ")),
-    fg("#000000")(bg(COLORS.surface)("▌")),
-  ]);
-}
-
-function formatClock(timestampMs: number) {
-  return new Date(timestampMs).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function parseArgs(argv: string[]) {

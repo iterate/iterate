@@ -241,11 +241,20 @@ describe("itx session socket", () => {
       baseUrl: "https://os.example.com/",
       credentials: { type: "admin-secret", secret: "s3cr3t" },
     });
+    const { reportTransportSuspicion } = await import("./itx-react.ts");
     const first = connectIterateSession();
     expect(onlySocket().url).toBe("wss://os.example.com/api");
     await openLatest();
     await first;
     expect(control.lastCredentials).toEqual({ type: "admin-secret", secret: "s3cr3t" });
+
+    // The liveness probe re-presents the SAME credentials (a cookie-less
+    // configured session must not probe with the browser default).
+    control.lastCredentials = undefined;
+    reportTransportSuspicion();
+    await vi.waitFor(() => {
+      expect(control.lastCredentials).toEqual({ type: "admin-secret", secret: "s3cr3t" });
+    });
   });
 
   test("configureIterateSession after the first dial throws — the target is per-process", async () => {
@@ -541,7 +550,7 @@ describe("useItxSubscription liveness", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const root = createRoot(container);
     await act(async () => {
-      root.render(createElement(ProjectScope, { slug: "acme", children: createElement(Harness) }));
+      root.render(createElement(ProjectScope, { slug: "acme" }, createElement(Harness)));
     });
     // The subscription awaits the connection inside its effect (never suspends);
     // open the socket and let the effect + async subscribe settle.
@@ -790,7 +799,7 @@ describe("useItxSubscription liveness", () => {
     const rendered = () => container.querySelector("output")?.textContent;
     const renderScope = (slug: string) =>
       act(async () => {
-        root.render(createElement(ProjectScope, { slug, children: createElement(Harness) }));
+        root.render(createElement(ProjectScope, { slug }, createElement(Harness)));
       });
 
     await renderScope("project-a");

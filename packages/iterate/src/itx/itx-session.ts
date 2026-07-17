@@ -108,7 +108,7 @@ let explicitConfig: IterateSessionConfig | undefined;
 export function configureIterateSession(config: IterateSessionConfig): void {
   if (current !== undefined) {
     throw new Error(
-      "configureIterateSession must run before the first connect — the session is already dialing.",
+      "configureIterateSession must run before the first connect — a session for this process already exists (live, dialing, or parked after a terminal failure).",
     );
   }
   explicitConfig = config;
