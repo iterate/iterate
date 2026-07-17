@@ -356,7 +356,14 @@ export function createSubscriberDial(deps: {
         deps.createAuthorityRoot(),
         toInvocation(expression, batch),
       );
-      disposeIgnoredRpcResult(value);
+      try {
+        disposeIgnoredRpcResult(value);
+      } catch (error) {
+        // Evaluation resolving is the subscriber's acknowledgement. A cleanup
+        // failure is observable, but must not turn that ack into a retry and
+        // deliver the same batch twice.
+        console.warn("stream push RPC result dispose failed after acknowledgement", { error });
+      }
     },
 
     /**

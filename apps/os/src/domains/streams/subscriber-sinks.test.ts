@@ -97,6 +97,37 @@ describe("push delivery RPC ownership", () => {
     ).rejects.toBe(failure);
   });
 
+  test("does not retry an acknowledged batch when result disposal throws", async () => {
+    const disposalError = new Error("native result disposal failed");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    dialMocks.evaluateItxExpression.mockResolvedValue({
+      receiver: undefined,
+      value: {
+        [Symbol.dispose]: () => {
+          throw disposalError;
+        },
+      },
+    });
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      createAuthorityRoot: () => ({}),
+      onDurableDeliveryError: vi.fn(),
+    });
+
+    try {
+      await expect(
+        dial.push(["worker", "processEventBatch"], {} as StreamPushEventBatch),
+      ).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "stream push RPC result dispose failed after acknowledgement",
+        { error: disposalError },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("a failed root construction does not evaluate and the next batch creates afresh", async () => {
     const failure = new Error("root construction failed");
     const root = {};

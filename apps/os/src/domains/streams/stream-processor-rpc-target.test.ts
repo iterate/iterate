@@ -91,6 +91,44 @@ describe("StreamRpcTarget", () => {
     expect(runtimeStateDispose).toHaveBeenCalledOnce();
   });
 
+  it("preserves a successful plain-data result when native disposal throws", async () => {
+    const disposalError = new Error("native invocation disposal failed");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const result = [
+      {
+        createdAt: new Date(0).toISOString(),
+        offset: 1,
+        path: "/events",
+        type: "events.iterate.com/test/read",
+      } satisfies StreamEvent,
+    ];
+    Object.defineProperty(result, Symbol.dispose, {
+      value: () => {
+        throw disposalError;
+      },
+    });
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return { getEvents: async () => result } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    try {
+      await expect(stream.getEvents()).resolves.toEqual(result);
+      expect(warn).toHaveBeenCalledWith("stream plain-data RPC result dispose failed", {
+        error: disposalError,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();

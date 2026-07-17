@@ -454,7 +454,14 @@ function detachPlainRpcResult(result: object): object {
     Reflect.deleteProperty(detached, Symbol.dispose);
     return detached;
   } finally {
-    disposeIgnoredRpcResult(result);
+    try {
+      disposeIgnoredRpcResult(result);
+    } catch (error) {
+      // The remote method has already succeeded and its plain data is safely
+      // detached. Cleanup failure must stay observable without rewriting that
+      // authoritative outcome into a product failure.
+      console.warn("stream plain-data RPC result dispose failed", { error });
+    }
   }
 }
 
