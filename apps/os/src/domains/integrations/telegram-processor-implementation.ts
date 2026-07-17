@@ -2,9 +2,12 @@
 // sibling of slack-processor-implementation.ts. Emitted event types, payloads,
 // and idempotency keys are stable wire formats.
 
-import { StreamProcessor } from "iterate/processors";
-import type { EmittedInput } from "iterate/processors";
-import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { StreamProcessor, type EmittedInput } from "iterate/processors";
+import {
+  agentCreationForPath,
+  telegramAgentSystemPrompt,
+  TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import {
   coerceTelegramId,
@@ -244,7 +247,7 @@ function telegramAgentCreationEvents(input: {
   path: string;
   projectId: string;
 }): EmittedInput<TelegramProcessorContract>[] {
-  return agentCreationForPath({
+  const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
     initialEvents: [
@@ -261,12 +264,14 @@ function telegramAgentCreationEvents(input: {
         },
       },
     ],
-    overrides: {
-      systemPrompt: telegramAgentSystemPrompt({
+    systemPromptPolicy: {
+      content: telegramAgentSystemPrompt({
         agentPath: input.path,
         chatId: input.chatId,
         connection: input.connection,
       }),
+      id: "telegram",
+      revision: TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
     },
     sibling: {
       birthCertificate: TelegramAgentProcessorContract.buildEvent({
@@ -284,7 +289,8 @@ function telegramAgentCreationEvents(input: {
       }),
       processorSlug: TelegramAgentProcessorContract.slug,
     },
-  }).events satisfies EmittedInput<TelegramProcessorContract>[];
+  });
+  return creation.events satisfies EmittedInput<TelegramProcessorContract>[];
 }
 
 /** The chat-scoped part of a routed stream path (`chat-{id}` or

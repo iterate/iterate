@@ -361,16 +361,26 @@ export interface Agent {
   processor: WakeableStreamProcessorRpc<AgentProcessorState>;
   /** The agent's own event stream. */
   stream: Stream;
+  /**
+   * Append durable events the Agent processor consumes. The input union and
+   * runtime parser both derive from `AgentProcessorContract.consumes`, so the
+   * typed helper cannot drift from the processor. This validates shape and
+   * vocabulary, not state-machine order or provenance, and grants no special
+   * append rights: any project member can append any event through
+   * `stream.append`, with the same reducer meaning for a valid matching event.
+   * `create()` remains the normal birth path. Use `stream.append` for an event
+   * outside the Agent vocabulary or for an intentionally ephemeral event.
+   */
+  append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
-   * Create the agent on this stream. The birth certificate contains only the
-   * processor-owned config; this method also creates the universally paired
-   * capability host, installs both subscriptions, appends any durable
-   * `initialEvents` in the same batch, and returns only after both processors
-   * have durably processed the complete batch.
+   * Create the generic agent machinery on this stream and wait until both
+   * processors have consumed the birth batch. Configuration, context, and
+   * tasks are separate events: append processor-consumed events through
+   * `agent.append()` or use a typed helper such as `message()` after creation.
    */
-  create(input: AgentCreateInput): Promise<void>;
+  create(): Promise<void>;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
@@ -2200,8 +2210,8 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
  * `stateSchema`.
  */
 export type AgentProcessorState = {
-  birthCertificate: { config: { systemPrompt: string; llm: { model: string } } } | null;
-  config: { systemPrompt: string; llm: { model: string } } | null;
+  birthCertificate: Record<string, never> | null;
+  config: { llm: { model: string } } | null;
   context: {
     system: (
       | {
@@ -2507,22 +2517,260 @@ export type AgentProcessorState = {
   };
 };
 
-/** Public agent-creation input. Durable, idempotency-keyed startup inputs
- * commit in the same append as the birth certificates and subscriptions,
- * before create waits for the processors to catch up. */
-export type AgentCreateInput = AgentDefaultsOverrides & {
-  initialEvents?: Array<
-    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
-  >;
-};
-
-/**
- * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
- * base64 (optionally a full `data:` URL) — that is what Workers AI image
- * models return, and the whole point of accepting strings is piping
- * `itx.ai.run` output straight into storage.
- */
-export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+/** Append input accepted by the Agent processor, derived from its `consumes` contract. */
+export type AgentEventInput =
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/configured",
+      { config: { llm?: { model?: string | undefined } | undefined } }
+    >
+  | TypedConsumedEventInput<"events.iterate.com/agent/created", Record<string, never>>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-cancelled",
+      | { phase: "scheduled"; reason: "interrupted-by-user-input"; requestId: string }
+      | {
+          phase: "requested";
+          reason: "durable-object-crashed" | "interrupted-by-user-input";
+          llmRequestOffset: number;
+        }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-completed",
+      {
+        durationMs: number;
+        llmRequestOffset: number;
+        result:
+          | { rawResponse?: unknown; status: "success"; usage?: unknown }
+          | { error: { message: string }; rawResponse?: unknown; status: "failure" };
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-requested",
+      { model: string; requestId: string; expiresAt?: number | undefined }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-scheduled",
+      { debounceMs: number; model: string; requestId: string }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-started",
+      { llmRequestOffset: number; model: string }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/loop-stopped",
+      { maxAutonomousTurns: number; reason: string; triggerOffset: number }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/metadata-changed",
+      {
+        title?: string | null | undefined;
+        summary?: string | null | undefined;
+        activity?: string | null | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+        pinned?: boolean | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/runtime-changed",
+      {
+        sinceOffset: number;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/token-usage-reported",
+      {
+        llmRequestOffset: number;
+        model: string;
+        maxContextTokens: number;
+        inputTokens: number;
+        outputTokens: number;
+        cachedInputTokens?: number | undefined;
+        reasoningOutputTokens?: number | undefined;
+      }
+    >
+  | TypedConsumedEventInput<"events.iterate.com/agent/waiting-cleared", { throughOffset: number }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agents/context-added",
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "system";
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "developer";
+          actor?:
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy?:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" }
+            | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "user";
+          actor: { type: "user"; origin: "mcp" | "web" };
+          llmRequestPolicy?:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" }
+            | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "assistant";
+          llmRequestOffset?: number | undefined;
+        }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agents/web-message-sent",
+      {
+        message: string;
+        files?:
+          | { contentType: string; filename: string; path: string; size: number; url: string }[]
+          | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/capability-host/script-run-requested",
+      { code: string; executionId: string; expiresAt: number }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/capability-host/script-run-settled",
+      {
+        executionId: string;
+        settlement:
+          | { status: "succeeded"; result?: JsonValue | undefined }
+          | {
+              status: "failed";
+              error: string;
+              failureKind: "deadline" | "expired" | "orphaned" | "runtime" | "typecheck";
+              phase: "before-execution" | "execution" | "recovery" | "typecheck";
+              executionMayHaveOccurred: boolean;
+              cancellation: "external-work-may-continue" | "not-applicable";
+            };
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/stream/processor-revived",
+      { [x: string]: unknown; processorSlug: string; revivals: number; version: string }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/stream/subscriber-connected",
+      {
+        subscriptionKey: string;
+        subscriptionType: "configured" | "ephemeral";
+        subscriber?:
+          | {
+              description?: string | undefined;
+              processor?:
+                | {
+                    announcement: {
+                      slug: string;
+                      version: string;
+                      description: string;
+                      consumes: string[];
+                      emits: string[];
+                      ownedEvents: { type: string; description?: string | undefined }[];
+                    };
+                  }
+                | undefined;
+            }
+          | undefined;
+      }
+    >
+  | TypedConsumedEventInput<"events.iterate.com/stream/woken", { incarnationId: string }>;
 
 /** One committed event on a durable stream: type, JSON payload, offset,
  * idempotency key, and provenance (processor stamp / cross-post chain), plus
@@ -2560,6 +2808,14 @@ export type StreamEvent = {
   createdAt: string;
   path: string;
 };
+
+/**
+ * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
+ * base64 (optionally a full `data:` URL) — that is what Workers AI image
+ * models return, and the whole point of accepting strings is piping
+ * `itx.ai.run` output straight into storage.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
 /** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
 export type AgentMetadataPatch = {
@@ -3419,13 +3675,23 @@ export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the generic platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
-};
+/**
+ * A durable processor input. Wake processors never receive ephemeral rows, so
+ * a domain object's processor-typed append door must not claim that they do.
+ */
+type TypedConsumedEventInput<
+  Type extends string = string,
+  Payload = Record<string, unknown>,
+> = Omit<TypedStreamEventInput<Type, Payload>, "ephemeral"> & { ephemeral?: never };
+
+/** JSON subset accepted by WorkerEntrypoint props and script results. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
@@ -3799,6 +4065,15 @@ export type StreamPingInput = { t0: number };
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
 
+/** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
+type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
+  StreamEventInput,
+  "payload" | "type"
+> & {
+  type: Type;
+  payload: Payload;
+};
+
 /** Input to the Images capability's `transform`: the source image stream,
  * ordered transform steps, optional overlay draws (watermarks — each with its
  * own transforms), and the output encoding. */
@@ -3878,15 +4153,6 @@ export type DynamicWorkerRefBase = {
   path: string;
   source: DynamicWorkerSource;
 };
-
-/** JSON subset accepted by WorkerEntrypoint props and script results. */
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
 
 /**
  * One overlay change returned by `WorkspaceGit.status`: a local file that

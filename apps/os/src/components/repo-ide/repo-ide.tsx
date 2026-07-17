@@ -387,7 +387,7 @@ export function RepoIde({
       // agent's first turn can always read the durable assignment.
       const agent = itx.agents.get(assignment.agentPath);
       const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create({});
+      if (snapshot.state.birthCertificate === null) await agent.create();
       await agent.message(assignment.instructions);
       toast.success(`Assigned ${task.title} to ${assignment.agentPath}.`);
       return assignment.agentPath;

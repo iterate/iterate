@@ -494,7 +494,7 @@ Responsibilities:
 - retain one technical last-event offset per row for idempotent redelivery;
 - retain `waitingForSinceOffset` technically so guarded clear facts cannot erase newer waits.
 
-The project batch fan-in routes `agent/created`, metadata, runtime, guarded waiting clears, and binding snapshots for paths under `/agents/**`. The projection treats the first direct `agent/created` event as the row initializer; it replaces the slightly later cross-post seed timestamp. This is a reducer rule, not append authority. A metadata-only change touches only the affected row in the live diff.
+The project batch fan-in routes `agent/created`, metadata, runtime, guarded waiting clears, and binding snapshots for paths under `/agents/**`. The projection treats the first direct `agent/created` event as the row initializer; it replaces the slightly later cross-post seed timestamp. This is a reducer rule, not an authorization rule. A metadata-only change touches only the affected row in the live diff.
 
 ### Durable indexing and recovery
 
@@ -1031,7 +1031,7 @@ Any unrelated local symbol with the same generic name, such as the ITX REPL's Re
 
 As of 2026-07-17, the clean replacement described above is implemented on the feature branch. Preview and production cutover evidence remain separate post-PR gates.
 
-- Repository typechecking and zero-warning linting pass. The `apps/os` unit suite passes 190 files and 1,866 runnable tests, with one explicitly skipped test.
+- Repository typechecking and zero-warning linting pass. The `apps/os` unit suite passes 190 files and 1,879 runnable tests, with one explicitly skipped test.
 - React Doctor reports no diagnostics in the changed files.
 - Focused runtime tests prove the exact 999/1,000 ms idle boundary and both LLM-to-script and script-to-LLM hand-offs without an idle journal frame.
 - Mounted DOM scale coverage renders a 5,000-agent catalog with a bounded virtual row count, keeps the transport snapshot below 16 MiB, and applies a one-row live patch inside the measured one-second budget.

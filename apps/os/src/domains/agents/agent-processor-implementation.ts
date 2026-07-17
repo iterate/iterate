@@ -1228,21 +1228,12 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
       return {
         ...state,
         birthCertificate: event.payload,
-        config: event.payload.config,
-        context: projectAgentSystemPrompt(state.context, {
-          content: event.payload.config.systemPrompt,
-          offset: event.offset,
-        }),
       };
     case "events.iterate.com/agent/configured": {
       const config = AgentConfig.parse(mergeProcessorConfig(state.config, event.payload.config));
       return {
         ...state,
         config,
-        context: projectAgentSystemPrompt(state.context, {
-          content: config.systemPrompt,
-          offset: event.offset,
-        }),
       };
     }
     case "events.iterate.com/agents/context-added": {
@@ -1563,26 +1554,6 @@ function projectContextAdded(
   return event.payload.role === "system"
     ? { ...context, system: projected }
     : { ...context, history: projected };
-}
-
-function projectAgentSystemPrompt(
-  context: AgentState["context"],
-  input: { content: string; offset: number },
-): AgentState["context"] {
-  const item: AgentState["context"]["system"][number] = {
-    role: "system",
-    key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
-    content: input.content,
-    offset: input.offset,
-  };
-  return {
-    ...context,
-    system: projectContextLane({
-      item,
-      lane: context.system,
-      publishedThrough: context.publishedThrough,
-    }),
-  };
 }
 
 function retainLatestKeyedOccurrences(

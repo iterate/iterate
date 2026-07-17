@@ -95,14 +95,17 @@ the project-controlled repo path:
 /repos/team/service -> /agents/repos/team/service/pr/42
 ```
 
-Only `pull_request:opened` calls the idempotent `agent.create`. The metadata,
-GitHub binding, webhook copy, and first review task are passed as its atomic
-`initialEvents`.
-Later events require the canonical agent birth event, so they cannot create an
-agent by accident. A valid delivery can append the following facts to the PR
-stream:
+Only `pull_request:opened` calls the idempotent, zero-argument
+`agent.create()`. The router then uses `agent.append(...)` for the stable
+policy and presentation metadata consumed by the Agent processor. It appends
+the typed GitHub binding, raw webhook copy, and referencing task atomically
+through `agent.stream.append` because the binding and webhook intentionally sit
+outside the Agent processor's consumed vocabulary. Later events require the
+canonical agent birth event, so they cannot create an agent by accident. A
+valid delivery can append the following facts to the PR stream:
 
-- stable presentation metadata and a GitHub pull-request binding at birth;
+- a keyed, versioned developer-policy context item;
+- stable presentation metadata and a GitHub pull-request binding;
 - the complete webhook with explicit cross-post provenance; and
 - when appropriate, one developer task that wakes or interrupts the agent.
 

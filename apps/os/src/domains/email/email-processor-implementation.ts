@@ -2,9 +2,12 @@
 // Slack webhook router (slack-processor-implementation.ts). Emitted event
 // types, payloads, and idempotency keys are stable wire formats.
 
-import { StreamProcessor } from "iterate/processors";
-import type { EmittedInput } from "iterate/processors";
-import { agentCreationForPath, EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
+import { StreamProcessor, type EmittedInput } from "iterate/processors";
+import {
+  agentCreationForPath,
+  EMAIL_AGENT_SYSTEM_PROMPT,
+  EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
 import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
@@ -205,7 +208,7 @@ function emailAgentCreationEvents(input: {
 }): EmittedInput<typeof EmailProcessorContract>[] {
   const subject = normalizeAgentBindingLabel(input.subject);
   const counterpart = normalizeAgentBindingLabel(input.counterpart);
-  return agentCreationForPath({
+  const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
     initialEvents: [
@@ -220,7 +223,11 @@ function emailAgentCreationEvents(input: {
         },
       },
     ],
-    overrides: { systemPrompt: EMAIL_AGENT_SYSTEM_PROMPT },
+    systemPromptPolicy: {
+      content: EMAIL_AGENT_SYSTEM_PROMPT,
+      id: "email",
+      revision: EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
+    },
     sibling: {
       birthCertificate: EmailAgentProcessorContract.buildEvent({
         type: "events.iterate.com/email-agent/created",
@@ -235,5 +242,6 @@ function emailAgentCreationEvents(input: {
       }),
       processorSlug: EmailAgentProcessorContract.slug,
     },
-  }).events satisfies EmittedInput<typeof EmailProcessorContract>[];
+  });
+  return creation.events satisfies EmittedInput<typeof EmailProcessorContract>[];
 }

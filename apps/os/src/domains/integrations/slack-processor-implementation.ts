@@ -4,9 +4,12 @@
 // Emitted event types, payloads, and idempotency keys are stable wire formats.
 
 import { z } from "zod";
-import { StreamProcessor } from "iterate/processors";
-import type { EmittedInput } from "iterate/processors";
-import { agentCreationForPath, slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { StreamProcessor, type EmittedInput } from "iterate/processors";
+import {
+  agentCreationForPath,
+  slackAgentSystemPrompt,
+  SLACK_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
 import { SlackAgentProcessorContract } from "./slack-agent-processor-contract.ts";
 import { readRecord, readString, slackThreadStreamPath, webhookAckIsFresh } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
@@ -165,7 +168,7 @@ function slackAgentCreationEvents(input: {
   projectId: string;
   threadTs: string;
 }): EmittedInput<SlackProcessorContract>[] {
-  return agentCreationForPath({
+  const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
     initialEvents: [
@@ -180,7 +183,11 @@ function slackAgentCreationEvents(input: {
         },
       },
     ],
-    overrides: { systemPrompt: slackAgentSystemPrompt(input.connection) },
+    systemPromptPolicy: {
+      content: slackAgentSystemPrompt(input.connection),
+      id: "slack",
+      revision: SLACK_AGENT_SYSTEM_PROMPT_REVISION,
+    },
     sibling: {
       birthCertificate: SlackAgentProcessorContract.buildEvent({
         type: "events.iterate.com/slack-agent/created",
@@ -195,7 +202,8 @@ function slackAgentCreationEvents(input: {
       }),
       processorSlug: SlackAgentProcessorContract.slug,
     },
-  }).events satisfies EmittedInput<SlackProcessorContract>[];
+  });
+  return creation.events satisfies EmittedInput<SlackProcessorContract>[];
 }
 
 type SlackRoute = {

@@ -34,12 +34,7 @@ const event = (type: string, payload: unknown, offset: number, createdAt = AT) =
   createdAt,
 });
 const created = (offset: number, createdAt = AT) =>
-  event(
-    "events.iterate.com/agent/created",
-    { config: { systemPrompt: "Test agent", llm: { model: "test/model" } } },
-    offset,
-    createdAt,
-  );
+  event("events.iterate.com/agent/created", {}, offset, createdAt);
 
 describe("AgentDatabase", () => {
   it("creates every agent before it has metadata", () => {
@@ -247,7 +242,7 @@ describe("AgentDatabase", () => {
 
     db.touch({
       path: "/agents/phantom",
-      events: [event("events.iterate.com/agent/created", {}, 1)],
+      events: [event("events.iterate.com/agent/created", { unexpected: true }, 1)],
     });
     expect(db.all()).toEqual({});
 
@@ -260,7 +255,7 @@ describe("AgentDatabase", () => {
     db.touch({
       path: "/agents/main",
       events: [
-        event("events.iterate.com/agent/created", {}, 2),
+        event("events.iterate.com/agent/created", { unexpected: true }, 2),
         event(AGENT_METADATA_CHANGED_EVENT_TYPE, { pinned: "yes" }, 3),
         event(AGENT_RUNTIME_CHANGED_EVENT_TYPE, { sinceOffset: -1 }, 4),
         event(AGENT_WAITING_CLEARED_EVENT_TYPE, { throughOffset: 0 }, 5),

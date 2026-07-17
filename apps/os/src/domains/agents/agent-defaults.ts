@@ -1,7 +1,7 @@
-// The platform's generic agent creation policy: the immutable birth
-// certificate plus the ordinary setup events every agent receives. Transport
-// processors choose their own prompts explicitly; the path never decides
-// what kind of processor exists on a stream.
+// Generic agent creation policy: an existence-only birth plus the ordinary
+// setup events every agent receives. Transport processors choose their own
+// system-context policy explicitly; the path never decides what kind of
+// processor exists on a stream.
 
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
@@ -10,6 +10,7 @@ import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
+  AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
   AgentProcessorContract,
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -20,6 +21,30 @@ const TYPESCRIPT_FENCE_INSTRUCTION =
 
 const AGENT_METADATA_INSTRUCTION =
   'Keep Iterate\'s agent UI current with itx.agent.setMetadata(...): set title once when the topic is clear and do not rewrite a good title; update activity on almost every working turn; keep summary to one or two sentences and change it only when durable purpose or conclusions change. When settled on a dependency, set waitingFor to "user_input", "external_event", or "timer"; runtime counts are normally emitted automatically and a qualifying wake clears the old wait. Never set pinned unless a human explicitly asks.';
+
+/**
+ * These revisions identify exact, retryable setup occurrences. Change the
+ * matching revision whenever the shipped event payload changes; the logical
+ * context key still owns supersession inside the Agent projection.
+ */
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "1";
+const AGENT_MODEL_POLICY_REVISION = "1";
+const AGENT_WORKSPACE_POLICY_REVISION = "1";
+const AGENT_BOOT_CONTEXT_REVISION = "1";
+
+export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const MCP_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = "1";
+
+type AgentSystemPromptPolicy = {
+  content: string;
+  /** Stable policy identity, distinct from the context slot it updates. */
+  id: string;
+  /** Exact shipped payload revision; bump it when `content` changes. */
+  revision: string;
+};
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -143,22 +168,23 @@ export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
 
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the generic platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
-};
-
-/** Public agent-creation input. Durable, idempotency-keyed startup inputs
- * commit in the same append as the birth certificates and subscriptions,
- * before create waits for the processors to catch up. */
-export type AgentCreateInput = AgentDefaultsOverrides & {
-  initialEvents?: Array<
-    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
-  >;
-};
+/**
+ * One exact, retryable occurrence updating the agent runtime's keyed
+ * system-context slot. `idempotencyKey` identifies this payload occurrence;
+ * the context key identifies the logical slot and makes a later revision
+ * supersede it. Never reuse an idempotency key after changing `content`.
+ */
+export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
+  return AgentProcessorContract.buildEvent({
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: input.idempotencyKey,
+    payload: {
+      role: "system",
+      key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+      content: input.content,
+    },
+  });
+}
 
 /**
  * Build the complete creation batch for one agent stream. Every agent has the
@@ -172,7 +198,7 @@ export function agentCreationForPath<
 >(input: {
   agentPath: string;
   projectId: string;
-  /** Platform or caller facts that must commit in the same creation batch. */
+  /** Events that must commit in the same creation batch. */
   initialEvents?: readonly InitialEvent[];
   /**
    * Human-facing project facts from the directory, when the caller has them:
@@ -182,22 +208,26 @@ export function agentCreationForPath<
    * have no directory at hand — the id-only line still works.
    */
   project?: { name: string; slug: string; workerUrl?: string };
-  overrides?: AgentDefaultsOverrides;
+  /** Initial execution policy for a routed agent. */
+  systemPromptPolicy?: AgentSystemPromptPolicy;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     processorSlug: string;
   };
 }) {
   const { agentPath, projectId, project } = input;
-  const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
-  // An override replaces the generic prompt wholesale. Child-agent-ness rides
-  // on the sender actor in each context item, not on the addressed path.
-  const systemPrompt = input.overrides?.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+  const model = DEFAULT_AGENT_MODEL;
+  const systemPromptPolicy: AgentSystemPromptPolicy = input.systemPromptPolicy ?? {
+    content: DEFAULT_AGENT_SYSTEM_PROMPT,
+    id: "default",
+    revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
+  };
+  const systemPrompt = systemPromptPolicy.content;
 
   const birthCertificate = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/created",
     idempotencyKey: `agent/created:${projectId}:${agentPath}`,
-    payload: { config: { systemPrompt, llm: { model } } },
+    payload: {},
   });
   const capabilityHostBirthCertificate = CapabilityHostProcessorContract.buildEvent({
     type: "events.iterate.com/capability-host/created",
@@ -210,7 +240,7 @@ export function agentCreationForPath<
     // sandbox mount: sandboxes are pets, created explicitly via
     // itx.sandboxes.create.)
     type: "events.iterate.com/capability-host/capability-provided",
-    idempotencyKey: `capability-host/workspace-provided:${projectId}:${agentPath}`,
+    idempotencyKey: `capability-host/workspace-provided:v${AGENT_WORKSPACE_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: {
       path: ["workspace"],
       type: "itx-expression",
@@ -221,6 +251,15 @@ export function agentCreationForPath<
         "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
     },
   });
+  const configured = AgentProcessorContract.buildEvent({
+    type: "events.iterate.com/agent/configured",
+    idempotencyKey: `agent/model-configured:v${AGENT_MODEL_POLICY_REVISION}:${projectId}:${agentPath}`,
+    payload: { config: { llm: { model } } },
+  });
+  const systemPromptContext = agentSystemPromptContextEvent({
+    content: systemPrompt,
+    idempotencyKey: `agent/system-prompt:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
+  });
   const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths
     // differ per agent but must survive history compaction. Facts and pointers
@@ -229,12 +268,12 @@ export function agentCreationForPath<
     // prompt budget test holds the line). System context never wakes the LLM
     // by itself.
     type: "events.iterate.com/agents/context-added",
-    idempotencyKey: `agent/boot-system-context:${projectId}:${agentPath}`,
+    idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}`,
     payload: {
       role: "system",
       key: "agent/boot-context",
       content: [
-        "Platform context for this agent:",
+        "Context for this agent:",
         project === undefined
           ? `- Project id: ${projectId}`
           : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
@@ -244,7 +283,7 @@ export function agentCreationForPath<
         // verbatim to users as the repo's full contents.
         '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
         "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
-        "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create({}); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
+        "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
         // Deliberate reinforcement of the prompt's FIND WORKING CODE
         // section — repetition is the one thing small prompts buy back.
         '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. For unfamiliar PROJECT facts or history: await itx.search.query({ q }) — conversations, webhooks, events, files, and the repo are all indexed, and each hit carries a ref back to the exact source. Noisy results? Refine the query (drop filler words, quote exact tokens); do not fall back to paging vendor APIs. await itx.__describe() lists everything at your scope.',
@@ -287,6 +326,8 @@ export function agentCreationForPath<
       ...(input.initialEvents ?? []),
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
+      configured,
+      systemPromptContext,
       workspaceProvided,
       bootContext,
       agentSubscription,

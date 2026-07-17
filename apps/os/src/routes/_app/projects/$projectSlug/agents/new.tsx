@@ -36,7 +36,7 @@ function NewAgentPage() {
       // conversational event is appended.
       const itx = await connectItx(project.id);
       const agent = itx.agents.get(agentPath);
-      await agent.create({});
+      await agent.create();
       await agent.message(content);
       return agentPath;
     },

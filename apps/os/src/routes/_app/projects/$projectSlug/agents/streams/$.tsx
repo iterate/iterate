@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItx, useLiveState } from "iterate/react";
 import { AgentDetailHeader } from "~/components/agents/agent-detail-header.tsx";
-import { ONBOARDING_AGENT_PATH, onboardingAgentCreateInput } from "~/lib/onboarding-agent.ts";
+import { ONBOARDING_AGENT_PATH, ensureOnboardingAgentReady } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -46,11 +46,11 @@ function ProjectAgentDetailContent() {
 
   // THE onboarding-agent birth: the agent is deliberately not born during
   // project bootstrap (it costs a real LLM turn), so opening its chat is what
-  // births it. The onboarding prompt and kickoff are explicit here rather
-  // than inferred from the stream path. One shared promise closes the race
-  // between this eager birth and a user sending immediately; retries cover
-  // the create-flow window where the itx session's claims may still be
-  // catching up.
+  // births it. The onboarding prompt and kickoff are appended explicitly here
+  // after generic creation rather than inferred from the stream path. One
+  // shared promise closes the race between this eager birth and a user sending
+  // immediately; retries cover the create-flow window where the itx session's
+  // claims may still be catching up.
   const ensureOnboardingAgent = useCallback((): Promise<void> => {
     if (streamPath !== ONBOARDING_AGENT_PATH) return Promise.resolve();
 
@@ -65,10 +65,7 @@ function ProjectAgentDetailContent() {
         try {
           const itx = await connectItx(project.id);
           const agent = itx.agents.get(ONBOARDING_AGENT_PATH);
-          const snapshot = await agent.processor.snapshot();
-          if (snapshot.state.birthCertificate === null) {
-            await agent.create(onboardingAgentCreateInput(project.id));
-          }
+          await ensureOnboardingAgentReady({ agent });
           return;
         } catch (error) {
           lastError = error;
@@ -101,8 +98,9 @@ function ProjectAgentDetailContent() {
     };
   }, [ensureOnboardingAgent]);
   // The stream view subscribes live, so a send needs no cache invalidation —
-  // the new events arrive over the socket. Agent setup is owned by project and
-  // agent processor facts; sendMessage only appends the user-facing input fact.
+  // the new events arrive over the socket. Agent setup is represented by
+  // explicit project and agent facts; sendMessage appends only the user-facing
+  // input fact.
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
   // are addressed by their stream path (e.g. "/agents/onboarding").
   async function submitAgentMessage(message: string) {
