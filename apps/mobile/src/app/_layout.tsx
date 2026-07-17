@@ -2,7 +2,9 @@ import "react-native-url-polyfill/auto";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { StyleSheet, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { BUILD_TIMESTAMP } from "../lib/build-info.ts";
 import { queryClient } from "../lib/query.ts";
 import { routeInitialLocationReminderNotification } from "../lib/location-reminder-runtime.ts";
 import { colors } from "../lib/theme.ts";
@@ -38,6 +40,25 @@ function RootStack() {
           contentStyle: { backgroundColor: colors.background },
         }}
       />
+      <View pointerEvents="none" style={styles.buildStamp}>
+        <Text selectable style={styles.buildStampText}>
+          {BUILD_TIMESTAMP}
+        </Text>
+      </View>
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  buildStamp: {
+    position: "absolute",
+    right: 4,
+    bottom: 2,
+    opacity: 0.55,
+  },
+  buildStampText: {
+    color: colors.textMuted,
+    fontSize: 9,
+    fontVariant: ["tabular-nums"],
+  },
+});
