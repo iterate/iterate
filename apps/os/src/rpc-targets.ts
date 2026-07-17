@@ -31,9 +31,9 @@ import { RpcTarget } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
+  isStreamDeliveryAuth,
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
-  STREAM_DELIVERY_PRINCIPAL,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -3038,7 +3038,7 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
 class PostHogIntegrationRpcTarget extends RpcTarget {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
-    if (props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
+    if (!isStreamDeliveryAuth(props.auth)) {
       throw new Error("PostHog ingestion is available only to stream delivery");
     }
   }

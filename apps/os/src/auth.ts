@@ -7,9 +7,10 @@
 // host capabilities name only that project, agents reach their project through
 // an explicit host-owned member, and public durable addresses are only dynamic
 // worker/facet descriptions. So authority lives in the ItxAuthContext every
-// authenticated RPC target carries. The one non-product lane is the
-// host-minted `stream-delivery` principal: it makes transport receivers
-// unreachable from project code without changing project authorization.
+// authenticated RPC target carries. The one non-product lane is a private
+// brand on auth contexts minted by the stream-delivery spine: it makes
+// transport receivers unreachable from project code without changing project
+// authorization or trusting a caller-controlled principal string.
 //
 // Credential lanes (see resolveItxAuth):
 //   from-server-cookie — the browser lane: a short-lived, signed operator
@@ -181,11 +182,18 @@ export function trustedInternalAuthContext(): ItxAuthContext {
   return new ItxAuthContext({ isAdmin: true, principal: "trusted-internal" });
 }
 
-/** Authority minted only while the stream spine evaluates a delivery expression. */
-export const STREAM_DELIVERY_PRINCIPAL = "stream-delivery";
+const streamDeliveryAuthContexts = new WeakSet<ItxAuthContext>();
 
+/** Authority minted only while the stream spine evaluates a delivery expression. */
 export function streamDeliveryAuthContext(): ItxAuthContext {
-  return new ItxAuthContext({ isAdmin: true, principal: STREAM_DELIVERY_PRINCIPAL });
+  const auth = trustedInternalAuthContext();
+  streamDeliveryAuthContexts.add(auth);
+  return auth;
+}
+
+/** This identity brand cannot be reproduced through any public credential lane. */
+export function isStreamDeliveryAuth(auth: ItxAuth): boolean {
+  return auth instanceof ItxAuthContext && streamDeliveryAuthContexts.has(auth);
 }
 
 export function userPrincipalOf(auth: ItxAuth): UserPrincipal | undefined {

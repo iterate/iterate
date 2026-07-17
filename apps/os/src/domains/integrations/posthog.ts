@@ -5,8 +5,8 @@ import type { SubscriptionConfiguredPayload } from "../streams/core-processor-co
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 
-export const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
-export const POSTHOG_STREAM_EVENT = "iterate stream event committed";
+const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
+const POSTHOG_STREAM_EVENT = "iterate stream event committed";
 
 const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/batch/";
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
@@ -74,29 +74,19 @@ function normalizeEventTimestamp(createdAt: string): string {
   return new Date(createdAt).toISOString();
 }
 
-type PostHogBatchEvent = {
-  event: string;
-  properties: Record<string, unknown>;
-  timestamp: string;
-  uuid: string;
-};
-
 function projectGroupIdentifyEvent(args: {
   batch: StreamPushEventBatch;
   distinctId: string;
   projectId: string;
   workerName: string;
-}): PostHogBatchEvent | undefined {
+}) {
   const { batch, distinctId, projectId, workerName } = args;
   const projectBirth = batch.events.find((event) => {
     if (
       batch.path !== "/" ||
       event.path !== "/" ||
       event.type !== "events.iterate.com/project/created" ||
-      event.idempotencyKey !== `project-created:${projectId}` ||
-      event.ephemeral !== undefined ||
-      event.metadata !== undefined ||
-      event.source !== undefined
+      event.idempotencyKey !== `project-created:${projectId}`
     ) {
       return false;
     }
@@ -106,11 +96,7 @@ function projectGroupIdentifyEvent(args: {
     if (
       event.path !== batch.path ||
       event.offset !== 1 ||
-      event.type !== "events.iterate.com/stream/created" ||
-      event.idempotencyKey !== undefined ||
-      event.ephemeral !== undefined ||
-      event.metadata !== undefined ||
-      event.source !== undefined
+      event.type !== "events.iterate.com/stream/created"
     ) {
       return false;
     }
@@ -157,7 +143,7 @@ function posthogEvents(args: {
   batch: StreamPushEventBatch;
   projectId: string;
   workerName: string;
-}): PostHogBatchEvent[] {
+}) {
   const { batch, projectId, workerName } = args;
   // PostHog requires identified events for group linkage. Keep one synthetic
   // identity per deployment/project: this avoids creating identities per stream

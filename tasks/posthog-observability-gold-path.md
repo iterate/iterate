@@ -220,9 +220,11 @@ push/webhook option rather than a private platform power.
 credentials; projects do not configure their own PostHog connection.
 The subscription itself remains ordinary. The host does, however, mint a
 `stream-delivery` purpose while the delivery spine evaluates its expression;
-the receiver rejects the userspace purpose so a project script cannot submit a
-fabricated batch directly. This is a receiver trust boundary, not protected
-subscription configuration: projects may still replace or remove the fact.
+the loopback converts that purpose to a private auth-context identity brand,
+and the receiver rejects every unbranded context. No public credential or
+caller-chosen principal string can reproduce it. This is a receiver trust
+boundary, not protected subscription configuration: projects may still
+replace or remove the fact.
 
 Fresh project streams append both platform subscriptions during their ordinary
 first-boot birth sequence, before the first user event can land. Neither the

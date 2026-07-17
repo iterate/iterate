@@ -2,12 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
-import {
-  capturePosthogStreamEventBatch,
-  POSTHOG_STREAM_EVENT,
-  POSTHOG_SUBSCRIPTION_KEY,
-  posthogSubscriptionEvent,
-} from "./posthog.ts";
+import { capturePosthogStreamEventBatch, posthogSubscriptionEvent } from "./posthog.ts";
+
+const POSTHOG_STREAM_EVENT = "iterate stream event committed";
+const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
 
 function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
   return {
