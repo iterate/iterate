@@ -7,6 +7,7 @@ import viteReact from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
+import { canonicalizeOutputWranglerConfig } from "./scripts/canonicalize-output-wrangler-config.ts";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
 // wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
@@ -103,6 +104,7 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     tailwindcss(),
+    canonicalizeOutputWranglerConfig(),
     devServerDiscoveryFile(),
     ...(captunName
       ? [

@@ -55,6 +55,8 @@ import {
   base64ToBytes,
   bytesToBase64,
   classifyRepoAccessError,
+  gitBranchContainsCommit,
+  isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
@@ -69,6 +71,10 @@ const REPO_DEFAULT_BRANCH = "main";
 // lane". Distinct from null, which is an authoritative "not at HEAD".
 const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
+const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
+// Artifact creation is an at-least-once obligation. Concurrent first drives
+// must produce the same root commit instead of racing two timestamped seeds.
+const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
 const TASK_FILE_INCLUDE_PATTERNS = [
   "tasks/**/*.md",
@@ -116,7 +122,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      createRepoArtifact: (input) => this.createArtifactRepo(input),
+      // Creation and public mutations all move the same branch. A duplicate
+      // at-head creation drive is harmless (the seed is idempotent below), but
+      // it must not move the ref between a mutation's checked clone and push.
+      createRepoArtifact: (input) => this.#serializeWrite(() => this.createArtifactRepo(input)),
       // Sync the current GitHub head, not necessarily the delivery's SHA:
       // GitHub webhooks may arrive out of order, and adopting a newer head
       // also satisfies every older push delivery. syncFromGithub derives a
@@ -298,12 +307,13 @@ export class RepoDurableObject extends DurableObject<Env> {
         // branch tip. Project repos are small; correctness beats depth tuning.
         const filesystem = new InMemoryFs();
         const git = createGit(filesystem, REPO_DIR);
+        let branchHead: { oid: string } | undefined;
         try {
           await git.clone({ branch, url: repo.remote, ...credentials });
+          [branchHead] = await git.log({ depth: 1, ref: branch });
         } catch (error) {
-          throw classifyRepoAccessError(error);
+          throw classifyRepoAccessError(error, branch);
         }
-        const [branchHead] = await git.log({ depth: 1 });
         if (!branchHead) throw new RepoNotSeededError("Repo has no commits.");
         try {
           await git.checkout({ ref: input.commitOid, force: true });
@@ -332,6 +342,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const clone = async () => {
       const filesystem = new InMemoryFs();
       const git = createGit(filesystem, REPO_DIR);
+      let head: { oid: string } | undefined;
       try {
         await git.clone({
           branch,
@@ -340,10 +351,10 @@ export class RepoDurableObject extends DurableObject<Env> {
           url: repo.remote,
           ...credentials,
         });
+        [head] = await git.log({ depth: 1, ref: branch });
       } catch (error) {
-        throw classifyRepoAccessError(error);
+        throw classifyRepoAccessError(error, branch);
       }
-      const [head] = await git.log({ depth: 1 });
       if (!head) throw new RepoNotSeededError("Repo has no commits.");
       return { filesystem, git, head };
     };
@@ -368,7 +379,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   // writes would otherwise clone the same head and the second (non-fast-
   // forward) push would clobber the first commit — while both callers got a
   // success result. All writes funnel through this one DO by design, which
-  // is exactly what makes a local chain a sufficient lock.
+  // makes a local chain a sufficient lock. Artifacts clones can still lag a
+  // completed push, so mutateArtifactRepo also verifies that its branch HEAD
+  // is the last pushed commit before it changes anything.
   #writeChain: Promise<unknown> = Promise.resolve();
   // Secondary repos have no root-workspace cache. Their HEAD reads otherwise
   // clone the complete Artifact once per call; a task board opening 42 files
@@ -393,10 +406,12 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     const parsed = parseCommitFilesInput(input);
     const repo = await this.gitAccess();
+    const branch = parsed.branch ?? repo.defaultBranch;
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
-      branch: parsed.branch ?? repo.defaultBranch,
+      branch,
       changes: parsed.changes,
+      expectedCommitOid: this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)),
       message: parsed.message,
       remote: repo.remote,
       token: repo.token,
@@ -430,9 +445,11 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
     const parsed = parseEditRepoFileInput(input);
     const repo = await this.gitAccess();
+    const branch = parsed.branch ?? repo.defaultBranch;
     const result = await editArtifactRepoFile({
       author: parsed.author,
-      branch: parsed.branch ?? repo.defaultBranch,
+      branch,
+      expectedCommitOid: this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)),
       message: parsed.message,
       newString: parsed.newString,
       oldString: parsed.oldString,
@@ -1296,7 +1313,10 @@ export class RepoDurableObject extends DurableObject<Env> {
         token,
       }),
     );
-    this.#headFilesSnapshot.clear();
+    // `repo/ready` is the creation boundary. Record the seed exactly like
+    // every later push so the first read or mutation waits for an Artifacts
+    // clone that can actually reach it instead of racing a stale replica.
+    this.#recordPushedHead({ branch: defaultBranch, commitOid: seeded.commitOid });
     this.ctx.storage.kv.put(repoHeadStorageKey(defaultBranch), {
       commitOid: seeded.commitOid,
       contentHash: seeded.contentHash,
@@ -1387,6 +1407,7 @@ async function seedArtifactRepo(input: {
   const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
 
+  let cloned = false;
   try {
     await git.clone({
       branch: input.branch,
@@ -1395,11 +1416,28 @@ async function seedArtifactRepo(input: {
       url: input.remote,
       ...credentials,
     });
+    cloned = true;
   } catch {
     await git.init({ defaultBranch: input.branch });
     await git.remote({
       add: { name: "origin", url: input.remote },
     });
+  }
+
+  // Creation is create-if-absent, never reset-to-template. In particular, a
+  // create-succeeded/ready-append-failed retry must preserve every commit that
+  // may have landed since the first drive.
+  if (cloned) {
+    const [head] = await git.log({ depth: 1, ref: input.branch }).catch((error: unknown) => {
+      if (isRepoNotSeededError(classifyRepoAccessError(error, input.branch))) return [];
+      throw error;
+    });
+    if (head) {
+      return {
+        commitOid: head.oid,
+        contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
+      };
+    }
   }
 
   for (const file of input.files) {
@@ -1411,21 +1449,23 @@ async function seedArtifactRepo(input: {
     await git.add({ filepath: file.path });
   }
 
-  try {
-    await git.commit({
-      author: {
-        email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
-        name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
-      },
-      message: "Seed minimal itx project worker",
-    });
-    await ensureBranchRef({ branch: input.branch, git });
-  } catch (error) {
-    if (!String(error).match(/nothing to commit|no changes/i)) throw error;
-  }
+  const identity = {
+    email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+    name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+    timestamp: REPO_SEED_COMMIT_TIMESTAMP_SECONDS,
+    timezoneOffset: 0,
+  };
+  await git.commit({
+    author: identity,
+    message: "Seed minimal itx project worker",
+  });
+  await ensureBranchRef({ branch: input.branch, git });
 
+  // When two first drives both observe an empty remote, the fixed
+  // identity/timestamp above gives them the same root oid. Never force this
+  // publication: if a different branch head appeared, creation must lose the
+  // race instead of replacing real history.
   const pushed = await git.push({
-    force: true,
     ref: input.branch,
     remote: "origin",
     ...credentials,
@@ -1434,7 +1474,7 @@ async function seedArtifactRepo(input: {
     throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
   }
 
-  const [head] = await git.log({ depth: 1 });
+  const [head] = await git.log({ depth: 1, ref: input.branch });
   if (!head) throw new Error(`Seeded repo has no head commit on ${input.branch}.`);
   return {
     commitOid: head.oid,
@@ -1446,6 +1486,7 @@ async function commitFilesToArtifactRepo(input: {
   author?: { email: string; name: string };
   branch: string;
   changes: RepoFileChange[];
+  expectedCommitOid?: string;
   message: string;
   remote: string;
   token: string;
@@ -1453,6 +1494,7 @@ async function commitFilesToArtifactRepo(input: {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
+    expectedCommitOid: input.expectedCommitOid,
     message: input.message,
     remote: input.remote,
     token: input.token,
@@ -1486,6 +1528,7 @@ async function commitFilesToArtifactRepo(input: {
 async function editArtifactRepoFile(input: {
   author?: { email: string; name: string };
   branch: string;
+  expectedCommitOid?: string;
   message: string;
   newString: string;
   oldString: string;
@@ -1497,6 +1540,7 @@ async function editArtifactRepoFile(input: {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
+    expectedCommitOid: input.expectedCommitOid,
     message: input.message,
     remote: input.remote,
     token: input.token,
@@ -1533,21 +1577,67 @@ async function editArtifactRepoFile(input: {
 async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: {
   author?: { email: string; name: string };
   branch: string;
+  expectedCommitOid?: string;
   message: string;
   mutate: (repo: { filesystem: InMemoryFs; git: ReturnType<typeof createGit> }) => Promise<Extra>;
   remote: string;
   token: string;
 }): Promise<CommitRepoFilesResult & { contentHash: string } & Extra> {
-  const filesystem = new InMemoryFs();
-  const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
+  const clone = async () => {
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, REPO_DIR);
+    let head: { oid: string } | undefined;
+    try {
+      await git.clone({
+        branch: input.branch,
+        singleBranch: true,
+        url: input.remote,
+        ...credentials,
+      });
+      [head] = await git.log({ depth: 1, ref: input.branch });
+    } catch (error) {
+      throw classifyRepoAccessError(error, input.branch);
+    }
+    if (!head) throw new RepoNotSeededError("Repo has no commits.");
+    return { filesystem, git, head };
+  };
 
-  await git.clone({
-    branch: input.branch,
-    singleBranch: true,
-    url: input.remote,
-    ...credentials,
-  });
+  let cloned: Awaited<ReturnType<typeof clone>> | undefined;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      cloned = await clone();
+      if (
+        input.expectedCommitOid === undefined ||
+        cloned.head.oid === input.expectedCommitOid ||
+        (await gitBranchContainsCommit({
+          branch: input.branch,
+          commitOid: input.expectedCommitOid,
+          git: cloned.git,
+        }))
+      ) {
+        break;
+      }
+      if (attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
+        throw new Error(
+          `Artifact branch ${input.branch} did not contain the last pushed commit ${input.expectedCommitOid} (saw ${cloned.head.oid}); refusing to commit on a stale or diverged base.`,
+        );
+      }
+      console.warn(
+        `repo mutation clone does not contain the last push (saw ${cloned.head.oid}, pushed ${input.expectedCommitOid}); retry ${attempt + 1}`,
+      );
+    } catch (error) {
+      if (input.expectedCommitOid === undefined || attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
+        throw error;
+      }
+      console.warn(
+        `repo mutation clone could not reach the last pushed commit ${input.expectedCommitOid}; retry ${attempt + 1}: ${String(error)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+  }
+
+  const { filesystem, git } = cloned;
 
   const extra = await input.mutate({ filesystem, git });
   const changedPaths = (await git.status()).map((entry) => entry.filepath).sort();
@@ -1571,9 +1661,10 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     },
     message: input.message,
   });
-  // No force: writes are serialized by the DO's #writeChain, so a fresh
-  // clone + one commit is always a fast-forward — a non-fast-forward push
-  // here means an out-of-band writer and should fail loudly, not clobber.
+  // No force: writes are serialized by the DO's #writeChain, and the clone
+  // above contains our last pushed commit, so one commit is a fast-forward.
+  // A rejection now means an out-of-band writer moved the ref after that
+  // checked clone and should fail loudly, not clobber.
   const pushed = await git.push({
     ref: input.branch,
     remote: "origin",

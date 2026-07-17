@@ -546,13 +546,8 @@ await repo.commitFiles({
   changes: [{ path, content: "# Edit example\\n\\n" + beforeText }],
 });
 
-// commitFiles is durable when it returns, but a freshly-created repo's first
-// reads can race its bootstrap; poll briefly rather than flake.
-let before = await repo.readFile({ path });
-for (let attempt = 0; attempt < 25 && before === null; attempt += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  before = await repo.readFile({ path });
-}
+// create waits for repo/ready, and commitFiles is a read-your-write boundary.
+const before = await repo.readFile({ path });
 if (before === null) throw new Error("Expected seeded file to exist.");
 
 const edit = await repo.edit({
@@ -562,17 +557,8 @@ const edit = await repo.edit({
   newString: afterText,
 });
 
-// The same bootstrap race can serve a pre-edit snapshot right after the
-// commit; poll until the read reflects the edit.
-let after = await repo.readFile({ path });
-for (
-  let attempt = 0;
-  attempt < 25 && (after === null || after.content === before.content);
-  attempt += 1
-) {
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  after = await repo.readFile({ path });
-}
+// edit has the same read-your-write guarantee.
+const after = await repo.readFile({ path });
 if (after === null) throw new Error("Expected edited file to exist.");
 
 return {

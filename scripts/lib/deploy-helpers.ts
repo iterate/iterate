@@ -114,7 +114,6 @@ export async function deployWithSecrets(input: {
     input.builtConfig,
     ...(input.extraDeployArgs ?? []),
   ];
-
   const secretsDir = mkdtempSync(join(tmpdir(), "deploy-secrets-"));
   try {
     const secretsFile = join(secretsDir, "secrets.json");

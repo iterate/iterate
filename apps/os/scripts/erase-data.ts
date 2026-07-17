@@ -24,7 +24,8 @@
  *   - normally, the auth D1 database (identities, orgs, projects — the source
  *     of every project id) and project-directory KV. `--preserve-auth` keeps
  *     both for a planned production recreation: selected OS projects can then
- *     be bootstrapped again under their exact Auth-owned ids.
+ *     be created afresh under their exact Auth-owned ids through the normal
+ *     project API.
  *
  * The os worker script and its routes stay (deleting a script cascades its
  * routes — the historical zombie-route/522 class), but it serves the parked
@@ -82,7 +83,7 @@ export default async function eraseData(options: {
   });
 
   if (options.preserveAuth) {
-    console.log("Auth D1 and project-directory KV preserved for planned project recovery");
+    console.log("Auth D1 and project-directory KV preserved for fresh project creation");
   } else {
     // ---- auth D1: delete every row of every user table -----------------------
     await wipeD1Tables(ctx, env.resources.authDbId);

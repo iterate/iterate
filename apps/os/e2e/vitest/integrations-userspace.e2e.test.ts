@@ -289,7 +289,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     // Force a real 401 (epoch bump kills the stored session) and call again:
     // re-login IS the refresh — the same strategy re-mints and the retry wins.
-    await petshopExpireTokens();
+    await petshopExpireTokens("graphql-session-login");
     const pets = await callApi("/api/pets");
     expect(pets).toMatchObject({ status: 200 });
     expect(Array.isArray(pets.body.pets ?? pets.body)).toBe(true);

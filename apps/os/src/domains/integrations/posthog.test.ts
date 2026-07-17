@@ -94,17 +94,8 @@ const captureArgs = (events: StreamEvent[], workerName = "os-preview-6") => ({
 
 const projectStream = {
   authority: "userspace",
-  path: "/agents/ada",
   projectId: "prj_123",
 } as const;
-
-function assertPosthogRecoveryEventAllowed(event: StreamEvent, projectId: string | null): void {
-  assertPlatformEventWriteAllowed([event], {
-    authority: "recovery",
-    path: event.path,
-    projectId,
-  });
-}
 
 describe("first-party PostHog stream integration", () => {
   it("defines one protected all-history, all-row subscription with bounded failure", () => {
@@ -191,20 +182,18 @@ describe("first-party PostHog stream integration", () => {
     expect(() =>
       assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], {
         authority: "admin",
-        path: "/agents/ada",
         projectId: "prj_123",
       }),
     ).toThrow(/managed by Iterate/);
     expect(() =>
       assertPlatformEventWriteAllowed(
         [{ ...posthogSubscriptionEvent(), metadata: { forged: true } }],
-        { authority: "userspace", path: "/agents/ada", projectId: "prj_123" },
+        { authority: "userspace", projectId: "prj_123" },
       ),
     ).toThrow(/noncanonical owner/);
     expect(() =>
       assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], {
         authority: "userspace",
-        path: "/agents/ada",
         projectId: null,
       }),
     ).toThrow(/requires a project stream/);
@@ -215,15 +204,7 @@ describe("first-party PostHog stream integration", () => {
     );
     expect(() =>
       assertPlatformEventWriteAllowed([projectWorkerBirth], {
-        authority: "recovery",
-        path: "/agents/ada",
-        projectId: "prj_123",
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertPlatformEventWriteAllowed([projectWorkerBirth], {
-        authority: "recovery",
-        path: "/agents/ada",
+        authority: "userspace",
         projectId: null,
       }),
     ).toThrow(/requires a project stream/);
@@ -235,7 +216,7 @@ describe("first-party PostHog stream integration", () => {
             payload: { subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY, afterOffset: 1 },
           },
         ],
-        { authority: "admin", path: "/agents/ada", projectId: "prj_123" },
+        { authority: "admin", projectId: "prj_123" },
       ),
     ).toThrow(/project worker birth subscription is managed/);
     expect(() =>
@@ -246,7 +227,7 @@ describe("first-party PostHog stream integration", () => {
             payload: { subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY },
           },
         ],
-        { authority: "admin", path: "/agents/ada", projectId: "prj_123" },
+        { authority: "admin", projectId: "prj_123" },
       ),
     ).not.toThrow();
   });
@@ -265,15 +246,12 @@ describe("first-party PostHog stream integration", () => {
     expect(() =>
       assertPlatformEventWriteAllowed([birth], {
         authority: "userspace",
-        path: "/",
         projectId: "prj_123",
       }),
     ).toThrow(/project birth is managed by Iterate/);
-    expect(() => assertPosthogRecoveryEventAllowed(birth, "prj_123")).not.toThrow();
     expect(() =>
       assertPlatformEventWriteAllowed([birth], {
-        authority: "recovery",
-        path: "/other",
+        authority: "admin",
         projectId: "prj_123",
       }),
     ).toThrow(/project birth is managed by Iterate/);
@@ -343,51 +321,7 @@ describe("first-party PostHog stream integration", () => {
     ).toBe(false);
   });
 
-  it("accepts only authentic first-hand PostHog control history during recovery", () => {
-    const canonical = {
-      ...posthogSubscriptionEvent(),
-      path: "/agents/ada",
-      offset: 2,
-      createdAt: "2026-07-16T09:00:00.000Z",
-    } satisfies StreamEvent;
-    expect(() => assertPosthogRecoveryEventAllowed(canonical, "prj_123")).not.toThrow();
-    expect(() =>
-      assertPosthogRecoveryEventAllowed({ ...canonical, ephemeral: true }, "prj_123"),
-    ).toThrow(/noncanonical owner/);
-    expect(() =>
-      assertPosthogRecoveryEventAllowed(
-        {
-          ...canonical,
-          type: "customer/event",
-          payload: {},
-        },
-        "prj_123",
-      ),
-    ).toThrow(/noncanonical owner/);
-
-    const removed = streamEvent({
-      type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY },
-    });
-    expect(() => assertPosthogRecoveryEventAllowed(removed, "prj_123")).toThrow(
-      /managed by Iterate/,
-    );
-    expect(() =>
-      assertPosthogRecoveryEventAllowed(
-        streamEvent({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            subscriptionKey: "attacker",
-            delivery: {
-              mode: "push",
-              expression: ["integrations", "posthog", "processEventBatch"],
-            },
-          },
-        }),
-        "prj_123",
-      ),
-    ).toThrow(/delivery route is managed by Iterate/);
-
+  it("allows only explicit admin resume and PostHog redrive lifecycle facts", () => {
     const lifecycle = [
       streamEvent({
         type: "events.iterate.com/stream/subscription-parked",
@@ -408,34 +342,10 @@ describe("first-party PostHog stream integration", () => {
         payload: { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY, afterOffset: 0 },
       }),
     ];
-    for (const event of lifecycle) {
-      expect(() => assertPosthogRecoveryEventAllowed(event, "prj_123")).not.toThrow();
-      expect(() =>
-        assertPosthogRecoveryEventAllowed(
-          {
-            ...event,
-            source: {
-              crossPostedFrom: [
-                {
-                  subscriptionKey: "forged",
-                  createdAt: event.createdAt,
-                  offset: 1,
-                  path: "/other",
-                  projectId: "prj_123",
-                  type: event.type,
-                },
-              ],
-            },
-          },
-          "prj_123",
-        ),
-      ).toThrow(/managed by Iterate/);
-    }
     for (const event of lifecycle.slice(1)) {
       expect(() =>
         assertPlatformEventWriteAllowed([event], {
           authority: "admin",
-          path: "/agents/ada",
           projectId: "prj_123",
         }),
       ).not.toThrow();
@@ -443,13 +353,31 @@ describe("first-party PostHog stream integration", () => {
     expect(() =>
       assertPlatformEventWriteAllowed([lifecycle[0]!], {
         authority: "admin",
-        path: "/agents/ada",
         projectId: "prj_123",
       }),
     ).toThrow(/managed by Iterate/);
-    expect(() => assertPosthogRecoveryEventAllowed(canonical, null)).toThrow(
-      /requires a project stream/,
-    );
+    expect(() =>
+      assertPlatformEventWriteAllowed(
+        [
+          {
+            ...lifecycle[1]!,
+            source: {
+              crossPostedFrom: [
+                {
+                  subscriptionKey: "forged",
+                  createdAt: lifecycle[1]!.createdAt,
+                  offset: 1,
+                  path: "/other",
+                  projectId: "prj_123",
+                  type: lifecycle[1]!.type,
+                },
+              ],
+            },
+          },
+        ],
+        { authority: "admin", projectId: "prj_123" },
+      ),
+    ).toThrow(/managed by Iterate/);
   });
 
   it("captures every row with one immutable first-class project group", async () => {

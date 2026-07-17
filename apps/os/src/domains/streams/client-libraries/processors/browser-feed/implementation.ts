@@ -115,15 +115,18 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   protected override processEvent(
     args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
   ): undefined {
-    const { ops } = planBrowserFeedOps(args.previousState, [args.event]);
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+    const { event } = args;
+    if (event === null) return;
+    const { ops } = planBrowserFeedOps(args.previousState, [event]);
     // A drained buffer means a new frame has started. Pending rows exist only
     // to make late corrections inside ONE uncommitted frame visible; SQLite
     // is authoritative after the preceding frame commits.
     if (this.projectionBuffer.pendingCount === 0) this.#pendingActivityRows.clear();
 
     const executionId =
-      args.event.type === "events.iterate.com/capability-host/script-run-settled"
-        ? readExecutionId(args.event.payload)
+      event.type === "events.iterate.com/capability-host/script-run-settled"
+        ? readExecutionId(event.payload)
         : null;
     const alreadyCorrected =
       executionId !== null &&
@@ -135,16 +138,16 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
       );
     if (executionId !== null && !alreadyCorrected) {
       args.blockProcessorWhile(async () => {
-        const correction = await this.#findPrunedActivityCorrection(args.event, executionId);
+        const correction = await this.#findPrunedActivityCorrection(event, executionId);
         this.#appendOps(
-          args.event.offset,
+          event.offset,
           correction === null ? ops : [...ops, correction],
           args.state.open,
         );
       });
       return;
     }
-    this.#appendOps(args.event.offset, ops, args.state.open);
+    this.#appendOps(event.offset, ops, args.state.open);
   }
 
   #appendOps(offset: number, ops: readonly FeedOp[], open: BrowserFeedState["open"]): void {

@@ -24,28 +24,21 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Session",
     kind: "interface",
     sourceText:
-      "/**\n * What you authenticate into: a catalog that vends itxs.\n *\n * A session is NOT an itx — it is the directory you use to reach one.\n * `projects` is principal-scoped. `streams` and `repos` here are the\n * deployment-wide surfaces backed by `projectId: null`, so only admin/internal\n * auth can reach them.\n */\nexport interface Session {\n  /** Includes `principal` — who this session is. */\n  __describe(): Promise<Description & { principal: string }>;\n  /** Deployment-wide streams (admin only; projectId: null). */\n  streams: StreamCollection;\n  /** Deployment-wide repos (admin only; projectId: null). */\n  repos: RepoCollection;\n  /** Admin-only exact-offset Stream Durable Object recovery. */\n  streamRecovery: StreamRecoveryCollection;\n  /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */\n  projects: ProjectCollection;\n}",
+      "/**\n * What you authenticate into: a catalog that vends itxs.\n *\n * A session is NOT an itx — it is the directory you use to reach one.\n * `projects` is principal-scoped. `streams` and `repos` here are the\n * deployment-wide surfaces backed by `projectId: null`, so only admin/internal\n * auth can reach them.\n */\nexport interface Session {\n  /** Includes `principal` — who this session is. */\n  __describe(): Promise<Description & { principal: string }>;\n  /** Deployment-wide streams (admin only; projectId: null). */\n  streams: StreamCollection;\n  /** Deployment-wide repos (admin only; projectId: null). */\n  repos: RepoCollection;\n  /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */\n  projects: ProjectCollection;\n}",
     summary: "What you authenticate into: a catalog that vends itxs.",
     memberSummaries: {
       __describe: "Includes `principal` — who this session is.",
       streams: "Deployment-wide streams (admin only; projectId: null).",
       repos: "Deployment-wide repos (admin only; projectId: null).",
-      streamRecovery: "Admin-only exact-offset Stream Durable Object recovery.",
       projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
     },
-    referencedTypeNames: [
-      "Description",
-      "StreamCollection",
-      "RepoCollection",
-      "StreamRecoveryCollection",
-      "ProjectCollection",
-    ],
+    referencedTypeNames: ["Description", "StreamCollection", "RepoCollection", "ProjectCollection"],
   },
   {
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. For project CONTENT and history, see itx.search. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. For project CONTENT and history, see itx.search. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
@@ -92,8 +85,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       repo: 'The project\'s config repo at /repos/config — shorthand for `repos.get("/repos/config")`.',
       workers: "Dynamic worker refs: get(ref).",
       workspaces: "Path-addressed durable workspaces (`itx.workspaces.get(path)`).",
-      processEventBatch:
-        "Platform dispatch point: streams deliver committed event batches here for the project worker.",
       worker:
         "The default repo-backed project worker — a convenience alias; the general API is `workers.get(ref)`.",
     },
@@ -132,7 +123,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "Repo",
       "DynamicWorkerCollection",
       "WorkspaceCollection",
-      "StreamPushEventBatch",
       "DynamicWorkerCapability",
       "ProjectWorker",
     ],
@@ -159,15 +149,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       get: "The repo at a path.",
     },
     referencedTypeNames: ["Description", "Repo"],
-  },
-  {
-    name: "StreamRecoveryCollection",
-    kind: "interface",
-    sourceText:
-      "/** Admin-only catalog for exact-offset Stream Durable Object recovery. */\nexport interface StreamRecoveryCollection {\n  get(input: { projectId: string | null; path: string }): StreamRecovery;\n}",
-    summary: "Admin-only catalog for exact-offset Stream Durable Object recovery.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamRecovery"],
   },
   {
     name: "ProjectCollection",
@@ -753,23 +734,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     ],
   },
   {
-    name: "StreamRecovery",
-    kind: "interface",
-    sourceText:
-      "/** Admin-only exact-offset export and replacement of one Stream Durable Object. */\nexport interface StreamRecovery {\n  exportForRecovery(args?: {\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportPage>;\n  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */\n  exportToRecovery(args: {\n    sink: StreamRecoveryExportSink;\n    afterOffset?: number;\n    limit?: number;\n    maxPages?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportSummary>;\n  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{\n    restoredEventCount: number;\n    lastImportedOffset: number;\n    currentMaxOffset: number;\n  }>;\n}",
-    summary: "Admin-only exact-offset export and replacement of one Stream Durable Object.",
-    memberSummaries: {
-      exportToRecovery:
-        "Stream part of a fixed export window to an acknowledged sink in bounded pages.",
-    },
-    referencedTypeNames: [
-      "StreamRecoveryExportPage",
-      "StreamRecoveryExportSink",
-      "StreamRecoveryExportSummary",
-      "StreamRecoveryRestoreInput",
-    ],
-  },
-  {
     name: "StreamProcessorRpc",
     kind: "interface",
     sourceText:
@@ -1052,16 +1016,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "A connected OpenAPI service.",
     memberSummaries: {},
     referencedTypeNames: [],
-  },
-  {
-    name: "StreamPushEventBatch",
-    kind: "typeAlias",
-    sourceText:
-      '/**\n * The batch a PUSH subscription\'s receiver is invoked with: the delivery\n * coordinates and events, plus the fields an at-least-once stateless receiver\n * needs to dedupe and self-configure. Deliberately NOT the live lanes\'\n * {@link StreamEventBatch}: push receivers include userspace project workers\n * and sibling streams, and the folded core state — other subscriptions\'\n * delivery expressions, park errors, the presence roster — is internal to the\n * deployment (the webhook envelope strips it for the same reason). Live sinks\n * (ephemeral subscribers, wake-mode processors) still get state-carrying\n * batches: they are the lanes that paint from state.\n */\nexport type StreamPushEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  streamMaxOffset: number;\n  subscriptionKey: SubscriptionKey;\n  /**\n   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),\n   * so receivers can dedupe redeliveries even without per-event bookkeeping.\n   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)\n   */\n  deliveryId: string;\n  /** 1-based consecutive attempt count for this batch. */\n  attempt: number;\n  /**\n   * The committed `subscription-configured` event this delivery serves — so a\n   * receiver can configure itself from committed stream state without a\n   * side-channel registry (which stream, which selector, whose params).\n   * Narrowed to the fields the fold stores; an honest shape instead of a\n   * `StreamEvent` cast that pretends metadata/source survived.\n   */\n  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;\n};',
-    summary:
-      "The batch a PUSH subscription's receiver is invoked with: the delivery coordinates and events, plus the fields an at-least-once stateless receiver needs to dedupe and self-configure.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamEvent", "SubscriptionKey"],
   },
   {
     name: "DynamicWorkerCapability",
@@ -1693,13 +1647,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "SubscriptionKey",
+    name: "StreamPushEventBatch",
     kind: "typeAlias",
     sourceText:
-      "/** Stable identity for one stream subscription connection. */\nexport type SubscriptionKey = string;",
-    summary: "Stable identity for one stream subscription connection.",
+      '/**\n * The batch a PUSH subscription\'s receiver is invoked with: the delivery\n * coordinates and events, plus the fields an at-least-once stateless receiver\n * needs to dedupe and self-configure. Deliberately NOT the live lanes\'\n * {@link StreamEventBatch}: push receivers include userspace project workers\n * and sibling streams, and the folded core state — other subscriptions\'\n * delivery expressions, park errors, the presence roster — is internal to the\n * deployment (the webhook envelope strips it for the same reason). Live sinks\n * (ephemeral subscribers, wake-mode processors) still get state-carrying\n * batches: they are the lanes that paint from state.\n */\nexport type StreamPushEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  streamMaxOffset: number;\n  subscriptionKey: SubscriptionKey;\n  /**\n   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),\n   * so receivers can dedupe redeliveries even without per-event bookkeeping.\n   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)\n   */\n  deliveryId: string;\n  /** 1-based consecutive attempt count for this batch. */\n  attempt: number;\n  /**\n   * The committed `subscription-configured` event this delivery serves — so a\n   * receiver can configure itself from committed stream state without a\n   * side-channel registry (which stream, which selector, whose params).\n   * Narrowed to the fields the fold stores; an honest shape instead of a\n   * `StreamEvent` cast that pretends metadata/source survived.\n   */\n  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;\n};',
+    summary:
+      "The batch a PUSH subscription's receiver is invoked with: the delivery coordinates and events, plus the fields an at-least-once stateless receiver needs to dedupe and self-configure.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["StreamEvent", "SubscriptionKey"],
   },
   {
     name: "StreamEventInput",
@@ -1795,42 +1750,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["SubscriptionKey"],
   },
   {
-    name: "StreamRecoveryExportPage",
-    kind: "typeAlias",
-    sourceText:
-      '/** One bounded page of a stream\'s storage-level recovery export. */\nexport type StreamRecoveryExportPage = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  events: {\n    type: string;\n    payload?: Record<string, unknown> | undefined;\n    metadata?: Record<string, unknown> | undefined;\n    source?:\n      | {\n          processor?:\n            | {\n                slug: string;\n                version: string;\n                stream: { path: string; projectId: string | null };\n                whileProcessing?: { offset: number; type: string } | undefined;\n              }\n            | undefined;\n          crossPostedFrom?:\n            | {\n                subscriptionKey: string;\n                createdAt: string;\n                offset: number;\n                path: string;\n                projectId: string | null;\n                type: string;\n              }[]\n            | undefined;\n        }\n      | undefined;\n    idempotencyKey?: string | undefined;\n    ephemeral?: true | undefined;\n    offset: number;\n    createdAt: string;\n    path: string;\n  }[];\n  throughOffset: number;\n  complete: boolean;\n};',
-    summary: "One bounded page of a stream's storage-level recovery export.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "StreamRecoveryExportSink",
-    kind: "typeAlias",
-    sourceText:
-      "/** Acknowledged page sink used by one long-running recovery export RPC. */\nexport type StreamRecoveryExportSink = {\n  write(page: StreamRecoveryExportPage): Promise<void>;\n};",
-    summary: "Acknowledged page sink used by one long-running recovery export RPC.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamRecoveryExportPage"],
-  },
-  {
-    name: "StreamRecoveryExportSummary",
-    kind: "typeAlias",
-    sourceText:
-      '/** Small result returned after every exported page has been acknowledged. */\nexport type StreamRecoveryExportSummary = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  throughOffset: number;\n  exportedEventCount: number;\n  pageCount: number;\n  lastExportedOffset: number;\n  complete: boolean;\n};',
-    summary: "Small result returned after every exported page has been acknowledged.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "StreamRecoveryRestoreInput",
-    kind: "typeAlias",
-    sourceText:
-      '/** A complete normalized stream log accepted by storage-level recovery restore. */\nexport type StreamRecoveryRestoreInput = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  events: {\n    type: string;\n    payload?: Record<string, unknown> | undefined;\n    metadata?: Record<string, unknown> | undefined;\n    source?:\n      | {\n          processor?:\n            | {\n                slug: string;\n                version: string;\n                stream: { path: string; projectId: string | null };\n                whileProcessing?: { offset: number; type: string } | undefined;\n              }\n            | undefined;\n          crossPostedFrom?:\n            | {\n                subscriptionKey: string;\n                createdAt: string;\n                offset: number;\n                path: string;\n                projectId: string | null;\n                type: string;\n              }[]\n            | undefined;\n        }\n      | undefined;\n    idempotencyKey?: string | undefined;\n    ephemeral?: true | undefined;\n    offset: number;\n    createdAt: string;\n    path: string;\n  }[];\n  highestAssignedOffset: number;\n};',
-    summary: "A complete normalized stream log accepted by storage-level recovery restore.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
     name: "ProjectDeploymentStatus",
     kind: "typeAlias",
     sourceText:
@@ -1847,6 +1766,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "/** One consistent read of a processor (what `snapshot()` returns): the folded\n * state pinned to the offset of the last event folded into it. */\nexport type ProcessorSnapshot<State> = {\n  offset: number;\n  state: State;\n};",
     summary:
       "One consistent read of a processor (what `snapshot()` returns): the folded state pinned to the offset of the last event folded into it.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SubscriptionKey",
+    kind: "typeAlias",
+    sourceText:
+      "/** Stable identity for one stream subscription connection. */\nexport type SubscriptionKey = string;",
+    summary: "Stable identity for one stream subscription connection.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

@@ -64,8 +64,6 @@ export interface Session {
   streams: StreamCollection;
   /** Deployment-wide repos (admin only; projectId: null). */
   repos: RepoCollection;
-  /** Admin-only exact-offset Stream Durable Object recovery. */
-  streamRecovery: StreamRecoveryCollection;
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
   projects: ProjectCollection;
 }
@@ -168,12 +166,6 @@ export interface Project {
   /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
-   * Platform dispatch point: streams deliver committed event batches here
-   * for the project worker. Scripts should not call this — subscribe to a
-   * stream (or configure a subscription) instead.
-   */
-  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
-  /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
    * invokeCapability in userspace, so a dotted call onto any getter the
@@ -196,11 +188,6 @@ export interface RepoCollection {
   create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
-}
-
-/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
-export interface StreamRecoveryCollection {
-  get(input: { projectId: string | null; path: string }): StreamRecovery;
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
@@ -1424,28 +1411,6 @@ export interface Stream {
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
 }
 
-/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
-export interface StreamRecovery {
-  exportForRecovery(args?: {
-    afterOffset?: number;
-    limit?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportPage>;
-  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
-  exportToRecovery(args: {
-    sink: StreamRecoveryExportSink;
-    afterOffset?: number;
-    limit?: number;
-    maxPages?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportSummary>;
-  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
-    restoredEventCount: number;
-    lastImportedOffset: number;
-    currentMaxOffset: number;
-  }>;
-}
-
 /**
  * The read-side RPC surface every stream processor node exposes: inspect
  * runtime state (snapshot plus a processor-specific runtime bag), take an
@@ -1905,41 +1870,6 @@ export type RevokeCapabilityInput = {
  * dynamic path-call fallback, so this contract does not re-declare a surface.
  */
 export type OpenApiRpc = object;
-
-/**
- * The batch a PUSH subscription's receiver is invoked with: the delivery
- * coordinates and events, plus the fields an at-least-once stateless receiver
- * needs to dedupe and self-configure. Deliberately NOT the live lanes'
- * {@link StreamEventBatch}: push receivers include userspace project workers
- * and sibling streams, and the folded core state — other subscriptions'
- * delivery expressions, park errors, the presence roster — is internal to the
- * deployment (the webhook envelope strips it for the same reason). Live sinks
- * (ephemeral subscribers, wake-mode processors) still get state-carrying
- * batches: they are the lanes that paint from state.
- */
-export type StreamPushEventBatch = {
-  projectId: string | null;
-  path: string;
-  events: StreamEvent[];
-  streamMaxOffset: number;
-  subscriptionKey: SubscriptionKey;
-  /**
-   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
-   * so receivers can dedupe redeliveries even without per-event bookkeeping.
-   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
-   */
-  deliveryId: string;
-  /** 1-based consecutive attempt count for this batch. */
-  attempt: number;
-  /**
-   * The committed `subscription-configured` event this delivery serves — so a
-   * receiver can configure itself from committed stream state without a
-   * side-channel registry (which stream, which selector, whose params).
-   * Narrowed to the fields the fold stores; an honest shape instead of a
-   * `StreamEvent` cast that pretends metadata/source survived.
-   */
-  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
-};
 
 /** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
@@ -3117,8 +3047,40 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
-/** Stable identity for one stream subscription connection. */
-export type SubscriptionKey = string;
+/**
+ * The batch a PUSH subscription's receiver is invoked with: the delivery
+ * coordinates and events, plus the fields an at-least-once stateless receiver
+ * needs to dedupe and self-configure. Deliberately NOT the live lanes'
+ * {@link StreamEventBatch}: push receivers include userspace project workers
+ * and sibling streams, and the folded core state — other subscriptions'
+ * delivery expressions, park errors, the presence roster — is internal to the
+ * deployment (the webhook envelope strips it for the same reason). Live sinks
+ * (ephemeral subscribers, wake-mode processors) still get state-carrying
+ * batches: they are the lanes that paint from state.
+ */
+export type StreamPushEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  subscriptionKey: SubscriptionKey;
+  /**
+   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
+   * so receivers can dedupe redeliveries even without per-event bookkeeping.
+   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
+   */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this batch. */
+  attempt: number;
+  /**
+   * The committed `subscription-configured` event this delivery serves — so a
+   * receiver can configure itself from committed stream state without a
+   * side-channel registry (which stream, which selector, whose params).
+   * Narrowed to the fields the fold stores; an honest shape instead of a
+   * `StreamEvent` cast that pretends metadata/source survived.
+   */
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+};
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
@@ -3295,104 +3257,6 @@ export type StreamSubscriptionHandle = Disposable & {
   unsubscribe(): void;
 };
 
-/** One bounded page of a stream's storage-level recovery export. */
-export type StreamRecoveryExportPage = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  events: {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          crossPostedFrom?:
-            | {
-                subscriptionKey: string;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  }[];
-  throughOffset: number;
-  complete: boolean;
-};
-
-/** Acknowledged page sink used by one long-running recovery export RPC. */
-export type StreamRecoveryExportSink = {
-  write(page: StreamRecoveryExportPage): Promise<void>;
-};
-
-/** Small result returned after every exported page has been acknowledged. */
-export type StreamRecoveryExportSummary = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  throughOffset: number;
-  exportedEventCount: number;
-  pageCount: number;
-  lastExportedOffset: number;
-  complete: boolean;
-};
-
-/** A complete normalized stream log accepted by storage-level recovery restore. */
-export type StreamRecoveryRestoreInput = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  events: {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          crossPostedFrom?:
-            | {
-                subscriptionKey: string;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  }[];
-  highestAssignedOffset: number;
-};
-
 /**
  * Whether a project the directory knows about actually exists in THIS
  * deployment's engine:
@@ -3409,6 +3273,9 @@ export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;
 };
+
+/** Stable identity for one stream subscription connection. */
+export type SubscriptionKey = string;
 
 /**
  * A structural patch turning a previous JSON value into the next one. Two

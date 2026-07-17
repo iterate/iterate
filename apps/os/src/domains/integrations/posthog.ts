@@ -137,48 +137,32 @@ export function assertCanonicalPosthogDeliveryEnvelope(batch: StreamPushEventBat
 /**
  * Reserved subscription configuration is installed inside the Stream Durable
  * Object. Public append may only perform explicit operator resume/redrive
- * actions; recovery import may replay authentic first-hand platform facts.
+ * actions; there is no import or compatibility lane for platform facts.
  */
 export function assertPlatformEventWriteAllowed(
   events: readonly StreamEventInput[],
   options: {
-    authority: "admin" | "recovery" | "userspace";
-    path: string;
+    authority: "admin" | "userspace";
     projectId: string | null;
   },
 ): void {
   const canonical = posthogSubscriptionEvent();
   for (const event of events) {
     if (event.type === "events.iterate.com/project/created") {
-      const authenticRecoveryBirth =
-        options.authority === "recovery" &&
-        options.projectId !== null &&
-        options.path === "/" &&
-        event.idempotencyKey === `project-created:${options.projectId}` &&
-        event.ephemeral === undefined &&
-        event.metadata === undefined &&
-        event.source === undefined;
-      if (authenticRecoveryBirth) continue;
       throw new Error("project birth is managed by Iterate");
     }
     if (isCanonicalProjectWorkerConfiguration(event)) {
       if (options.projectId === null) {
         throw new Error("the project worker birth subscription requires a project stream");
       }
-      if (options.authority !== "recovery") {
-        throw new Error("the project worker birth subscription is managed by Iterate");
-      }
-      continue;
+      throw new Error("the project worker birth subscription is managed by Iterate");
     }
     const isCanonical = isFirstPartyPosthogSubscriptionConfiguration(event);
     if (isCanonical) {
       if (options.projectId === null) {
         throw new Error("the first-party PostHog subscription requires a project stream");
       }
-      if (options.authority !== "recovery") {
-        throw new Error("the first-party PostHog subscription is managed by Iterate");
-      }
-      continue;
+      throw new Error("the first-party PostHog subscription is managed by Iterate");
     }
     if (event.idempotencyKey === canonical.idempotencyKey) {
       throw new Error("the first-party PostHog idempotency key has a noncanonical owner");
@@ -187,16 +171,13 @@ export function assertPlatformEventWriteAllowed(
     const key = event.payload?.subscriptionKey;
     const isResume = event.type === "events.iterate.com/stream/subscription-resumed";
     const isCursorSet = event.type === "events.iterate.com/stream/subscription-cursor-set";
-    const lifecycleType = isResume || isCursorSet;
     const isAllowedLifecycle =
       (key === POSTHOG_SUBSCRIPTION_KEY || key === PROJECT_WORKER_SUBSCRIPTION_KEY) &&
       event.source === undefined &&
       event.metadata === undefined &&
       event.ephemeral === undefined &&
-      ((options.authority === "admin" &&
-        (isResume || (key === POSTHOG_SUBSCRIPTION_KEY && isCursorSet))) ||
-        (options.authority === "recovery" &&
-          (lifecycleType || event.type === "events.iterate.com/stream/subscription-parked")));
+      options.authority === "admin" &&
+      (isResume || (key === POSTHOG_SUBSCRIPTION_KEY && isCursorSet));
     if (isAllowedLifecycle) continue;
     if (key === PROJECT_WORKER_SUBSCRIPTION_KEY) {
       throw new Error("the project worker birth subscription is managed by Iterate");

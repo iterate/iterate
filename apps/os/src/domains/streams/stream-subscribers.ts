@@ -169,8 +169,8 @@ type Connection = {
   isLive(): boolean;
   /** `true` while a durable sink delivery is dispatched but unsettled. */
   hasPendingDelivery(): boolean;
-  /** Stop the pump, dispose the sink, optionally append the disconnect fact, drop from the table. */
-  close(reason: StreamSubscriberDisconnectReason, recordFact?: boolean): void;
+  /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
+  close(reason: StreamSubscriberDisconnectReason): void;
 };
 
 /** Everything `open()` needs to start one delivery connection. */
@@ -273,8 +273,6 @@ export class StreamSubscribers {
   readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, Connection>();
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Invalidates async delivery work started against a pre-recovery log. */
-  #recoveryGeneration = 0;
 
   // Durable-lane in-memory state. All of it is reconstructible: a DO eviction
   // resets these and the durable rows + folded config re-derive every decision
@@ -344,30 +342,6 @@ export class StreamSubscribers {
     } catch (error) {
       console.error("stream durable subscription reconcile failed", error);
     }
-  }
-
-  /**
-   * Quiesce every delivery lane before storage-level recovery. Async calls
-   * cannot be cancelled, so their generation fence makes late results inert.
-   */
-  resetForRecovery(): void {
-    this.#recoveryGeneration += 1;
-    if (this.#idleTimer !== undefined) clearTimeout(this.#idleTimer);
-    this.#idleTimer = undefined;
-    this.#tearingDown = true;
-    try {
-      for (const connection of [...this.#connections.values()]) {
-        connection.close("replaced", false);
-      }
-    } finally {
-      this.#tearingDown = false;
-    }
-    this.#pokesInFlight.clear();
-    this.#pushDrains.clear();
-    this.#batchLimits.clear();
-    this.#consecutiveSkips.clear();
-    this.#subscriptionMetrics.clear();
-    this.#freshTail = [];
   }
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
@@ -478,7 +452,6 @@ export class StreamSubscribers {
     delivery: Extract<SubscriptionDelivery, { mode: "wake" }>,
     configOffset: number,
   ): void {
-    const recoveryGeneration = this.#recoveryGeneration;
     const state = this.#hooks.coreState();
     if (state.projectId === undefined || state.path === undefined) return;
     const request: StreamSubscriberWakeRequest = {
@@ -498,10 +471,6 @@ export class StreamSubscribers {
         const response = await withDeliveryTimeout(pokePromise, `poke ${subscriptionKey}`, {
           onLateResolve: (late) => late.sink[Symbol.dispose](),
         });
-        if (recoveryGeneration !== this.#recoveryGeneration) {
-          response.sink[Symbol.dispose]();
-          return;
-        }
         const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
         if (
           current === undefined ||
@@ -561,13 +530,9 @@ export class StreamSubscribers {
           this.#hooks.store.advanceWatermark(subscriptionKey, response.checkpointOffset);
         }
       } catch (error) {
-        if (recoveryGeneration === this.#recoveryGeneration) {
-          this.#onDeliveryFailure(subscriptionKey, error);
-        }
+        this.#onDeliveryFailure(subscriptionKey, error);
       } finally {
-        if (recoveryGeneration === this.#recoveryGeneration) {
-          this.#pokesInFlight.delete(subscriptionKey);
-        }
+        this.#pokesInFlight.delete(subscriptionKey);
       }
     })();
     this.#hooks.keepAlive(work);
@@ -582,12 +547,10 @@ export class StreamSubscribers {
    * can own their cursors. Push delivers per batch; webhook per event.
    */
   #drainPush(subscriptionKey: string): void {
-    const recoveryGeneration = this.#recoveryGeneration;
     this.#pushDrains.add(subscriptionKey);
     const work = (async () => {
       try {
         for (;;) {
-          if (recoveryGeneration !== this.#recoveryGeneration) return;
           const state = this.#hooks.coreState();
           const entry = state.configuredSubscribersByKey[subscriptionKey];
           if (entry === undefined || entry.parkedAtOffset !== undefined) return;
@@ -698,7 +661,6 @@ export class StreamSubscribers {
               );
             }
           } catch (error) {
-            if (recoveryGeneration !== this.#recoveryGeneration) return;
             // "continue" = the failure handler already moved the goalposts
             // (halved the bisect window or stepped over confirmed poison) and
             // the loop should try again NOW; anything else backs off or parks
@@ -708,7 +670,6 @@ export class StreamSubscribers {
             }
             return;
           }
-          if (recoveryGeneration !== this.#recoveryGeneration) return;
           // The awaited resolve above IS this lane's consumption ack — record
           // both the call duration (transport+receiver latency) and the
           // commit→acked age of the newest delivered event, all on the
@@ -729,22 +690,18 @@ export class StreamSubscribers {
           try {
             this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           } catch (error) {
-            if (recoveryGeneration === this.#recoveryGeneration) {
-              // The receiver accepted the batch, but the stream has not
-              // durably advanced its cursor. Treat that as the same
-              // at-least-once failure as a rejected receiver call: retain the
-              // cursor, persist bounded backoff, and redeliver the stable ID.
-              this.#onDeliveryFailure(subscriptionKey, error, row.attempt);
-            }
+            // The receiver accepted the batch, but the stream has not durably
+            // advanced its cursor. Treat that as the same at-least-once
+            // failure as a rejected receiver call: retain the cursor, persist
+            // bounded backoff, and redeliver the stable ID.
+            this.#onDeliveryFailure(subscriptionKey, error, row.attempt);
             return;
           }
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }
       } finally {
-        if (recoveryGeneration === this.#recoveryGeneration) {
-          this.#pushDrains.delete(subscriptionKey);
-        }
+        this.#pushDrains.delete(subscriptionKey);
       }
     })();
     this.#hooks.keepAlive(
@@ -1219,7 +1176,7 @@ export class StreamSubscribers {
       wake: () => void pump(),
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
-      close: (reason, recordFact = true) => {
+      close: (reason) => {
         if (!open) return;
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
@@ -1230,12 +1187,10 @@ export class StreamSubscribers {
         connection.ping?.[Symbol.dispose]();
         sink[Symbol.dispose]();
         connection.getProcessorRuntimeState?.[Symbol.dispose]();
-        if (recordFact) {
-          this.#hooks.appendFact({
-            type: "events.iterate.com/stream/subscriber-disconnected",
-            payload: { subscriptionKey, reason },
-          });
-        }
+        this.#hooks.appendFact({
+          type: "events.iterate.com/stream/subscriber-disconnected",
+          payload: { subscriptionKey, reason },
+        });
         // A dead durable connection makes its watermark decisive again. Only
         // genuinely-broken closes re-reconcile: idle teardown suppresses
         // reconcile for its turn and advances watermarks itself (see

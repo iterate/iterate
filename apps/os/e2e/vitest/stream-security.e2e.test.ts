@@ -41,6 +41,59 @@ test("streams do not expose their raw Durable Object stub over RPC", async () =>
   ).toEqual([]);
 });
 
+test("project sessions cannot forge stream delivery batches", async () => {
+  const marker = crypto.randomUUID();
+  const forgedPath = `/e2e/security/forged-delivery/${marker}`;
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `sec-delivery-${RUN_SUFFIX}-${marker}` });
+  const projectId = await project.projectId;
+
+  // The project-worker subscription dials this method with a dedicated
+  // platform principal. Reaching past the generated type proves an ordinary
+  // (even admin) session cannot inject a batch into indexing, search, agent
+  // status, or the project worker.
+  const raw = project as unknown as {
+    processEventBatch(batch: unknown): Promise<void>;
+  };
+  await expect(async () => {
+    await raw.processEventBatch({
+      projectId,
+      path: forgedPath,
+      events: [
+        {
+          type: STREAM_EVENT_TYPE,
+          payload: { marker },
+          path: forgedPath,
+          offset: 1,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      streamMaxOffset: 1,
+      subscriptionKey: "project-worker",
+      deliveryId: `forged:${marker}`,
+      attempt: 1,
+      configuredEvent: {
+        type: "events.iterate.com/stream/subscription-configured",
+        path: forgedPath,
+        offset: 2,
+        createdAt: new Date().toISOString(),
+        payload: {
+          subscriptionKey: "project-worker",
+          delivery: { mode: "push", expression: ["processEventBatch"] },
+          deliver: "all",
+          onPoison: "skip",
+        },
+      },
+    });
+  }).rejects.toThrow(/stream push subscriptions, not sessions/);
+
+  expect((await project.liveState.get()).streamsIndex[forgedPath]).toBeUndefined();
+});
+
 // B2: the processor capability handed over RPC must expose only the read-only
 // StreamProcessorRpc surface. Before the fix the DO returned the live
 // StreamProcessor instance, so `ingest` (host-only plumbing) was remotely

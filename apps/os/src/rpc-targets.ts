@@ -58,12 +58,6 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
-import type {
-  StreamRecoveryExportPage,
-  StreamRecoveryExportSink,
-  StreamRecoveryExportSummary,
-  StreamRecoveryRestoreInput,
-} from "./domains/streams/recovery.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -151,7 +145,10 @@ import type {
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
-import { rethrowStreamUnavailable } from "./domains/streams/stream-unavailable.ts";
+import {
+  isDurableObjectLifecycleError,
+  rethrowStreamUnavailable,
+} from "./domains/streams/stream-unavailable.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -213,6 +210,7 @@ import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
+  enqueueAutomaticStreamIndex,
   ensureProjectSearchInstance,
   indexDocument,
   indexPinnedStreamEvent,
@@ -395,6 +393,10 @@ const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
+// Public create calls are acknowledgement boundaries, not indefinite leases.
+// A wedged processor must fail the caller loudly instead of parking an RPC
+// forever; the durable birth events remain committed for ordinary redelivery.
+const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -489,7 +491,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     assertPlatformEventWriteAllowed(events, {
       authority: this.props.auth.principal === "admin" ? "admin" : "userspace",
-      path: this.props.path,
       projectId: this.props.projectId,
     });
     return this.#durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
@@ -769,61 +770,6 @@ class StreamCollectionRpcTarget<
   }
 }
 
-/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
-class StreamRecoveryCollectionRpcTarget extends IterateRpcTarget<"StreamRecoveryCollection"> {
-  constructor(readonly props: { auth: ItxAuth }) {
-    super();
-    if (!props.auth.isAdmin()) throw new Error("stream recovery requires an admin principal");
-  }
-
-  get(input: { projectId: string | null; path: string }): StreamRecoveryRpcTarget {
-    return new StreamRecoveryRpcTarget({
-      projectId: input.projectId,
-      path: normalizePath(input.path),
-    });
-  }
-}
-
-/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
-class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
-  constructor(readonly props: { projectId: string | null; path: string }) {
-    super();
-  }
-
-  get #stream() {
-    return env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(this.props, { allowNullProjectId: true }),
-    );
-  }
-
-  exportForRecovery(args?: {
-    afterOffset?: number;
-    limit?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportPage> {
-    return this.#stream.exportForRecovery(args);
-  }
-
-  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
-  exportToRecovery(args: {
-    sink: StreamRecoveryExportSink;
-    afterOffset?: number;
-    limit?: number;
-    maxPages?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportSummary> {
-    return this.#stream.exportToRecovery(args);
-  }
-
-  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
-    restoredEventCount: number;
-    lastImportedOffset: number;
-    currentMaxOffset: number;
-  }> {
-    return this.#stream.restoreFromRecovery(input);
-  }
-}
-
 /** Project-scoped stream catalog with reduced-state listing. */
 class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"ProjectStreamCollection"> {
   constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
@@ -922,7 +868,10 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("scheduler create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
@@ -1022,7 +971,10 @@ async function requestRepoCreate(input: {
   const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
   if (createOffset === 0) throw new Error("repo create committed no events");
   const repo = new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
-  await repo.processor.waitUntilProcessed({ offset: createOffset });
+  await repo.processor.waitUntilProcessed({
+    offset: createOffset,
+    timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+  });
 
   await timedStep("create-timing", timing, "wait-repo-ready", () =>
     stream.waitForEvent({
@@ -1078,7 +1030,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  // Private on purpose (unlike StreamRpcTarget's public stub getter): the
+  // Private on purpose, like every RPC target's stub getter: the
   // Repo Durable Object carries `gitAccess()`, whose write tokens must not be
   // reachable through the public capnweb surface — itx callers get file-level
   // methods only.
@@ -1671,8 +1623,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** @internal */
-  get durableObjectStub() {
+  get #durableObjectStub() {
     return env.WORKSPACE.getByName(
       DurableObjectNameCodec.stringify({
         path: this.props.path,
@@ -1683,22 +1634,22 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** Workspace identity string (debug). */
   whoami(): Promise<string> {
-    return this.durableObjectStub.whoami();
+    return this.#durableObjectStub.whoami();
   }
 
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.durableObjectStub.kill());
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   /** File contents, or null when the path does not exist. */
   readFile(path: string): Promise<string | null> {
-    return this.durableObjectStub.readFile(path);
+    return this.#durableObjectStub.readFile(path);
   }
 
   /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null> {
-    return this.durableObjectStub.readFileBytes(path);
+    return this.#durableObjectStub.readFileBytes(path);
   }
 
   /**
@@ -1708,7 +1659,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
    * main).
    */
   reset(): Promise<void> {
-    return this.durableObjectStub.reset();
+    return this.#durableObjectStub.reset();
   }
 
   /**
@@ -1718,29 +1669,29 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
    * masks it until that ancestor is reverted too.
    */
   revert(path: string): Promise<void> {
-    return this.durableObjectStub.revert(path);
+    return this.#durableObjectStub.revert(path);
   }
 
   /** Every file path in the merged view (local layer over latest main), sorted. */
   listAllFiles(): Promise<string[]> {
-    return this.durableObjectStub.listAllFiles();
+    return this.#durableObjectStub.listAllFiles();
   }
 
   writeFile(path: string, content: string): Promise<void> {
-    return this.durableObjectStub.writeFile(path, content);
+    return this.#durableObjectStub.writeFile(path, content);
   }
 
   writeFileBytes(path: string, data: Uint8Array): Promise<void> {
-    return this.durableObjectStub.writeFileBytes(path, data);
+    return this.#durableObjectStub.writeFileBytes(path, data);
   }
 
   appendFile(path: string, content: string): Promise<void> {
-    return this.durableObjectStub.appendFile(path, content);
+    return this.#durableObjectStub.appendFile(path, content);
   }
 
   /** Delete one file. Returns false when the path did not exist. */
   deleteFile(path: string): Promise<boolean> {
-    return this.durableObjectStub.deleteFile(path);
+    return this.#durableObjectStub.deleteFile(path);
   }
 
   /**
@@ -1748,40 +1699,40 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
    * The `oldString` must match exactly once unless `replaceAll` is true.
    */
   edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
-    return this.durableObjectStub.edit(input);
+    return this.#durableObjectStub.edit(input);
   }
 
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.mkdir(path, opts);
+    return this.#durableObjectStub.mkdir(path, opts);
   }
 
   readDir(dir?: string): Promise<WorkspaceFileInfo[]> {
-    return this.durableObjectStub.readDir(dir);
+    return this.#durableObjectStub.readDir(dir);
   }
 
   glob(pattern: string): Promise<WorkspaceFileInfo[]> {
-    return this.durableObjectStub.glob(pattern);
+    return this.#durableObjectStub.glob(pattern);
   }
 
   rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.rm(path, opts);
+    return this.#durableObjectStub.rm(path, opts);
   }
 
   cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.cp(src, dest, opts);
+    return this.#durableObjectStub.cp(src, dest, opts);
   }
 
   mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.mv(src, dest, opts);
+    return this.#durableObjectStub.mv(src, dest, opts);
   }
 
   /** File metadata, or null when the path does not exist. */
   stat(path: string): Promise<WorkspaceFileInfo | null> {
-    return this.durableObjectStub.stat(path);
+    return this.#durableObjectStub.stat(path);
   }
 
   exists(path: string): Promise<boolean> {
-    return this.durableObjectStub.exists(path);
+    return this.#durableObjectStub.exists(path);
   }
 
   /** Git over this workspace's checkout. */
@@ -1818,8 +1769,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** @internal */
-  get durableObjectStub() {
+  get #durableObjectStub() {
     return env.WORKSPACE.getByName(
       DurableObjectNameCodec.stringify({
         path: this.props.path,
@@ -1830,7 +1780,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
   status(): Promise<WorkspaceChange[]> {
-    return this.durableObjectStub.gitStatus();
+    return this.#durableObjectStub.gitStatus();
   }
 
   /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
@@ -1838,12 +1788,12 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     author?: { email: string; name: string };
     message: string;
   }): Promise<WorkspacePublishResult> {
-    return this.durableObjectStub.gitCommit(input);
+    return this.#durableObjectStub.gitCommit(input);
   }
 
   /** The config repo's main-branch history, newest first. */
   log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]> {
-    return this.durableObjectStub.gitLog(input);
+    return this.#durableObjectStub.gitLog(input);
   }
 }
 
@@ -1964,7 +1914,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
    * (audit, egress, whether material is present, the refresh strategy). The
    * raw value is never part of it. */
   async __describe(): Promise<Description & SecretDescription> {
-    const state = await this.durableObjectStub.describe();
+    const state = await this.#durableObjectStub.describe();
     return describeNode({
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
@@ -1985,8 +1935,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** @internal */
-  get durableObjectStub() {
+  get #durableObjectStub() {
     return env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
@@ -1997,38 +1946,38 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
 
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response> {
-    return this.durableObjectStub.fetch(request);
+    return this.#durableObjectStub.fetch(request);
   }
 
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.durableObjectStub.kill());
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   /** Create this secret and wait until its processor has folded the birth certificate. */
   create(input: SecretCreateInput): Promise<StreamEvent> {
-    return this.durableObjectStub.create(input);
+    return this.#durableObjectStub.create(input);
   }
 
   /** Set secret material, its egress allowlist, and/or refresh strategy.
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent> {
-    return this.durableObjectStub.update(input);
+    return this.#durableObjectStub.update(input);
   }
 
   /** The secret stream processor; its public state IS the SecretDescription. */
   get processor(): WakeableStreamProcessorRpc<SecretDescription> {
     return new ProcessorRelayRpcTarget<SecretDescription>({
       auth: this.props.auth,
-      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
     });
   }
 
   /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
   get liveState(): LiveStateRpc<SecretDescription> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
-      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
+      () => this.#durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
     );
   }
 }
@@ -4155,8 +4104,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return this.#props.capabilityHost.revokeCapability(input);
   }
 
-  /** @internal */
-  get durableObjectStub() {
+  get #durableObjectStub() {
     return env.AGENT.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#props.projectId,
@@ -4169,7 +4117,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   get processor(): WakeableStreamProcessorRpc<AgentProcessorState> {
     return new ProcessorRelayRpcTarget<AgentProcessorState>({
       auth: this.#props.auth,
-      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
     });
   }
 
@@ -4220,8 +4168,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("agent create committed no events");
     await Promise.all([
-      this.processor.waitUntilProcessed({ offset }),
-      this.capabilityHost.processor.waitUntilProcessed({ offset }),
+      this.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
+      this.capabilityHost.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
     ]);
   }
 
@@ -4450,7 +4404,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /** Restart the agent's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.durableObjectStub.kill());
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   async #assertCreated(): Promise<void> {
@@ -4741,6 +4695,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     await timedStep("create-timing", timing, "wait-project-birth", () =>
       project.processor.waitUntilProcessed({
         offset: Math.max(created.offset, subscription.offset),
+        // A create must never leave its caller parked behind a wedged
+        // processor indefinitely. One project birth frame has a shared 60s
+        // sibling-barrier deadline; 75s leaves 15s for durable-delivery
+        // backoff and transport redial.
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     );
     // The project now EXISTS and its birth has been processed. Whether to
@@ -4996,7 +4955,10 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("capability host create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
@@ -5206,8 +5168,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return this.#props.projectId;
   }
 
-  /** @internal */
-  get durableObjectStub() {
+  get #durableObjectStub() {
     return env.PROJECT.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.#props.projectId }),
     );
@@ -5222,7 +5183,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#props.capabilityHost.path;
     const [project, hostDescription] = await Promise.all([
-      this.durableObjectStub.describe(),
+      this.#durableObjectStub.describe(),
       this.#props.capabilityHost.__describe(),
     ]);
     const mountedCapabilities = hostDescription.capabilities;
@@ -5283,20 +5244,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.durableObjectStub.kill());
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
   get processor(): WakeableStreamProcessorRpc<ProjectProcessorState> {
     return new ProcessorRelayRpcTarget<ProjectProcessorState>({
       auth: this.#props.auth,
-      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
     });
   }
 
   /** The project DO's methods this isolate reaches — typed once (see {@link ProjectDurableObjectRpc}). */
   get #projectDo(): ProjectDurableObjectRpc {
-    return this.durableObjectStub as unknown as ProjectDurableObjectRpc;
+    return this.#durableObjectStub as unknown as ProjectDurableObjectRpc;
   }
 
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
@@ -5539,7 +5500,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /**
+  /** @internal
    * Platform dispatch point: streams deliver committed event batches here
    * for the project worker. Scripts should not call this — subscribe to a
    * stream (or configure a subscription) instead.
@@ -5553,18 +5514,34 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Platform indexing steps are idempotent and never-throwing. The one setup
   // step (installing the first-party PostHog feed) may reject, but translates
   // that rejection into receiver-unavailable so the birth batch is retried
-  // rather than poison-skipped. Setup additionally requires the narrow
+  // rather than poison-skipped. The whole entry point requires the narrow
   // stream-delivery principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+    if (this.#props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
+      throw new Error("processEventBatch is dialed by stream push subscriptions, not sessions");
+    }
     if (batch.projectId !== this.#props.projectId) {
       throw new Error("stream delivery project does not match its itx authority");
     }
     await this.#installPosthogSubscriptionForCreatedStream(batch);
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
-    this.#indexStreamSearch(batch);
+    // Search is a derived mirror, so schedule it independently of the user
+    // worker outcome: a batch that the delivery spine eventually poison-skips
+    // must still be searchable. waitUntil keeps it off the authoritative
+    // acknowledgement path, while the isolate-wide per-stream tail preserves
+    // ordering across cached project-target remints.
+    if (batch.projectId !== null) {
+      this.#props.ctx.waitUntil(
+        enqueueAutomaticStreamIndex({
+          projectId: batch.projectId,
+          path: batch.path,
+          run: () => this.#indexStreamSearch(batch),
+        }),
+      );
+    }
     try {
-      return await this.worker.processEventBatch(batch);
+      await this.worker.processEventBatch(batch);
     } catch (error) {
       // The bootstrap window: the worker cannot be MATERIALIZED yet (config
       // repo unseeded, or its first build still in flight). That is this
@@ -5593,10 +5570,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * that may be skipped.
    */
   async #installPosthogSubscriptionForCreatedStream(batch: StreamPushEventBatch): Promise<void> {
-    if (
-      this.#props.auth.principal !== STREAM_DELIVERY_PRINCIPAL ||
-      !batchContainsCanonicalStreamCreated(batch)
-    ) {
+    if (!batchContainsCanonicalStreamCreated(batch)) {
       return;
     }
     try {
@@ -5713,37 +5687,31 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * SPIKE platform step: mirror the batch's stream events into the itx.search
    * corpus (domains/search/search-index.ts) as fixed 100-offset segment
-   * documents. Same rules as {@link #indexStreamActivity}: idempotent
-   * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
-   * — only the worker delegation may reject into the spine's retry. It rides
-   * the same ordered, checkpointed delivery, re-reading each touched segment's
-   * full range from the stream so a transient failure self-heals on the next
-   * batch in that segment (see indexStreamEventBatch).
+   * documents. It is idempotent (segment docs are deterministic rewrites),
+   * queued in delivery order under waitUntil, and MUST NOT throw — only the
+   * worker delegation may reject into the spine's retry. Re-reading each
+   * touched segment's full range means a transient failure self-heals on the
+   * next batch in that segment (see indexStreamEventBatch).
    */
-  #indexStreamSearch(batch: StreamPushEventBatch): void {
+  async #indexStreamSearch(batch: StreamPushEventBatch): Promise<void> {
     if (batch.projectId === null) return;
-    const streamStub = env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: batch.projectId, path: batch.path },
-        { allowNullProjectId: true },
-      ),
-    );
-    // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
-    // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
-    // promise can be cancelled when the invocation's I/O context ends.
-    const projectId = batch.projectId;
-    this.#props.ctx.waitUntil(
-      indexStreamEventBatch({
+    try {
+      const streamStub = env.STREAM.getByName(
+        DurableObjectNameCodec.stringify(
+          { projectId: batch.projectId, path: batch.path },
+          { allowNullProjectId: true },
+        ),
+      );
+      await indexStreamEventBatch({
         batch,
         readEvents: (args) => streamStub.getEvents(args),
-      })
-        // Freshness: nudge the project's instance (if one exists) so passive
-        // content is searchable in minutes, not on the hourly schedule.
-        .then(() => triggerProjectSearchSyncDebounced(projectId))
-        .catch((error: unknown) => {
-          console.warn("search index stream batch failed", { path: batch.path, error });
-        }),
-    );
+      });
+      // Freshness: nudge the project's instance (if one exists) so passive
+      // content is searchable in minutes, not on the hourly schedule.
+      await triggerProjectSearchSyncDebounced(batch.projectId);
+    } catch (error: unknown) {
+      console.warn("search index stream batch failed", { path: batch.path, error });
+    }
   }
 
   /**
@@ -5837,7 +5805,6 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       children: {
         projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
         repos: "Deployment-wide repos (admin only; projectId: null).",
-        streamRecovery: "Admin-only exact-offset Stream Durable Object recovery.",
         streams: "Deployment-wide streams (admin only; projectId: null).",
       },
       parent: "the /api unauthenticated entrypoint, via authenticate(credentials)",
@@ -5859,11 +5826,6 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       auth: this.props.auth,
       projectId: null,
     });
-  }
-
-  /** Admin-only exact-offset Stream Durable Object recovery. */
-  get streamRecovery(): StreamRecoveryCollectionRpcTarget {
-    return new StreamRecoveryCollectionRpcTarget({ auth: this.props.auth });
   }
 
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
@@ -6261,7 +6223,11 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    await this.#catchUpBeforeSnapshot?.();
+    // The runner waiter registers first, then starts its own serialized
+    // self-pull. Its timeout therefore bounds the WHOLE read-your-writes
+    // operation. Awaiting catchUpBeforeSnapshot here first made timeoutMs
+    // dishonest: a stuck catch-up could hold this call forever before the
+    // timed waiter even existed.
     await this.#reads.waitUntilEvent(input);
   }
 }
@@ -6575,7 +6541,7 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
  * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
  * exists to close for `ingest`).
  */
-class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
+export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements WakeableStreamProcessorRpc<State>
 {
@@ -6598,16 +6564,67 @@ class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorH
     return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
   }
 
+  async #callProcessor<Result>(
+    call: (processor: StreamProcessorRpc<State>) => Promise<Result>,
+  ): Promise<Result> {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      let processor: StreamProcessorRpc<State> | undefined;
+      try {
+        processor = await this.#processor();
+        return await call(processor);
+      } catch (error) {
+        if (attempt === 1 && isDurableObjectLifecycleError(error)) {
+          // Deploys and evictions may reset a processor-hosting DO while its
+          // facade property or method call is in flight. A fresh host stub
+          // reaches the replacement incarnation; retry exactly once so this
+          // expected lifecycle transition does not strand a durable birth
+          // frame. App errors are never retried, and a second lifecycle
+          // failure propagates to the caller.
+          console.info("processor relay retrying after Durable Object lifecycle reset");
+          continue;
+        }
+        throw error;
+      } finally {
+        // A Workers RPC property returning an RpcTarget materializes a remote
+        // stub for every relay call. It is only needed for this one method and
+        // must be released deterministically. In-process targets are real
+        // RpcTargets and remain owned by their host.
+        if (processor !== undefined && !(processor instanceof RpcTarget)) {
+          try {
+            (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+          } catch (error) {
+            // Disposal is cleanup, not the authoritative processor outcome. A
+            // stale workerd RPC stub can reject disposal after its backing DO
+            // resets; preserve the success/error/retry already chosen above,
+            // while keeping the cleanup failure observable.
+            console.warn("processor relay transient facade dispose failed", { error });
+          }
+        }
+      }
+    }
+    throw new Error("processor relay exhausted its bounded lifecycle retry");
+  }
+
   async snapshot() {
-    return await (await this.#processor()).snapshot();
+    return await this.#callProcessor((processor) => processor.snapshot());
   }
 
   async getRuntimeState() {
-    return await (await this.#processor()).getRuntimeState();
+    return await this.#callProcessor((processor) => processor.getRuntimeState());
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    return await (await this.#processor()).waitUntilProcessed(input);
+    const deadline = input.timeoutMs === undefined ? undefined : Date.now() + input.timeoutMs;
+    return await this.#callProcessor((processor) => {
+      if (deadline === undefined) return processor.waitUntilProcessed(input);
+      const timeoutMs = deadline - Date.now();
+      if (timeoutMs <= 0) {
+        throw new Error(
+          `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
+        );
+      }
+      return processor.waitUntilProcessed({ ...input, timeoutMs });
+    });
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */
