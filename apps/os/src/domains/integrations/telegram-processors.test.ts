@@ -1379,8 +1379,9 @@ describe("telegramAgentSystemPrompt", () => {
     // Telegram file metadata and the connection's write-only token compose
     // into a token-safe download — the agent must not refuse before trying it.
     expect(prompt).toContain(`itx.integrations.telegram.get("${CONNECTION}").getFile`);
+    expect(prompt).toContain("const filePath = file.result.file_path");
     expect(prompt).toContain(
-      `new Request('https://api.telegram.org/file/botgetSecret({ path: "/secrets/integrations/telegram/${CONNECTION}/bot-token" })/' + file_path)`,
+      `new Request('https://api.telegram.org/file/botgetSecret({ path: "/secrets/integrations/telegram/${CONNECTION}/bot-token" })/' + filePath)`,
     );
     expect(prompt).toContain("itx.egress.fetch");
     expect(prompt).toContain("itx.agent.addFiles");
