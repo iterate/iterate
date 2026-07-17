@@ -163,18 +163,24 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
   }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>["processEvent"]>[0]): undefined {
     // At-head reconcile: derive milestones from the WHOLE fold, never from
     // event-time state — a refold replays every historical event, and only
-    // the at-head state has absorbed the milestones already journaled. The
-    // stable idempotency key (count folded in, no event bound) makes the
-    // append collapse across redeliveries, revivals, and refolds.
+    // the at-head state has absorbed the milestones already journaled. One
+    // fact per crossed threshold, even when catch-up lands past several at
+    // once (routine while the worker cold-builds); the stable idempotency
+    // keys (count folded in, no event bound) make the appends collapse
+    // across redeliveries, revivals, and refolds.
     if (!delivery.caughtUp || state.birthCertificate === null) return;
-    const milestone = Math.floor(state.entries.length / 5) * 5;
-    if (milestone <= state.lastMilestone) return;
+    const reached = Math.floor(state.entries.length / 5) * 5;
+    if (reached <= state.lastMilestone) return;
+    const missed: number[] = [];
+    for (let count = state.lastMilestone + 5; count <= reached; count += 5) missed.push(count);
     blockProcessorWhileCaughtUp(async () => {
-      await append({
-        type: "events.iterate.com/guestbook/milestone-reached",
-        payload: { count: milestone },
-        idempotencyKey: this.idempotencyKey(`milestone:${milestone}`),
-      });
+      await append(
+        ...missed.map((count) => ({
+          type: "events.iterate.com/guestbook/milestone-reached" as const,
+          payload: { count },
+          idempotencyKey: this.idempotencyKey(`milestone:${count}`),
+        })),
+      );
     });
   }
 }

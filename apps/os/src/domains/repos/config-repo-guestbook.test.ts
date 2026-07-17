@@ -57,6 +57,24 @@ test("folds signatures and emits each milestone exactly once", async () => {
   expect(eventsOfType(stream, "events.iterate.com/guestbook/milestone-reached")).toHaveLength(1);
 });
 
+test("a catch-up past several thresholds journals every crossed milestone", async () => {
+  const stream = new MemoryStream(guestbookStreamPath);
+  const driver = guestbookDriver(stream);
+
+  // All twelve entries land before the processor's first at-head pass — the
+  // cold-build shape. Both crossings must be journaled, in order.
+  for (let n = 1; n <= 12; n++) await sign(stream, n);
+  await driver.deliver();
+  await driver.deliver();
+
+  expect(
+    eventsOfType(stream, "events.iterate.com/guestbook/milestone-reached").map(
+      (event) => event.payload,
+    ),
+  ).toEqual([{ count: 5 }, { count: 10 }]);
+  expect(driver.state.lastMilestone).toBe(10);
+});
+
 test("refold: a fresh processor over the same journal appends nothing and converges", async () => {
   const stream = new MemoryStream(guestbookStreamPath);
   const live = guestbookDriver(stream);

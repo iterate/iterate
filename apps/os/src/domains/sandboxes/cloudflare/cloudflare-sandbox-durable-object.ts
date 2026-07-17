@@ -7,6 +7,12 @@ import {
   parseSSEStream,
   Sandbox,
 } from "@cloudflare/sandbox";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type RegisteredProcessorReads,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
 import { trustedInternalAuthContext } from "../../../auth.ts";
 import { workerVersion, type Env } from "../../../env.ts";
 import {
@@ -19,12 +25,6 @@ import { listIntegrationConnections } from "../../integrations/connect-flows.ts"
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake.ts";
-import {
-  createStreamProcessorRegistry,
-  type RegisteredProcessorReads,
-  type StreamProcessorRegistry,
-} from "iterate/processors";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../streams/utils.ts";
 import {
   SandboxProcessorContract,
