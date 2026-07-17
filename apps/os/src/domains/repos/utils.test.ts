@@ -75,6 +75,15 @@ describe("classifyRepoAccessError", () => {
     expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
   });
 
+  test("wraps an explicitly requested branch missing from an empty Artifacts repo", () => {
+    const raw = Object.assign(new Error("Could not find main."), {
+      code: "NotFoundError",
+    });
+
+    expect(isRepoNotSeededError(classifyRepoAccessError(raw, "main"))).toBe(true);
+    expect(classifyRepoAccessError(raw)).toBe(raw);
+  });
+
   test("passes every other failure through unchanged", () => {
     const network = new Error("fetch failed");
     expect(classifyRepoAccessError(network)).toBe(network);

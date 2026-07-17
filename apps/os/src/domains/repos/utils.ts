@@ -77,15 +77,23 @@ export function isRepoNotSeededError(error: unknown): boolean {
  * Wraps a branch-clone failure as {@link RepoNotSeededError} when it means
  * "the remote has no such ref/commits" — isomorphic-git's NotFoundError for a
  * ref (an empty Artifacts remote answers HEAD with a branch that has no
- * commits, observed as "Could not find refs/heads/master"), or the Artifacts
- * repo itself missing (`NOT_FOUND` — created lazily by the bootstrap saga).
- * Anything else returns unchanged.
+ * commits, observed as either "Could not find refs/heads/master" or "Could
+ * not find main" depending on whether isomorphic-git resolves HEAD or an
+ * explicitly requested branch), or the Artifacts repo itself missing
+ * (`NOT_FOUND` — created lazily by the bootstrap saga). Anything else returns
+ * unchanged.
  */
-export function classifyRepoAccessError(error: unknown): unknown {
+export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  const missingRequestedBranch =
+    branch !== undefined &&
+    typeof message === "string" &&
+    (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
   const notSeeded =
     code === "NOT_FOUND" ||
-    (code === "NotFoundError" && typeof message === "string" && message.includes("refs/"));
+    (code === "NotFoundError" &&
+      typeof message === "string" &&
+      (message.includes("refs/") || missingRequestedBranch));
   if (!notSeeded) return error;
   return new RepoNotSeededError(
     `Repo has no commits yet (unseeded or still seeding): ${typeof message === "string" ? message : String(error)}`,

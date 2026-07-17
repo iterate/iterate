@@ -55,6 +55,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   classifyRepoAccessError,
+  isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
@@ -305,12 +306,13 @@ export class RepoDurableObject extends DurableObject<Env> {
         // branch tip. Project repos are small; correctness beats depth tuning.
         const filesystem = new InMemoryFs();
         const git = createGit(filesystem, REPO_DIR);
+        let branchHead: { oid: string } | undefined;
         try {
           await git.clone({ branch, url: repo.remote, ...credentials });
+          [branchHead] = await git.log({ depth: 1, ref: branch });
         } catch (error) {
-          throw classifyRepoAccessError(error);
+          throw classifyRepoAccessError(error, branch);
         }
-        const [branchHead] = await git.log({ depth: 1 });
         if (!branchHead) throw new RepoNotSeededError("Repo has no commits.");
         try {
           await git.checkout({ ref: input.commitOid, force: true });
@@ -339,6 +341,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const clone = async () => {
       const filesystem = new InMemoryFs();
       const git = createGit(filesystem, REPO_DIR);
+      let head: { oid: string } | undefined;
       try {
         await git.clone({
           branch,
@@ -347,10 +350,10 @@ export class RepoDurableObject extends DurableObject<Env> {
           url: repo.remote,
           ...credentials,
         });
+        [head] = await git.log({ depth: 1, ref: branch });
       } catch (error) {
-        throw classifyRepoAccessError(error);
+        throw classifyRepoAccessError(error, branch);
       }
-      const [head] = await git.log({ depth: 1 });
       if (!head) throw new RepoNotSeededError("Repo has no commits.");
       return { filesystem, git, head };
     };
@@ -1425,7 +1428,7 @@ async function seedArtifactRepo(input: {
   // may have landed since the first drive.
   if (cloned) {
     const [head] = await git.log({ depth: 1, ref: input.branch }).catch((error: unknown) => {
-      if (String(error).includes(`Could not find refs/heads/${input.branch}`)) return [];
+      if (isRepoNotSeededError(classifyRepoAccessError(error, input.branch))) return [];
       throw error;
     });
     if (head) {
@@ -1583,13 +1586,18 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   const clone = async () => {
     const filesystem = new InMemoryFs();
     const git = createGit(filesystem, REPO_DIR);
-    await git.clone({
-      branch: input.branch,
-      singleBranch: true,
-      url: input.remote,
-      ...credentials,
-    });
-    const [head] = await git.log({ depth: 1 });
+    let head: { oid: string } | undefined;
+    try {
+      await git.clone({
+        branch: input.branch,
+        singleBranch: true,
+        url: input.remote,
+        ...credentials,
+      });
+      [head] = await git.log({ depth: 1, ref: input.branch });
+    } catch (error) {
+      throw classifyRepoAccessError(error, input.branch);
+    }
     if (!head) throw new RepoNotSeededError("Repo has no commits.");
     return { filesystem, git, head };
   };
