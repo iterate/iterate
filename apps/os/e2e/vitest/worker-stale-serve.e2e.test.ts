@@ -9,10 +9,7 @@ import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 // project HTML (HTMLRewriter is workerd-only, so this cannot be unit-tested).
 test(
   "project host serves the previous build through a broken commit, with serve info and overlay",
-  // Four polled phases at up to 120s each in the worst case — the timeout
-  // stays above their sum so a slow phase fails with pollHome's crafted
-  // message instead of a bare vitest timeout.
-  { timeout: 540_000 },
+  { timeout: 240_000 },
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -30,15 +27,19 @@ test(
       const raw = response.headers.get("x-iterate-worker-serve");
       return { response, serve: raw === null ? null : (JSON.parse(raw) as Serve) };
     };
+    // All four polled phases share ONE deadline inside the heavy-test budget
+    // (240s ceiling — scripts/preview/e2e-policy.test.ts): a slow cold build
+    // gets whatever the fast phases didn't use, and a wedged phase fails with
+    // this crafted message instead of a bare vitest timeout.
+    const testDeadline = Date.now() + 220_000;
     const pollHome = async (
       accept: (result: Awaited<ReturnType<typeof fetchHome>>) => boolean,
       what: string,
     ) => {
-      const deadline = Date.now() + 120_000;
       for (;;) {
         const result = await fetchHome();
         if (accept(result)) return result;
-        if (Date.now() > deadline) {
+        if (Date.now() > testDeadline) {
           throw new Error(
             `never saw ${what}; last: ${result.response.status} ${JSON.stringify(result.serve)}`,
           );
