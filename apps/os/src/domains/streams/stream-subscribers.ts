@@ -371,6 +371,11 @@ export class StreamSubscribers {
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
     this.wake();
+    this.rearmPendingRetries();
+  }
+
+  /** Restore the earliest durable retry alarm after an incarnation starts. */
+  rearmPendingRetries(): void {
     this.#armAlarmFromStore();
   }
 

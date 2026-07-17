@@ -431,6 +431,25 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 2, attempt: 0, nextAttemptAt: null });
   });
 
+  it("a3. a fresh incarnation re-arms a future durable retry", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.push = async () => {
+      throw new Error("receiver unavailable");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    const retryAt = h.row("k")?.nextAttemptAt;
+    expect(retryAt).not.toBeNull();
+
+    h.armedAlarms.length = 0;
+    h.subscribers.rearmPendingRetries();
+
+    expect(h.armedAlarms).toEqual([retryAt]);
+  });
+
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ selector: { eventTypes: ["a"] } }), 0);

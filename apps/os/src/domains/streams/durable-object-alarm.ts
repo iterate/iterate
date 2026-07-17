@@ -1,4 +1,4 @@
-/** Serializes shared Durable Object alarm writes and exposes failures to Cloudflare. */
+/** Serializes shared Durable Object alarm writes and resets on storage failure. */
 export class DurableObjectAlarm {
   readonly #ctx: DurableObjectState;
   readonly #diagnosticContext: { projectId: string | null; streamId: string };
@@ -19,12 +19,18 @@ export class DurableObjectAlarm {
       if (current === null || at < current) await this.#ctx.storage.setAlarm(at);
     });
     this.#chain = armed.catch(() => undefined);
-    this.#ctx.waitUntil(
-      armed.catch((error: unknown) => {
+    // DurableObjectState.waitUntil has no effect. A rejected
+    // blockConcurrencyWhile callback instead resets this incarnation, whose
+    // constructor wake reconciles the durable retry row and tries to arm
+    // again. This also keeps concurrent get/set pairs behind one input gate.
+    void this.#ctx.blockConcurrencyWhile(async () => {
+      try {
+        await armed;
+      } catch (error: unknown) {
         emitAlarmError(error, this.#diagnosticContext);
         throw error;
-      }),
-    );
+      }
+    });
   }
 }
 

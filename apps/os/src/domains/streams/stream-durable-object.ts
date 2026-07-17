@@ -4,7 +4,10 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { assertPosthogSubscriptionWriteAllowed } from "../integrations/posthog.ts";
+import {
+  assertPosthogSubscriptionWriteAllowed,
+  isFirstPartyPosthogSubscriptionConfiguration,
+} from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { DurableObjectAlarm } from "./durable-object-alarm.ts";
 import type {
@@ -201,6 +204,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: crypto.randomUUID() },
     });
+    // A previous alarm-arm storage failure resets this incarnation. The retry
+    // row survived in SQLite, so every fresh incarnation must restore its
+    // earliest wake before it can become quiet again.
+    this.#subscribers.rearmPendingRetries();
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
@@ -1082,7 +1089,16 @@ export class StreamDurableObject extends DurableObject<Env> {
    * only appends the built inputs in its own synchronous turn.
    */
   acceptCrossPost(batch: StreamPushEventBatch): void {
-    const inputs = buildAcceptCrossPostAppendInputs(batch, {
+    // This reserved configuration is local desired state, not a product fact
+    // to replicate. Its source stream's own all-event feed captures it once;
+    // copying it would create a misleading inert control row on the target.
+    // Filter before the optional transform so a userspace event transformed
+    // into reserved configuration still reaches the guard below and fails.
+    const localEventsRemoved = {
+      ...batch,
+      events: batch.events.filter((event) => !isFirstPartyPosthogSubscriptionConfiguration(event)),
+    };
+    const inputs = buildAcceptCrossPostAppendInputs(localEventsRemoved, {
       projectId: this.name.projectId,
       path: this.name.path,
     });

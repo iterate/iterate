@@ -71,7 +71,8 @@ function hasCanonicalPosthogPayload(event: Pick<StreamEventInput, "type" | "payl
   );
 }
 
-function isCanonicalPosthogConfiguration(event: StreamEventInput): boolean {
+/** True only for the platform-owned configuration as committed on its own stream. */
+export function isFirstPartyPosthogSubscriptionConfiguration(event: StreamEventInput): boolean {
   const canonical = posthogSubscriptionEvent();
   return (
     event.idempotencyKey === canonical.idempotencyKey &&
@@ -145,7 +146,7 @@ export function assertPosthogSubscriptionWriteAllowed(
       }
       continue;
     }
-    const isCanonical = isCanonicalPosthogConfiguration(event);
+    const isCanonical = isFirstPartyPosthogSubscriptionConfiguration(event);
     if (isCanonical) {
       if (options.projectId === null) {
         throw new Error("the first-party PostHog subscription requires a project stream");
