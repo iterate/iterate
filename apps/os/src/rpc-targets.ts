@@ -66,10 +66,10 @@ import { ProjectProcessorContract } from "./domains/projects/project-processor-c
 import { capabilityHostBirthEvents } from "./domains/capability-host/capability-host-birth.ts";
 import {
   driveScriptExecution,
+  scriptExecutionExpiresAt,
   type ForegroundScriptExecutor,
   type ScriptExecutionHost,
 } from "./domains/capability-host/script-execution-driver.ts";
-import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -5061,13 +5061,17 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     });
   }
 
-  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
-  async runScript(code: string): Promise<{
+  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. `timeoutMs` may shorten, but never extend, the platform's bounded execution lifetime. */
+  async runScript(
+    code: string,
+    options?: { timeoutMs?: number },
+  ): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
   }> {
     const executionId = crypto.randomUUID();
+    const expiresAt = scriptExecutionExpiresAt(Date.now(), options?.timeoutMs);
     const { completedEvent, settlement } = await driveScriptExecution({
       authority: {
         ownerWorkerName: env.WORKER_SELF,
@@ -5079,7 +5083,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       intent: {
         code,
         executionId,
-        expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+        expiresAt,
       },
       observeCompletion: ({ idempotencyKey, timeoutMs }) =>
         waitForStreamIdempotencyKey({

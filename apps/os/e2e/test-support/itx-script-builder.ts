@@ -38,6 +38,7 @@ import type { CapabilityHost, Project } from "../../src/itx-api.generated.ts";
 /** Anything that can run an `async (itx) => …` script: `project.capabilityHost`,
  * `agent.capabilityHost`, or `itx.capabilityHosts.get(path)`. */
 export type RunScriptHost = Pick<CapabilityHost, "runScript">;
+export type RunScriptOptions = Exclude<Parameters<RunScriptHost["runScript"]>[1], undefined>;
 
 /** A typed script builder against one capability-host scope. The default
  * script-side `itx` surface is the project handle; widen it for dynamic
@@ -97,8 +98,8 @@ export class ItxScriptBuilder<Ctx, Vars extends Record<string, unknown>> {
     };
   }
 
-  async execute<Result>(fn: (itx: Ctx, vars: Vars) => Promise<Result>) {
-    return await this.#run<Result>(this.define(fn).code);
+  async execute<Result>(fn: (itx: Ctx, vars: Vars) => Promise<Result>, options?: RunScriptOptions) {
+    return await this.#run<Result>(this.define(fn).code, options);
   }
 
   /**
@@ -107,12 +108,12 @@ export class ItxScriptBuilder<Ctx, Vars extends Record<string, unknown>> {
    * generic (there is no function to infer from). Same result shape as
    * `execute()`.
    */
-  async executeSource<Result = unknown>(code: string) {
-    return await this.#run<Result>(this.defineSource<Result>(code).code);
+  async executeSource<Result = unknown>(code: string, options?: RunScriptOptions) {
+    return await this.#run<Result>(this.defineSource<Result>(code).code, options);
   }
 
-  async #run<Result>(code: string) {
-    const execution = await this.host.runScript(code);
+  async #run<Result>(code: string, options?: RunScriptOptions) {
+    const execution = await this.host.runScript(code, options);
     return {
       /** Raw envelope from `runScript` (completedEvent, executionId, result). */
       execution,

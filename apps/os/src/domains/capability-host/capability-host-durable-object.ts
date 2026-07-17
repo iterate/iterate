@@ -9,6 +9,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
@@ -219,13 +220,16 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return await this.#capabilityHostProcessor.requestScript(input);
   }
 
-  /** Commit the exact executor outcome supplied by the explicit driver. */
+  /** Commit the exact executor outcome and return its authoritative stream event. */
   async settleScriptExecution(input: {
     executionId: string;
     settlement: ScriptExecutionSettlement;
-  }): Promise<void> {
+  }): Promise<StreamEvent> {
     await this.#catchUp();
-    await this.#capabilityHostProcessor.settleScriptExecution(input.executionId, input.settlement);
+    return await this.#capabilityHostProcessor.settleScriptExecution(
+      input.executionId,
+      input.settlement,
+    );
   }
 
   async describeCapabilities(): Promise<CapabilityDescription[]> {

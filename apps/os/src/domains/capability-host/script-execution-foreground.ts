@@ -56,35 +56,30 @@ export async function executeForegroundScript(input: {
   return settlementFromWorkerOutcome(outcome);
 }
 
-type SettlementCommitOutcome =
-  | { status: "committed" }
+type SettlementCommitOutcome<T> =
+  | { status: "committed"; value: T }
   | { status: "commit-failed"; error: unknown };
-
-type SettlementObservationOutcome<T> =
-  | { status: "observed"; value: T }
-  | { status: "observation-failed"; error: unknown };
 
 /**
  * Idempotently hand the executor's exact outcome back to its durable host and
- * return only the exact journal event observed on the Stream DO. A Workers
- * RPC rejection is ambiguous: the append may have committed before its
- * acknowledgement was lost. Retrying this settlement is safe (all attempts
- * use the execution's one completion idempotency key); retrying userspace is
- * deliberately impossible.
+ * return the exact journal event supplied by the acknowledged append. A
+ * Workers RPC rejection is ambiguous: the append may have committed before
+ * its acknowledgement was lost. Retrying this settlement is safe (all
+ * attempts use the execution's one completion idempotency key); retrying
+ * userspace is deliberately impossible. Only after every bounded commit
+ * acknowledgement fails do we point-read/observe the exact idempotency key.
  *
- * The observer participates in every race. If it sees the durable event while
- * an RPC attempt is still in flight, that event is already authoritative and
- * the caller can finish. Both sides install rejection handlers up front, so a
- * winning branch never leaves an abandoned promise to reject unobserved.
+ * The healthy path never opens a second Stream DO request. The append result
+ * is already the authoritative durable event; waiting for the host's
+ * processor fold or a redundant observer turns unrelated delivery pressure
+ * into user-visible script latency.
  */
 export async function commitForegroundScriptSettlement<T>(input: {
-  commit: () => Promise<void>;
+  commit: () => Promise<T>;
   /**
-   * Lazily connect the exact-event observer. The commit RPC is dispatched
-   * first so a long-lived Stream DO WebSocket cannot occupy the outbound lane
-   * needed to create the event it is waiting for. Connecting after dispatch
-   * cannot miss the event: the Stream DO point-reads this idempotency key
-   * before accepting every observer socket.
+   * Ambiguous-failure recovery only. The Stream DO point-reads this exact
+   * idempotency key before accepting an observer socket, so connecting after
+   * all commit attempts cannot miss a committed event.
    */
   observe: () => Promise<T>;
   /** Test seam only. */
@@ -97,46 +92,36 @@ export async function commitForegroundScriptSettlement<T>(input: {
     throw new Error("maxAttempts must be a positive safe integer");
   }
 
-  let observation: Promise<SettlementObservationOutcome<T>> | undefined;
+  let lastCommitError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    // Invoke synchronously before constructing the observer promise. Workers
-    // RPC dispatch begins at the call site even though its result is async.
-    let commitCall: Promise<void>;
+    let commitCall: Promise<T>;
     try {
       commitCall = input.commit();
     } catch (error) {
       commitCall = Promise.reject(error);
     }
-    const commit: Promise<SettlementCommitOutcome> = Promise.resolve(commitCall).then(
-      () => ({ status: "committed" }),
+    const outcome: SettlementCommitOutcome<T> = await Promise.resolve(commitCall).then(
+      (value) => ({ status: "committed", value }) as const,
       (error: unknown) => {
         input.onCommitFailure?.({ attempt, error });
-        return { status: "commit-failed", error };
+        return { status: "commit-failed", error } as const;
       },
     );
-    observation ??= Promise.resolve()
-      .then(input.observe)
-      .then(
-        (value) => ({ status: "observed", value }),
-        (error: unknown) => ({ status: "observation-failed", error }),
-      );
-    const outcome = await Promise.race([observation, commit]);
-    if (outcome.status === "observed") return outcome.value;
-    if (outcome.status === "observation-failed") throw outcome.error;
-    if (outcome.status === "committed") {
-      const observed = await observation;
-      if (observed.status === "observed") return observed.value;
-      throw observed.error;
-    }
-    if (attempt === maxAttempts) {
-      const detail = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
-      throw new Error(
-        `Script settlement commit failed after ${maxAttempts} bounded idempotent attempts: ${detail}`,
-        { cause: outcome.error },
-      );
-    }
+    if (outcome.status === "committed") return outcome.value;
+    lastCommitError = outcome.error;
   }
 
-  throw new Error("unreachable script settlement commit state");
+  try {
+    return await input.observe();
+  } catch (observationError) {
+    const commitDetail =
+      lastCommitError instanceof Error ? lastCommitError.message : String(lastCommitError);
+    const observationDetail =
+      observationError instanceof Error ? observationError.message : String(observationError);
+    throw new Error(
+      `Script settlement commit failed after ${maxAttempts} bounded idempotent attempts (${commitDetail}), and its exact durable outcome could not be observed: ${observationDetail}`,
+      { cause: observationError },
+    );
+  }
 }

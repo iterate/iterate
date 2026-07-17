@@ -1,6 +1,7 @@
 import { tracing } from "cloudflare:workers";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamIdempotencyWaitTimeoutError } from "../streams/wait-for-idempotency-key.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./capability-host-processor-contract.ts";
 import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   scriptSettlementFromEvent,
@@ -21,6 +22,26 @@ export type ScriptExecutionIntent = {
   executionId: string;
   expiresAt: number;
 };
+
+/** Resolve a caller-selected absolute lifetime without allowing one request to
+ * extend the platform's bounded recovery window. */
+export function scriptExecutionExpiresAt(now: number, timeoutMs?: number): number {
+  const resolvedTimeoutMs = timeoutMs ?? DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
+  if (
+    !Number.isSafeInteger(resolvedTimeoutMs) ||
+    resolvedTimeoutMs < 1 ||
+    resolvedTimeoutMs > DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS
+  ) {
+    throw new Error(
+      `script timeoutMs must be a positive safe integer no greater than ${DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS}`,
+    );
+  }
+  const expiresAt = now + resolvedTimeoutMs;
+  if (!Number.isSafeInteger(expiresAt)) {
+    throw new Error("script expiry must be an epoch-millisecond safe integer");
+  }
+  return expiresAt;
+}
 
 /**
  * The capability host's one-way handoff to an explicit execution driver.
@@ -49,7 +70,7 @@ export type ScriptExecutionHost = {
   settleScriptExecution(input: {
     executionId: string;
     settlement: ScriptExecutionSettlement;
-  }): Promise<void>;
+  }): Promise<StreamEvent>;
 };
 
 type ScriptExecutionDriveResult = {

@@ -2,12 +2,9 @@
 
 import type { RpcStub } from "capnweb";
 import { expect, test } from "vitest";
-import type { Project } from "../../src/itx-api.generated.ts";
-import { ScriptExecutionSettlement } from "../../src/domains/capability-host/script-execution-settlement.ts";
 import type { SandboxLiteDurableObject } from "../../src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
-import { defineItxScript } from "../test-support/itx-script-builder.ts";
-import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import { itxScript } from "../test-support/itx-script-builder.ts";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
 
 test.skipIf(deployedBaseUrl() === null)(
@@ -88,11 +85,6 @@ test.skipIf(deployedBaseUrl() === null)(
   async () => {
     await using handle = await createTestProject({ slugPrefix: "script-sandbox-deadline" });
     using itx = handle.itx();
-    using agent = handle.agent("/agents/script-sandbox-deadline");
-    // Agent and capability-host processors have explicit births. A raw stream
-    // append on an unborn path is intentionally inert, so create through the
-    // public agent door before exercising the capability host.
-    await agent.create({});
     const sandboxName = `script-timeout-${crypto.randomUUID()}`;
     const { path: sandboxPath } = await itx.sandboxes.create({
       instanceType: "lite",
@@ -110,77 +102,36 @@ test.skipIf(deployedBaseUrl() === null)(
       const warm = await sandbox.exec("printf warm", { timeout: 10_000 });
       expect(warm).toMatchObject({ exitCode: 0, stdout: "warm" });
 
-      const executionId = `sandbox-deadline:${crypto.randomUUID()}`;
-      const expiresAt = Date.now() + 60_000;
-      const { code } = defineItxScript(
-        async (
-          project: Project,
-          vars: { pidFile: string; requestedTimeoutMs: number; sandboxPath: string },
-        ) => {
-          const guardedSandbox = (await project.sandboxes.get(vars.sandboxPath)) as unknown as {
-            exec(
-              command: string,
-              options: { timeout: number },
-            ): Promise<{ exitCode: number; stderr: string; success: boolean }>;
-          };
-          const quotedPidFile = `'${vars.pidFile.replaceAll("'", `'\\''`)}'`;
-          const timedOut = await guardedSandbox.exec(
-            [
-              `pid_file=${quotedPidFile}`,
-              "trap '' TERM",
-              "(trap '' TERM; while :; do sleep 60; done) &",
-              "child=$!",
-              'printf \'%s %s\\n\' "$$" "$child" > "$pid_file"',
-              "while :; do sleep 60; done",
-            ].join("\n"),
-            // The generated worker must replace this twenty-minute request
-            // with the remaining absolute budget minus cleanup grace.
-            { timeout: vars.requestedTimeoutMs },
-          );
-          return { timedOut };
-        },
-        { pidFile, requestedTimeoutMs: 20 * 60 * 1_000, sandboxPath },
-      );
-      await agent.stream.append({
-        type: "events.iterate.com/capability-host/script-run-requested",
-        payload: { code, executionId, expiresAt },
-      });
+      const execution = await itxScript(itx.capabilityHost)
+        .vars({ pidFile, requestedTimeoutMs: 20 * 60 * 1_000, sandboxPath })
+        .execute(
+          async (project, vars) => {
+            const guardedSandbox = (await project.sandboxes.get(vars.sandboxPath)) as unknown as {
+              exec(
+                command: string,
+                options: { timeout: number },
+              ): Promise<{ exitCode: number; stderr: string; success: boolean }>;
+            };
+            const quotedPidFile = `'${vars.pidFile.replaceAll("'", `'\\''`)}'`;
+            const timedOut = await guardedSandbox.exec(
+              [
+                `pid_file=${quotedPidFile}`,
+                "trap '' TERM",
+                "(trap '' TERM; while :; do sleep 60; done) &",
+                "child=$!",
+                'printf \'%s %s\\n\' "$$" "$child" > "$pid_file"',
+                "while :; do sleep 60; done",
+              ].join("\n"),
+              // The generated worker must replace this twenty-minute request
+              // with the remaining absolute budget minus cleanup grace.
+              { timeout: vars.requestedTimeoutMs },
+            );
+            return { timedOut };
+          },
+          { timeoutMs: 60_000 },
+        );
 
-      let settlement: unknown;
-      let observedLifecycle: { offset: number; type: string }[] = [];
-      await waitForCondition(
-        async () => {
-          const lifecycle = await agent.stream.getEvents({
-            eventTypes: [
-              "events.iterate.com/capability-host/script-run-started",
-              "events.iterate.com/capability-host/script-run-settled",
-            ],
-            limit: 100,
-          });
-          observedLifecycle = lifecycle
-            .filter((event) => event.payload?.executionId === executionId)
-            .map((event) => ({ offset: event.offset, type: event.type }));
-          const completion = lifecycle.find(
-            (event) =>
-              event.type === "events.iterate.com/capability-host/script-run-settled" &&
-              event.payload?.executionId === executionId,
-          );
-          if (completion === undefined) return false;
-          settlement = completion.payload?.settlement;
-          return true;
-        },
-        {
-          description: () =>
-            `the deadline-bounded sandbox script to settle; observed lifecycle ${JSON.stringify(observedLifecycle)}`,
-          intervalMs: 1_000,
-          timeoutMs: 120_000,
-        },
-      );
-
-      const parsed = ScriptExecutionSettlement.parse(settlement);
-      expect(parsed, JSON.stringify(parsed)).toMatchObject({ status: "succeeded" });
-      if (parsed.status !== "succeeded") throw new Error(parsed.error);
-      expect(parsed.result).toMatchObject({
+      expect(execution.success()).toMatchObject({
         timedOut: {
           exitCode: 124,
           success: false,

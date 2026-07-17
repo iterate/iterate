@@ -4,6 +4,7 @@ import {
   type StreamProcessorConstructorArgs,
 } from "../streams/stream-processor.ts";
 import type { ProcessorState } from "../streams/processor-contracts.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { Project } from "../../itx-api.generated.ts";
@@ -20,7 +21,9 @@ import { settleByDeadline } from "./execution-deadline.ts";
 import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
+  ScriptExecutionSettlement as ScriptExecutionSettlementSchema,
   scriptCompletionInput,
+  scriptSettlementFromEvent,
   settlementAppendDeadline,
   settlementForUndrivenScript,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
@@ -1072,33 +1075,53 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     };
   }
 
-  /** Commit the exact outcome returned to the still-live explicit driver. */
+  /** Commit the exact outcome returned to the still-live explicit driver and
+   * return the append's authoritative event. The fold is deliberately not a
+   * response barrier: every later host verb catches up before reading state. */
   async settleScriptExecution(
     executionId: string,
     settlement: ScriptExecutionSettlementValue,
-  ): Promise<void> {
+  ): Promise<StreamEvent> {
+    const normalizedSettlement = ScriptExecutionSettlementSchema.parse(settlement);
     const { state } = await this.#reads.snapshot();
     const execution = state.scriptExecutions[executionId];
-    if (execution === undefined) return;
-    await this.#appendAndFoldCompletionWithin({ executionId, settlement }, execution.expiresAt);
+    if (execution === undefined) {
+      const completed = await this.stream.getEvent({
+        idempotencyKey: this.#completionIdempotencyKey(executionId),
+      });
+      if (completed === undefined) {
+        throw new Error(
+          `script execution "${executionId}" has neither an open obligation nor a committed settlement`,
+        );
+      }
+      const committedSettlement = scriptSettlementFromEvent(completed, executionId);
+      if (
+        committedSettlement === undefined ||
+        JSON.stringify(committedSettlement) !== JSON.stringify(normalizedSettlement)
+      ) {
+        throw new Error(
+          `script execution "${executionId}" was already settled with a different immutable outcome`,
+        );
+      }
+      return completed;
+    }
+    return await this.#appendCompletionEventWithin(
+      { executionId, settlement: normalizedSettlement },
+      execution.expiresAt,
+    );
   }
 
   /**
    * Commit a terminal script fact and fold that exact offset through this
-   * processor before the background attempt is considered settled. Normal
-   * executions run off the processor chain, so this self-pull cannot deadlock;
-   * inline recovery settlement deliberately uses #appendCompletionsWithin.
+   * processor for preparation paths that must return a `settled` handoff.
+   * Foreground execution returns its authoritative append result directly;
+   * the next host verb's catch-up supplies its read barrier instead.
    */
   async #appendAndFoldCompletionWithin(
     input: { executionId: string; settlement: ScriptExecutionSettlementValue },
     obligationExpiresAt: number,
   ): Promise<void> {
-    const [completed] = await this.#appendCompletionWithin(input, obligationExpiresAt);
-    if (completed === undefined) {
-      throw new Error(
-        `script execution "${input.executionId}" completion append returned no event`,
-      );
-    }
+    const completed = await this.#appendCompletionEventWithin(input, obligationExpiresAt);
     await this.#reads.waitUntilEvent({
       offset: completed.offset,
       timeoutMs: Math.max(
@@ -1106,6 +1129,19 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         obligationExpiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - (this.#now ?? Date.now)(),
       ),
     });
+  }
+
+  async #appendCompletionEventWithin(
+    input: { executionId: string; settlement: ScriptExecutionSettlementValue },
+    obligationExpiresAt: number,
+  ): Promise<StreamEvent> {
+    const [completed] = await this.#appendCompletionWithin(input, obligationExpiresAt);
+    if (completed === undefined) {
+      throw new Error(
+        `script execution "${input.executionId}" completion append returned no event`,
+      );
+    }
+    return completed;
   }
 
   async #awaitJournalAppend<T>(

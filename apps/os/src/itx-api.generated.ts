@@ -498,8 +498,11 @@ export interface CapabilityHost {
       path: string;
     }
   >;
-  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
-  runScript(code: string): Promise<{
+  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. `timeoutMs` may shorten, but never extend, the platform's bounded execution lifetime. */
+  runScript(
+    code: string,
+    options?: { timeoutMs?: number },
+  ): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;

@@ -87,52 +87,59 @@ describe("foreground script execution", () => {
 });
 
 describe("foreground script settlement commit", () => {
-  it("returns only after the exact durable event is observed", async () => {
-    const commit = vi.fn(async () => undefined);
+  it("returns the acknowledged durable event without opening an observer", async () => {
     const event = { offset: 42 };
+    const commit = vi.fn(async () => event);
+    const observe = vi.fn(async () => {
+      throw new Error("the healthy path must not observe");
+    });
 
-    await expect(
-      commitForegroundScriptSettlement({ commit, observe: () => Promise.resolve(event) }),
-    ).resolves.toBe(event);
+    await expect(commitForegroundScriptSettlement({ commit, observe })).resolves.toBe(event);
     expect(commit).toHaveBeenCalledOnce();
+    expect(observe).not.toHaveBeenCalled();
   });
 
   it("accepts an observed durable event when the commit acknowledgement is lost", async () => {
-    const acknowledgement = Promise.withResolvers<void>();
     const event = { offset: 42 };
     const onCommitFailure = vi.fn();
-    const result = commitForegroundScriptSettlement({
-      commit: () => acknowledgement.promise,
-      observe: () => Promise.resolve(event),
-      onCommitFailure,
-    });
-
-    await expect(result).resolves.toBe(event);
-    acknowledgement.reject(new Error("host reset after append"));
-    await vi.waitFor(() => expect(onCommitFailure).toHaveBeenCalledOnce());
-  });
-
-  it("retries only the idempotent settlement handoff, never userspace", async () => {
-    const onCommitFailure = vi.fn();
-    const observation = Promise.withResolvers<{ offset: number }>();
     const commit = vi.fn(async () => {
-      if (commit.mock.calls.length === 1) throw new Error("lost acknowledgement");
-      observation.resolve({ offset: 42 });
+      throw new Error("host reset after append");
     });
 
     await expect(
       commitForegroundScriptSettlement({
         commit,
-        observe: () => observation.promise,
+        maxAttempts: 2,
+        observe: () => Promise.resolve(event),
         onCommitFailure,
       }),
-    ).resolves.toEqual({ offset: 42 });
+    ).resolves.toBe(event);
     expect(commit).toHaveBeenCalledTimes(2);
-    expect(onCommitFailure).toHaveBeenCalledOnce();
+    expect(onCommitFailure).toHaveBeenCalledTimes(2);
   });
 
-  it("fails explicitly after the bounded settlement attempts are exhausted", async () => {
-    const observation = Promise.withResolvers<never>();
+  it("retries only the idempotent settlement handoff, never userspace", async () => {
+    const event = { offset: 42 };
+    const onCommitFailure = vi.fn();
+    const observe = vi.fn(async () => event);
+    const commit = vi.fn(async () => {
+      if (commit.mock.calls.length === 1) throw new Error("lost acknowledgement");
+      return event;
+    });
+
+    await expect(
+      commitForegroundScriptSettlement({
+        commit,
+        observe,
+        onCommitFailure,
+      }),
+    ).resolves.toBe(event);
+    expect(commit).toHaveBeenCalledTimes(2);
+    expect(onCommitFailure).toHaveBeenCalledOnce();
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("fails explicitly when bounded commits and exact observation both fail", async () => {
     const commit = vi.fn(async () => {
       throw new Error("host unavailable");
     });
@@ -141,44 +148,31 @@ describe("foreground script settlement commit", () => {
       commitForegroundScriptSettlement({
         commit,
         maxAttempts: 3,
-        observe: () => observation.promise,
+        observe: () => Promise.reject(new Error("event unavailable")),
       }),
     ).rejects.toThrow(
-      "Script settlement commit failed after 3 bounded idempotent attempts: host unavailable",
+      "Script settlement commit failed after 3 bounded idempotent attempts (host unavailable), and its exact durable outcome could not be observed: event unavailable",
     );
     expect(commit).toHaveBeenCalledTimes(3);
-    observation.reject(new Error("test cleanup"));
-    await Promise.resolve();
   });
 
-  it("surfaces an exact-observation failure without leaving commit rejection unhandled", async () => {
-    const acknowledgement = Promise.withResolvers<void>();
-    const result = commitForegroundScriptSettlement({
-      commit: () => acknowledgement.promise,
-      observe: () => Promise.reject(new Error("observer protocol defect")),
-    });
-
-    await expect(result).rejects.toThrow("observer protocol defect");
-    acknowledgement.reject(new Error("late acknowledgement failure"));
-    await Promise.resolve();
-  });
-
-  it("dispatches the settlement commit before opening its long-lived observer", async () => {
+  it("does not observe until every bounded commit acknowledgement has failed", async () => {
     const order: string[] = [];
 
     await expect(
       commitForegroundScriptSettlement({
-        commit: () => {
+        commit: async () => {
           order.push("commit");
-          return Promise.resolve();
+          throw new Error("lost acknowledgement");
         },
-        observe: () => {
+        maxAttempts: 2,
+        observe: async () => {
           order.push("observe");
-          return Promise.resolve({ offset: 42 });
+          return { offset: 42 };
         },
       }),
     ).resolves.toEqual({ offset: 42 });
 
-    expect(order).toEqual(["commit", "observe"]);
+    expect(order).toEqual(["commit", "commit", "observe"]);
   });
 });

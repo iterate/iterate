@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
   driveScriptExecution,
+  scriptExecutionExpiresAt,
   type ScriptExecutionHandoff,
   type ScriptExecutionHost,
   type ScriptExecutionIntent,
 } from "./script-execution-driver.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./capability-host-processor-contract.ts";
 
 const intent: ScriptExecutionIntent = {
   code: "async () => 42",
@@ -31,7 +33,7 @@ function completion(settlement: unknown): StreamEvent {
 
 function hostWith(handoff: ScriptExecutionHandoff) {
   const settleScriptExecution = vi.fn<ScriptExecutionHost["settleScriptExecution"]>(
-    async () => undefined,
+    async ({ settlement }) => completion(settlement),
   );
   return {
     host: {
@@ -52,6 +54,7 @@ describe("script execution driver", () => {
     });
     const run = vi.fn(async () => ({ status: "succeeded" as const, result: 42 }));
     const completedEvent = completion({ status: "succeeded", result: 42 });
+    const observeCompletion = vi.fn(async () => completedEvent);
 
     await expect(
       driveScriptExecution({
@@ -60,7 +63,7 @@ describe("script execution driver", () => {
         host,
         intent,
         now: () => 1_000,
-        observeCompletion: async () => completedEvent,
+        observeCompletion,
       }),
     ).resolves.toEqual({
       completedEvent,
@@ -72,6 +75,7 @@ describe("script execution driver", () => {
       executionId: intent.executionId,
       settlement: { status: "succeeded", result: 42 },
     });
+    expect(observeCompletion).not.toHaveBeenCalled();
   });
 
   it("observes a replayed handoff without invoking or settling userspace again", async () => {
@@ -104,4 +108,20 @@ describe("script execution driver", () => {
     expect(run).not.toHaveBeenCalled();
     expect(settleScriptExecution).not.toHaveBeenCalled();
   });
+});
+
+describe("script execution expiry", () => {
+  it("uses the bounded platform lifetime by default and accepts a shorter explicit timeout", () => {
+    expect(scriptExecutionExpiresAt(1_000)).toBe(1_000 + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS);
+    expect(scriptExecutionExpiresAt(1_000, 60_000)).toBe(61_000);
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER])(
+    "rejects an invalid or overlong timeout (%s)",
+    (timeoutMs) => {
+      expect(() => scriptExecutionExpiresAt(1_000, timeoutMs)).toThrow(
+        `script timeoutMs must be a positive safe integer no greater than ${DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS}`,
+      );
+    },
+  );
 });

@@ -430,7 +430,7 @@ describe("script execution typecheck gate", () => {
     );
   });
 
-  it("launches from its durable request append without waiting for a subscription wake", async () => {
+  it("returns its durable completion without waiting for a subscription wake or processor fold", async () => {
     const stream = new MemoryStream();
     const run = vi.fn(async () => "ok");
     const harness = makeProcessor({ stream, run });
@@ -448,15 +448,45 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(run).toHaveBeenCalledTimes(1);
 
-    // MemoryStream also never delivers the completion. The background attempt
-    // must fold its own committed completion offset instead of parking the
-    // public call on the asynchronous subscription lane.
+    // MemoryStream also never delivers the completion. The append result is
+    // already the authoritative durable outcome, so the foreground call must
+    // return without putting the host's processor fold on its latency path.
     await expect(result).resolves.toMatchObject({ result: "ok" });
+    expect((await harness.runner.snapshot()).offset).toBe(3);
+
+    // The next host verb starts with catch-up; model that boundary and prove
+    // the ordinary fold still closes the obligation exactly once.
+    await harness.runner.catchUp();
     expect((await harness.runner.snapshot()).offset).toBe(4);
     expect(
       recordedSpans.find((span) => span.name === "capability_host.script_request_append")
         ?.attributes,
     ).toMatchObject({ "iterate.capability_host.request_offset": 2 });
+  });
+
+  it("returns the same immutable completion when a lost acknowledgement retries after fold", async () => {
+    const stream = capabilityHostStream();
+    const harness = makeProcessor({ stream });
+    await harness.runner.catchUp();
+    const request = await harness.processor.requestScript(executionIntent("async () => 42"));
+    const settlement = { status: "succeeded" as const, result: 42 };
+    await harness.runner.catchUp();
+
+    const committed = await harness.processor.settleScriptExecution(
+      request.executionId,
+      settlement,
+    );
+    await harness.runner.catchUp();
+
+    await expect(
+      harness.processor.settleScriptExecution(request.executionId, settlement),
+    ).resolves.toEqual(committed);
+    await expect(
+      harness.processor.settleScriptExecution(request.executionId, {
+        status: "succeeded",
+        result: 43,
+      }),
+    ).rejects.toThrow("already settled with a different immutable outcome");
   });
 
   it("does not put a foreground launch behind the request-fold chain", async () => {
