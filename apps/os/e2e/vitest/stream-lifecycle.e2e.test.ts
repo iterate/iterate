@@ -34,7 +34,6 @@ type ConfiguredSubscriberRecord = {
     offset?: number;
     payload?: {
       subscriptionKey?: string;
-      delivery?: { mode?: string; expression?: unknown[] };
       selector?: { eventTypes?: string[] };
     };
   };
@@ -313,16 +312,15 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
   ).toBe(true);
 });
 
-test("project streams are born with a project-worker push feed callers cannot replace", async () => {
+test("project streams are born with the project-worker push feed and replace it by key", async () => {
   // Stateless workers are no longer a wake-target kind: a worker consumes via
   // a PUSH subscription whose expression addresses it. Every project-scoped
   // stream self-configures the default feed at birth — subscriptionKey
   // "project-worker", expression ["processEventBatch"] (the project root's
   // dispatch point, delegating to the worker), deliver
   // "all", onPoison "skip" — in the same synchronous turn as `created`, so
-  // there is no wiring window. The key is reserved because replacing this
-  // birth feed could prevent the platform from installing required stream
-  // integrations.
+  // there is no wiring window. It stays ordinary config: one registry, one
+  // spine, overridable by re-appending the same key.
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -356,29 +354,109 @@ test("project streams are born with a project-worker push feed callers cannot re
     },
   );
 
-  // A same-key replacement is rejected; there is no compatibility lane that
-  // lets callers bypass the project-root dispatch point.
+  // Config replacement: a same-key subscription-configured append overrides
+  // the birth-certificate feed (latest committed event per key wins).
   const narrowedTypes = [`events.iterate.test/lifecycle-worker-feed-selected-${marker}`];
-  await expect(
-    stream.append({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        subscriptionKey: "project-worker",
-        delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
-        selector: { eventTypes: narrowedTypes },
-        onPoison: "skip",
-      },
-    }),
-  ).rejects.toThrow("the project worker birth subscription is managed by Iterate");
+  const [replacement] = await stream.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: "project-worker",
+      // Deliberately the DIRECT worker spelling: both names stay valid, and
+      // this pins that a subscription may bypass the root dispatch point.
+      delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+      selector: { eventTypes: narrowedTypes },
+      onPoison: "skip",
+    },
+  });
 
   const replaced = asStreamRuntimeState(await stream.runtimeState());
   const record = replaced.coreProcessorState.configuredSubscribersByKey?.["project-worker"];
-  expect(record?.latestConfiguredEvent?.offset).toBe(2);
-  expect(record?.latestConfiguredEvent?.payload?.delivery).toEqual({
-    mode: "push",
-    expression: ["processEventBatch"],
+  expect(record?.latestConfiguredEvent?.offset).toBe(replacement.offset);
+  expect(record?.latestConfiguredEvent?.payload?.selector?.eventTypes).toEqual(narrowedTypes);
+});
+
+test("stream idle teardown severs configured processor subscriptions", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
   });
-  expect(record?.latestConfiguredEvent?.payload?.selector).toBeUndefined();
+  using project = itx.projects.create({ slug: `lifecycle-idle-${marker}` });
+  using stream = project.streams.get("/");
+
+  const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
+
+  await forceStreamIdleTeardown(stream);
+
+  await waitForCondition(
+    async () => {
+      const state = asStreamRuntimeState(await stream.runtimeState());
+      return keys.every((key) => state.runtime.connections[key] === undefined);
+    },
+    {
+      description: `configured processor connections to be severed by idle teardown (${keys.join(", ")})`,
+      // Severance is asynchronous fan-out across three cross-script RPC
+      // connections; 1.5s flaked under the CI-parallel lane profile (4 files x
+      // concurrency 3 on one slot). The assertion is about eventual severance,
+      // not a latency SLA.
+      timeoutMs: 10_000,
+    },
+  );
+
+  const events = await stream.getEvents({ afterOffset: 0 });
+  for (const key of keys) {
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            reason: "idle",
+            subscriptionKey: key,
+          }),
+          type: "events.iterate.com/stream/subscriber-disconnected",
+        }),
+      ]),
+    );
+  }
+});
+
+test("append after idle teardown re-wakes configured subscriber from its checkpoint", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `lifecycle-redial-${marker}` });
+  using stream = project.streams.get("/");
+
+  const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
+
+  await forceStreamIdleTeardown(stream);
+
+  await waitForCondition(
+    async () => {
+      const state = asStreamRuntimeState(await stream.runtimeState());
+      return keys.every((key) => state.runtime.connections[key] === undefined);
+    },
+    {
+      description: `configured processor connections to be absent before re-wake (${keys.join(", ")})`,
+      // Same asynchronous fan-out as above — 1.5s flaked under CI-parallel load.
+      timeoutMs: 10_000,
+    },
+  );
+
+  await stream.append({
+    type: "events.iterate.test/lifecycle-redial-trigger",
+    payload: { marker },
+  });
+
+  const { state } = await waitForConfiguredProcessorConnections(stream, { expectedKeys: keys });
+  for (const key of keys) {
+    expect(state.runtime.connections[key]?.subscriptionType).toBe("configured");
+  }
 });
 
 test("closing a Cap'n Web session without unsubscribe removes its stream subscription", async () => {
@@ -615,6 +693,18 @@ async function waitForWaitForEventConnection(stream: Stream): Promise<string> {
     },
   );
   return key!;
+}
+
+async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
+  // Test-only operator path: exercise the idle teardown behavior without waiting
+  // for the production five-minute timer.
+  await (
+    stream as unknown as {
+      durableObjectStub: {
+        runIdleTeardownNow(): Promise<void> | void;
+      };
+    }
+  ).durableObjectStub.runIdleTeardownNow();
 }
 
 function configuredSubscriptionKeys(state: StreamRuntimeState): string[] {

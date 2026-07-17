@@ -104,25 +104,18 @@ expression naming the method to invoke on the ordinary domain surface
 delegates to the project worker — `["streams", ["get", path], "acceptCrossPost"]`);
 webhook is the same cursor machinery pointed at plain HTTP:
 
-|                         | ephemeral                                                                   | durable `wake`                                                      | durable `push`                                                                                  | durable `webhook`                                |
-| ----------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| who                     | browsers, tests, `waitForEvent`                                             | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost`, protected platform observability | external HTTP receivers                          |
-| subscription            | `subscribe()` (session)                                                     | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`                                             | config event, `delivery: {mode:"webhook", url}`  |
-| offset owner            | client, in-memory                                                           | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log                                              | **stream** — same cursor row, advanced per EVENT |
-| stream-side row         | none                                                                        | observational watermark (poke coalescing, lag)                      | authoritative cursor                                                                            | authoritative cursor                             |
-| sink arrives as         | `subscribe()` parameter                                                     | returned from the expression-named poke                             | named by a persisted itx expression                                                             | the configured URL                               |
-| warm transport          | retained one-way callback                                                   | retained one-way sink                                               | fresh awaited call per batch                                                                    | one `fetch` POST per event                       |
-| return frames per batch | **zero** (result disposed unpulled)                                         | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)                                             | the 2xx response (**the ack**), per event        |
-| retry / failure         | client's problem                                                            | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)                                           | same spine, same machine, per-event granularity  |
-| replay                  | durable rows after `replayAfterOffset`; ephemeral rows only live after open | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`                                       | same as push                                     |
-| filter                  | `selector` / `eventTypes` on subscribe                                      | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config                                                 | same selector shape                              |
-
-### Event type identifiers
-
-An event `type` is indexed operational schema, not content: 1–256 ASCII
-characters matching a URI-like identifier (`A-Z a-z 0-9 . _ : / @ + * -`).
-Put user text and secrets in `payload`; the first-party PostHog feed indexes
-the exact type but deliberately never exports payload or metadata.
+|                         | ephemeral                                                                   | durable `wake`                                                      | durable `push`                                                         | durable `webhook`                                |
+| ----------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------ |
+| who                     | browsers, tests, `waitForEvent`                                             | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost`, PostHog | external HTTP receivers                          |
+| subscription            | `subscribe()` (session)                                                     | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`                    | config event, `delivery: {mode:"webhook", url}`  |
+| offset owner            | client, in-memory                                                           | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log                     | **stream** — same cursor row, advanced per EVENT |
+| stream-side row         | none                                                                        | observational watermark (poke coalescing, lag)                      | authoritative cursor                                                   | authoritative cursor                             |
+| sink arrives as         | `subscribe()` parameter                                                     | returned from the expression-named poke                             | named by a persisted itx expression                                    | the configured URL                               |
+| warm transport          | retained one-way callback                                                   | retained one-way sink                                               | fresh awaited call per batch                                           | one `fetch` POST per event                       |
+| return frames per batch | **zero** (result disposed unpulled)                                         | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)                    | the 2xx response (**the ack**), per event        |
+| retry / failure         | client's problem                                                            | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)                  | same spine, same machine, per-event granularity  |
+| replay                  | durable rows after `replayAfterOffset`; ephemeral rows only live after open | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`              | same as push                                     |
+| filter                  | `selector` / `eventTypes` on subscribe                                      | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config                        | same selector shape                              |
 
 ### Ephemeral events
 
@@ -134,12 +127,13 @@ breaker, same pause door), with two deliberate demotions:
   processor catch-up) skip ephemeral rows unless the caller passes
   `includeEphemeral: true`. Point reads by offset or idempotencyKey — an
   explicit request — always return them.
-- **Excluded from ordinary durable subscribers.** The wake/push/webhook lanes
+- **Excluded from durable subscribers by default.** The wake/push/webhook lanes
   drop ephemeral events from delivery exactly the way selectors already skip
   non-matching events (skip-not-defer: cursors advance over their offsets),
   so subscription-fed product processors never fold or side-effect on one.
-  Iterate's protected PostHog push is the sole durable opt-in: it mirrors the
-  committed row for observability but cannot affect product state. Ephemeral
+  A push/webhook may explicitly set `includeEphemeral: true`; the ordinary
+  first-party PostHog subscription does so to mirror every committed row. Wake
+  processors cannot opt in. Ephemeral
   `subscribe()` connections receive an ephemeral row only when it is appended
   after that exact connection opens. Reconnect/catch-up replays durable rows
   only; historical ephemeral rows are never delivered.
@@ -164,12 +158,11 @@ The e2e ("ephemeral events are second-class rows…", `streams.e2e.test.ts`)
 proves every clause of this contract end to end, and the `ephemeral-events`
 entry in the itx example catalogue is its userspace-runnable twin.
 
-The demotions are not a license to lose observability. A future sweep may
-EVICT an ephemeral row only after the protected PostHog cursor has acknowledged
-it; until then the stream retains the exact committed row. Once acknowledged,
-eviction may leave permanent offset gaps that every read path — including the
-browser mirror — already tolerates. Constraints pre-paid for that future sweep:
-the offset allocator survives head-row eviction
+The demotions are a license the stream keeps: because product state cannot
+depend on an ephemeral row, a future sweep may EVICT them (memory pressure,
+DO-startup cleanup), leaving permanent offset gaps that every read path —
+including the browser mirror — already tolerates. Constraints pre-paid for
+that future sweep: the offset allocator survives head-row eviction
 (`highestAssignedOffset()` reads AUTOINCREMENT's `sqlite_sequence`, which row
 deletion does not reset — reissuing a seen offset would wedge every
 offset-keyed consumer); eviction forgets idempotency keys (a swept key
@@ -260,7 +253,7 @@ delivery: {
 Every host's processor is a real itx node (`itx.agents.get(path).processor`,
 `itx.repos.get(path).processor`, the project root's own `itx.processor`,
 `itx.email.processor`, `itx.integrations.slack.get("<conn>").processor`, …), and
-`wakeStreamSubscriber` on it is the host's wake door — stream-delivery only,
+`wakeStreamSubscriber` on it is the host's wake door — trusted-internal only,
 because the handshake's sink drives the host's durable checkpoint. The stream
 pokes; the host answers with everything:
 

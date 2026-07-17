@@ -195,9 +195,9 @@ For an unexpected browser or Worker failure an operator should be able to:
 
 ## First-party stream event feed
 
-The analytics-event gold path is a platform-owned durable subscription on
-every project stream. It is not a project setting, user-provided integration,
-or optional connection:
+The analytics-event gold path is an automatically appended, ordinary durable
+subscription on every new project stream. It is not a project setting,
+user-provided integration, or optional connection:
 
 ```text
 project-worker subscription
@@ -208,25 +208,22 @@ project-worker subscription
   -> PostHog EU public batch capture
 ```
 
-The fixed subscription key is `iterate-platform-posthog`. It delivers from
-offset zero, includes ephemeral rows, parks rather than poison-skipping, and
-uses the fixed expression
-`["integrations", "posthog", "processEventBatch"]`. The key, idempotency key,
-delivery route, and `includeEphemeral` power are reserved at every append and
-cross-post boundary. Only the narrow `stream-delivery` principal may append the
-exact canonical configuration; admins may operate its cursor but may not
-redefine it. `itx.integrations.posthog` is an internal first-party receiver; it
-has no per-project credentials or configuration.
+The conventional subscription key is `iterate-platform-posthog`. It delivers
+from offset zero, explicitly includes ephemeral rows, parks rather than
+poison-skipping, and uses the fixed expression
+`["integrations", "posthog", "processEventBatch"]`. This is normal stream
+configuration: the key and route are not reserved, and the subscription may be
+replaced or removed through the normal lifecycle. `includeEphemeral` is a
+generic push/webhook option rather than a private platform power.
+`itx.integrations.posthog` is a fixed first-party receiver with deployment
+credentials; projects do not configure their own PostHog connection.
 
-Fresh streams install the subscription when their project-worker feed delivers
-the immutable offset-one `events.iterate.com/stream/created` fact. Redelivery
-appends the same idempotent fact, so it is harmless and a parked feed is never
-silently reset. The canonical birth `project-worker` subscription is also
-reserved from userspace lifecycle writes: otherwise replacing it during an
-installation retry could permanently prevent offset one from reaching the
-platform dispatch point. The installer accepts only the authentic offset-two
-birth configuration and cannot be triggered through a lookalike push route.
-There is deliberately no legacy scan, wake-time shim, or
+Fresh streams install the subscription when their existing project-worker feed
+delivers `events.iterate.com/stream/created` to
+`Project.processEventBatch`. Redelivery appends the same idempotent
+configuration, so it is harmless and does not reset the cursor. Neither the
+project-worker subscription nor the PostHog subscription receives a special
+protection mechanism. There is deliberately no legacy scan, wake-time shim, or
 operator-configurable backfill. Streams created before this invariant exists
 are outside the rollout boundary; every stream created afterwards acquires the
 feed through its ordinary durable birth delivery. There is no recovery import
@@ -234,24 +231,24 @@ or restoration lane. The shared streams example app has no project-worker/OS
 integration root and therefore does not acquire this OS-only subscription.
 
 “All events” means one PostHog occurrence for every committed row still owned
-by the stream, without a type selector, sampling, success/error filter, or
-ephemeral exclusion. Future ephemeral eviction must not delete a row until the
-reserved PostHog cursor has received HTTP acceptance for it. The stream remains authoritative:
-PostHog stores an operational occurrence index, not another copy of arbitrary
-event payloads. Payload, metadata, source chains, idempotency keys, arguments,
-scripts, prompts, and other unreviewed values are deliberately absent. This
-keeps secrets out of analytics and prevents PostHog's post-enrichment Kafka
-size limit from accepting and then dropping multi-megabyte stream rows.
+by the stream, without a type selector, sampling, success/error filter,
+ephemeral exclusion, or payload allowlist. The complete committed event is
+sent verbatim under `properties.stream_event`, including payload, metadata,
+source/cross-post provenance, idempotency key, ephemerality, offset, commit
+time, type, and raw path. The raw stream path is also indexed separately as
+`stream_path`. This is intentionally a second searchable event copy in
+PostHog, not a bounded operational projection. Event producers therefore own
+the obligation not to append secrets that must not reach our first-party
+analytics project. PostHog request-size and asynchronous ingestion warnings
+must be treated as observable delivery constraints, not reasons to silently
+filter fields.
 
-Each occurrence contains bounded, reviewed coordinates:
+Each occurrence also contains indexed coordinates:
 
 - deployment worker name and immutable project id;
-- an opaque stable stream id and source offset (raw user-controlled stream
-  paths are not exported);
+- the raw stream path, an opaque stable stream id, and source offset;
 - original commit time, ephemerality, and stream high-water mark;
-- the exact event type as a bounded operational schema identifier, including
-  custom project event types (event types are public identifiers and must never
-  contain secrets or user content); and
+- the exact event type, including custom project event types; and
 - a stable UUID derived from an unambiguous JSON tuple of deployment, project,
   stream path, offset, and commit time, so at-least-once retries submit the
   same identity without path delimiter collisions or conflating a stream
@@ -265,10 +262,10 @@ group keys be unique identifiers rather than display names. The authentic root
 `$groupidentify` occurrence for that same key. Its `$group_set` records the id
 and immutable canonical slug, so operators can find one project group by either
 identifier without creating parallel entities. The event must be first-hand,
-durable, unannotated, on `/`, and carry the reserved `project-created:<id>`
-idempotency key; lookalike or cross-posted events cannot write group properties.
-No directory lookup, mutable alias, or per-batch group update exists, and
-creator email or other birth payload fields are never sent.
+durable, unannotated, on `/`, and carry the `project-created:<id>` idempotency
+key; lookalike or cross-posted events cannot write group properties. No
+directory lookup, mutable alias, or per-batch group update exists. The regular
+stream occurrence still contains the complete project birth payload.
 
 PostHog only links identified events to groups, so every event uses one stable
 synthetic operational identity per deployment/project. This creates no
@@ -434,7 +431,7 @@ alarm actions. Possible later operation adapters are:
 - [ ] Logging failure cannot alter the product outcome.
 - [ ] Secrets, bodies, scripts, prompts, arguments/results, auth headers, and
       query parameters are absent from logs, exceptions, and replay.
-- [ ] Every fresh project stream receives the one canonical PostHog
+- [ ] Every fresh project stream receives the ordinary PostHog
       subscription from its `stream/created` delivery; there is no legacy
       scan, backfill, or compatibility path.
 - [ ] Every durable and ephemeral row is submitted as one project-grouped
@@ -442,9 +439,9 @@ alarm actions. Possible later operation adapters are:
 - [ ] Only public-batch HTTP acceptance gates the durable cursor; transport
       failures eventually park, and the proof checks PostHog's asynchronous
       ingestion-warning surface without claiming exactly-once indexing.
-- [ ] Arbitrary event payloads, metadata, provenance, idempotency keys, and raw
-      stream paths are absent from the Capture request; the bounded event type
-      is the intentional public schema identifier.
+- [ ] The Capture request contains the complete committed event, including
+      payload, metadata, provenance, idempotency key, and raw stream path, with
+      no event-field allowlist or filtering.
 - [ ] Preview proof includes the PostHog live feed and its matching Cloudflare
       capture span for a fresh stream's durable and ephemeral rows.
 

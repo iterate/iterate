@@ -9,7 +9,6 @@ import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
 import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
-import { DurableObjectNameCodec } from "~/domains/durable-object-names.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
 import type { Stream } from "~/itx-api.generated.ts";
@@ -52,20 +51,11 @@ export class ItxEntrypoint extends WorkerEntrypoint {
  * reach the RPC surface or the UI. Local dev (no iterateAuth config) stays
  * the historical auth-less playground.
  *
- * `kill()` is inherited from the public `Stream` capability. `reset()` is the
- * playground-only operator verb the sidebar needs for destructive experiments;
- * its raw Durable Object stub remains a JavaScript-private implementation detail.
+ * `kill()`/`reset()` are playground-only operator verbs on top of the public
+ * `Stream` capability — the sidebar's restart/reset experiments need them, and
+ * itx deliberately keeps them off the public contract.
  */
 class PlaygroundStreamRpcTarget extends StreamRpcTarget {
-  get #streamDurableObjectStub() {
-    return workerEnv.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: this.props.projectId, path: this.props.path },
-        { allowNullProjectId: true },
-      ),
-    );
-  }
-
   override at(path: Parameters<Stream["at"]>[0]) {
     return new PlaygroundStreamRpcTarget({
       auth: this.props.auth,
@@ -74,9 +64,14 @@ class PlaygroundStreamRpcTarget extends StreamRpcTarget {
     });
   }
 
+  /** Abort the stream DO; the durable log is kept and a woken event is appended on restart. */
+  kill() {
+    return this.durableObjectStub.kill();
+  }
+
   /** Wipe all stream DO storage, then abort — the next connection starts a fresh stream. */
   reset() {
-    return this.#streamDurableObjectStub.reset();
+    return this.durableObjectStub.reset();
   }
 }
 

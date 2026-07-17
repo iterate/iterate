@@ -230,16 +230,14 @@ type StreamSubscribersHooks = {
   readEvents(args: { afterOffset: number; limit: number }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
-  /** Platform policy: whether this protected subscription sees ephemeral rows. */
-  includeEphemeral(subscriptionKey: string): boolean;
   /** The spine's durable cursor rows (SQLite next to the event log). */
   store: SubscriptionCursorStore;
   /** Transport quarantine (see {@link SubscriberDial}). */
   dial: SubscriberDial;
   /**
    * Append a fact the delivery machinery produces (presence, parked, poison
-   * error records). Must not throw: close paths run during teardown where an
-   * append can fail, and that must never mask the close itself.
+   * error records). Teardown facts may be logged and swallowed by the owner;
+   * a failed parking fact must throw so work is not silently cleared.
    */
   appendFact(event: StreamEventInput): void;
   /**
@@ -591,12 +589,12 @@ export class StreamSubscribers {
             sized.map((entry) => [entry.event.offset, entry.byteLength]),
           );
 
-          // Ordinary durable receivers never see ephemeral rows. The sole
-          // exception is fixed by the owning stream's platform policy; there
-          // is deliberately no public configuration field that can opt in.
-          const visible = this.#hooks.includeEphemeral(subscriptionKey)
-            ? sized.map((entry) => entry.event)
-            : sized.filter((entry) => entry.event.ephemeral !== true).map((entry) => entry.event);
+          // Durable delivery skips ephemeral rows unless the subscription
+          // explicitly opts in. The cursor still advances over skipped rows.
+          const visible =
+            config.includeEphemeral === true
+              ? sized.map((entry) => entry.event)
+              : sized.filter((entry) => entry.event.ephemeral !== true).map((entry) => entry.event);
           const { matched, conditionErrors } = this.#applySelector(
             subscriptionKey,
             config,

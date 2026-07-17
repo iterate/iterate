@@ -64,11 +64,7 @@ export class DynamicWorkerRunner {
      * past the request that gave up on them (see resolveWorkerSource). */
     waitUntil: (promise: Promise<unknown>) => void;
   }) {
-    const itxScope = itxEntrypointProps({
-      path: props.scopePath,
-      projectId: props.projectId,
-      purpose: "userspace",
-    });
+    const itxScope = itxEntrypointProps({ path: props.scopePath, projectId: props.projectId });
     this.#bindings = { ITX: itxEntrypointBinding(props.exports, itxScope) };
     this.#globalOutbound = projectEgressFetcher(props.exports, props.projectId);
     this.#projectId = props.projectId;

@@ -85,9 +85,6 @@ export const StreamSubscriptionType = z.enum(["configured", "ephemeral"]);
 /** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
 export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
 
-/** Reserved birth-certificate feed into the project's platform dispatch point. */
-export const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
-
 /**
  * How a durable subscription's events reach the subscriber — the three
  * modalities of the streams README's axes table. Wake and push share ONE
@@ -182,6 +179,8 @@ const SubscriptionConfiguredPayload = z
     deliver: DeliverPolicy.optional(),
     /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
     onPoison: OnPoisonPolicy.optional(),
+    /** Include ephemeral rows in push/webhook delivery. Absent = durable rows only. */
+    includeEphemeral: z.boolean().optional(),
     /**
      * Receiver-owned configuration, passed through VERBATIM on every delivery
      * (the frame carries the configured event). The platform never interprets
@@ -197,7 +196,7 @@ const SubscriptionConfiguredPayload = z
     // subscriber owns its checkpoint) would commit config that silently does
     // nothing.
     if (payload.delivery.mode === "wake") {
-      for (const field of ["deliver", "onPoison"] as const) {
+      for (const field of ["deliver", "onPoison", "includeEphemeral"] as const) {
         if (payload[field] === undefined) continue;
         ctx.addIssue({
           code: "custom",

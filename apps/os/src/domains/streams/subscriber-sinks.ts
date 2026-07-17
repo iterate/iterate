@@ -328,11 +328,7 @@ export function createSubscriberDial(deps: {
    * proxies through this chain and must not outlive it).
    */
   const acquireAuthorityRoot = async () => {
-    const binding = itxLoopbackStub(deps.exports, {
-      projectId: deps.projectId,
-      path: "/",
-      purpose: "stream-delivery",
-    });
+    const binding = itxLoopbackStub(deps.exports, { projectId: deps.projectId, path: "/" });
     try {
       const root = await binding.get();
       return {

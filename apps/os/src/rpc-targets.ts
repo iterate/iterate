@@ -31,9 +31,9 @@ import { RpcTarget } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
-  STREAM_DELIVERY_PRINCIPAL,
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
+  trustedInternalAuthContext,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -105,11 +105,8 @@ import {
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import {
-  assertCanonicalProjectWorkerDeliveryEnvelope,
-  assertPlatformEventWriteAllowed,
-  assertCanonicalPosthogDeliveryEnvelope,
-  batchContainsCanonicalStreamCreated,
   capturePosthogStreamEventBatch,
+  posthogSubscriptionEvent,
 } from "./domains/integrations/posthog.ts";
 import {
   connectionSlackClient,
@@ -436,7 +433,7 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT product event: live subscribe() connections see it, but default reads and ordinary durable delivery (processors, the project worker feed) do not. First-party observability still acknowledges every row before any future eviction; append the durable product fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -459,7 +456,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get #durableObjectStub() {
+  /** @internal */
+  get durableObjectStub() {
     return env.STREAM.getByName(
       DurableObjectNameCodec.stringify(
         {
@@ -490,11 +488,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // ride the tagged methods.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    assertPlatformEventWriteAllowed(events, {
-      authority: this.props.auth.principal === "admin" ? "admin" : "userspace",
-      projectId: this.props.projectId,
-    });
-    return this.#durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -512,7 +506,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.#durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -523,7 +517,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.#durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -548,14 +542,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.#durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+    return this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.#durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
+    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -579,17 +573,17 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.#durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void> {
-    return Promise.resolve(this.#durableObjectStub.kill());
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /**
-   * Session-scoped live event delivery (the public "ephemeral" subscription
-   * lane; a protected platform observability push is the only durable opt-in):
+   * Session-scoped live event delivery (the "ephemeral" subscription lane —
+   * also the only lane that receives `ephemeral: true` events):
    * `processEventBatch` first receives durable history after
    * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
    * when appended after this exact subscription opens and are never replayed.
@@ -642,7 +636,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // disposes a session's exports when the session ends, which is exactly an
     // ephemeral subscription's lifetime.
     const forward = retainProcessEventBatch(args.processEventBatch);
-    return this.#durableObjectStub.subscribe({
+    return this.durableObjectStub.subscribe({
       ...args,
       processEventBatch: (batch) => void forward(batch),
     });
@@ -660,10 +654,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // through a push expression evaluated against the project's trusted itx
     // root. A session principal appending copies would bypass provenance
     // stamping.
-    if (this.props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
+    if (this.props.auth.principal !== "trusted-internal") {
       throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
-    return Promise.resolve(this.#durableObjectStub.acceptCrossPost(batch));
+    return Promise.resolve(this.durableObjectStub.acceptCrossPost(batch));
   }
 
   /**
@@ -1023,7 +1017,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  // Private on purpose, like every RPC target's stub getter: the
+  // Private on purpose (unlike StreamRpcTarget's public stub getter): the
   // Repo Durable Object carries `gitAccess()`, whose write tokens must not be
   // reachable through the public capnweb surface — itx callers get file-level
   // methods only.
@@ -1616,7 +1610,8 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get #durableObjectStub() {
+  /** @internal */
+  get durableObjectStub() {
     return env.WORKSPACE.getByName(
       DurableObjectNameCodec.stringify({
         path: this.props.path,
@@ -1627,22 +1622,22 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** Workspace identity string (debug). */
   whoami(): Promise<string> {
-    return this.#durableObjectStub.whoami();
+    return this.durableObjectStub.whoami();
   }
 
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.#durableObjectStub.kill());
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /** File contents, or null when the path does not exist. */
   readFile(path: string): Promise<string | null> {
-    return this.#durableObjectStub.readFile(path);
+    return this.durableObjectStub.readFile(path);
   }
 
   /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null> {
-    return this.#durableObjectStub.readFileBytes(path);
+    return this.durableObjectStub.readFileBytes(path);
   }
 
   /**
@@ -1652,7 +1647,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
    * main).
    */
   reset(): Promise<void> {
-    return this.#durableObjectStub.reset();
+    return this.durableObjectStub.reset();
   }
 
   /**
@@ -1662,29 +1657,29 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
    * masks it until that ancestor is reverted too.
    */
   revert(path: string): Promise<void> {
-    return this.#durableObjectStub.revert(path);
+    return this.durableObjectStub.revert(path);
   }
 
   /** Every file path in the merged view (local layer over latest main), sorted. */
   listAllFiles(): Promise<string[]> {
-    return this.#durableObjectStub.listAllFiles();
+    return this.durableObjectStub.listAllFiles();
   }
 
   writeFile(path: string, content: string): Promise<void> {
-    return this.#durableObjectStub.writeFile(path, content);
+    return this.durableObjectStub.writeFile(path, content);
   }
 
   writeFileBytes(path: string, data: Uint8Array): Promise<void> {
-    return this.#durableObjectStub.writeFileBytes(path, data);
+    return this.durableObjectStub.writeFileBytes(path, data);
   }
 
   appendFile(path: string, content: string): Promise<void> {
-    return this.#durableObjectStub.appendFile(path, content);
+    return this.durableObjectStub.appendFile(path, content);
   }
 
   /** Delete one file. Returns false when the path did not exist. */
   deleteFile(path: string): Promise<boolean> {
-    return this.#durableObjectStub.deleteFile(path);
+    return this.durableObjectStub.deleteFile(path);
   }
 
   /**
@@ -1692,40 +1687,40 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
    * The `oldString` must match exactly once unless `replaceAll` is true.
    */
   edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
-    return this.#durableObjectStub.edit(input);
+    return this.durableObjectStub.edit(input);
   }
 
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.#durableObjectStub.mkdir(path, opts);
+    return this.durableObjectStub.mkdir(path, opts);
   }
 
   readDir(dir?: string): Promise<WorkspaceFileInfo[]> {
-    return this.#durableObjectStub.readDir(dir);
+    return this.durableObjectStub.readDir(dir);
   }
 
   glob(pattern: string): Promise<WorkspaceFileInfo[]> {
-    return this.#durableObjectStub.glob(pattern);
+    return this.durableObjectStub.glob(pattern);
   }
 
   rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void> {
-    return this.#durableObjectStub.rm(path, opts);
+    return this.durableObjectStub.rm(path, opts);
   }
 
   cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.#durableObjectStub.cp(src, dest, opts);
+    return this.durableObjectStub.cp(src, dest, opts);
   }
 
   mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.#durableObjectStub.mv(src, dest, opts);
+    return this.durableObjectStub.mv(src, dest, opts);
   }
 
   /** File metadata, or null when the path does not exist. */
   stat(path: string): Promise<WorkspaceFileInfo | null> {
-    return this.#durableObjectStub.stat(path);
+    return this.durableObjectStub.stat(path);
   }
 
   exists(path: string): Promise<boolean> {
-    return this.#durableObjectStub.exists(path);
+    return this.durableObjectStub.exists(path);
   }
 
   /** Git over this workspace's checkout. */
@@ -1762,7 +1757,8 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get #durableObjectStub() {
+  /** @internal */
+  get durableObjectStub() {
     return env.WORKSPACE.getByName(
       DurableObjectNameCodec.stringify({
         path: this.props.path,
@@ -1773,7 +1769,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
   status(): Promise<WorkspaceChange[]> {
-    return this.#durableObjectStub.gitStatus();
+    return this.durableObjectStub.gitStatus();
   }
 
   /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
@@ -1781,12 +1777,12 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     author?: { email: string; name: string };
     message: string;
   }): Promise<WorkspacePublishResult> {
-    return this.#durableObjectStub.gitCommit(input);
+    return this.durableObjectStub.gitCommit(input);
   }
 
   /** The config repo's main-branch history, newest first. */
   log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]> {
-    return this.#durableObjectStub.gitLog(input);
+    return this.durableObjectStub.gitLog(input);
   }
 }
 
@@ -1907,7 +1903,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
    * (audit, egress, whether material is present, the refresh strategy). The
    * raw value is never part of it. */
   async __describe(): Promise<Description & SecretDescription> {
-    const state = await this.#durableObjectStub.describe();
+    const state = await this.durableObjectStub.describe();
     return describeNode({
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
@@ -1928,7 +1924,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get #durableObjectStub() {
+  /** @internal */
+  get durableObjectStub() {
     return env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
@@ -1939,38 +1936,38 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
 
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response> {
-    return this.#durableObjectStub.fetch(request);
+    return this.durableObjectStub.fetch(request);
   }
 
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.#durableObjectStub.kill());
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /** Create this secret and wait until its processor has folded the birth certificate. */
   create(input: SecretCreateInput): Promise<StreamEvent> {
-    return this.#durableObjectStub.create(input);
+    return this.durableObjectStub.create(input);
   }
 
   /** Set secret material, its egress allowlist, and/or refresh strategy.
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent> {
-    return this.#durableObjectStub.update(input);
+    return this.durableObjectStub.update(input);
   }
 
   /** The secret stream processor; its public state IS the SecretDescription. */
   get processor(): WakeableStreamProcessorRpc<SecretDescription> {
     return new ProcessorRelayRpcTarget<SecretDescription>({
       auth: this.props.auth,
-      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
     });
   }
 
   /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
   get liveState(): LiveStateRpc<SecretDescription> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
-      () => this.#durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
     );
   }
 }
@@ -2945,28 +2942,20 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
   }
 }
 
-/** Iterate-owned receiver behind `itx.integrations.posthog`. */
+/** Iterate's fixed first-party PostHog stream receiver. */
 class PostHogIntegrationRpcTarget extends RpcTarget {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { projectId: string }) {
     super();
-    if (props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
-      throw new Error("PostHog stream ingestion is an Iterate-managed integration");
-    }
   }
 
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
-    assertCanonicalPosthogDeliveryEnvelope(batch);
     if (batch.projectId !== this.props.projectId) {
       throw new Error("PostHog stream delivery project does not match its itx authority");
     }
     const config = parseConfig(env).posthog;
-    // Deployed environment generation requires this block. Undefined is kept
-    // only for intentionally vendor-free local development; delivery parks
-    // loudly instead of pretending those rows were exported.
     if (config === undefined) {
       throw new StreamReceiverUnavailableError("PostHog is not configured for this deployment");
     }
-
     await capturePosthogStreamEventBatch({
       apiKey: config.apiKey,
       batch,
@@ -3058,12 +3047,9 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
-  /** @internal Iterate-owned sink for the reserved all-stream event feed. */
+  /** @internal Iterate's fixed first-party event feed. */
   get posthog(): PostHogIntegrationRpcTarget {
-    return new PostHogIntegrationRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-    });
+    return new PostHogIntegrationRpcTarget({ projectId: this.props.projectId });
   }
 
   /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
@@ -4097,7 +4083,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return this.#props.capabilityHost.revokeCapability(input);
   }
 
-  get #durableObjectStub() {
+  /** @internal */
+  get durableObjectStub() {
     return env.AGENT.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#props.projectId,
@@ -4110,7 +4097,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   get processor(): WakeableStreamProcessorRpc<AgentProcessorState> {
     return new ProcessorRelayRpcTarget<AgentProcessorState>({
       auth: this.#props.auth,
-      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
     });
   }
 
@@ -4397,7 +4384,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /** Restart the agent's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.#durableObjectStub.kill());
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   async #assertCreated(): Promise<void> {
@@ -4642,30 +4629,12 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // The auth worker may normalize the slug (slugify); adopt its canonical
     // form so stream events agree with the directory and ingress hostnames.
     args.slug = registered.slug;
-    const creatorEmail = userPrincipalOf(this.props.auth)?.email;
-    const rootStreamName = streamDurableObjectName({
-      projectId: registered.projectId,
-      path: "/",
-    });
-    const [created, subscription] = await timedStep("create-timing", timing, "root-append", () =>
-      env.STREAM.getByName(rootStreamName).initializeProjectRoot({
-        ...(creatorEmail === undefined ? {} : { creatorEmail }),
-        slug: registered.slug,
-        projectProcessorSubscription: buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
-          }),
-          idempotencyKey: "project-processor-subscription-v1",
-          processor: ["processor"],
-          processorSlug: ProjectProcessorContract.slug,
-        }),
-      }),
-    );
-
-    // Birth is now durable and cannot be pre-empted by a session. Expose the
-    // project to the creator and prime slug resolution only after that fact.
+    // The creating session can use the project immediately; a signed-in user's
+    // claims catch up on the next token refresh (directory fallback covers the
+    // gap for other connections).
     widenProjectAccess(this.props.auth, registered.projectId);
+    // Prime the slug->id directory cache so the post-create navigation (and
+    // the first project-host request) never miss into the auth worker.
     await timedStep("create-timing", timing, "prime-directory", () =>
       primeProjectDirectory(env.PROJECT_DIRECTORY, {
         id: registered.projectId,
@@ -4679,6 +4648,36 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       auth: this.props.auth,
       projectId: args.projectId,
     });
+
+    const creatorEmail = userPrincipalOf(this.props.auth)?.email;
+    const appendRootEvents = () =>
+      stream.append(
+        {
+          type: "events.iterate.com/project/created",
+          idempotencyKey: `project-created:${registered.projectId}`,
+          payload: {
+            config: {
+              onboardingActive: true,
+              slug: registered.slug,
+              ...(creatorEmail === undefined ? {} : { creatorEmail }),
+            },
+          },
+        },
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: "/",
+          }),
+          processor: ["processor"],
+          processorSlug: ProjectProcessorContract.slug,
+        }),
+      );
+    const [created, subscription] = await timedStep(
+      "create-timing",
+      timing,
+      "root-append",
+      appendRootEvents,
+    );
     const project = itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -5161,7 +5160,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return this.#props.projectId;
   }
 
-  get #durableObjectStub() {
+  /** @internal */
+  get durableObjectStub() {
     return env.PROJECT.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.#props.projectId }),
     );
@@ -5176,7 +5176,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#props.capabilityHost.path;
     const [project, hostDescription] = await Promise.all([
-      this.#durableObjectStub.describe(),
+      this.durableObjectStub.describe(),
       this.#props.capabilityHost.__describe(),
     ]);
     const mountedCapabilities = hostDescription.capabilities;
@@ -5237,20 +5237,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.#durableObjectStub.kill());
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 
   /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
   get processor(): WakeableStreamProcessorRpc<ProjectProcessorState> {
     return new ProcessorRelayRpcTarget<ProjectProcessorState>({
       auth: this.#props.auth,
-      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
     });
   }
 
   /** The project DO's methods this isolate reaches — typed once (see {@link ProjectDurableObjectRpc}). */
   get #projectDo(): ProjectDurableObjectRpc {
-    return this.#durableObjectStub as unknown as ProjectDurableObjectRpc;
+    return this.durableObjectStub as unknown as ProjectDurableObjectRpc;
   }
 
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
@@ -5493,7 +5493,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** @internal
+  /**
    * Platform dispatch point: streams deliver committed event batches here
    * for the project worker. Scripts should not call this — subscribe to a
    * stream (or configure a subscription) instead.
@@ -5504,19 +5504,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // deployment code instead of by patching user repos, and first-party
   // per-event work (the streams index via #indexStreamActivity; future
   // policy/metrics feeds) joins the same ordered, checkpointed delivery.
-  // Platform indexing steps are idempotent and never-throwing. The one setup
-  // step (installing the first-party PostHog feed) may reject, but translates
-  // that rejection into receiver-unavailable so the birth batch is retried
-  // rather than poison-skipped. The whole entry point requires the narrow
-  // stream-delivery principal.
+  // Rule for such steps: idempotent and never-throwing; only the worker
+  // delegation may reject into the spine's retry/park machinery. Same trust
+  // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
-    if (this.#props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
-      throw new Error("processEventBatch is dialed by stream push subscriptions, not sessions");
-    }
-    if (batch.projectId !== this.#props.projectId) {
-      throw new Error("stream delivery project does not match its itx authority");
-    }
-    assertCanonicalProjectWorkerDeliveryEnvelope(batch);
     await this.#installPosthogSubscriptionForCreatedStream(batch);
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
@@ -5541,8 +5532,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // repo unseeded, or its first build still in flight). That is this
       // receiver being unavailable, not the batch being poison — say so in
       // the delivery contract's vocabulary so the spine backs off and
-      // redelivers instead of skip-confirming real events. A skipped first
-      // batch loses real userspace reactions; this exact race
+      // redelivers instead of skip-confirming real events. (A skipped
+      // A skipped first batch loses real userspace reactions; this exact race
       // previously skipped offset 1 of every fresh project's root stream
       // against the config-repo seed.)
       if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
@@ -5556,23 +5547,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
-   * Platform lifecycle hook: the project-worker feed's offset-one birth batch
-   * installs the separate first-party PostHog feed on that same stream. The
-   * fixed idempotency key makes source redelivery harmless. There is no scan,
-   * backfill, or compatibility hook for streams created before the rollout
-   * boundary. A setup outage is receiver unavailability, never a poison event
-   * that may be skipped.
+   * New streams announce themselves through the existing project-worker feed.
+   * Append the PostHog feed as an ordinary durable subscription on that same
+   * stream. Its idempotency key makes project-worker redelivery harmless.
    */
   async #installPosthogSubscriptionForCreatedStream(batch: StreamPushEventBatch): Promise<void> {
-    if (!batchContainsCanonicalStreamCreated(batch)) {
-      return;
-    }
+    if (!batch.events.some((event) => event.type === "events.iterate.com/stream/created")) return;
     try {
-      const streamName = streamDurableObjectName({
-        projectId: batch.projectId,
-        path: batch.path,
-      });
-      await env.STREAM.getByName(streamName).installFirstPartyPosthogSubscription();
+      await this.streams.get(batch.path).append(posthogSubscriptionEvent());
     } catch (error) {
       throw new StreamReceiverUnavailableError(
         "could not install the first-party PostHog subscription",
@@ -5767,8 +5749,8 @@ export function itxForScope(props: {
  * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
  * walks the same shape a project stream's does.
  */
-export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
-  return new SessionRpcTarget(props);
+export function deploymentItxForTrustedInternal(props: { ctx: CfExecutionContext }) {
+  return new SessionRpcTarget({ auth: trustedInternalAuthContext(), ctx: props.ctx });
 }
 
 async function projectProcessorState(projectId: string) {
@@ -6625,7 +6607,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   wakeStreamSubscriber(
     request: StreamSubscriberWakeRequest,
   ): Promise<StreamSubscriberWakeResponse> {
-    if (this.#auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
+    if (this.#auth.principal !== "trusted-internal") {
       throw new Error("wakeStreamSubscriber is dialed by stream delivery spines, not sessions");
     }
     return this.#host().wakeStreamSubscriber(request);

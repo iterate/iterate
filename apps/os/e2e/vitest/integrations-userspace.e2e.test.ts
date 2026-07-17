@@ -69,13 +69,6 @@ test("a project mounts ocado into the collection; connections + secret confineme
     ).rejects.toThrow(/built-in integrations member/);
     await expect(
       project.provideCapability({
-        path: ["integrations", "posthog", "shadow"],
-        type: "live",
-        capability: {},
-      }),
-    ).rejects.toThrow(/built-in integrations member/);
-    await expect(
-      project.provideCapability({
         path: ["integrations", "list"],
         type: "live",
         capability: {},

@@ -4,12 +4,6 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  assertPlatformEventWriteAllowed,
-  isPlatformLocalControlEvent,
-  POSTHOG_SUBSCRIPTION_KEY,
-  posthogSubscriptionEvent,
-} from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { DurableObjectAlarm } from "./durable-object-alarm.ts";
 import type {
@@ -36,7 +30,6 @@ import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
-  PROJECT_WORKER_SUBSCRIPTION_KEY,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
@@ -44,6 +37,8 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+
+const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -100,13 +95,11 @@ export class StreamDurableObject extends DurableObject<Env> {
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
-          // live lanes deliver them; ordinary durable lanes filter them
-          // from DELIVERY, while the protected observability push explicitly
-          // opts in (stream-subscribers.ts).
+          // live lanes deliver them; durable lanes filter them from DELIVERY
+          // unless their ordinary subscription explicitly opts in.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
-      includeEphemeral: (subscriptionKey) => subscriptionKey === POSTHOG_SUBSCRIPTION_KEY,
       store: this.#subscriptionCursorStore,
       dial: createSubscriberDial({
         projectId: this.name.projectId,
@@ -337,39 +330,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#subscribers.armOrClearIdleTimer();
 
     return events;
-  }
-
-  /** Install the fixed first-party feed without exposing a configurable append lane. */
-  installFirstPartyPosthogSubscription(): StreamEvent {
-    if (this.name.projectId === null) {
-      throw new Error("the first-party PostHog subscription requires a project stream");
-    }
-    return this.append(posthogSubscriptionEvent())[0]!;
-  }
-
-  /** Create the unforgeable root birth fact before the project is exposed to sessions. */
-  initializeProjectRoot(args: {
-    creatorEmail?: string;
-    projectProcessorSubscription: StreamEventInput;
-    slug: string;
-  }): StreamEvent[] {
-    if (this.name.projectId === null || this.name.path !== "/") {
-      throw new Error("project birth requires a project root stream");
-    }
-    return this.append(
-      {
-        type: "events.iterate.com/project/created",
-        idempotencyKey: `project-created:${this.name.projectId}`,
-        payload: {
-          config: {
-            onboardingActive: true,
-            slug: args.slug,
-            ...(args.creatorEmail === undefined ? {} : { creatorEmail: args.creatorEmail }),
-          },
-        },
-      },
-      args.projectProcessorSubscription,
-    );
   }
 
   /**
@@ -907,25 +867,9 @@ export class StreamDurableObject extends DurableObject<Env> {
    * only appends the built inputs in its own synchronous turn.
    */
   acceptCrossPost(batch: StreamPushEventBatch): void {
-    // Platform birth and subscription facts are local control state, not
-    // product facts to replicate. The source's all-event feed captures them;
-    // copying them would create misleading inert rows on the target.
-    // Filter before the optional transform so a userspace event transformed
-    // into reserved configuration still reaches the guard below and fails.
-    const localEventsRemoved = {
-      ...batch,
-      events: batch.events.filter((event) => !isPlatformLocalControlEvent(event)),
-    };
-    const inputs = buildAcceptCrossPostAppendInputs(localEventsRemoved, {
+    const inputs = buildAcceptCrossPostAppendInputs(batch, {
       projectId: this.name.projectId,
       path: this.name.path,
-    });
-    // A transform is user-controlled and can construct stream control facts.
-    // Protect the platform key at this second append boundary; the public
-    // StreamRpcTarget guard alone cannot see the transformed destination row.
-    assertPlatformEventWriteAllowed(inputs, {
-      authority: "userspace",
-      projectId: this.name.projectId,
     });
     if (inputs.length > 0) this.append(...inputs);
   }
@@ -1317,6 +1261,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   // ===========================================================================
   // Operator/admin verbs.
   // ===========================================================================
+
+  /** Sever every idle durable connection now — the idle timer's action, exposed for tests/operators. */
+  runIdleTeardownNow(): void {
+    this.#subscribers.runIdleTeardownNow();
+    this.#flushCoreProcessorState();
+  }
 
   /**
    * Wipes this stream's durable storage and aborts the current incarnation.

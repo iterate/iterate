@@ -42,8 +42,8 @@ export class StreamEventLog {
     this.sql.exec(`
       -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
       -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
-      -- ephemeral marks second-class rows: range reads exclude them unless asked.
-      -- Any future eviction must wait for the protected observability cursor. It keeps offsets consumed
+      -- ephemeral marks second-class rows: range reads exclude them unless asked, and
+      -- the stream may evict them in the future. Eviction keeps offsets consumed
       -- (highestAssignedOffset reads AUTOINCREMENT's sqlite_sequence, which survives
       -- row deletion) but forgets their idempotency keys.
       create table if not exists events (

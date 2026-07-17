@@ -1,15 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  CoreProcessorContract,
-  PROJECT_WORKER_SUBSCRIPTION_KEY,
-} from "../streams/core-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
-  assertCanonicalProjectWorkerDeliveryEnvelope,
-  assertCanonicalPosthogDeliveryEnvelope,
-  assertPlatformEventWriteAllowed,
-  batchContainsCanonicalStreamCreated,
   capturePosthogStreamEventBatch,
   POSTHOG_STREAM_EVENT,
   POSTHOG_SUBSCRIPTION_KEY,
@@ -18,22 +11,36 @@ import {
 
 function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
   return {
-    type: "customer-defined/event",
+    type: "events.example.com/answer-recorded",
     path: "/agents/ada",
     offset: 7,
     createdAt: "2026-07-16T10:00:00.000Z",
-    payload: { answer: 42 },
-    metadata: { source: "test" },
-    idempotencyKey: "customer-key",
+    payload: { answer: 42, nested: { retained: true } },
+    metadata: { source: "test", tags: ["complete"] },
+    source: {
+      processor: {
+        slug: "agent",
+        version: "1.2.3",
+        stream: { projectId: "prj_123", path: "/agents/ada" },
+        whileProcessing: { offset: 6, type: "events.example.com/question-asked" },
+      },
+      crossPostedFrom: [
+        {
+          subscriptionKey: "mirror",
+          createdAt: "2026-07-16T09:59:00.000Z",
+          offset: 3,
+          path: "/source",
+          projectId: "prj_123",
+          type: "events.example.com/question-asked",
+        },
+      ],
+    },
+    idempotencyKey: "answer:42",
     ...overrides,
   };
 }
 
 function batch(events: StreamEvent[]): StreamPushEventBatch {
-  const canonical = CoreProcessorContract.parseEventInput(
-    "events.iterate.com/stream/subscription-configured",
-    posthogSubscriptionEvent(),
-  );
   return {
     projectId: "prj_123",
     path: "/agents/ada",
@@ -47,28 +54,7 @@ function batch(events: StreamEvent[]): StreamPushEventBatch {
       path: "/agents/ada",
       offset: 4,
       createdAt: "2026-07-16T09:00:00.000Z",
-      // The fold stores the schema-parsed payload, whose property order is
-      // different from the builder. This is the real delivery shape.
-      payload: canonical.payload,
-    },
-  };
-}
-
-function projectWorkerBatch(events: StreamEvent[]): StreamPushEventBatch {
-  return {
-    ...batch(events),
-    subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-    configuredEvent: {
-      type: "events.iterate.com/stream/subscription-configured",
-      path: "/agents/ada",
-      offset: 2,
-      createdAt: "2026-07-16T09:00:00.000Z",
-      payload: {
-        subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-        delivery: { mode: "push", expression: ["processEventBatch"] },
-        deliver: "all",
-        onPoison: "skip",
-      },
+      payload: posthogSubscriptionEvent().payload,
     },
   };
 }
@@ -80,26 +66,22 @@ type CapturedRequest = {
 
 function acceptingFetch(requests: CapturedRequest[] = []) {
   return vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as CapturedRequest;
-    requests.push(body);
+    requests.push(JSON.parse(String(init?.body)) as CapturedRequest);
     return new Response(null, { status: 200 });
   });
 }
 
-const captureArgs = (events: StreamEvent[], workerName = "os-preview-6") => ({
-  apiKey: "phc_test",
-  batch: batch(events),
-  projectId: "prj_123",
-  workerName,
-});
-
-const projectStream = {
-  authority: "userspace",
-  projectId: "prj_123",
-} as const;
+function captureArgs(events: StreamEvent[], workerName = "os-preview-6") {
+  return {
+    apiKey: "phc_test",
+    batch: batch(events),
+    projectId: "prj_123",
+    workerName,
+  };
+}
 
 describe("first-party PostHog stream integration", () => {
-  it("defines one protected all-history, all-row subscription with bounded failure", () => {
+  it("uses an ordinary all-history subscription that explicitly includes ephemeral rows", () => {
     const event = posthogSubscriptionEvent();
     expect(event).toEqual({
       type: "events.iterate.com/stream/subscription-configured",
@@ -112,6 +94,7 @@ describe("first-party PostHog stream integration", () => {
           expression: ["integrations", "posthog", "processEventBatch"],
         },
         deliver: "all",
+        includeEphemeral: true,
         onPoison: "park",
       },
     });
@@ -123,316 +106,13 @@ describe("first-party PostHog stream integration", () => {
     ).not.toThrow();
   });
 
-  it("accepts only the canonical delivery route and configuration", () => {
-    expect(() => assertCanonicalPosthogDeliveryEnvelope(batch([streamEvent()]))).not.toThrow();
-    expect(() =>
-      assertCanonicalPosthogDeliveryEnvelope({
-        ...batch([streamEvent()]),
-        subscriptionKey: "customer-feed",
-      }),
-    ).toThrow(/canonical stream subscription/);
-    expect(() =>
-      assertCanonicalPosthogDeliveryEnvelope({
-        ...batch([streamEvent()]),
-        configuredEvent: { ...batch([streamEvent()]).configuredEvent, path: "/other" },
-      }),
-    ).toThrow(/canonical stream subscription/);
-    expect(() =>
-      assertCanonicalPosthogDeliveryEnvelope({
-        ...batch([streamEvent()]),
-        configuredEvent: {
-          ...batch([streamEvent()]).configuredEvent,
-          payload: { ...posthogSubscriptionEvent().payload, onPoison: "skip" },
-        },
-      }),
-    ).toThrow(/canonical stream subscription/);
-  });
-
-  it("accepts only the immutable project-worker birth subscription envelope", () => {
-    const canonical = projectWorkerBatch([streamEvent()]);
-    expect(() => assertCanonicalProjectWorkerDeliveryEnvelope(canonical)).not.toThrow();
-    for (const forged of [
-      { ...canonical, subscriptionKey: "customer-feed" },
-      {
-        ...canonical,
-        configuredEvent: { ...canonical.configuredEvent, offset: 3 },
-      },
-      {
-        ...canonical,
-        configuredEvent: { ...canonical.configuredEvent, path: "/other" },
-      },
-      {
-        ...canonical,
-        configuredEvent: {
-          ...canonical.configuredEvent,
-          payload: {
-            ...canonical.configuredEvent.payload,
-            delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
-          },
-        },
-      },
-      { ...canonical, projectId: null },
-    ] satisfies StreamPushEventBatch[]) {
-      expect(() => assertCanonicalProjectWorkerDeliveryEnvelope(forged)).toThrow(
-        /canonical stream subscription/,
-      );
-    }
-  });
-
-  it("reserves the platform key, idempotency key, and delivery route", () => {
-    expect(() =>
-      assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], projectStream),
-    ).toThrow(/managed by Iterate/);
-    expect(() =>
-      assertPlatformEventWriteAllowed(
-        [
-          {
-            type: "events.iterate.com/stream/subscription-removed",
-            payload: { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY },
-          },
-        ],
-        projectStream,
-      ),
-    ).toThrow(/managed by Iterate/);
-    expect(() =>
-      assertPlatformEventWriteAllowed(
-        [
-          {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: {
-              subscriptionKey: "guaranteed-error-spam",
-              delivery: {
-                mode: "push",
-                expression: ["integrations", "posthog", "processEventBatch"],
-              },
-            },
-          },
-        ],
-        projectStream,
-      ),
-    ).toThrow(/delivery route is managed by Iterate/);
-    expect(() =>
-      assertPlatformEventWriteAllowed(
-        [
-          {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: {
-              subscriptionKey: "duplicate-project-worker",
-              delivery: { mode: "push", expression: ["processEventBatch"] },
-            },
-          },
-        ],
-        projectStream,
-      ),
-    ).toThrow(/project worker delivery route is managed by Iterate/);
-    expect(() =>
-      assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], {
-        authority: "admin",
-        projectId: "prj_123",
-      }),
-    ).toThrow(/managed by Iterate/);
-    expect(() =>
-      assertPlatformEventWriteAllowed(
-        [{ ...posthogSubscriptionEvent(), metadata: { forged: true } }],
-        { authority: "userspace", projectId: "prj_123" },
-      ),
-    ).toThrow(/noncanonical owner/);
-    expect(() =>
-      assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], {
-        authority: "userspace",
-        projectId: null,
-      }),
-    ).toThrow(/requires a project stream/);
-
-    const projectWorkerBirth = projectWorkerBatch([streamEvent()]).configuredEvent;
-    expect(() => assertPlatformEventWriteAllowed([projectWorkerBirth], projectStream)).toThrow(
-      /project worker birth subscription is managed/,
-    );
-    expect(() =>
-      assertPlatformEventWriteAllowed([projectWorkerBirth], {
-        authority: "userspace",
-        projectId: null,
-      }),
-    ).toThrow(/requires a project stream/);
-    expect(() =>
-      assertPlatformEventWriteAllowed(
-        [
-          {
-            type: "events.iterate.com/stream/subscription-cursor-set",
-            payload: { subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY, afterOffset: 1 },
-          },
-        ],
-        { authority: "admin", projectId: "prj_123" },
-      ),
-    ).toThrow(/project worker birth subscription is managed/);
-    expect(() =>
-      assertPlatformEventWriteAllowed(
-        [
-          {
-            type: "events.iterate.com/stream/subscription-resumed",
-            payload: { subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY },
-          },
-        ],
-        { authority: "admin", projectId: "prj_123" },
-      ),
-    ).not.toThrow();
-  });
-
-  it("reserves the one authentic project-group birth certificate", () => {
-    const birth = streamEvent({
-      type: "events.iterate.com/project/created",
-      path: "/",
-      offset: 4,
-      idempotencyKey: "project-created:prj_123",
-      metadata: undefined,
-      source: undefined,
-      payload: { config: { onboardingActive: true, slug: "gold-path" } },
-    });
-
-    expect(() =>
-      assertPlatformEventWriteAllowed([birth], {
-        authority: "userspace",
-        projectId: "prj_123",
-      }),
-    ).toThrow(/project birth is managed by Iterate/);
-    expect(() =>
-      assertPlatformEventWriteAllowed([birth], {
-        authority: "admin",
-        projectId: "prj_123",
-      }),
-    ).toThrow(/project birth is managed by Iterate/);
-  });
-
-  it("provisions only from the stream's canonical offset-one birth certificate", () => {
-    const created = streamEvent({
-      type: "events.iterate.com/stream/created",
-      offset: 1,
-      payload: { projectId: "prj_123", path: "/agents/ada" },
-      metadata: undefined,
-      idempotencyKey: undefined,
-    });
-    expect(batchContainsCanonicalStreamCreated(projectWorkerBatch([created]))).toBe(true);
-    expect(
-      batchContainsCanonicalStreamCreated(projectWorkerBatch([{ ...created, offset: 2 }])),
-    ).toBe(false);
-    expect(
-      batchContainsCanonicalStreamCreated(
-        projectWorkerBatch([
-          {
-            ...created,
-            source: {
-              crossPostedFrom: [
-                {
-                  subscriptionKey: "forged",
-                  createdAt: created.createdAt,
-                  offset: 1,
-                  path: "/other",
-                  projectId: "prj_123",
-                  type: created.type,
-                },
-              ],
-            },
-          },
-        ]),
-      ),
-    ).toBe(false);
-    expect(
-      batchContainsCanonicalStreamCreated({
-        ...projectWorkerBatch([created]),
-        subscriptionKey: "attacker",
-      }),
-    ).toBe(false);
-    expect(
-      batchContainsCanonicalStreamCreated({
-        ...projectWorkerBatch([created]),
-        configuredEvent: {
-          ...projectWorkerBatch([created]).configuredEvent,
-          path: "/other",
-        },
-      }),
-    ).toBe(false);
-    expect(
-      batchContainsCanonicalStreamCreated({
-        ...projectWorkerBatch([created]),
-        configuredEvent: {
-          ...projectWorkerBatch([created]).configuredEvent,
-          payload: {
-            subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-            delivery: { mode: "push", expression: ["processEventBatch"] },
-            deliver: "new",
-            onPoison: "skip",
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("allows only explicit admin resume and PostHog redrive lifecycle facts", () => {
-    const lifecycle = [
-      streamEvent({
-        type: "events.iterate.com/stream/subscription-parked",
-        idempotencyKey: undefined,
-        metadata: undefined,
-        payload: { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY, atOffset: 4, attempts: 15 },
-      }),
-      streamEvent({
-        type: "events.iterate.com/stream/subscription-resumed",
-        idempotencyKey: undefined,
-        metadata: undefined,
-        payload: { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY },
-      }),
-      streamEvent({
-        type: "events.iterate.com/stream/subscription-cursor-set",
-        idempotencyKey: undefined,
-        metadata: undefined,
-        payload: { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY, afterOffset: 0 },
-      }),
-    ];
-    for (const event of lifecycle.slice(1)) {
-      expect(() =>
-        assertPlatformEventWriteAllowed([event], {
-          authority: "admin",
-          projectId: "prj_123",
-        }),
-      ).not.toThrow();
-    }
-    expect(() =>
-      assertPlatformEventWriteAllowed([lifecycle[0]!], {
-        authority: "admin",
-        projectId: "prj_123",
-      }),
-    ).toThrow(/managed by Iterate/);
-    expect(() =>
-      assertPlatformEventWriteAllowed(
-        [
-          {
-            ...lifecycle[1]!,
-            source: {
-              crossPostedFrom: [
-                {
-                  subscriptionKey: "forged",
-                  createdAt: lifecycle[1]!.createdAt,
-                  offset: 1,
-                  path: "/other",
-                  projectId: "prj_123",
-                  type: lifecycle[1]!.type,
-                },
-              ],
-            },
-          },
-        ],
-        { authority: "admin", projectId: "prj_123" },
-      ),
-    ).toThrow(/managed by Iterate/);
-  });
-
-  it("captures every row with one immutable first-class project group", async () => {
+  it("captures the complete committed event and raw stream path", async () => {
     const durable = streamEvent();
     const ephemeral = streamEvent({
-      type: "events.iterate.com/customer/ephemeral",
+      type: "events.example.com/progress",
       offset: 8,
       ephemeral: true,
-      payload: { arbitrary: "customer value" },
+      payload: { token: "full payload retained" },
     });
     const requests: CapturedRequest[] = [];
     const captureFetch = acceptingFetch(requests);
@@ -446,38 +126,30 @@ describe("first-party PostHog stream integration", () => {
     expect(url).toBe("https://eu.i.posthog.com/batch/");
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).has("Authorization")).toBe(false);
-    const request = requests[0]!;
-    expect(request.api_key).toBe("phc_test");
-    expect(request).not.toHaveProperty("sent_at");
-    expect(request.batch).toHaveLength(2);
-    expect(request.batch[0]).toMatchObject({
+    expect(requests[0]).toMatchObject({ api_key: "phc_test" });
+    expect(requests[0]!.batch).toHaveLength(2);
+    expect(requests[0]!.batch[0]).toMatchObject({
       distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
       event: POSTHOG_STREAM_EVENT,
-    });
-    expect(request.batch.map((event) => event.event)).toEqual([
-      POSTHOG_STREAM_EVENT,
-      POSTHOG_STREAM_EVENT,
-    ]);
-    expect(request.batch[1]).toMatchObject({
-      distinct_id: request.batch[0]!.distinct_id,
       properties: {
-        $geoip_disable: true,
         $groups: { project: "prj_123" },
-        $is_server: true,
         project_id: "prj_123",
-        stream_event_created_at: "2026-07-16T10:00:00.000Z",
-        stream_event_ephemeral: true,
-        stream_event_offset: 8,
-        stream_event_type: "events.iterate.com/customer/ephemeral",
+        stream_path: "/agents/ada",
+        stream_event: durable,
+        stream_event_type: durable.type,
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        stream_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        worker_name: "os-preview-6",
       },
     });
-    expect(request.batch[1]!.properties).not.toHaveProperty("stream_event");
+    expect(requests[0]!.batch[1]).toMatchObject({
+      event: POSTHOG_STREAM_EVENT,
+      properties: {
+        stream_event: ephemeral,
+        stream_event_ephemeral: true,
+      },
+    });
   });
 
-  it("identifies the immutable project id and slug from the authentic project birth", async () => {
+  it("models a project by immutable id and slug without filtering its birth payload", async () => {
     const created = streamEvent({
       type: "events.iterate.com/project/created",
       path: "/",
@@ -487,210 +159,71 @@ describe("first-party PostHog stream integration", () => {
       source: undefined,
       payload: {
         config: {
-          creatorEmail: "private@example.com",
+          creatorEmail: "owner@example.com",
           onboardingActive: true,
           slug: "gold-path",
         },
       },
     });
-    const firstArgs = captureArgs([created]);
-    firstArgs.batch.path = "/";
-    const first: CapturedRequest[] = [];
-    const retry: CapturedRequest[] = [];
+    const args = captureArgs([created]);
+    args.batch.path = "/";
+    const requests: CapturedRequest[] = [];
 
-    await capturePosthogStreamEventBatch(firstArgs, { fetch: acceptingFetch(first) });
-    await capturePosthogStreamEventBatch(firstArgs, { fetch: acceptingFetch(retry) });
+    await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(requests) });
 
-    expect(first[0]!.batch).toHaveLength(2);
-    expect(first[0]!.batch[0]).toEqual({
-      distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
+    expect(requests[0]!.batch[0]).toMatchObject({
       event: "$groupidentify",
       properties: {
-        $geoip_disable: true,
         $group_key: "prj_123",
         $group_set: { id: "prj_123", slug: "gold-path" },
         $group_type: "project",
-        $is_server: true,
       },
-      timestamp: created.createdAt,
-      uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
-    expect(first[0]!.batch[1]).toMatchObject({
+    expect(requests[0]!.batch[1]).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
-      properties: { $groups: { project: "prj_123" }, stream_event_offset: 4 },
+      properties: { stream_event: JSON.parse(JSON.stringify(created)) },
     });
-    expect(JSON.stringify(first[0])).not.toContain("private@example.com");
-    expect(first[0]!.batch[0]).toEqual(retry[0]!.batch[0]);
+    expect(JSON.stringify(requests[0])).toContain("owner@example.com");
   });
 
-  it("does not infer group properties from lookalike project events", async () => {
-    const authentic = streamEvent({
-      type: "events.iterate.com/project/created",
-      path: "/",
-      offset: 4,
-      idempotencyKey: "project-created:prj_123",
-      metadata: undefined,
-      source: undefined,
-      payload: { config: { slug: "gold-path" } },
-    });
-    const lookalikes: StreamEvent[] = [
-      { ...authentic, path: "/other" },
-      { ...authentic, idempotencyKey: "forged" },
-      { ...authentic, metadata: { forged: true } },
-      {
-        ...authentic,
-        source: {
-          crossPostedFrom: [
-            {
-              subscriptionKey: "forged",
-              createdAt: authentic.createdAt,
-              offset: 1,
-              path: "/other",
-              projectId: "prj_123",
-              type: authentic.type,
-            },
-          ],
-        },
-      },
-      { ...authentic, ephemeral: true },
-    ];
-
-    for (const event of lookalikes) {
-      const args = captureArgs([event]);
-      args.batch.path = "/";
-      const requests: CapturedRequest[] = [];
-      await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(requests) });
-      expect(requests[0]!.batch.map((item) => item.event)).toEqual([POSTHOG_STREAM_EVENT]);
-    }
-  });
-
-  it("isolates the operational identity and limiter key by deployment and project", async () => {
-    const requests: CapturedRequest[] = [];
-    const captureFetch = acceptingFetch(requests);
-
-    await capturePosthogStreamEventBatch(captureArgs([streamEvent()]), {
-      fetch: captureFetch,
-    });
-    const otherProject = captureArgs([streamEvent()]);
-    otherProject.projectId = "prj_456";
-    otherProject.batch.projectId = "prj_456";
-    await capturePosthogStreamEventBatch(otherProject, { fetch: captureFetch });
-
-    const firstIdentity = requests[0]!.batch[0]!.distinct_id;
-    const secondIdentity = requests[1]!.batch[0]!.distinct_id;
-    expect(firstIdentity).not.toBe(secondIdentity);
-    expect(requests[0]!.batch[0]!.distinct_id).toBe(firstIdentity);
-    expect(requests[1]!.batch[0]!.distinct_id).toBe(secondIdentity);
-  });
-
-  it("indexes the exact bounded custom event identifier", async () => {
-    const requests: CapturedRequest[] = [];
-    const eventType = `custom/${"x".repeat(249)}`;
-    await capturePosthogStreamEventBatch(captureArgs([streamEvent({ type: eventType })]), {
-      fetch: acceptingFetch(requests),
-    });
-    const properties = requests[0]!.batch[0]!.properties as Record<string, unknown>;
-    expect(properties.stream_event_type).toBe(eventType);
-    expect(properties.stream_event_uuid).toMatch(/^[0-9a-f-]{36}$/);
-  });
-
-  it("keeps stream identity bounded without exporting a user-controlled path", async () => {
-    const input = captureArgs([streamEvent({ path: `/${"x".repeat(2_000)}` })]);
-    input.batch.path = `/${"x".repeat(2_000)}`;
-    const requests: CapturedRequest[] = [];
-    await capturePosthogStreamEventBatch(input, { fetch: acceptingFetch(requests) });
-    expect(String(requests[0]!.batch[0]!.distinct_id).length).toBeLessThanOrEqual(200);
-    expect(requests[0]!.batch[0]!.properties).toMatchObject({
-      stream_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
-    });
-    expect(requests[0]!.batch[0]!.properties).not.toHaveProperty("stream_path");
-  });
-
-  it("rejects an invalid recovered timestamp before capture", async () => {
-    const invalid = captureArgs([streamEvent({ createdAt: "not-a-timestamp" })]);
-    const invalidFetch = acceptingFetch();
-    await expect(capturePosthogStreamEventBatch(invalid, { fetch: invalidFetch })).rejects.toThrow(
-      "invalid createdAt timestamp",
-    );
-    expect(invalidFetch).not.toHaveBeenCalled();
-  });
-
-  it("indexes a multi-megabyte row without copying its payload into PostHog", async () => {
-    const huge = streamEvent({ payload: { body: "x".repeat(3 * 1_024 * 1_024) } });
-    let captureBody = "";
-    const captureFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      captureBody = String(init?.body);
-      return new Response(null, { status: 200 });
-    });
-
-    await capturePosthogStreamEventBatch(captureArgs([huge]), { fetch: captureFetch });
-
-    expect(captureBody.length).toBeLessThan(10_000);
-    expect(captureBody).not.toContain(huge.payload!.body as string);
-  });
-
-  it("keeps retry UUIDs stable without conflating deployments or recreated streams", async () => {
-    const event = streamEvent();
+  it("keeps source identity stable on retry and distinct between deployments", async () => {
     const first: CapturedRequest[] = [];
     const retry: CapturedRequest[] = [];
     const production: CapturedRequest[] = [];
-    const recreated: CapturedRequest[] = [];
-    await capturePosthogStreamEventBatch(captureArgs([event]), { fetch: acceptingFetch(first) });
-    await capturePosthogStreamEventBatch(captureArgs([event]), { fetch: acceptingFetch(retry) });
-    await capturePosthogStreamEventBatch(captureArgs([event], "os"), {
+    await capturePosthogStreamEventBatch(captureArgs([streamEvent()]), {
+      fetch: acceptingFetch(first),
+    });
+    await capturePosthogStreamEventBatch(captureArgs([streamEvent()]), {
+      fetch: acceptingFetch(retry),
+    });
+    await capturePosthogStreamEventBatch(captureArgs([streamEvent()], "os"), {
       fetch: acceptingFetch(production),
     });
-    await capturePosthogStreamEventBatch(
-      captureArgs([streamEvent({ createdAt: "2026-07-17T10:00:00.000Z" })]),
-      { fetch: acceptingFetch(recreated) },
-    );
 
     expect(first[0]!.batch[0]!.uuid).toBe(retry[0]!.batch[0]!.uuid);
+    expect(first[0]!.batch[0]!.timestamp).toBe(retry[0]!.batch[0]!.timestamp);
     expect(first[0]!.batch[0]!.uuid).not.toBe(production[0]!.batch[0]!.uuid);
-    expect(first[0]!.batch[0]!.uuid).not.toBe(recreated[0]!.batch[0]!.uuid);
   });
 
-  it("keeps the complete PostHog deduplication identity stable across retries", async () => {
-    const first: CapturedRequest[] = [];
-    const retry: CapturedRequest[] = [];
-    const args = captureArgs([streamEvent()]);
-
-    await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(first) });
-    await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(retry) });
-
-    expect(first[0]).not.toHaveProperty("sent_at");
-    expect(retry[0]).not.toHaveProperty("sent_at");
-    expect(first[0]!.batch.map(({ timestamp, uuid }) => ({ timestamp, uuid }))).toEqual(
-      retry[0]!.batch.map(({ timestamp, uuid }) => ({ timestamp, uuid })),
-    );
-    expect(first[0]!.batch[0]!.timestamp).toBe("2026-07-16T10:00:00.000Z");
-  });
-
-  it("uses unambiguous coordinate identities for adversarial paths and event types", async () => {
-    const first: CapturedRequest[] = [];
-    const second: CapturedRequest[] = [];
-    const firstArgs = captureArgs([streamEvent({ offset: 1, type: "2/foo" })]);
-    firstArgs.batch.path = "/x";
-    const secondArgs = captureArgs([streamEvent({ offset: 2, type: "foo" })]);
-    secondArgs.batch.path = "/x/1";
-
-    await capturePosthogStreamEventBatch(firstArgs, { fetch: acceptingFetch(first) });
-    await capturePosthogStreamEventBatch(secondArgs, { fetch: acceptingFetch(second) });
-
-    expect(first[0]!.batch[0]!.uuid).not.toBe(second[0]!.batch[0]!.uuid);
-  });
-
-  it("acknowledges public HTTP acceptance and rejects transport failure", async () => {
-    const args = captureArgs([streamEvent()]);
+  it("rejects malformed source timestamps and non-2xx capture responses", async () => {
+    const invalidFetch = acceptingFetch();
     await expect(
-      capturePosthogStreamEventBatch(args, {
-        fetch: vi.fn(async () => new Response("accepted", { status: 200 })),
+      capturePosthogStreamEventBatch(captureArgs([streamEvent({ createdAt: "invalid" })]), {
+        fetch: invalidFetch,
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("invalid createdAt timestamp");
+    expect(invalidFetch).not.toHaveBeenCalled();
+
     await expect(
-      capturePosthogStreamEventBatch(args, {
-        fetch: vi.fn(async () => new Response("do not echo this body", { status: 429 })),
+      capturePosthogStreamEventBatch(captureArgs([streamEvent()]), {
+        fetch: vi.fn(async () => new Response("no", { status: 503 })),
       }),
-    ).rejects.toThrow("PostHog batch capture rejected the request with HTTP 429");
+    ).rejects.toThrow("HTTP 503");
+  });
+
+  it("does not call PostHog for an empty delivery batch", async () => {
+    const captureFetch = acceptingFetch();
+    await capturePosthogStreamEventBatch(captureArgs([]), { fetch: captureFetch });
+    expect(captureFetch).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@ const EXPECTED_POSTHOG_SUBSCRIPTION = {
       expression: ["integrations", "posthog", "processEventBatch"],
     },
     deliver: "all",
+    includeEphemeral: true,
     onPoison: "park",
   },
 } as const;

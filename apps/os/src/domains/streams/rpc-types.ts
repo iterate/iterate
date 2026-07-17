@@ -22,9 +22,8 @@ export type StreamEventReadInput = {
   limit?: number;
   /**
    * Include ephemeral events (default false). Ephemeral rows are second-class:
-   * excluded from every range read unless explicitly requested. They remain
-   * retained until first-party observability acknowledges them; product code
-   * must never derive durable state from one.
+   * excluded from every range read unless explicitly requested, and the stream
+   * may evict them later — never derive durable state from one.
    */
   includeEphemeral?: boolean;
 };
@@ -44,7 +43,7 @@ export type ProcessorSnapshot<State> = {
  * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.
  *
  * `wakeStreamSubscriber` is dialed by stream delivery spines only
- * (stream-delivery): the handshake's sink drives the host's durable
+ * (trusted-internal): the handshake's sink drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
  * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
