@@ -10,6 +10,10 @@
  * script must never pick its target from ambient shell state.
  *
  * What it destroys and why that's sufficient:
+ *   - explicitly retired Worker secret bindings. Wrangler preserves secrets
+ *     omitted from a deploy, so a preview slot can otherwise inherit a
+ *     forbidden credential from its previous owner. Current secret names are
+ *     untouched and the retired names are re-read after deletion.
  *   - every Durable Object on the os worker — instances, storage, alarms —
  *     by deploying the parked worker with a `deleted` tombstone for each
  *     live class (the only way to delete DO instances; see
@@ -42,12 +46,13 @@ import {
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  removeWorkerSecrets,
   SANDBOX_BACKUP_EXPIRY_RULE,
   wipeD1Tables,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
-import { COMPATIBILITY_DATE } from "./generate-wrangler-config.ts";
+import { COMPATIBILITY_DATE, RETIRED_WORKER_SECRETS } from "./generate-wrangler-config.ts";
 
 /** Erase ALL user data in a deployed environment; infrastructure stays (see file header). */
 export default async function eraseData(options: {
@@ -67,6 +72,15 @@ export default async function eraseData(options: {
   console.log(
     `Erasing all data in ${ctx.name} (worker ${env.osWorkerName}, auth D1 ${env.resources.authDbId}, KV ${env.resources.projectDirectoryKvId})`,
   );
+
+  // ---- Retired Worker secrets: remove only the explicit denylist ------------
+  // This destructive operator path is the migration boundary. Normal deploys
+  // only assert absence and must never mutate credential state.
+  await removeWorkerSecrets({
+    cf,
+    workerName: env.osWorkerName,
+    secretNames: RETIRED_WORKER_SECRETS,
+  });
 
   // ---- Durable Objects: destroy every instance --------------------------------
   // First, so no surviving DO (agent turn, scheduler alarm) writes fresh rows

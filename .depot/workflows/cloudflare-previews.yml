@@ -138,12 +138,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
         run: |-
           set -euo pipefail
-          # A manual dispatch is an explicit ask for a preview, so it
-          # overrides the draft policy.
+          # A manual dispatch is an explicit ask for a fresh preview, so it
+          # overrides the draft policy and redeploys even when this exact head
+          # was previously cleaned up and recorded as released.
           doppler run --project _shared --config prd -- pnpm preview run \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
-            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft' || '' }}
+            ${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}
       - name: Collect OS preview test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results

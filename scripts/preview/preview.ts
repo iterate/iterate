@@ -3549,11 +3549,13 @@ async function runPreviewDeployCommand(input: {
 type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
 
 /**
- * The real {@link EraseSlotData}: the os app's destroy command, which is the
- * erase-data script — it wipes the slot's auth D1 and project-directory KV
- * (the data plane every preview app shares) and leaves infrastructure alone.
- * The deploy that follows the reclaim re-seeds auth's OAuth client.
+ * Every app that owns slot-persistent data. OS wipes the shared data plane;
+ * the streams playground separately owns its StreamDurableObject namespace.
  */
+function selectPreviewSlotDataOwners() {
+  return [cloudflarePreviewApps.os, cloudflarePreviewApps["streams-example-app"]] as const;
+}
+
 function makePreviewSlotDataEraser(runtime: {
   commandEnvironment: NodeJS.ProcessEnv;
   repositoryRoot: string;
@@ -3562,16 +3564,20 @@ function makePreviewSlotDataEraser(runtime: {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
     logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
-    const result = await runPreviewDeployCommand({
-      app: cloudflarePreviewApps.os,
-      commandEnvironment: runtime.commandEnvironment,
-      dopplerConfig,
-      operation: "down",
-      repositoryRoot: runtime.repositoryRoot,
-      signal: runtime.signal,
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(commandFailureMessage(result, `Erasing ${slug} data failed.`));
+    for (const app of selectPreviewSlotDataOwners()) {
+      const result = await runPreviewDeployCommand({
+        app,
+        commandEnvironment: runtime.commandEnvironment,
+        dopplerConfig,
+        operation: "down",
+        repositoryRoot: runtime.repositoryRoot,
+        signal: runtime.signal,
+      });
+      if (result.exitCode !== 0) {
+        throw new Error(
+          commandFailureMessage(result, `Erasing ${slug} ${app.displayName} data failed.`),
+        );
+      }
     }
     logPreview(`erased ${slug} data (${formatDurationMs(Date.now() - startedAt)})`);
   };
@@ -5047,6 +5053,7 @@ export const previewInternals = {
   resolvePreviewTestBaseUrlEnvironment,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
+  selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
   waitForHttpReadiness,
