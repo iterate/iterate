@@ -129,6 +129,7 @@ export default function SignInScreen() {
           {serverOptions.map((preset) => (
             <Pressable
               key={preset.baseUrl}
+              accessibilityRole="button"
               onPress={() => setEditedServer(preset.baseUrl)}
               style={[styles.chip, server === preset.baseUrl && styles.chipActive]}
             >
@@ -140,6 +141,7 @@ export default function SignInScreen() {
         </View>
 
         <Pressable
+          accessibilityRole="button"
           onPress={() => login.mutate()}
           disabled={login.isPending}
           style={[styles.signIn, login.isPending && { opacity: 0.6 }]}

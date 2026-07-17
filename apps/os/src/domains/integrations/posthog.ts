@@ -203,7 +203,6 @@ export async function capturePosthogStreamEventBatch(
   if (args.batch.events.length === 0) {
     throw new Error("PostHog stream delivery batch must contain an event");
   }
-  const events = posthogEvents(args);
   await tracing.enterSpan("posthog.capture_stream_events", async (span) => {
     const streamId = posthogUuid(["stream-v1", args.workerName, args.projectId, args.batch.path]);
     span.setAttribute("iterate.project.id", args.projectId);
@@ -211,6 +210,12 @@ export async function capturePosthogStreamEventBatch(
     span.setAttribute("iterate.stream.event_count", args.batch.events.length);
     span.setAttribute("iterate.stream.delivery_id", args.batch.deliveryId);
     span.setAttribute("iterate.stream.delivery_attempt", args.batch.attempt);
+
+    // Payload shaping is intentionally inside the span. Oversized stream
+    // events are truncated before egress, and that CPU is part of delivery —
+    // keeping it observable prevents a future regression from appearing as
+    // unexplained time in the parent Stream.append invocation.
+    const events = posthogEvents(args);
 
     const response = await (deps.fetch ?? fetch)("https://eu.i.posthog.com/batch/", {
       // Deliberately omit optional `sent_at`: these are server-authoritative

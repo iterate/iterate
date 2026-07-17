@@ -1,6 +1,20 @@
 const encoder = new TextEncoder();
 const MINIMUM_TRUNCATED_VALUE = "[truncated]";
 
+type JsonPrimitive = null | boolean | number | string;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+type MeasuredJson =
+  | { bytes: number; kind: "primitive"; value: Exclude<JsonPrimitive, string> }
+  | { bytes: number; kind: "string"; value: string }
+  | { bytes: number; items: MeasuredJson[]; kind: "array"; value: JsonValue[] }
+  | {
+      bytes: number;
+      entries: { key: string; keyBytes: number; value: MeasuredJson }[];
+      kind: "object";
+      value: { [key: string]: JsonValue };
+    };
+
 function serialize(value: unknown): string {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) {
@@ -9,105 +23,238 @@ function serialize(value: unknown): string {
   return serialized;
 }
 
-function jsonBytes(value: unknown): number {
-  return encoder.encode(serialize(value)).byteLength;
+function serializedBytes(serialized: string): number {
+  return encoder.encode(serialized).byteLength;
 }
 
-const minimumTruncatedBytes = jsonBytes(MINIMUM_TRUNCATED_VALUE);
+function primitiveJsonBytes(value: Exclude<JsonPrimitive, string>): number {
+  if (value === null) return 4;
+  if (typeof value === "boolean") return value ? 4 : 5;
+  // Oversized inputs are measured after a JSON stringify/parse round trip, so
+  // numbers are finite and String(number) is JSON's canonical representation
+  // (including -0 becoming "0").
+  return String(value).length;
+}
 
-function truncateString(value: string, maxBytes: number, originalBytes: number): string {
+/**
+ * Measure normalized JSON once, bottom-up. The previous implementation called
+ * JSON.stringify for every ancestor and every candidate in a binary search;
+ * a 10 MB string nested five levels deep was therefore copied and encoded
+ * dozens of times inside the Stream Durable Object's append CPU budget.
+ */
+function measureJson(value: JsonValue): MeasuredJson {
+  if (typeof value === "string") {
+    return { bytes: jsonStringBytes(value), kind: "string", value };
+  }
+  if (value === null || typeof value !== "object") {
+    return { bytes: primitiveJsonBytes(value), kind: "primitive", value };
+  }
+  if (Array.isArray(value)) {
+    const items = value.map(measureJson);
+    return {
+      // Brackets + commas + each already-measured value.
+      bytes: 2 + Math.max(0, items.length - 1) + items.reduce((sum, item) => sum + item.bytes, 0),
+      items,
+      kind: "array",
+      value,
+    };
+  }
+
+  const entries = Object.entries(value).map(([key, child]) => ({
+    key,
+    keyBytes: jsonStringBytes(key),
+    value: measureJson(child),
+  }));
+  return {
+    // Braces + commas + serialized key + colon + serialized value.
+    bytes:
+      2 +
+      Math.max(0, entries.length - 1) +
+      entries.reduce((sum, entry) => sum + entry.keyBytes + 1 + entry.value.bytes, 0),
+    entries,
+    kind: "object",
+    value,
+  };
+}
+
+/** JSON-string content bytes for one code point, and its UTF-16 width. */
+function encodedStringUnit(value: string, index: number): { bytes: number; width: number } {
+  const unit = value.charCodeAt(index);
+  if (
+    unit === 0x22 ||
+    unit === 0x5c ||
+    unit === 0x08 ||
+    unit === 0x09 ||
+    unit === 0x0a ||
+    unit === 0x0c ||
+    unit === 0x0d
+  ) {
+    return { bytes: 2, width: 1 };
+  }
+  if (unit <= 0x1f) return { bytes: 6, width: 1 };
+  if (unit <= 0x7f) return { bytes: 1, width: 1 };
+  if (unit <= 0x7ff) return { bytes: 2, width: 1 };
+  if (unit >= 0xd800 && unit <= 0xdbff) {
+    const next = value.charCodeAt(index + 1);
+    if (next >= 0xdc00 && next <= 0xdfff) return { bytes: 4, width: 2 };
+    // Well-formed JSON.stringify escapes lone surrogates as \ud800-style text.
+    return { bytes: 6, width: 1 };
+  }
+  if (unit >= 0xdc00 && unit <= 0xdfff) return { bytes: 6, width: 1 };
+  return { bytes: 3, width: 1 };
+}
+
+function jsonStringContentBytes(value: string): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length; ) {
+    const encoded = encodedStringUnit(value, index);
+    bytes += encoded.bytes;
+    index += encoded.width;
+  }
+  return bytes;
+}
+
+function jsonStringBytes(value: string): number {
+  // JSON.stringify adds exactly two ASCII quote bytes around string content.
+  return jsonStringContentBytes(value) + 2;
+}
+
+const minimumTruncatedBytes = jsonStringBytes(MINIMUM_TRUNCATED_VALUE);
+
+function truncateString(value: string, maxBytes: number, originalBytes: number) {
   const marker = `… [truncated from ${originalBytes} JSON bytes]`;
-  if (jsonBytes(marker) > maxBytes) return MINIMUM_TRUNCATED_VALUE;
-
-  const characters = Array.from(value);
-  let low = 0;
-  let high = characters.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    const candidate = `${characters.slice(0, middle).join("")}${marker}`;
-    if (jsonBytes(candidate) <= maxBytes) low = middle;
-    else high = middle - 1;
+  const prefixBudget = maxBytes - 2 - jsonStringContentBytes(marker);
+  if (prefixBudget < 0) {
+    return { bytes: minimumTruncatedBytes, value: MINIMUM_TRUNCATED_VALUE };
   }
-  return `${characters.slice(0, low).join("")}${marker}`;
+
+  // Scan only the prefix that can survive (normally <= 100 KiB), regardless
+  // of whether the discarded source string is 10 MB or 10 GB. This follows
+  // JSON.stringify's escaping and never slices a surrogate pair.
+  let bytes = 0;
+  let end = 0;
+  while (end < value.length) {
+    const encoded = encodedStringUnit(value, end);
+    if (bytes + encoded.bytes > prefixBudget) break;
+    bytes += encoded.bytes;
+    end += encoded.width;
+  }
+  const compacted = `${value.slice(0, end)}${marker}`;
+  return { bytes: bytes + jsonStringContentBytes(marker) + 2, value: compacted };
 }
 
-function truncateArray(value: unknown[], maxBytes: number, originalBytes: number): unknown {
-  const makeCandidate = (kept: number) => [
-    ...value.slice(0, kept),
-    `[truncated ${value.length - kept} items; from ${originalBytes} JSON bytes]`,
-  ];
-  if (jsonBytes(makeCandidate(0)) > maxBytes) return MINIMUM_TRUNCATED_VALUE;
-
-  let low = 0;
-  let high = value.length - 1;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (jsonBytes(makeCandidate(middle)) <= maxBytes) low = middle;
-    else high = middle - 1;
+function largestChild(node: Extract<MeasuredJson, { kind: "array" | "object" }>): {
+  index: number;
+  value: MeasuredJson;
+} | null {
+  const children = node.kind === "array" ? node.items : node.entries.map((entry) => entry.value);
+  let largest: { index: number; value: MeasuredJson } | null = null;
+  for (const [index, value] of children.entries()) {
+    if (largest === null || value.bytes > largest.value.bytes) largest = { index, value };
   }
-  return makeCandidate(low);
+  return largest;
 }
 
-function truncateObject(
-  value: Record<string, unknown>,
-  maxBytes: number,
-  originalBytes: number,
-): unknown {
-  const entries = Object.entries(value);
+function maximumCandidateLength(args: {
+  length: number;
+  maxBytes: number;
+  candidateBytes(kept: number): number;
+}): number | null {
+  if (args.candidateBytes(0) > args.maxBytes) return null;
+  let low = 0;
+  // Truncation always drops at least one original item/property.
+  let high = args.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (args.candidateBytes(middle) <= args.maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
+
+function truncateArray(node: Extract<MeasuredJson, { kind: "array" }>, maxBytes: number) {
+  const prefixBytes = [0];
+  for (const item of node.items) prefixBytes.push(prefixBytes.at(-1)! + item.bytes);
+  const marker = (kept: number) =>
+    `[truncated ${node.items.length - kept} items; from ${node.bytes} JSON bytes]`;
+  const candidateBytes = (kept: number) =>
+    // Brackets + kept item bytes + marker bytes + one comma per kept item.
+    2 + prefixBytes[kept]! + jsonStringBytes(marker(kept)) + kept;
+  const kept = maximumCandidateLength({
+    candidateBytes,
+    length: node.items.length,
+    maxBytes,
+  });
+  if (kept === null) {
+    return { bytes: minimumTruncatedBytes, value: MINIMUM_TRUNCATED_VALUE };
+  }
+  return {
+    bytes: candidateBytes(kept),
+    value: [...node.items.slice(0, kept).map((item) => item.value), marker(kept)],
+  };
+}
+
+function truncateObject(node: Extract<MeasuredJson, { kind: "object" }>, maxBytes: number) {
   let markerKey = "$iterate_truncated";
-  while (Object.hasOwn(value, markerKey)) markerKey = `$${markerKey}`;
+  while (Object.hasOwn(node.value, markerKey)) markerKey = `$${markerKey}`;
 
-  const makeCandidate = (kept: number) =>
-    Object.fromEntries([
-      ...entries.slice(0, kept),
-      [
-        markerKey,
-        `[truncated ${entries.length - kept} properties; from ${originalBytes} JSON bytes]`,
-      ],
-    ]);
-  if (jsonBytes(makeCandidate(0)) > maxBytes) return MINIMUM_TRUNCATED_VALUE;
-
-  let low = 0;
-  let high = entries.length - 1;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (jsonBytes(makeCandidate(middle)) <= maxBytes) low = middle;
-    else high = middle - 1;
+  const prefixBytes = [0];
+  for (const entry of node.entries) {
+    prefixBytes.push(prefixBytes.at(-1)! + entry.keyBytes + 1 + entry.value.bytes);
   }
-  return makeCandidate(low);
+  const marker = (kept: number) =>
+    `[truncated ${node.entries.length - kept} properties; from ${node.bytes} JSON bytes]`;
+  const markerKeyBytes = jsonStringBytes(markerKey);
+  const candidateBytes = (kept: number) =>
+    // Braces + kept entries + marker key/colon/value + one comma per kept entry.
+    2 + prefixBytes[kept]! + markerKeyBytes + 1 + jsonStringBytes(marker(kept)) + kept;
+  const kept = maximumCandidateLength({
+    candidateBytes,
+    length: node.entries.length,
+    maxBytes,
+  });
+  if (kept === null) {
+    return { bytes: minimumTruncatedBytes, value: MINIMUM_TRUNCATED_VALUE };
+  }
+  return {
+    bytes: candidateBytes(kept),
+    value: Object.fromEntries([
+      ...node.entries.slice(0, kept).map((entry) => [entry.key, entry.value.value] as const),
+      [markerKey, marker(kept)],
+    ]),
+  };
 }
 
-function truncateLargestValue(value: unknown, maxBytes: number): unknown {
-  const originalBytes = jsonBytes(value);
-  if (originalBytes <= maxBytes) return value;
-  if (typeof value === "string") return truncateString(value, maxBytes, originalBytes);
-  if (value === null || typeof value !== "object") return MINIMUM_TRUNCATED_VALUE;
-
-  const entries = Array.isArray(value) ? [...value.entries()] : Object.entries(value);
-  let largest: { bytes: number; child: unknown; key: number | string } | undefined;
-  for (const [key, child] of entries) {
-    const bytes = jsonBytes(child);
-    if (largest === undefined || bytes > largest.bytes) largest = { bytes, child, key };
+function truncateMeasuredJson(
+  node: MeasuredJson,
+  maxBytes: number,
+): { bytes: number; value: JsonValue } {
+  if (node.bytes <= maxBytes) return { bytes: node.bytes, value: node.value };
+  if (node.kind === "string") return truncateString(node.value, maxBytes, node.bytes);
+  if (node.kind === "primitive") {
+    return { bytes: minimumTruncatedBytes, value: MINIMUM_TRUNCATED_VALUE };
   }
-  const overflow = originalBytes - maxBytes;
 
-  // Recurse when one child can absorb the whole overflow. Otherwise chopping
-  // the enclosing collection's tail is both deterministic and bounded work.
-  if (largest !== undefined && largest.bytes - minimumTruncatedBytes >= overflow) {
-    const replacement = truncateLargestValue(largest.child, largest.bytes - overflow);
-    if (Array.isArray(value)) {
-      const copy = [...value];
-      copy[largest.key as number] = replacement;
-      return copy;
+  const largest = largestChild(node);
+  const overflow = node.bytes - maxBytes;
+  if (largest !== null && largest.value.bytes - minimumTruncatedBytes >= overflow) {
+    const replacement = truncateMeasuredJson(largest.value, largest.value.bytes - overflow);
+    if (node.kind === "array") {
+      const value = node.items.map((item, index) =>
+        index === largest.index ? replacement.value : item.value,
+      );
+      return { bytes: node.bytes - largest.value.bytes + replacement.bytes, value };
     }
-    return Object.fromEntries(
-      entries.map(([key, child]) => [key, key === largest.key ? replacement : child]),
+    const value = Object.fromEntries(
+      node.entries.map((entry, index) => [
+        entry.key,
+        index === largest.index ? replacement.value : entry.value.value,
+      ]),
     );
+    return { bytes: node.bytes - largest.value.bytes + replacement.bytes, value };
   }
 
-  return Array.isArray(value)
-    ? truncateArray(value, maxBytes, originalBytes)
-    : truncateObject(value as Record<string, unknown>, maxBytes, originalBytes);
+  return node.kind === "array" ? truncateArray(node, maxBytes) : truncateObject(node, maxBytes);
 }
 
 type TruncatedJson = {
@@ -127,17 +274,31 @@ export function truncateJsonToBytes(value: unknown, maxBytes: number): Truncated
     throw new RangeError(`maxBytes must be an integer of at least ${minimumTruncatedBytes}`);
   }
 
+  // Serialize once to apply JSON's toJSON/undefined/NaN semantics. UTF-16
+  // length is a lower bound for UTF-8 JSON length, so only encode the fast
+  // path when it is already bounded by maxBytes. A 10 MB value must not create
+  // a second 10 MB TextEncoder buffer merely to discover that it is oversized.
   const serialized = serialize(value);
-  const originalBytes = encoder.encode(serialized).byteLength;
-  if (originalBytes <= maxBytes) {
-    return { bytes: originalBytes, originalBytes, truncated: false, value };
+  if (serialized.length <= maxBytes) {
+    const originalBytes = serializedBytes(serialized);
+    if (originalBytes <= maxBytes) {
+      return { bytes: originalBytes, originalBytes, truncated: false, value };
+    }
   }
 
-  const compacted = truncateLargestValue(JSON.parse(serialized), maxBytes);
+  const measured = measureJson(JSON.parse(serialized) as JsonValue);
+  const compacted = truncateMeasuredJson(measured, maxBytes);
+  // Verification is intentionally bounded: the compacted representation is
+  // at most maxBytes even when the source was gigabytes. Keep exact accounting
+  // as an asserted invariant without recreating the discarded source tail.
+  const compactedBytes = serializedBytes(serialize(compacted.value));
+  if (compactedBytes !== compacted.bytes || compactedBytes > maxBytes) {
+    throw new Error("truncated JSON byte accounting invariant failed");
+  }
   return {
-    bytes: jsonBytes(compacted),
-    originalBytes,
+    bytes: compactedBytes,
+    originalBytes: measured.bytes,
     truncated: true,
-    value: compacted,
+    value: compacted.value,
   };
 }
