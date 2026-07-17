@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import { defineConfig, devices } from "@playwright/test";
 import {
   E2E_CI_RETRIES,
@@ -16,6 +17,12 @@ const videoArtifactsEnabled = videoMode || !process.env.CI;
 const configuredOsBaseUrl = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
 const localOsTarget = configuredOsBaseUrl ? null : await localOsDevServer.resolveTarget();
 const osBaseUrl = configuredOsBaseUrl || localOsTarget?.baseUrl;
+const mobileWebPort = Number(
+  process.env.PLAYWRIGHT_MOBILE_WEB_PORT ||
+    (await pickFreePort(localOsTarget ? localOsTarget.port : null)),
+);
+process.env.PLAYWRIGHT_MOBILE_WEB_PORT = String(mobileWebPort);
+const mobileWebUrl = `http://127.0.0.1:${mobileWebPort}`;
 
 export default defineConfig({
   testDir: "specs",
@@ -52,24 +59,68 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "chromium",
+      name: "web",
+      testIgnore: "**/mobile/**",
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
+    {
+      name: "mobile",
+      testMatch: "**/mobile/**/*.spec.ts",
+      use: {
+        ...devices["Desktop Chrome"],
+        // Metro reports its HTTP server ready before the first JS bundle has
+        // compiled and hydrated, so the mobile route needs a small startup
+        // budget beyond the web app's already-running action timeout.
+        actionTimeout: 5_000,
+        baseURL: mobileWebUrl,
+        viewport: { width: 390, height: 844 },
+        deviceScaleFactor: 1,
+      },
+    },
   ],
-  webServer: localOsTarget
-    ? {
-        command: `node ./apps/os/scripts/dev.ts start --detach --keep-alive --port ${localOsTarget.port}`,
-        env: process.env as Record<string, string>,
-        url: `${localOsTarget.baseUrl}/api/health`,
-        reuseExistingServer: !process.env.CI,
-        timeout: Math.max(
-          10_000,
-          new Date(localOsDevServer.readLive()?.startedAt || Date.now()).getTime() +
-            180_000 -
-            Date.now(),
-        ),
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    : undefined,
+  webServer: [
+    ...(localOsTarget
+      ? [
+          {
+            command: `node ./apps/os/scripts/dev.ts start --detach --keep-alive --port ${localOsTarget.port}`,
+            env: process.env as Record<string, string>,
+            url: `${localOsTarget.baseUrl}/api/health`,
+            reuseExistingServer: !process.env.CI,
+            timeout: Math.max(
+              10_000,
+              new Date(localOsDevServer.readLive()?.startedAt || Date.now()).getTime() +
+                180_000 -
+                Date.now(),
+            ),
+            stdout: "pipe" as const,
+            stderr: "pipe" as const,
+          },
+        ]
+      : []),
+    {
+      command: `pnpm --dir apps/mobile start:web --port ${mobileWebPort}`,
+      url: mobileWebUrl,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  ],
 });
+
+async function pickFreePort(excludedPort: number | null): Promise<number> {
+  const port = await new Promise<number>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close();
+        reject(new Error("Could not allocate a port for Expo Web."));
+        return;
+      }
+      server.close((error) => (error ? reject(error) : resolve(address.port)));
+    });
+  });
+  return port === excludedPort ? await pickFreePort(excludedPort) : port;
+}
