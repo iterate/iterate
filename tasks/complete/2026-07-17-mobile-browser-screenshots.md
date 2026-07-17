@@ -24,6 +24,17 @@ Make the merged `apps/mobile` app renderable and screenshot-able on an ordinary 
 - The first tracer-bullet screenshots cover the signed-out server picker because it is the app's deterministic, unauthenticated entry point. Authenticated projects/chat need credentials plus controlled product state and should be added as a separate fixture-backed slice rather than mocked inside this visual test.
 - The Playwright lane belongs to `apps/mobile` and owns its server/config so it can be run independently of the much larger OS product spec suite.
 
+## Follow-up: join the normal dev and Playwright lanes
+
+Move the mobile browser spec into the normal root Playwright suite so `pnpm spec`
+can test desktop OS and phone-sized Expo Web behavior together. Prefer a second
+Playwright project plus a `webServer` array that supervises both the existing OS
+dev server and `apps/mobile start:web`; that gives us normal mobile specs without
+silently changing `apps/os/scripts/dev.ts` from its current single-process lifecycle
+contract. If root `pnpm dev` should always launch both apps for humans too, first
+make it an explicit multi-process dev-stack supervisor whose discovery, ports,
+logs, `status`, `restart`, and `kill` semantics cover both children.
+
 ## Implementation log
 
 - 2026-07-17: researched the current Expo SDK 54 guidance. Expo Router supports web, Expo documents `expo start --web` for development and `expo export --platform web` for production bundles, and the required packages are `react-dom`, `react-native-web`, and `@expo/metro-runtime`. The app already has the Metro runtime but not the first two.
