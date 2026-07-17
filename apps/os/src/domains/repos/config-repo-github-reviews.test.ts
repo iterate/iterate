@@ -347,16 +347,16 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(4);
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
       idempotencyKey: "github-pr/mention-instructions:/integrations/github/install-789:12",
       payload: {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
         role: "developer",
       },
     });
-    expect(test.appendBatches[0]?.events[1]?.payload).not.toHaveProperty("actor");
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events[2]?.payload).not.toHaveProperty("actor");
+    expect(test.appendBatches[0]?.events[3]).toMatchObject({
       idempotencyKey: "github-pr/mention:/integrations/github/install-789:12",
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
@@ -371,11 +371,11 @@ describe("userspace GitHub pull-request routing", () => {
         ],
       },
     });
-    const instructions = JSON.stringify(test.appendBatches[0]?.events[1]);
+    const instructions = JSON.stringify(test.appendBatches[0]?.events[2]);
     expect(instructions).toContain("GitHub's signed webhook identifies @jonas as MEMBER");
     expect(instructions).toContain("issues.createComment");
     expect(instructions).not.toContain("@iterate please review");
-    const request = JSON.stringify(test.appendBatches[0]?.events[2]);
+    const request = JSON.stringify(test.appendBatches[0]?.events[3]);
     expect(request).toContain("@iterate please review");
     expect(request).toContain("https://github.com/acme/widgets/pull/7#issuecomment-991");
     expect(JSON.stringify(test.appendBatches[0]?.events)).not.toContain("checkCollaborator");
@@ -406,10 +406,10 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
+    expect(JSON.stringify(test.appendBatches[0]?.events[3])).toContain(
       "@iterate answer this review",
     );
-    expect(JSON.stringify(test.appendBatches[0]?.events[2])).not.toContain("wrong field");
+    expect(JSON.stringify(test.appendBatches[0]?.events[3])).not.toContain("wrong field");
   });
 
   it("does not wake from normalized mention metadata when the native message body is absent", async () => {
@@ -424,7 +424,7 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(1);
+    expect(test.appendBatches[0]?.events).toHaveLength(2);
   });
 
   it("creates the pull-request agent from a trusted mention", async () => {
@@ -435,8 +435,8 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(4);
+    expect(test.appendBatches[0]?.events[3]).toMatchObject({
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
         llmRequestPolicy: { behaviour: "after-current-request" },
