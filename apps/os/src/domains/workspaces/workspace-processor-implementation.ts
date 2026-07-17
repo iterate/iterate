@@ -1,0 +1,38 @@
+import { StreamProcessor } from "../streams/stream-processor.ts";
+import { foldWorkspaceConfig, WorkspaceProcessorContract } from "./workspace-processor-contract.ts";
+
+/**
+ * The workspace lifecycle processor: a pure fold of the birth certificate and
+ * configuration patches into `{ birthCertificate, config }`. Deliberately no
+ * `processEvent` — the workspace Durable Object is the imperative actor (it
+ * appends these events and serves the filesystem); this class exists so the
+ * mount table is event-sourced state with the platform's ordinary
+ * created/configured semantics.
+ */
+export class WorkspaceProcessor extends StreamProcessor<WorkspaceProcessorContract> {
+  readonly contract = WorkspaceProcessorContract;
+
+  protected override reduce({
+    event,
+    state,
+  }: Parameters<StreamProcessor<WorkspaceProcessorContract>["reduce"]>[0]) {
+    switch (event.type) {
+      case "events.iterate.com/workspace/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("workspace received more than one created event");
+        }
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          config: event.payload.config,
+        };
+      case "events.iterate.com/workspace/configured":
+        return {
+          ...state,
+          config: foldWorkspaceConfig(state.config, event.payload.config),
+        };
+      default:
+        return state;
+    }
+  }
+}

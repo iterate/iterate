@@ -178,7 +178,10 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
-  WORKSPACE: "WorkspaceDurableObject",
+  // Deliberately NOT "WorkspaceDurableObject": declarative exports key
+  // namespaces by class name, and the retired single-parent-overlay workspace
+  // occupied that name — reusing it would inherit the old namespace's storage.
+  WORKSPACE_V2: "WorkspaceV2DurableObject",
   // One sandbox container class PER INSTANCE TYPE (Cloudflare fixes instance_type per
   // class) — bindings and class names come from the canonical table in
   // src/domains/sandboxes/instance-types.ts.

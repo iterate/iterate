@@ -9,15 +9,11 @@ type RepoArtifactNameParts = {
 const SEPARATOR = "--";
 const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 
-/**
- * The project's config repo — an ordinary repo at an ordinary `/repos/*`
- * path, seeded during project bootstrap and the source the default project
- * worker builds from. Keeping the path here lets project creation, project
- * processors, and worker refs share the same address instead of each baking
- * in their own literal. Its events reach the project stream `/` through the
- * `cross-post:/` subscription the bootstrap saga arms on this repo's stream.
- */
-export const CONFIG_REPO_PATH = "/repos/config";
+import { CONFIG_REPO_PATH } from "./paths.ts";
+
+// Home of CONFIG_REPO_PATH: ./paths.ts (dependency-light on purpose — see its
+// module doc). Re-exported here so repo-domain callers keep one import.
+export { CONFIG_REPO_PATH };
 
 /**
  * The default project worker's build entry point. This shared filename keeps

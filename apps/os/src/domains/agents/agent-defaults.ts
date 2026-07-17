@@ -238,9 +238,9 @@ export function agentCreationForPath<
       type: "itx-expression",
       expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
       instructions:
-        `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): an instant copy-on-write overlay over the config repo's latest main, living in a Durable Object filesystem — no container, no clone, always warm. ` +
-        'Reads see latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
-        "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
+        `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): a mount-routed, copy-on-write filesystem living in a Durable Object — no container, no clone, always warm. By default the config repo is mounted at "/", so reads see its latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/glob/listAllFiles; paths are absolute). ` +
+        "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the mounted repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps. " +
+        "More repos can be mounted into the tree (getConfig/configure: mount path → { repoPath, policy }); commits route per mount and never span mounts (pass { scope } when more than one mount is dirty).",
     },
   });
   const configured = AgentProcessorContract.buildEvent({
@@ -274,7 +274,7 @@ export function agentCreationForPath<
         // between the two write doors — the model was repeating this line
         // verbatim to users as the repo's full contents.
         '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
-        "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
+        '- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace — the config repo mounted at "/", live at latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
         "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
         // Deliberate reinforcement of the prompt's FIND WORKING CODE
         // section — repetition is the one thing small prompts buy back.

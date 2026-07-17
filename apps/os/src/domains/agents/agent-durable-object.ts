@@ -72,11 +72,11 @@ export class AgentDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
         }),
       // Oversized script results spill into the agent's OWN workspace (the
-      // same checkout itx.workspace resolves to), so the model can page
+      // same filesystem itx.workspace resolves to), so the model can page
       // through the file instead of blowing its context window. The first
-      // write on a fresh workspace waits for the repo clone.
+      // write on a fresh workspace births it (default mount table).
       writeWorkspaceFile: ({ content, path }) =>
-        this.env.WORKSPACE.getByName(
+        this.env.WORKSPACE_V2.getByName(
           DurableObjectNameCodec.stringify({
             path: agentWorkspacePath(this.#name.path),
             projectId: this.#name.projectId,

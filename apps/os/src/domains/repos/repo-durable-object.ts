@@ -21,7 +21,6 @@ import {
   indexRepoSnapshotToSearchIndex,
   triggerProjectSearchSyncDebounced,
 } from "../search/search-index.ts";
-import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -46,7 +45,6 @@ import {
 } from "./checkout-files.ts";
 import { diffFileMaps } from "./line-diff.ts";
 import {
-  CONFIG_REPO_PATH,
   RepoArtifactNameCodec,
   RepoNotSeededError,
   base64ToBytes,
@@ -64,9 +62,6 @@ import { githubFastForwardTransferDepth } from "./github-sync-utils.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 
-// Sentinel for "the root workspace cache could not answer — use the clone
-// lane". Distinct from null, which is an authoritative "not at HEAD".
-const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 // Artifact creation is an at-least-once obligation. Concurrent first drives
@@ -543,9 +538,8 @@ export class RepoDurableObject extends DurableObject<Env> {
    * Committed file contents at HEAD — or, with `commitOid`, pinned to that
    * commit — null when the path does not exist there. `encoding: "base64"`
    * reads the raw bytes (images, PDFs — anything a utf8 decode would corrupt)
-   * and returns them base64-encoded. HEAD reads serve from the root workspace
-   * cache (no clone); pinned reads keep the clone lane (the cache only ever
-   * holds the head).
+   * and returns them base64-encoded. Reads serve from the clone lane's
+   * shared head snapshot (one clone per head movement per incarnation).
    */
   async readFile(input: {
     path: string;
@@ -554,10 +548,6 @@ export class RepoDurableObject extends DurableObject<Env> {
   }): Promise<{ commitOid: string; content: string; path: string } | null> {
     const path = normalizeRepoFilePath(input.path);
     if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
-    if (input.commitOid === undefined) {
-      const cached = await this.#readHeadFromRootCache(path, input.encoding);
-      if (cached !== CACHE_UNAVAILABLE) return cached;
-    }
     if (input.encoding === "base64") {
       const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });
       const absolutePath = `${REPO_DIR}/${path}`;
@@ -581,9 +571,8 @@ export class RepoDurableObject extends DurableObject<Env> {
    * Every task markdown file's contents at HEAD in ONE clone. The task board
    * needs the CONTENT of every `tasks/**` markdown file, not the whole tree;
    * doing that as `listFiles()` + a `readFile()` per task fans N reads at this
-   * object, and on any repo without the root workspace cache (everything but
-   * the config repo) each `readFile` is its own full clone — N concurrent
-   * clones of a big repo is exactly what overloads this DO. The task include
+   * object, and on a cold snapshot each `readFile` is its own full clone — N
+   * concurrent clones of a big repo is exactly what overloads this DO. The task include
    * mask is applied BEFORE contents are read (see `getFilesSnapshot`), so this
    * only ever reads the handful of task files, and its cost scales with the
    * number of tasks, not the size of the repo.
@@ -592,80 +581,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     return this.getFilesSnapshot({ include: TASK_FILE_INCLUDE_PATTERNS });
   }
 
-  /** All committed file paths at HEAD (the project repo serves from the root workspace cache). */
+  /** All committed file paths at HEAD (served from the clone lane's shared head snapshot). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
-    if (this.#hasRootWorkspaceCache()) {
-      try {
-        const head = await this.getHead();
-        const paths = await this.#rootWorkspaceStub().listAllFiles();
-        return { commitOid: head.commitOid, paths: paths.map((p) => p.slice(1)).sort() };
-      } catch (error) {
-        console.warn(
-          `repo listFiles via the root workspace cache failed; falling back to a clone: ${String(error)}`,
-        );
-      }
-    }
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
-  }
-
-  /**
-   * A HEAD file read served from the project's root workspace — the durable
-   * cache of main this repo already keeps fresh through its head cursor —
-   * instead of a full clone per read.
-   *
-   * Call order matters: `getHead()` FIRST warms this DO's durable head cursor
-   * (the one-time cold miss clones), so when the root workspace's freshness
-   * check dials back into this DO re-entrantly (we are awaiting its read at
-   * that moment; the input gate is open at RPC awaits), that nested
-   * `getHead()` is a synchronous kv hit. The returned oid is the cursor read
-   * before the content — a commit landing between the two can make the
-   * content newer than its label, the inherent approximation of a HEAD read.
-   *
-   * The cache is a CACHE: any failure (workspace DO unhappy, uncacheable
-   * repo) falls back to the authoritative clone lane, loudly.
-   */
-  async #readHeadFromRootCache(
-    path: string,
-    encoding: "utf8" | "base64" | undefined,
-  ): Promise<
-    { commitOid: string; content: string; path: string } | null | typeof CACHE_UNAVAILABLE
-  > {
-    if (!this.#hasRootWorkspaceCache()) return CACHE_UNAVAILABLE;
-    try {
-      const head = await this.getHead();
-      const root = this.#rootWorkspaceStub();
-      if (encoding === "base64") {
-        const bytes = await root.readFileBytes(`/${path}`);
-        return bytes === null
-          ? null
-          : { commitOid: head.commitOid, content: bytesToBase64(bytes), path };
-      }
-      const content = await root.readFile(`/${path}`);
-      return content === null ? null : { commitOid: head.commitOid, content, path };
-    } catch (error) {
-      console.warn(
-        `repo head read via the root workspace cache failed; falling back to a clone: ${String(error)}`,
-      );
-      return CACHE_UNAVAILABLE;
-    }
-  }
-
-  // The root workspace mirrors exactly ONE repo: the project repo at "/".
-  // Every other repo (secondary /repos/**, per-example scratch repos,
-  // projectId-less legacy repos) stays on the clone lane — serving them from
-  // the project root's checkout returns the WRONG repo's files.
-  #hasRootWorkspaceCache(): boolean {
-    return this.#name.projectId !== null && this.#name.path === CONFIG_REPO_PATH;
-  }
-
-  #rootWorkspaceStub() {
-    return this.env.WORKSPACE.getByName(
-      DurableObjectNameCodec.stringify({
-        path: ROOT_WORKSPACE_PATH,
-        projectId: this.#name.projectId!,
-      }),
-    );
   }
 
   /**
