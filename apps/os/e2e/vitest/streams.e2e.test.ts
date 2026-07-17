@@ -18,16 +18,16 @@ const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
 const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
 const EXPECTED_POSTHOG_SUBSCRIPTION = {
   type: "events.iterate.com/stream/subscription-configured",
-  idempotencyKey: "iterate-platform-posthog-subscription-v1",
+  idempotencyKey: "iterate-platform-posthog-subscription-v2",
   payload: {
     subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
-    description: "Iterate's first-party, all-event PostHog feed",
+    description: "Iterate's first-party durable-event PostHog feed",
     delivery: {
       mode: "push",
       expression: ["integrations", "posthog", "processEventBatch"],
     },
     deliver: "all",
-    includeEphemeral: true,
+    includeEphemeral: false,
     onPoison: "park",
   },
 } as const;
