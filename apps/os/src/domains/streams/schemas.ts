@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /** Searchable operational identifier exported by the first-party event feed. */
-export const StreamEventType = z
+const StreamEventType = z
   .string()
   .max(256, "event type must be at most 256 characters")
   .regex(

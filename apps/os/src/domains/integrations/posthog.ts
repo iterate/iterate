@@ -74,7 +74,7 @@ function hasCanonicalPosthogPayload(event: Pick<StreamEventInput, "type" | "payl
 }
 
 /** True only for the platform-owned configuration as committed on its own stream. */
-export function isFirstPartyPosthogSubscriptionConfiguration(event: StreamEventInput): boolean {
+function isFirstPartyPosthogSubscriptionConfiguration(event: StreamEventInput): boolean {
   const canonical = posthogSubscriptionEvent();
   return (
     event.idempotencyKey === canonical.idempotencyKey &&
