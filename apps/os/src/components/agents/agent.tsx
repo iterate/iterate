@@ -35,11 +35,9 @@ import {
 } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 
-export type AgentVariant = "detail" | "catalog" | "sidebar";
-
-export type AgentProps = {
+type AgentProps = {
   agent: AgentRecord;
-  variant: AgentVariant;
+  variant: "detail" | "catalog" | "sidebar";
   nowMs: number;
   tree?: Pick<
     AgentTreeNode,

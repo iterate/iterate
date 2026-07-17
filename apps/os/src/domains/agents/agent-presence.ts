@@ -11,8 +11,8 @@ export const AGENT_PATH_MAX_LENGTH = 240;
 export const AGENT_BINDING_CONNECTION_MAX_LENGTH = 64;
 export const AGENT_BINDING_ID_MAX_LENGTH = 128;
 export const AGENT_BINDING_LABEL_MAX_LENGTH = 240;
-export const AGENT_BINDING_REPOSITORY_PART_MAX_LENGTH = 100;
-export const AGENT_BINDING_SHA_MAX_LENGTH = 64;
+const AGENT_BINDING_REPOSITORY_PART_MAX_LENGTH = 100;
+const AGENT_BINDING_SHA_MAX_LENGTH = 64;
 export const AGENT_BINDING_URL_MAX_LENGTH = 512;
 
 const boundedText = (maximum: number) => z.string().trim().min(1).max(maximum);
@@ -30,8 +30,8 @@ export const AgentPath = z
   });
 export type AgentPath = z.infer<typeof AgentPath>;
 
-export const AgentWaitingFor = z.enum(["user_input", "external_event", "timer"]);
-export type AgentWaitingFor = z.infer<typeof AgentWaitingFor>;
+const AgentWaitingFor = z.enum(["user_input", "external_event", "timer"]);
+type AgentWaitingFor = z.infer<typeof AgentWaitingFor>;
 
 export const AgentMetadata = z.strictObject({
   title: boundedText(AGENT_TITLE_MAX_LENGTH).optional(),
@@ -112,14 +112,14 @@ export const AgentBinding = z.discriminatedUnion("type", [
 ]);
 export type AgentBinding = z.infer<typeof AgentBinding>;
 
-export const AgentTimestamps = z.strictObject({
+const AgentTimestamps = z.strictObject({
   createdAt: z.iso.datetime(),
   lastWorkAt: z.iso.datetime(),
   metadataUpdatedAt: z.iso.datetime().optional(),
   activityUpdatedAt: z.iso.datetime().optional(),
   runtimeUpdatedAt: z.iso.datetime().optional(),
 });
-export type AgentTimestamps = z.infer<typeof AgentTimestamps>;
+type AgentTimestamps = z.infer<typeof AgentTimestamps>;
 
 export const AgentRecord = z.strictObject({
   path: AgentPath,

@@ -19,7 +19,7 @@ export type AgentTreeNode = {
   aggregateActiveCount: number;
 };
 
-export type VisibleAgentRow = {
+type VisibleAgentRow = {
   node: AgentTreeNode;
   depth: number;
   matching: boolean;
@@ -126,7 +126,7 @@ export function agentTitle(agent: AgentRecord): string {
   return agent.path.split("/").filter(Boolean).at(-1) ?? agent.path;
 }
 
-export function agentBindingTitle(binding: AgentRecord["binding"]): string | undefined {
+function agentBindingTitle(binding: AgentRecord["binding"]): string | undefined {
   if (binding === undefined) return undefined;
   switch (binding.type) {
     case "slack_thread":
@@ -147,7 +147,7 @@ export function agentBindingTitle(binding: AgentRecord["binding"]): string | und
   }
 }
 
-export function agentSearchText(agent: AgentRecord): string {
+function agentSearchText(agent: AgentRecord): string {
   const binding = agent.binding === undefined ? [] : Object.values(agent.binding);
   return [
     agentTitle(agent),

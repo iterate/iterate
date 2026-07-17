@@ -3,7 +3,7 @@ import { StreamPath } from "~/lib/stream-links.ts";
 
 export type PaletteTab = "agents" | "tree" | "recent";
 
-export type PaletteKeyboardTarget =
+type PaletteKeyboardTarget =
   | { kind: "agent"; path: string; shortcut: boolean }
   | { kind: "stream"; path: string };
 
@@ -70,7 +70,7 @@ export function isPaletteResultKeyboardTarget(target: EventTarget | null): boole
   );
 }
 
-export type PaletteStreamTreeNode = {
+type PaletteStreamTreeNode = {
   row: StreamIndexRow;
   children: PaletteStreamTreeNode[];
 };
@@ -132,29 +132,20 @@ export function flattenStreamRows(
   return rows;
 }
 
-export function toggled(current: ReadonlySet<string>, path: string): ReadonlySet<string> {
+function toggled(current: ReadonlySet<string>, path: string): ReadonlySet<string> {
   const next = new Set(current);
   if (next.has(path)) next.delete(path);
   else next.add(path);
   return next;
 }
 
-export type PaletteDialogState = {
+type PaletteDialogState = {
   tab: PaletteTab;
   query: string;
   selectedValue: string;
   expandedAgentPaths: ReadonlySet<string>;
   expandedStreamPaths: ReadonlySet<string>;
 };
-
-export type PaletteDialogAction =
-  | { type: "closed" }
-  | { type: "opened"; tab: PaletteTab; expandedStreamPaths: ReadonlySet<string> }
-  | { type: "query_changed"; query: string }
-  | { type: "selection_changed"; selectedValue: string }
-  | { type: "tab_changed"; tab: PaletteTab }
-  | { type: "agent_toggled"; path: string }
-  | { type: "stream_toggled"; path: string };
 
 export function initialPaletteDialogState(): PaletteDialogState {
   return {
@@ -165,6 +156,15 @@ export function initialPaletteDialogState(): PaletteDialogState {
     expandedStreamPaths: new Set(),
   };
 }
+
+type PaletteDialogAction =
+  | { type: "closed" }
+  | { type: "opened"; tab: PaletteTab; expandedStreamPaths: ReadonlySet<string> }
+  | { type: "query_changed"; query: string }
+  | { type: "selection_changed"; selectedValue: string }
+  | { type: "tab_changed"; tab: PaletteTab }
+  | { type: "agent_toggled"; path: string }
+  | { type: "stream_toggled"; path: string };
 
 export function reducePaletteDialogState(
   state: PaletteDialogState,

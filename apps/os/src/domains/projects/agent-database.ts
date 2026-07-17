@@ -34,8 +34,6 @@ export type AgentTouchInput = {
   events: AgentProjectionEvent[];
 };
 
-export type AgentSeed = { path: string; createdAt: string };
-
 type StoredAgent = {
   record: AgentRecordValue;
   lastEventOffset: number;
@@ -79,7 +77,7 @@ export class AgentDatabase {
   /** Seed quiet agents from the project processor's complete created catalog.
    * A later direct agent/created fact with offset > 0 replaces the seed's
    * slightly later cross-post timestamp. */
-  seedMissing(agents: readonly AgentSeed[]): void {
+  seedMissing(agents: readonly { path: string; createdAt: string }[]): void {
     let nextStored = this.#stored;
     let nextProjection = this.#projection;
     for (const agent of agents) {
