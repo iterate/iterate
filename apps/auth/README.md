@@ -116,7 +116,8 @@ they are easy to confuse, so they're documented there:
 
 OS's runtime-only privileged operations are RPC methods on auth's default
 `AuthWorker`: project creation, slug lookup, user-project membership,
-project-id minting, and opaque OAuth token introspection. Its shared base class
+project-id minting, project-app session issuance/validation, and opaque OAuth
+token introspection. Its shared base class
 is the `/worker` export of `@iterate-com/auth-contract`; implementation lives in
 `src/server/project-directory.ts` and `src/server/oauth-token-introspection.ts`.
 

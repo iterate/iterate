@@ -35,7 +35,9 @@ into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
 The example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless, extends
-`IterateWorkerEntrypoint`) and `CounterApp` (stateful, extends
+`IterateWorkerEntrypoint`), `InternalApp` (stateless and protected by
+`itx.auth.get({ policy: "project-member" }).fetch(request)`), and
+`CounterApp` (stateful, extends
 `IterateDurableObject` — a mini client-side app whose count updates live over
 a WebSocket at `/ws`).
 The router dispatches every app request through `this.fetchDynamicWorker(req,
