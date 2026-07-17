@@ -11,7 +11,7 @@ Cloudflare pieces must exist before the lease enters the pool.
 
 | Layer         | Per-slot state                                                                                                                                                         |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository    | Five environment-map entries, Auth OAuth audiences, mobile preset, preview inventory                                                                                   |
+| Repository    | OS and Semaphore environment entries; derived app maps, OAuth audiences, mobile preset, and preview inventory                                                          |
 | Doppler       | Branch configs in `os`, `auth`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                                                |
 | Cloudflare    | Two zones, seven Workers, two D1 databases, two KV namespaces, three R2 buckets, one Queue, one AI Search namespace, DNS, routes, container classes, and email routing |
 | External apps | One GitHub App and one Slack app for full integration parity                                                                                                           |
@@ -77,33 +77,49 @@ References: [Workers](https://developers.cloudflare.com/workers/platform/limits/
 Make these edits together. A partial edit can produce a healthy-looking Worker
 that cannot authenticate or cannot be leased safely.
 
-### Environment maps
+### Make `envs.ts` the source of truth
 
 In `envs.ts`, add:
 
 - `preview_10`–`preview_19` to `envs`, using `previewSlot(N, ...)` with all
   three resource IDs set to `UNPROVISIONED`;
-- the same names to `authEnvs` with fixed test OTP enabled;
 - the same names to `semaphoreEnvs`, using `semaphorePreviewSlot(N,
 UNPROVISIONED)`;
-- the same names to `dummyPetshopEnvs`;
-- the same names to `streamsExampleEnvs`.
 
 Do not invent IDs and do not copy IDs from another slot. OS and Auth deliberately
 share the slot's Auth D1 ID; Semaphore has its own D1 ID.
 
-### Every other fleet list
+The other three maps have no independent per-slot resource IDs. Refactor their
+preview entries instead of adding another ten names by hand:
 
-Update all of these from 1–9 to 1–19:
+- derive `authEnvs` preview entries from `envs`, with fixed test OTP enabled;
+- derive `dummyPetshopEnvs` preview entries from each OS preview's slot number;
+- derive `streamsExampleEnvs` preview entries from each OS preview's slot
+  number.
 
-- `previewEnvironmentSlotNumbers` in `scripts/preview/preview.ts`. This drives
-  both Doppler provisioning and the desired Semaphore inventory.
-- The exact inventory assertion in `scripts/preview/preview.test.ts`.
-- All four preview arrays in `apps/auth/src/server/oauth-resources.ts`. These
-  are Auth's allowed OAuth resource audiences. Missing them makes token requests
-  for the new OS, MCP, Semaphore, and Streams hosts fail.
-- `targets` in `apps/os/scripts/sync-auth-clients.ts`.
-- `SERVER_PRESETS` in `apps/mobile/src/lib/servers.ts`.
+Keep their production and Auth `dev_global` entries explicit. Type each derived
+map so a missing or extra deployed environment is a type error.
+
+### Derive every fleet projection
+
+Export a preview-only projection from `envs.ts`, derived from the `envs` entries
+or their `dopplerConfig` values. Do not add a second `[1, ..., 19]` constant.
+Use that projection to replace every remaining hard-coded slot list:
+
+- derive the slot numbers used by Doppler provisioning and Semaphore inventory
+  in `scripts/preview/preview.ts`;
+- derive the four Auth audience sets in
+  `apps/auth/src/server/oauth-resources.ts` from `envs`, `semaphoreEnvs`, and
+  `streamsExampleEnvs`;
+- derive `targets` in `apps/os/scripts/sync-auth-clients.ts` from `envs`;
+- derive `SERVER_PRESETS` in `apps/mobile/src/lib/servers.ts` from `envs`.
+
+Delete the `environmentConfigLeaseInventory` test that spells out
+`preview-1`–`preview-9`: after the inventory is derived, that assertion only
+repeats its input. Keep the rest of `scripts/preview/preview.test.ts`. It covers
+behavior that deployed-env smoke tests do not isolate: dependency ordering,
+diff selection, retry and force-push handling, inventory add/delete semantics,
+lease ownership, failed cleanup, reclaim, and GC.
 
 Also add `previewDependencies: ["auth"]` to the Streams example app in
 `cloudflarePreviewApps`. Its deploy fetches and bakes Auth's JWKS, but the

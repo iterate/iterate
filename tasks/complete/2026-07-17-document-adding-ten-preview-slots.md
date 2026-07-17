@@ -82,3 +82,6 @@ or cannot be cleaned up safely.
   credential behavior without mutating external state.
 - 2026-07-17: Added and cross-linked the runbook, including capacity math,
   first-deploy ordering, stop conditions, drift notes, and a completion ledger.
+- 2026-07-17: Review replaced the duplicated expansion lists with one `envs.ts`
+  source-of-truth design and distinguished one tautological inventory assertion
+  from the preview test file's behavioral state-machine coverage.
