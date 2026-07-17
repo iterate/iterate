@@ -214,13 +214,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAuth",
     kind: "interface",
     sourceText:
-      "/** A partial fetch: return its response, or continue the app when it returns null. */\nexport interface ProjectAuth {\n  /** Bind a project-member gate to this itx's project. */\n  get(policy: ProjectAuthPolicy): ProjectAuth;\n  /**\n   * Own login, callback, logout, and the host-only cookie. Returns null only\n   * when this request belongs to a current project member. Pass a clone when\n   * the app will later read the request body: `auth.fetch(request.clone())`.\n   */\n  fetch(request: ProjectAuthRequest): Promise<Response | null>;\n}",
+      "/** A partial fetch: return its response, or continue the app when it returns null. */\nexport interface ProjectAuth {\n  /** Bind a project-member gate to this itx's project. */\n  get(policy: ProjectAuthPolicy): ProjectAuth;\n  /**\n   * Own login, callback, logout, and the host-only cookie. Returns null only\n   * when this request belongs to a current project member. Like any partial\n   * fetch, a null result leaves the request body untouched for the app.\n   */\n  fetch(request: Request): Promise<Response | null>;\n}",
     summary: "A partial fetch: return its response, or continue the app when it returns null.",
     memberSummaries: {
       get: "Bind a project-member gate to this itx's project.",
       fetch: "Own login, callback, logout, and the host-only cookie.",
     },
-    referencedTypeNames: ["ProjectAuthPolicy", "ProjectAuthRequest"],
+    referencedTypeNames: ["ProjectAuthPolicy"],
   },
   {
     name: "CfBrowserCapability",
@@ -1184,15 +1184,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       '/** A declarative access rule for a project-host web app. */\nexport type ProjectAuthPolicy = { policy: "project-member" };',
     summary: "A declarative access rule for a project-host web app.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ProjectAuthRequest",
-    kind: "typeAlias",
-    sourceText:
-      "/** The portable request fields consumed by the partial auth handler. */\nexport type ProjectAuthRequest = {\n  readonly body: ReadableStream<Uint8Array<ArrayBuffer>> | null;\n  readonly headers: Headers;\n  readonly method: string;\n  readonly url: string;\n};",
-    summary: "The portable request fields consumed by the partial auth handler.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

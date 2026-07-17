@@ -12,6 +12,9 @@ describe("project auth partial fetch", () => {
     );
     expect(html?.status).toBe(200);
     expect(await html?.text()).toContain('action="/_iterate/auth/login"');
+    expect(html?.headers.get("content-security-policy")).toContain(
+      `form-action 'self' ${osOrigin}`,
+    );
     expect(await projectFetch(new Request(`${appOrigin}/api/events`))).toMatchObject({
       status: 401,
     });
@@ -50,15 +53,17 @@ describe("project auth partial fetch", () => {
     await expect(response?.json()).resolves.toEqual({ ok: true, returnTo: "/events" });
   });
 
-  test("continues only while the cookie validates for this project and origin", async () => {
+  test("continues without consuming the request while the cookie remains valid", async () => {
     const validate = vi.fn(async () => ({ expiresAt: Math.floor(Date.now() / 1000) + 600 }));
-    const allowed = await projectFetch(
-      new Request(`${appOrigin}/private`, {
-        headers: { cookie: "iterate-project-auth=signed-token" },
-      }),
-      validate,
-    );
+    const request = new Request(`${appOrigin}/private`, {
+      body: "app-owned-body",
+      headers: { cookie: "iterate-project-auth=signed-token" },
+      method: "POST",
+    });
+    const allowed = await projectFetch(request, validate);
     expect(allowed).toBeNull();
+    expect(request.bodyUsed).toBe(false);
+    await expect(request.text()).resolves.toBe("app-owned-body");
     expect(validate).toHaveBeenCalledWith({
       audience: appOrigin,
       projectId,

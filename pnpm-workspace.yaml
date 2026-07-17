@@ -85,18 +85,6 @@ packageExtensions:
     peerDependencies:
       '@typescript/vfs': '*'
       typescript: '*'
-  lucide-react:
-    peerDependencies:
-      '@types/react': '*'
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
-  streamdown:
-    peerDependencies:
-      '@types/react': '*'
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
 
 patchedDependencies:
   '@better-auth/oauth-provider@1.6.9': patches/@better-auth__oauth-provider@1.6.9.patch

@@ -107,14 +107,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // carry an idempotency key.
   async processEvent(event: StreamEvent): Promise<void> {
     if (event.type === "events.iterate.com/github/webhook-received") {
-      const itx = await this.env.ITX.get();
-      try {
-        await processGithubReviewEvent({ config: GITHUB_REVIEWS, event, itx });
-      } finally {
-        try {
-          itx[Symbol.dispose]?.();
-        } catch {}
-      }
+      using itx = await this.env.ITX.get();
+      await processGithubReviewEvent({ config: GITHUB_REVIEWS, event, itx });
     }
   }
 }
@@ -122,55 +116,51 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 // A stateless app the root project worker routes to when ingress selects the
 // "hello" app. It gets the full project itx through env.ITX, and the same
 // base-class surface as the root worker — add a getter here and it's an
-// `itx.worker` capability on THIS app via `project.workers.get(ref)`.
+// `itx.worker` capability on THIS app via `itx.workers.get(ref)`.
 export class HelloApp extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
-    const project = await this.env.ITX.get();
-    try {
-      const description = await project.__describe();
-      return Response.json({
-        app: "hello",
-        path: new URL(req.url).pathname,
-        projectId: description.projectId,
-      });
-    } finally {
-      // Release the itx stub (see the processEvent comment above); guarded so
-      // a throwing dispose can never mask the response.
-      try {
-        project[Symbol.dispose]?.();
-      } catch {}
-    }
+    using itx = await this.env.ITX.get();
+    const description = await itx.__describe();
+    return Response.json({
+      app: "hello",
+      path: new URL(req.url).pathname,
+      projectId: description.projectId,
+    });
   }
 }
 
 // A project-member-only app. Auth is a partial fetch: return its response when
 // non-null, and continue the app only when it returns null.
 export class InternalApp extends IterateWorkerEntrypoint {
-  async fetch(req: Request): Promise<Response> {
-    const project = await this.env.ITX.get();
-    try {
-      const auth = await project.auth.get({ policy: "project-member" }).fetch(req.clone());
-      if (auth) return auth;
+  async fetch(request: Request): Promise<Response> {
+    using itx = await this.env.ITX.get();
+    const auth = await itx.auth.get({ policy: "project-member" }).fetch(request);
+    if (auth) return auth;
 
-      const snapshot = await project.processor.snapshot();
-      const events = await project.streams.get("/").getEvents({
-        afterOffset: Math.max(0, snapshot.offset - 25),
-        limit: 25,
+    // A null auth result leaves the original request untouched, so normal app
+    // routes can still read its body. This echo route makes that contract easy
+    // to exercise in the seeded browser proof.
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/echo") {
+      return new Response(await request.text(), {
+        headers: { "cache-control": "no-store", "content-type": "text/plain" },
       });
-      return new Response(
-        `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Project events</title></head><body><main><h1>Latest project root events</h1><form action="/_iterate/auth/logout" method="post"><button>Sign out</button></form><pre>${escapeHtml(JSON.stringify(events.slice().reverse(), null, 2))}</pre></main></body></html>`,
-        {
-          headers: {
-            "cache-control": "no-store",
-            "content-type": "text/html; charset=utf-8",
-          },
-        },
-      );
-    } finally {
-      try {
-        project[Symbol.dispose]?.();
-      } catch {}
     }
+
+    const snapshot = await itx.processor.snapshot();
+    const events = await itx.streams.get("/").getEvents({
+      afterOffset: Math.max(0, snapshot.offset - 25),
+      limit: 25,
+    });
+    return new Response(
+      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Project events</title></head><body><main><h1>Latest project root events</h1><form action="/_iterate/auth/logout" method="post"><button>Sign out</button></form><pre>${escapeHtml(JSON.stringify(events.slice().reverse(), null, 2))}</pre></main></body></html>`,
+      {
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/html; charset=utf-8",
+        },
+      },
+    );
   }
 }
 

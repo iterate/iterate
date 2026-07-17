@@ -7,8 +7,27 @@ import { isSameOriginBrowserRequest } from "./operator-session.ts";
 /** A declarative access rule for a project-host web app. */
 export type ProjectAuthPolicy = { policy: "project-member" };
 
-/** The portable request fields consumed by the partial auth handler. */
-export type ProjectAuthRequest = Pick<Request, "body" | "headers" | "method" | "url">;
+/** The request fields consumed by the server-side auth implementation. */
+type ProjectAuthRequest = Pick<Request, "body" | "headers" | "method" | "url">;
+
+/** Metadata sent by the worker-side partial-fetch facade for body-free paths. */
+export type ProjectAuthRpcMetadata = {
+  headers: [string, string][];
+  method: string;
+  url: string;
+};
+
+export function projectAuthRequestFromRpc(
+  request: ProjectAuthRpcMetadata | Request,
+): ProjectAuthRequest {
+  if (request instanceof Request) return request;
+  return {
+    body: null,
+    headers: new Headers(request.headers),
+    method: request.method,
+    url: request.url,
+  };
+}
 
 const AUTH_COOKIE = "iterate-project-auth";
 const CALLBACK_PATH = "/_iterate/auth/callback";
@@ -35,7 +54,8 @@ export function parseProjectAuthPolicy(value: ProjectAuthPolicy): ProjectAuthPol
 
 /**
  * Project-app auth as a partial fetch. A response means auth owns the request;
- * null means the current request has a live project-member session.
+ * null means the current request has a live project-member session. The null
+ * path inspects metadata only and leaves the request body untouched.
  */
 export async function handleProjectAuthFetch(input: {
   osBaseUrl: string | undefined;
@@ -84,7 +104,7 @@ export async function handleProjectAuthFetch(input: {
     return_to: `${url.pathname}${url.search}`,
   })}`;
   const response = isHtmlNavigation(input.request)
-    ? loginPage(login)
+    ? loginPage(login, input.osBaseUrl)
     : Response.json({ authenticated: false, login }, { headers: noStoreHeaders(), status: 401 });
   if (token) response.headers.append("set-cookie", expiredCookie(url));
   return response;
@@ -290,12 +310,17 @@ function expiredCookie(url: URL) {
   ].join("; ");
 }
 
-function loginPage(login: string) {
+function loginPage(login: string, osBaseUrl: string | undefined) {
   const returnTo = new URL(login, "https://project.invalid").searchParams.get("return_to") ?? "/";
   const headers = htmlHeaders();
+  // Chromium applies form-action to the entire redirect chain, not just the
+  // same-origin form target. Permit the configured OS origin so the local
+  // login endpoint can hand the navigation to Iterate without weakening any
+  // other CSP directive.
+  const formAction = osBaseUrl ? `'self' ${new URL(osBaseUrl).origin}` : "'self'";
   headers.set(
     "content-security-policy",
-    "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    `default-src 'none'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
   );
   return new Response(
     `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Sign in</title></head><body><main><h1>Sign in to Iterate</h1><p>This app is available to project members.</p><form action="${LOGIN_PATH}" method="get"><input name="return_to" type="hidden" value="${escapeHtml(returnTo)}"><button type="submit">Continue with Iterate</button></form></main></body></html>`,

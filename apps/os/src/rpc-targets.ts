@@ -260,8 +260,9 @@ import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
 import {
   handleProjectAuthFetch,
   parseProjectAuthPolicy,
+  projectAuthRequestFromRpc,
   type ProjectAuthPolicy,
-  type ProjectAuthRequest,
+  type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
 import type {
   McpBeginOAuthInput,
@@ -5175,14 +5176,15 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
 
   /**
    * Own login, callback, logout, and the host-only cookie. Returns null only
-   * when this request belongs to a current project member. Pass a clone when
-   * the app will later read the request body: `auth.fetch(request.clone())`.
+   * when this request belongs to a current project member. Like any partial
+   * fetch, a null result leaves the request body untouched for the app.
    */
-  async fetch(request: ProjectAuthRequest): Promise<Response | null> {
+  fetch(request: Request): Promise<Response | null>;
+  async fetch(request: ProjectAuthRpcMetadata | Request): Promise<Response | null> {
     return await handleProjectAuthFetch({
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
-      request,
+      request: projectAuthRequestFromRpc(request),
       validateSession: (input) => env.AUTH.validateProjectAppSession(input),
     });
   }
