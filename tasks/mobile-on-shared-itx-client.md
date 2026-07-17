@@ -29,8 +29,16 @@ shared client already owns, live-proven in the browser and the chat TUI:
 - Wire RN wake signals: `AppState` → `focusManager.setFocused`, NetInfo/
   expo-network → `onlineManager` (TanStack's documented RN pattern), and
   `reportTransportSuspicion()` on app-foreground for the keeper.
+- Re-point mobile's 10 deep-relative `apps/os/src/itx-api.generated.ts` type
+  imports at the package too (absorbed from the deleted
+  generated-contract-imports-via-package task; the streams-example-app half
+  shipped in #2069) — after which nothing outside `apps/os` reaches into its
+  source tree for the contract.
 - Metro must resolve the package's subpath exports (`iterate/client`,
   `iterate/react`); check `unstable_enablePackageExports` behavior.
+- Mobile's e2e also hand-dials `newWebSocketRpcSession` four times
+  (approval-roundtrip ×2, chat-roundtrip, example-runner) — collapse onto
+  `iterate/node`.
 
 Proof: the mobile e2e suite drives the exact phone code from Node
 (`apps/mobile/e2e/*.e2e.test.ts`) — same lane that proved the TUI.
