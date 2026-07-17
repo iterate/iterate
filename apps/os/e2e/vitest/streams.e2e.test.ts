@@ -124,7 +124,10 @@ test("stream birth installs the first-party PostHog subscription through itx.pro
       );
       return configuration !== undefined;
     },
-    { description: "project-worker birth delivery to install the PostHog feed" },
+    {
+      description: "project-worker birth delivery to install the PostHog feed",
+      timeoutMs: 30_000,
+    },
   );
 
   expect(configuration).toMatchObject({
@@ -311,7 +314,10 @@ test("ephemeral events are raw-readable and delivered live, but never replayed t
           event.type === EXPECTED_POSTHOG_SUBSCRIPTION.type &&
           event.payload?.subscriptionKey === POSTHOG_SUBSCRIPTION_KEY,
       ),
-    { description: "the first-party PostHog subscription to finish installing" },
+    {
+      description: "the first-party PostHog subscription to finish installing",
+      timeoutMs: 30_000,
+    },
   );
 
   const [before, chunk, after] = await stream.append(

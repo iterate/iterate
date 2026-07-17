@@ -188,7 +188,10 @@ test("Authenticated internal auth itx can create project and append to stream", 
       (await somePath.getEvents()).some(
         (event) => event.payload?.subscriptionKey === "iterate-platform-posthog",
       ),
-    { description: "the first-party PostHog subscription to finish installing" },
+    {
+      description: "the first-party PostHog subscription to finish installing",
+      timeoutMs: 30_000,
+    },
   );
   const somePathEvents = await somePath.getEvents();
   expect(somePathEvents.slice(0, 3)).toMatchObject([

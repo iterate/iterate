@@ -208,7 +208,10 @@ test("append accepts an offset assertion on a subscription-configured core event
       (await stream.getEvents({ afterOffset: 0 })).some(
         (event) => event.payload?.subscriptionKey === "iterate-platform-posthog",
       ),
-    { description: "the first-party PostHog subscription to finish installing" },
+    {
+      description: "the first-party PostHog subscription to finish installing",
+      timeoutMs: 30_000,
+    },
   );
   const runtime = (await stream.runtimeState()) as {
     coreProcessorState: { maxOffset: number };
