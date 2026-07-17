@@ -53,8 +53,7 @@ node --version
 pnpm --version
 
 echo "==> Installing Doppler CLI"
-curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager
-doppler --version
+./scripts/ci/install-doppler.sh
 
 echo "==> Installing preview browser"
 pnpm --dir apps/streams-example-app exec playwright install chromium

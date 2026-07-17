@@ -126,9 +126,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install
       - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+        run: scripts/ci/install-doppler.sh
       # ONE step for deploy + e2e: `preview run` shares a single resolved PR
       # head between the two phases, so a push can no longer race into a gap
       # between separate deploy and test steps (that gap used to need a whole

@@ -177,3 +177,26 @@ describe("Depot validation capacity", () => {
     expect(job["timeout-minutes"]).toBe(timeoutMinutes);
   });
 });
+
+describe("Doppler CLI bootstrap", () => {
+  it.each([
+    ".depot/workflows/cloudflare-previews.yml",
+    ".github/workflows/claude-assistant.yml",
+    "scripts/depot-ci/bake-preview-ci-image.sh",
+  ])("$file uses the pinned installer", (file) => {
+    const source = readFileSync(resolve(repoRoot, file), "utf8");
+
+    expect(source).toContain("scripts/ci/install-doppler.sh");
+    expect(source).not.toContain("cli.doppler.com/install.sh");
+  });
+
+  it("pins and verifies the release archive", () => {
+    const source = readFileSync(resolve(repoRoot, "scripts/ci/install-doppler.sh"), "utf8");
+
+    expect(source).toContain('readonly version="3.76.0"');
+    expect(source).toContain(
+      'readonly sha256="04f1ff30ed162d7af1dba7f11ad6a37ef35099de86a7ec6e261b64b1b337a3f3"',
+    );
+    expect(source).toContain("sha256sum --check --status");
+  });
+});
