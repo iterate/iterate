@@ -52,7 +52,19 @@ export function AgentStateSheet({
     () => (node === undefined ? [] : flattenVisibleAgentRows(node.children, expandedPaths)),
     [expandedPaths, node],
   );
-  if (node === undefined) return null;
+  if (node === undefined) {
+    // Birth or first live-state round trip: hold the strip's slot with the
+    // path tail so the page doesn't jump when the projection lands.
+    const PlaceholderIcon = bindingIcon(undefined);
+    return (
+      <div className="flex w-full shrink-0 items-center gap-2 border-b px-4 py-2 text-sm text-muted-foreground sm:px-6">
+        <PlaceholderIcon className="size-3.5 shrink-0" aria-hidden />
+        <span className="min-w-0 truncate font-medium">
+          {path.split("/").filter(Boolean).at(-1) ?? path}
+        </span>
+      </div>
+    );
+  }
   const agent = node.agent;
   // The strip speaks for THIS agent (its title and activity are self-only),
   // so its dot is self state too; subtree awareness lives in the sheet's
