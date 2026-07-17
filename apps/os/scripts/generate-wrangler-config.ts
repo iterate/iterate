@@ -220,7 +220,11 @@ const DO_EXPORTS = {
 const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; production: number }> =
   {
     lite: { preview: 20, production: 50 },
-    basic: { preview: 10, production: 30 },
+    // basic 15 (was 10): the dynamic-worker build pipeline runs one builder
+    // container per building project (sleepAfter 60s), and an e2e run churns
+    // ~6-8 builders alongside the suite's own pet sandboxes — 10 left no
+    // headroom and a capacity squat starves every placement fleet-wide.
+    basic: { preview: 15, production: 30 },
     "standard-1": { preview: 5, production: 20 },
     "standard-2": { preview: 2, production: 10 },
     "standard-3": { preview: 2, production: 5 },

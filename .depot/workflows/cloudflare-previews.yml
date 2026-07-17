@@ -91,12 +91,15 @@ jobs:
     # while halving the per-second cost. Re-check with
     # `depot ci metrics --run <id>` before changing.
     runs-on: depot-ubuntu-24.04-8
-    # Hard backstop on ONE attempt: a preview run past 10 minutes IS a flake
-    # (healthy ~4m; slot wait 6m, both e2e sub-lanes 360s watchdogs and
-    # per-test caps all fail loudly before this fires). 2026-07-09 saw 31m
-    # and ~90m attempts (unerasable-slot loops, an unbounded playwright
-    # tail); nothing can stack past this anymore.
-    timeout-minutes: 10
+    # Hard backstop on ONE attempt (slot wait 6m, both e2e sub-lanes 360s
+    # watchdogs and per-test caps all fail loudly before this fires).
+    # 2026-07-09 saw 31m and ~90m attempts (unerasable-slot loops, an
+    # unbounded playwright tail); nothing can stack past this anymore.
+    # 15 (was 10): the sandbox-build pipeline moved the os deploy to ~3m
+    # (container image reconcile + template-artifact seeding) and a healthy
+    # full run to ~9.5m — the old ceiling was killing green runs mid-upload,
+    # which also lost their failure artifacts.
+    timeout-minutes: 15
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false
