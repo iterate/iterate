@@ -81,7 +81,7 @@ test("retained exit content cannot navigate and reopen the raw-event inspector",
 
 test("arrow keys still page when a Base UI sheet would stopPropagation on bubble", async () => {
   const host = document.createElement("div");
-  document.body.append(host);
+  document.body.appendChild(host);
   const root = createRoot(host);
   mountedRoots.push(root);
   const onNavigate = vi.fn();
