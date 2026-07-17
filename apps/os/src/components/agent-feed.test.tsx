@@ -238,7 +238,7 @@ test("a crash-cancel remains visibly busy while its replacement is pending", () 
   expect(container.querySelector("svg.lucide-loader-circle")).not.toBeNull();
 });
 
-test("a newly announced phase never links to a previous completed operation", () => {
+test("a resumed recovery phase shows its own status without linking to the crashed operation", () => {
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
   const live: AgentUiActivity = {
     kind: "activity",
@@ -255,7 +255,8 @@ test("a newly announced phase never links to a previous completed operation", ()
         status: "done",
         thinkingText: "",
         responseText: "done",
-        outcome: "completed",
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
         startedAtMs: now - 8_000,
         durationMs: 2_000,
       },

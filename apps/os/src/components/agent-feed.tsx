@@ -642,7 +642,8 @@ export function AgentLiveActivity({
   const phaseKind = live.phase === "script" ? "code" : live.phase === "llm" ? "llm" : null;
   const phaseStep =
     phaseKind == null ? liveStep : runningSteps.findLast((step) => step.kind === phaseKind);
-  const basePhaseLabel = recovering
+  const recoveringBetweenPhases = recovering && live.phase == null && phaseStep == null;
+  const basePhaseLabel = recoveringBetweenPhases
     ? "Restarted — continuing…"
     : live.phase === "script"
       ? "Running code"
@@ -651,7 +652,7 @@ export function AgentLiveActivity({
           ? liveActivityLabel([phaseStep])
           : "Waiting for a response"
         : liveActivityLabel(phaseStep == null ? [] : [phaseStep]);
-  const phaseStartedAtMs = recovering
+  const phaseStartedAtMs = recoveringBetweenPhases
     ? summary.recoveryStartedAtMs
     : (live.phaseStartedAtMs ?? phaseStep?.startedAtMs ?? live.startedAtMs);
   const inspectCurrentPhase =
