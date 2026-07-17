@@ -82,11 +82,15 @@ Every lifecycle verb appears on the sandbox's own stream as a
 `started`/`stopped` are the authoritative signal (they also fire for implicit
 wakes and idle sleeps); the `-requested` events are the record of who asked.
 `create-requested` is the one durable-by-contract append — it IS the name
-claim and the routing record, so `create` awaits it. Everything else is
-best-effort by design: lifecycle telemetry never blocks or fails a container
-start/stop. `SandboxProcessor` folds the events into a small
-status projection (`status`, `instanceType`, `lastBackupId`, `env`) — it takes no
-actions and is not yet wired to a processor host.
+claim and the routing record, so `create` awaits it. Requested and ancillary
+audit facts are best-effort; the `created`/`started`/`stopped`/`destroyed`
+completions that drive UI state are appended and folded before their lifecycle
+boundary returns. `SandboxProcessor` is hosted by the Sandbox Durable Object
+and folds the events into a small projection (`status`, `running`,
+`instanceType`, `lastBackupId`, `env`) exposed through
+`itx.sandboxes.processor(path)` and `itx.sandboxes.liveState(path)`. It takes no
+actions, disables recovery so it does not compete for the Containers SDK's
+alarm, and receives durable stream wakes through the sandbox collection.
 
 ## `/workspace` persists across stop/sleep (R2 backup/restore)
 
