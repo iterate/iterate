@@ -28,6 +28,20 @@ import type { DeployableEnv, EnvContext } from "./env-context.ts";
 /** The slice of EnvContext the reset needs: the account-scoped CF API fetch. */
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf">;
 
+type WorkerBinding = Record<string, unknown> & {
+  name?: unknown;
+  namespace_id?: unknown;
+  script_name?: unknown;
+  type?: unknown;
+};
+
+type WorkerSettings = {
+  annotations?: Record<string, unknown>;
+  bindings?: WorkerBinding[];
+};
+
+const SETTINGS_SCAN_CONCURRENCY = 10;
+
 const PARKED_WORKER_MODULE = new URL("./parked-worker/worker.js", import.meta.url);
 
 /** Deterministic 8-hex-char suffix so the same input always names the same tag. */
@@ -77,6 +91,123 @@ export async function getWorkerDoNamespaces(
   return namespaces;
 }
 
+function isBindingToWorker(
+  binding: WorkerBinding,
+  workerName: string,
+  namespaceIds: ReadonlySet<string>,
+) {
+  return (
+    binding.type === "durable_object_namespace" &&
+    (binding.script_name === workerName ||
+      (typeof binding.namespace_id === "string" && namespaceIds.has(binding.namespace_id)))
+  );
+}
+
+function writableAnnotations(annotations: WorkerSettings["annotations"]) {
+  return Object.fromEntries(
+    ["workers/message", "workers/tag"].flatMap((key) =>
+      typeof annotations?.[key] === "string" ? [[key, annotations[key]]] : [],
+    ),
+  );
+}
+
+function bindingNames(bindings: readonly WorkerBinding[], workerName: string) {
+  const names = bindings.map((binding) => binding.name);
+  if (names.some((name) => typeof name !== "string" || name.length === 0)) {
+    throw new Error(
+      `DO reset: ${workerName} has a binding without a usable name; refusing to rewrite its settings`,
+    );
+  }
+  return names as string[];
+}
+
+async function forEachWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  visit: (item: T) => Promise<void>,
+) {
+  const queue = [...items];
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      for (let item = queue.shift(); item !== undefined; item = queue.shift()) await visit(item);
+    }),
+  );
+}
+
+/**
+ * Remove bindings in other Workers that keep this Worker's Durable Object
+ * namespaces alive. Workers themselves and every unrelated binding remain:
+ * the settings API's `inherit` binding copies each survivor from the latest
+ * version, including redacted secrets that cannot safely be reconstructed
+ * from a settings GET.
+ *
+ * Readback is part of the operation, not a diagnostic. A tombstone deploy
+ * must never start while Cloudflare still reports a reference to a namespace
+ * it is about to retire.
+ */
+export async function detachExternalDurableObjectBindings(input: {
+  ctx: CfContext;
+  targetWorkerName: string;
+  targetNamespaceIds: readonly string[];
+  workerNames: readonly string[];
+}): Promise<{ workerName: string; removedBindingNames: string[] }[]> {
+  const namespaceIds = new Set(input.targetNamespaceIds);
+  const detached: { workerName: string; removedBindingNames: string[] }[] = [];
+  const candidates = input.workerNames.filter(
+    (workerName) => workerName !== input.targetWorkerName,
+  );
+
+  await forEachWithConcurrency(candidates, SETTINGS_SCAN_CONCURRENCY, async (workerName) => {
+    const path = `/workers/scripts/${encodeURIComponent(workerName)}/settings`;
+    const before = await input.ctx.cf<WorkerSettings>(path);
+    const bindings = before.bindings ?? [];
+    const removed = bindings.filter((binding) =>
+      isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
+    );
+    if (removed.length === 0) return;
+
+    const remaining = bindings.filter(
+      (binding) => !isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
+    );
+    const remainingNames = bindingNames(remaining, workerName);
+    const removedBindingNames = bindingNames(removed, workerName).sort();
+    const annotations = writableAnnotations(before.annotations);
+    const settings = {
+      annotations,
+      bindings: remainingNames.map((name) => ({ name, type: "inherit" })),
+    };
+    const form = new FormData();
+    form.append(
+      "settings",
+      new Blob([JSON.stringify(settings)], { type: "application/json" }),
+      "settings.json",
+    );
+    await input.ctx.cf(path, { method: "PATCH", body: form });
+
+    const after = await input.ctx.cf<WorkerSettings>(path);
+    const afterBindings = after.bindings ?? [];
+    const afterNames = bindingNames(afterBindings, workerName).sort();
+    const expectedNames = [...remainingNames].sort();
+    if (
+      afterBindings.some((binding) =>
+        isBindingToWorker(binding, input.targetWorkerName, namespaceIds),
+      ) ||
+      JSON.stringify(afterNames) !== JSON.stringify(expectedNames) ||
+      JSON.stringify(writableAnnotations(after.annotations)) !== JSON.stringify(annotations)
+    ) {
+      throw new Error(
+        `DO reset: ${workerName} settings readback did not preserve the expected bindings and annotations`,
+      );
+    }
+    detached.push({ workerName, removedBindingNames });
+    console.log(
+      `DO reset: detached ${workerName} bindings ${removedBindingNames.join(", ")} from ${input.targetWorkerName}`,
+    );
+  });
+
+  return detached.sort((a, b) => a.workerName.localeCompare(b.workerName));
+}
+
 /**
  * Destroy every Durable Object on a worker and leave it parked at 503 until
  * the next deploy. No-op when the worker doesn't exist or has no DO classes.
@@ -104,6 +235,12 @@ export async function resetWorkerDurableObjects(input: {
     return { action: "skipped", reason: "script does not exist" };
   }
   const namespaces = await getWorkerDoNamespaces(input.ctx, input.workerName);
+  await detachExternalDurableObjectBindings({
+    ctx: input.ctx,
+    targetWorkerName: input.workerName,
+    targetNamespaceIds: namespaces.map((namespace) => namespace.namespaceId),
+    workerNames: scripts.map((candidate) => candidate.id),
+  });
   if (namespaces.length === 0) {
     console.log(`DO reset: worker ${input.workerName} has no Durable Object classes — clean`);
     return { action: "skipped", reason: "no Durable Object classes" };

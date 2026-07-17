@@ -53,6 +53,7 @@ const {
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
+  selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
   waitForHttpReadiness,
@@ -78,6 +79,13 @@ describe("preview app dependency expansion", () => {
       "dummy-petshop",
     ]);
   });
+});
+
+test("preview handover erases every app with slot-persistent data", () => {
+  expect(selectPreviewSlotDataOwners().map((app) => app.slug)).toEqual([
+    "os",
+    "streams-example-app",
+  ]);
 });
 
 describe("preview deploy ordering", () => {
@@ -354,9 +362,11 @@ describe("draft preview policy", () => {
     expect(workflow).toContain("- converted_to_draft");
     expect(workflow).toContain("- labeled");
     expect(workflow).toContain("- unlabeled");
-    // A manual dispatch is an explicit ask, so it bypasses the draft policy.
+    // A manual dispatch is an explicit ask for a fresh preview: it bypasses
+    // the draft policy and cannot false-green after cleanup recorded this
+    // exact head as released.
     expect(workflow).toContain(
-      "${{ github.event_name == 'workflow_dispatch' && '--allow-draft' || '' }}",
+      "${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}",
     );
   });
 });

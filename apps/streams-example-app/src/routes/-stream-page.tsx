@@ -631,7 +631,7 @@ function EventRows({
   onEventTypeFilterChange(eventType: string): void;
 }) {
   const topScrollAffordanceHeight = 48;
-  const estimatedEventRowHeight = 38;
+  const estimatedEventRowHeight = 40; // Pending + pb-2 must measure exactly this.
   const parentRef = useRef<HTMLDivElement>(null);
   const previousEventCount = useRef(eventCount);
   const initialScrollOffset = useRef(
@@ -1051,7 +1051,7 @@ function EventRowWindow({
       >
         {event === undefined ? (
           <article
-            className="box-border h-[30px] rounded-md border border-[#e1e5eb]"
+            className="box-border h-8 rounded-md border border-[#e1e5eb]"
             data-testid="event-row-pending"
           />
         ) : (
