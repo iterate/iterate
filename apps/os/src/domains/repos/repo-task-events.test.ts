@@ -58,20 +58,38 @@ describe("repo task change projection", () => {
   it("recognizes GitHub branch pushes without projecting commit facts", () => {
     expect(
       repoGithubPushFromWebhookPayload({
-        body: { ref: "refs/heads/main", after: "abc123" },
-        headers: { githubEvent: "push" },
+        body: { ref: "refs/heads/main", after: "abc123", repository: { id: 101 } },
+        delivery: { id: "delivery-1", name: "push" },
+        installationId: "789",
       }),
-    ).toEqual({ afterCommitOid: "abc123", branch: "main" });
+    ).toEqual({
+      afterCommitOid: "abc123",
+      branch: "main",
+      installationId: "789",
+      repositoryId: 101,
+    });
     expect(
       repoGithubPushFromWebhookPayload({
-        body: { ref: "refs/heads/main", after: "abc123" },
-        headers: { githubEvent: "pull_request" },
+        body: { ref: "refs/heads/main", after: "abc123", repository: { id: 101 } },
+        delivery: { id: "delivery-1", name: "pull_request" },
+        installationId: "789",
       }),
     ).toBeNull();
     expect(
       repoGithubPushFromWebhookPayload({
-        body: { ref: "refs/heads/main", after: "0".repeat(40) },
-        headers: { githubEvent: "push" },
+        body: {
+          ref: "refs/heads/main",
+          after: "0".repeat(40),
+          repository: { id: 101 },
+        },
+        delivery: { id: "delivery-1", name: "push" },
+        installationId: "789",
+      }),
+    ).toBeNull();
+    expect(
+      repoGithubPushFromWebhookPayload({
+        body: { ref: "refs/heads/main", after: "abc123" },
+        delivery: { id: "delivery-1", name: "push" },
       }),
     ).toBeNull();
   });
