@@ -199,7 +199,11 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   });
   expect(await workspace.readFile("/side/side.md")).toBeNull();
   expect(await workspace.readFile("/side/attempt.md")).toBe("not committable");
-  expect((await workspace.git.status()).unmounted).toContainEqual({
+  // With "/" still mounted nothing is ever truly unmounted — the orphaned
+  // local file now routes to the root mount as an ordinary addition.
+  const statusAfterUnmount = await workspace.git.status();
+  expect(statusAfterUnmount.unmounted).toEqual([]);
+  expect(statusAfterUnmount.mounts.find((mount) => mount.path === "/")?.changes).toContainEqual({
     change: "added",
     path: "/side/attempt.md",
   });
