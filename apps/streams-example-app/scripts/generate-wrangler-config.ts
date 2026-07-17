@@ -33,6 +33,8 @@ export const REQUIRED_SECRETS = [
   "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
 ];
 
+export const COMPATIBILITY_DATE = "2026-06-17";
+
 /**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
  * emitted as per-env `vars` so the worker's runtime base URL and auth issuer
@@ -79,7 +81,7 @@ const config = {
   // deployed workers under a fake "dev" service in observability queries.
   name: "streams-example-app",
   main: "./src/worker.ts",
-  compatibility_date: "2026-06-17",
+  compatibility_date: COMPATIBILITY_DATE,
   // global_fetch_strictly_public: the iterate-auth login handler fetches the
   // auth worker for OIDC discovery + token exchange; without the flag,
   // same-zone subrequests would go to the zone origin instead of through

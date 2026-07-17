@@ -53,6 +53,7 @@ const {
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
+  selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
   waitForHttpReadiness,
@@ -78,6 +79,13 @@ describe("preview app dependency expansion", () => {
       "dummy-petshop",
     ]);
   });
+});
+
+test("preview handover erases every app with slot-persistent data", () => {
+  expect(selectPreviewSlotDataOwners().map((app) => app.slug)).toEqual([
+    "os",
+    "streams-example-app",
+  ]);
 });
 
 describe("preview deploy ordering", () => {
