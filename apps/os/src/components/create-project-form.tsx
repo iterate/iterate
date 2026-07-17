@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
@@ -21,7 +22,6 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { connectIterateSession, reconnectIterateSession } from "iterate/react";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -35,46 +35,50 @@ const CreateProjectInput = z.object({
   organizationSlug: z.string(),
 });
 
-export function CreateProjectForm() {
+export function CreateProjectForm({
+  onPendingChange,
+}: {
+  /** Fired when create submit starts/ends so a host sheet can block dismiss. */
+  onPendingChange?: (pending: boolean) => void;
+} = {}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { refresh, session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
+  // Stays true from mutation success until this form unmounts after navigate —
+  // `isPending` alone drops false before router.navigate settles, which would
+  // briefly re-enable sheet dismiss and race the welcome redirect.
+  const [navigatingAway, setNavigatingAway] = useState(false);
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
-      // Straight through the itx session: create registers the project with
-      // the auth worker (org grant -> claims) and runs the engine bootstrap
-      // saga, then widens THIS socket's access to the new project.
       const session = await connectIterateSession();
-      // Fast path: resolve as soon as the project EXISTS — the bootstrap saga
-      // keeps running behind the handle, and the project home page plays its
-      // progress live from processor pushes until `state.created` flips.
+      // ONE pipelined round trip: identity() rides the create call. Create
+      // resolves once the project EXISTS (identity registered, directory
+      // primed, birth events appended — `waitUntilReady: false`); the
+      // bootstrap saga runs behind the handle, driven by create's own
+      // server-side nudge, and the project home plays it from live pushes.
       const project = session.projects.create({
         slug: input.slug,
         waitUntilReady: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
-      // ONE pipelined round trip, then navigate: __describe() rides the create
-      // pipeline, so the only wait is create itself (auth registration +
-      // bootstrap appends). Deliberately NOT awaited here: projects.list() —
-      // it probes engine existence for every project the caller owns, which
-      // costs whole seconds and is exactly the "weird delay" this path had.
-      const description = await project.__describe();
-      // The form validates strict kebab-case, so the auth worker's slug
-      // normalization is an identity for UI creates; the background task
-      // below still reconciles against the canonical record.
-      return { id: description.projectId, slug: input.slug };
+      // Navigate to the server's canonical slug, not the form's: auth may
+      // normalize it (reserved names, all-numeric).
+      const identity = await project.identity();
+      return { slug: identity.slug };
     },
-    onSuccess: (project) => {
-      // Onto the onboarding agent URL immediately. The stream page can render
-      // while the bootstrap saga and onboarding agent birth catch up behind it.
-      // The project route resolves without the refreshed session: create primes
-      // the server-side project directory, which is the auth fallback for
-      // exactly this claims-lag window.
+    onSuccess: ({ slug }) => {
+      setNavigatingAway(true);
+      // Onto the project home immediately with `welcome` so the creation
+      // checklist paints while the bootstrap saga runs. The project route
+      // resolves without the refreshed session: create primes the
+      // server-side project directory, which is the auth fallback for exactly
+      // this claims-lag window. Once `state.ready` flips, the home page
+      // hands off to the onboarding agent.
       void router.navigate({
-        to: "/projects/$projectSlug/agents/streams/$",
-        params: { projectSlug: project.slug, _splat: ONBOARDING_AGENT_PATH },
-        search: {},
+        to: "/projects/$projectSlug",
+        params: { projectSlug: slug },
+        search: { welcome: true },
       });
       // Session catch-up runs BEHIND the navigation: refresh the browser auth
       // session so its claims carry the new project, reconnect the one itx
@@ -85,21 +89,6 @@ export function CreateProjectForm() {
         reconnectIterateSession();
         await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
         await router.invalidate();
-        // Belt and braces: if the auth worker normalized the slug after all,
-        // hop to the canonical URL (the checklist state is server-side, so
-        // nothing is lost).
-        const session = await connectIterateSession();
-        const entry = (await session.projects.list()).find(
-          (candidate) => candidate.id === project.id,
-        );
-        if (entry != null && entry.slug !== project.slug) {
-          void router.navigate({
-            to: "/projects/$projectSlug/agents/streams/$",
-            params: { projectSlug: entry.slug, _splat: ONBOARDING_AGENT_PATH },
-            search: {},
-            replace: true,
-          });
-        }
       })().catch(() => {
         // Claims catch up on the next token refresh regardless; the directory
         // fallback keeps the project usable in the meantime.
@@ -124,9 +113,18 @@ export function CreateProjectForm() {
     },
   });
 
+  const createPending = createProject.isPending || navigatingAway;
+
+  // Host sheet (and any other shell) must not dismiss while create is in
+  // flight or while we are navigating into the new project: a mid-flight
+  // close would race that navigation with a /projects bounce.
+  useEffect(() => {
+    onPendingChange?.(createPending);
+  }, [createPending, onPendingChange]);
+
   return (
     <form
-      className="max-w-sm space-y-4"
+      className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -184,8 +182,8 @@ export function CreateProjectForm() {
       </FieldGroup>
       <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
         {([canSubmit, isSubmitting]) => (
-          <Button type="submit" disabled={!canSubmit || isSubmitting || createProject.isPending}>
-            {isSubmitting || createProject.isPending ? "Creating..." : "Create project"}
+          <Button type="submit" disabled={!canSubmit || isSubmitting || createPending}>
+            {isSubmitting || createPending ? "Creating..." : "Create project"}
           </Button>
         )}
       </form.Subscribe>

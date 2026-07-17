@@ -44,8 +44,9 @@ The Doppler secrets are split by purpose:
 
 - `APP_CONFIG_INTEGRATIONS__SLACK` contains the Slack app credentials for the
   OS deployment: OAuth client ID, OAuth client secret, and webhook signing
-  secret. It also contains `botToken`, a recovery credential for that same
-  Slack app.
+  secret. It may also contain `botToken`, an optional app-level outbound
+  fallback for that same Slack app. Presence in Doppler is not proof that the
+  token is live.
 - The OS **Connect Slack** flow stores the workspace bot token for a project at
   `/secrets/integrations/slack/<connection>/bot-token` and claims the Slack
   team in the deployment's `/integrations/_directory` stream.
@@ -53,7 +54,8 @@ The Doppler secrets are split by purpose:
   Slack rejects that token, OS uses `auth.test` to prove that
   `APP_CONFIG_INTEGRATIONS__SLACK.botToken` belongs to the connection's
   journaled team before retrying. A typo'd or disconnected connection never
-  gets the recovery credential.
+  gets the fallback. The fallback is not a substitute for **Connect Slack** and
+  must never be used to reconstruct a project's connection.
 
 ## Trigger actor for smoke tests
 
@@ -79,7 +81,7 @@ smokes (CI notifications and agent smoke posts). It is **not** the product bot:
 |          | Product bot under test                                                                                                                           | Trigger actor                                                        |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | Identity | production `iterate`, or `iterate-preview-N`                                                                                                     | `Niterate` / `iterate_ci_preview_bo`                                 |
-| Doppler  | project secret `/secrets/integrations/slack/<connection>/bot-token` (Connect Slack); optional recovery `APP_CONFIG_INTEGRATIONS__SLACK.botToken` | **`SLACK_CI_BOT_TOKEN`** on `os/*` configs **and** `_shared/prd`     |
+| Doppler  | project secret `/secrets/integrations/slack/<connection>/bot-token` (Connect Slack); optional fallback `APP_CONFIG_INTEGRATIONS__SLACK.botToken` | **`SLACK_CI_BOT_TOKEN`** on `os/*` configs **and** `_shared/prd`     |
 | Used for | receiving events, 👀, replies                                                                                                                    | `chat.postMessage` only                                              |
 | Code     | outbound Web API via OS / `itx.integrations.slack`                                                                                               | [`scripts/ci/slack.ts`](../scripts/ci/slack.ts) `getSlackBotToken()` |
 
@@ -120,9 +122,9 @@ doppler run --config prd -- pnpm cli itx run \
   -e 'return await itx.integrations.slack.get().conversations.join({ channel: "C096Q1M4Y86" })'
 ```
 
-`APP_CONFIG_INTEGRATIONS__SLACK.botToken` is only a **recovery** credential for
-the deployment's Slack app and may be `invalid_auth`. Prefer the project secret
-behind `itx.integrations.slack.get()` for join / real outbound API calls.
+`APP_CONFIG_INTEGRATIONS__SLACK.botToken` is only an optional outbound fallback
+for the deployment's Slack app and may be `invalid_auth`. Prefer the project
+secret behind `itx.integrations.slack.get()` for join / real outbound API calls.
 
 ### Production mention-gate smoke
 
@@ -135,6 +137,15 @@ current **slack-agent** mention gate:
 | `<@iterateUserId> …` or Slack `app_mention`          | Product bot wakes and can reply (👀 may appear) |
 | Follow-up in a thread already activated by a mention | Still wakes (no re-mention required)            |
 | `!debug` / bang-commands                             | Still run without a mention                     |
+
+Slack's `assistant.threads.setTitle` and `assistant.threads.setStatus` methods
+belong only to the app's Assistant direct-message surface. The routed webhook's
+`event.channel_type` is the authority: `im` (normally a `D…` conversation) may
+use Assistant thread UI; ordinary `channel`/`group`/`mpim` threads must not.
+Channel mentions still use the 👀 acknowledgement and normal `chat.postMessage`
+reply. Removing an already-absent 👀 returns Slack's `no_reaction`, which is an
+idempotent success and must not appear in error telemetry. In production traces
+for a `C…` or `G…` channel thread, any `assistant.threads.*` call is a defect.
 
 ```bash
 doppler run --project os --config prd -- python3 - <<'PY'
@@ -169,12 +180,36 @@ To confirm membership / reactions from the CI actor:
 
 ### Post-recreation proof
 
-After recreating production, use a real human `@iterate` mention and retain its
-permalink. A product-bot reply in the same thread proves signed webhook ingress,
-the global workspace-to-project claim, the restored project connection and bot
-token, agent routing, and outbound Slack delivery.
+Recreate the association with the normal **Connect Slack** OAuth flow. Never
+hand-create the connection secret or append `slack/connected` / directory-claim
+events: OAuth completion validates and stores the fresh workspace token, creates
+the router and subscription, records the lifecycle fact, and claims webhook
+ingress as one owning operation.
 
-Read the thread back through the restored project connection as a second check.
+Do not use `APP_CONFIG_INTEGRATIONS__SLACK.botToken` as restoration material.
+Before sending any smoke message, prove the project token and directory claim
+with the recreation verifier (run without `--context` so it can read the global
+directory):
+
+```bash
+# from apps/os
+doppler run --config prd -- pnpm cli itx run \
+  --file ../../.agents/skills/recreate-production/scripts/verify-slack-connection.itx.js \
+  --vars '{"projectId":"<iterate-project-id>","connection":"t0675psn873","expectedTeamId":"T0675PSN873"}'
+```
+
+Require `ok: true`, the expected team ID, a bot user ID, and a directory claim
+offset. If `auth.test` reports `invalid_auth`, OAuth has not established a live
+connection—do not append claims around it.
+
+Only after that barrier, send a **new** real-human or CI-actor `@iterate`
+mention and retain its permalink. Slack webhooks received before the directory
+claim exists are validly ACKed and ignored; Slack does not replay them after a
+later association. A product-bot reply in the same thread proves signed webhook
+ingress, the global workspace-to-project claim, the live project connection
+and bot token, agent routing, and outbound Slack delivery.
+
+Read the thread back through the live project connection as a second check.
 Convert the permalink's final `p...` value back to Slack's dotted timestamp and
 use the recorded connection explicitly:
 
@@ -187,9 +222,9 @@ doppler run --config prd -- pnpm cli itx run \
 ```
 
 Require `ok: true`, the human root message, and a reply whose user is the
-recorded product-bot user. Save the permalink, timestamps, and reply text in
-the cutover evidence. A pre-cutover thread is only a baseline; repeat this
-after restore.
+recorded product-bot user. Save the verifier result, permalink, timestamps, and
+reply text in the cutover evidence. A pre-cutover or pre-claim thread is only a
+baseline; repeat the message after reconnecting.
 
 ## Manual preview smoke test
 
@@ -237,9 +272,9 @@ otherwise:
 - The app scope `chat:write.public` lets a Slack app post into public channels,
   so a bot user not appearing as a channel member does not rule out its app
   posting a reply.
-- If production has `APP_CONFIG_INTEGRATIONS__SLACK.botToken`, it can recover
-  outbound Slack Web API calls from a missing, expired, or revoked connection
-  token after verifying the connection's Slack team.
+- If production has `APP_CONFIG_INTEGRATIONS__SLACK.botToken`, it can retry an
+  outbound Slack Web API call after a missing, expired, or revoked connection
+  token, but only after verifying the connection's Slack team.
 
 For a precise diagnosis, inspect the Slack event wrapper and traces:
 

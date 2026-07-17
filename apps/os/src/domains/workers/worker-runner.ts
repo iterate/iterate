@@ -38,6 +38,8 @@ type StatefulWorkerRpc = {
     ref: StatefulDynamicWorkerRef;
   }): Promise<unknown>;
   kill(): Promise<void>;
+  setAlarm(input: { atMs: number | null; ref: StatefulDynamicWorkerRef }): Promise<void>;
+  getAlarm(): Promise<number | null>;
 };
 
 /**
@@ -262,6 +264,16 @@ export class DynamicWorkerRunner {
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
   async kill(ref: StatefulDynamicWorkerRef): Promise<void> {
     await this.#statefulWorker(ref).kill();
+  }
+
+  /** Arm (or with null, disarm) a stateful dynamic worker's durable alarm. */
+  async setAlarm(ref: StatefulDynamicWorkerRef, atMs: number | null): Promise<void> {
+    await this.#statefulWorker(ref).setAlarm({ atMs, ref });
+  }
+
+  /** The stateful dynamic worker's currently armed alarm time, if any. */
+  async getAlarm(ref: StatefulDynamicWorkerRef): Promise<number | null> {
+    return await this.#statefulWorker(ref).getAlarm();
   }
 
   async #load(

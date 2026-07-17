@@ -2,6 +2,7 @@ import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
   itxProjectStream,
+  withStatefulWorkerAlarms,
   type Project,
   type StreamEvent,
   type StreamEventInput,
@@ -240,7 +241,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
             createdAt: event.createdAt,
             offset: event.offset,
             path: event.path,
-            projectId: itx.projectId,
+            projectId: await itx.projectId,
             type: event.type,
           },
         ],
@@ -491,36 +492,56 @@ export class GuestbookApp extends IterateDurableObject {
   // Hosting is constructed lazily, not in the constructor: the registry and
   // the processor's provenance stamps need the owning project's id, which
   // arrives with the wake request or is read from the project stub on first
-  // fetch.
+  // fetch — and is cached durably so an alarm fire needs no dial.
   #ensureHost(projectId: string): {
     guestbook: GuestbookProcessor;
     registry: StreamProcessorRegistry;
   } {
     if (this.#host === undefined) {
+      this.ctx.storage.kv.put("guestbook:project-id", projectId);
       const stream = itxProjectStream(this.env, guestbookStreamPath);
-      const registry = createStreamProcessorRegistry(this.ctx, {
-        path: guestbookStreamPath,
-        projectId,
-        stream,
-        version: "0",
-      });
+      // withStatefulWorkerAlarms: this class is hosted as a workerd facet,
+      // and facet storage has no alarms — the wrapper routes the standard
+      // `ctx.storage` alarm API through the platform Durable Object hosting
+      // this worker, whose fire calls `alarm()` below.
+      const registry = createStreamProcessorRegistry(
+        withStatefulWorkerAlarms(this.ctx, this.env, guestbookAppRef),
+        {
+          path: guestbookStreamPath,
+          projectId,
+          stream,
+          // The crash-loop budget's deploy-reset lane: a facet has no build
+          // identity to hand here yet, so a broken-then-fixed worker waits
+          // out the keepalive backoff instead of resetting on deploy.
+          version: "0",
+        },
+      );
       const guestbook = registry.register(
-        // NO `{ recovery: true }`: keepalive recovery arms durable alarms,
-        // and workerd does not implement alarms on the facet storage that
-        // hosts stateful dynamic workers ("alarms are not yet implemented
-        // for SQLite-backed Durable Objects") — arming would fail every
-        // delivery. Fine for the guestbook: its only side effect is an
-        // idempotency-keyed at-head append, re-derived on the next delivery,
-        // so nothing is owed across an eviction. Processors with
-        // consequential background obligations need a platform-hosted DO
-        // until facet alarms ship; then this becomes
-        // `registry.register(processor, { recovery: true })` plus an
-        // `alarm()` method routing to `registry.handleAlarm`.
         new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),
+        // Keepalive recovery: if an eviction kills this object while it owes
+        // work, the alarm fires, the keepalive journals a revival fact, and
+        // its wake delivery re-runs the at-head reconcile.
+        { recovery: true },
       );
       this.#host = { guestbook, registry };
     }
     return this.#host;
+  }
+
+  /** The hosting Durable Object's alarm fire, replayed into this class (see
+   * withStatefulWorkerAlarms above). Route it to the registry: each keepalive
+   * self-gates on its own persisted record, so a stale fire is a no-op. */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    // A fire can be a cold incarnation's first event, so don't depend on a
+    // live loopback dial: any prior contact cached the project id durably
+    // (an alarm can only exist after a delivery armed it).
+    let projectId = this.ctx.storage.kv.get<string>("guestbook:project-id");
+    if (projectId === undefined) {
+      using project = await this.env.ITX.get();
+      projectId = await project.projectId;
+    }
+    const { registry } = this.#ensureHost(projectId);
+    await registry.handleAlarm(alarmInfo);
   }
 
   /** The wake door the stream spine dials — the subscription's persisted
