@@ -8,6 +8,9 @@
     "src/client.ts",
     "src/live-state.ts",
     "src/node.ts",
+    "src/processors/cloudflare.ts",
+    "src/processors/index.ts",
+    "src/processors/testing.ts",
     "src/react.ts",
     "src/cloudflare-workers.d.ts"
   ],

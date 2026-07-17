@@ -4,7 +4,7 @@ import type {
   ProcessEventBatch,
   StreamPushEventBatch,
   StreamSubscriberPing,
-} from "./rpc-types.ts";
+} from "iterate/processors";
 
 const dialMocks = vi.hoisted(() => ({
   evaluateItxExpression: vi.fn(),

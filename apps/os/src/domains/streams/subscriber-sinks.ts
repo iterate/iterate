@@ -27,9 +27,7 @@
 // `retainProcessEventBatch` below and the wire tests in
 // stream-wire.e2e.test.ts.
 
-import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
-import { disposeIgnoredRpcResult, isThenable, retainCallback } from "../../lib/rpc/retain.ts";
-import { projectEgressFetcher } from "../projects/utils.ts";
+import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/live-state";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
@@ -41,7 +39,9 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
   StreamWebhookDelivery,
-} from "./rpc-types.ts";
+} from "iterate/processors";
+import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
 import type { SubscriberDial } from "./stream-subscribers.ts";
 
 /**

@@ -29,6 +29,28 @@
  */
 import { RpcTarget } from "cloudflare:workers";
 import type { LiveUpdate } from "iterate/live-state";
+import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
+import type { ProcessorReads } from "iterate/processors";
+import type {
+  GetProcessorRuntimeState,
+  LiveStateRpc,
+  LiveStateSubscriptionHandle,
+  ProcessEventBatch,
+  StreamPushEventBatch,
+  ProcessorRuntimeState,
+  ProcessorSnapshot,
+  StreamEventReadInput,
+  StreamProcessorRpc,
+  StreamSubscriberPing,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+  StreamSubscriptionHandle,
+  WakeableStreamProcessorRpc,
+} from "iterate/processors";
+import { StreamReceiverUnavailableError } from "iterate/processors";
+import type { StreamThroughputMetrics } from "iterate/processors";
+import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
+import { LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -143,7 +165,6 @@ import type {
   DynamicWorkerRef,
   ProjectWorker,
 } from "./domains/workers/schemas.ts";
-import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
   isDurableObjectLifecycleError,
@@ -175,7 +196,6 @@ import {
   openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
-import type { ProcessorReads } from "./domains/streams/stream-processor.ts";
 import type {
   CapabilityDescription,
   Description,
@@ -293,29 +313,9 @@ import type {
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
 import type {
-  GetProcessorRuntimeState,
-  LiveStateRpc,
-  LiveStateSubscriptionHandle,
-  ProcessEventBatch,
-  StreamPushEventBatch,
-  ProcessorRuntimeState,
-  ProcessorSnapshot,
-  StreamEventReadInput,
-  StreamProcessorRpc,
-  StreamSubscriberPing,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-  StreamSubscriptionHandle,
-  WakeableStreamProcessorRpc,
-} from "./domains/streams/rpc-types.ts";
-import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
-import type {
   ConnectionRuntimeState,
   SubscriptionRuntimeState,
 } from "./domains/streams/stream-subscribers.ts";
-import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
-import type { StreamProcessorRegistry } from "./domains/streams/stream-processor-registry.ts";
-import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";

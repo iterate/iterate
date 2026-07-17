@@ -9,7 +9,7 @@ import {
   useLiveState,
   type ItxSubscriptionStatus,
 } from "iterate/react";
-import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 // The live-state PLAYGROUND — one primitive from several angles: a DO-backed

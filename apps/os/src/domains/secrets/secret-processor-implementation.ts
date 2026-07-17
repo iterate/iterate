@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/processors";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 
 export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {

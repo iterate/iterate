@@ -11,7 +11,7 @@ import type {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { ProcessorRuntimeState } from "../domains/streams/rpc-types.ts";
+import type { ProcessorRuntimeState } from "iterate/processors";
 import type { Stream } from "../itx-api.generated.ts";
 import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
