@@ -91,31 +91,34 @@ qualification before implementation:
 - Codex's normalized control rows, direct target union, replacement receiver,
   simplified poison policy, and 4,250-line cap are all hypothetical. None has a
   feature-complete deployed result.
-- Neither plan gives the durable form of `subscribe` a complete user-level
-  lifecycle. That API decision precedes schema and transport implementation.
+- A post-comparison API decision resolves the plans' durable-subscribe
+  ambiguity: public `subscribe()` remains live and non-durable. Durable
+  subscription configuration remains canonical stream events, with a separate
+  helper constructing and appending those events. It is not a second overload
+  of `subscribe()`.
 - All target line counts are design budgets. Only the exact-main and candidate
   source counts are observations.
 
 ## Side-by-Side
 
-| Question              | Claude Fable                                                               | Codex                                                                                           | Adjudication                                                                                     |
-| --------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Rewrite scope         | Source Stream kernel only; retain runner and browser mirror                | Replace source kernel and introduce a new `ProcessorReceiver` protocol                          | Fable wins. Reusing the now-integrated runner deletes risk and work.                             |
-| Canonical journal     | Event log is truth                                                         | Event log is truth                                                                              | Agreement.                                                                                       |
-| Core/control state    | Fold event log, cache in KV, append `woken` and presence facts             | Materialize normalized SQL rows in the append transaction; delete KV replay and lifecycle facts | Prefer Codex, subject to a singleton/activation proof.                                           |
-| Append implementation | Preserve candidate hot-path shape                                          | Introduce a pure `AppendPlan`                                                                   | Preserve candidate shape. A pure plan is welcome only if it adds no allocation or statement tax. |
-| Live delivery         | Parameterized `LiveSession` inside a large unified delivery module         | Separate live module with one in-flight and one queued frame                                    | Separate owner, but preserve the candidate's zero-return synchronous fast path.                  |
-| Generic durable push  | Source-owned exact claim                                                   | Source-owned exact outbox                                                                       | Agreement.                                                                                       |
-| Processor progress    | Existing runner remains authoritative                                      | New receiver persists claim, progress, projection, and retries                                  | Keep the existing runner. Add no second processor protocol without a measured need.              |
-| Delivery unification  | One 1,450-line delivery spine and mode-specific settle rules               | One engine, but distinct live, outbox, and processor semantics                                  | Use shared scheduling and frames, not one mode-branching state machine.                          |
-| Transport             | Retain trusted Itx expression/capability wake path and classify outcomes   | Closed typed targets, plain-data acknowledgements, no capability-returning `get`                | Codex is the target; the lifecycle probe chooses direct RPC versus fetch.                        |
-| Poison handling       | Retain confirmation, bisection, skip cap, and audit facts                  | Remove bisection; permit only typed permanent per-event skip                                    | Retain Fable behavior until the simpler alternative is proven.                                   |
-| `waitForEvent`        | In-DO, incarnation-bound; client retries                                   | Reset-safe client utility using scan progress, ping I/O, and `AbortSignal`                      | Codex wins and matches the accepted reset-safety invariant.                                      |
-| Public append         | One public method, private raw result specializations                      | One public method and private projection mode                                                   | Agreement in substance. Do not expose `appendAck` as a concept.                                  |
-| Public subscribe      | Primarily an ephemeral session; durable subscriptions remain control facts | Live callback contract; durable target configuration remains separate                           | Neither fully resolves the requested append/subscribe-centered API. Decide before coding.        |
-| Rollback              | Pre-built binary may drop an unknown schema on touch                       | Explicit stop, erase, then old binary                                                           | Codex wins. Automatic destructive mismatch handling violates explicit erase approval.            |
-| Source-kernel budget  | 5,440 lines, eight total machines including receiver                       | 4,250 lines, five machines, but includes a replacement receiver                                 | Treat 4,250 as a stretch and 5,440 as a stop signal, not competing exact forecasts.              |
-| Test budget           | About 9,500 lines, heavily ported                                          | 6,000 focused lines plus existing e2e                                                           | Do not cap tests by line count. Delete duplication, not fault coverage.                          |
+| Question              | Claude Fable                                                               | Codex                                                                                           | Adjudication                                                                                                  |
+| --------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Rewrite scope         | Source Stream kernel only; retain runner and browser mirror                | Replace source kernel and introduce a new `ProcessorReceiver` protocol                          | Fable wins. Reusing the now-integrated runner deletes risk and work.                                          |
+| Canonical journal     | Event log is truth                                                         | Event log is truth                                                                              | Agreement.                                                                                                    |
+| Core/control state    | Fold event log, cache in KV, append `woken` and presence facts             | Materialize normalized SQL rows in the append transaction; delete KV replay and lifecycle facts | Prefer Codex, subject to a singleton/activation proof.                                                        |
+| Append implementation | Preserve candidate hot-path shape                                          | Introduce a pure `AppendPlan`                                                                   | Preserve candidate shape. A pure plan is welcome only if it adds no allocation or statement tax.              |
+| Live delivery         | Parameterized `LiveSession` inside a large unified delivery module         | Separate live module with one in-flight and one queued frame                                    | Separate owner, but preserve the candidate's zero-return synchronous fast path.                               |
+| Generic durable push  | Source-owned exact claim                                                   | Source-owned exact outbox                                                                       | Agreement.                                                                                                    |
+| Processor progress    | Existing runner remains authoritative                                      | New receiver persists claim, progress, projection, and retries                                  | Keep the existing runner. Add no second processor protocol without a measured need.                           |
+| Delivery unification  | One 1,450-line delivery spine and mode-specific settle rules               | One engine, but distinct live, outbox, and processor semantics                                  | Use shared scheduling and frames, not one mode-branching state machine.                                       |
+| Transport             | Retain trusted Itx expression/capability wake path and classify outcomes   | Closed typed targets, plain-data acknowledgements, no capability-returning `get`                | Codex is the target; the lifecycle probe chooses direct RPC versus fetch.                                     |
+| Poison handling       | Retain confirmation, bisection, skip cap, and audit facts                  | Remove bisection; permit only typed permanent per-event skip                                    | Retain Fable behavior until the simpler alternative is proven.                                                |
+| `waitForEvent`        | In-DO, incarnation-bound; client retries                                   | Reset-safe client utility using scan progress, ping I/O, and `AbortSignal`                      | Codex wins and matches the accepted reset-safety invariant.                                                   |
+| Public append         | One public method, private raw result specializations                      | One public method and private projection mode                                                   | Agreement in substance. Do not expose `appendAck` as a concept.                                               |
+| Public subscribe      | Primarily an ephemeral session; durable subscriptions remain control facts | Live callback contract; durable target configuration remains separate                           | Keep `subscribe()` live-only. Configure durable subscriptions through canonical events and a separate helper. |
+| Rollback              | Pre-built binary may drop an unknown schema on touch                       | Explicit stop, erase, then old binary                                                           | Codex wins. Automatic destructive mismatch handling violates explicit erase approval.                         |
+| Source-kernel budget  | 5,440 lines, eight total machines including receiver                       | 4,250 lines, five machines, but includes a replacement receiver                                 | Treat 4,250 as a stretch and 5,440 as a stop signal, not competing exact forecasts.                           |
+| Test budget           | About 9,500 lines, heavily ported                                          | 6,000 focused lines plus existing e2e                                                           | Do not cap tests by line count. Delete duplication, not fault coverage.                                       |
 
 ## Shared Consensus
 
@@ -170,13 +173,16 @@ re-enter public append.
 
 The clean design is a materialized SQL projection:
 
-- control events remain immutable audit facts;
+- subscription control events remain the canonical durable facts, not merely
+  an audit copy of independently canonical rows;
 - normalized configuration and runtime rows change in the same SQLite
   transaction as the control event;
+- projection rows are deterministic and rebuildable from the event journal;
 - activation reads rows directly and reconciles obligations;
 - restore rebuilds projection rows from staged events before atomic replacement;
-- delivery-produced terminal facts use an internal transaction, not recursive
-  public append;
+- delivery-produced semantic transitions commit their canonical event and
+  projection change together through an internal commit path, without a
+  recursive public RPC;
 - no KV state or synthetic `woken` event is required.
 
 This is **hypothetical**. It earns inclusion only if a focused workerd slice
@@ -243,23 +249,32 @@ Recommended rules:
 - `append({return: "offsets" | "events"}, ...events)` is the same operation.
 - Internal result specialization is one private commit mode, not public
   `appendAck` or `appendOffsets` methods.
-- `subscribe` has explicit ephemeral and durable forms. The ephemeral form owns
-  a callback capability; the durable form owns a stable key, selector, target,
-  start coordinate, and failure policy.
-- Durable subscribe/replace/remove must be one coherent command surface. It may
-  emit internal audit events, but callers should not need to know control-event
-  type names.
-- Subscribers implement singular `processEvent(event)`. Private transports send
-  bounded frames and adapt them synchronously until the first thenable.
+- `subscribe()` is only the live, non-durable operation. It owns a callback for
+  the lifetime of that open subscription and returns an unsubscribe handle.
+- Durable configuration, replacement, and removal remain canonical
+  `subscription-configured` / `subscription-removed` events. A separate helper
+  constructs and appends those events so callers do not hand-author event type
+  strings or payload envelopes. There is no durable overload of `subscribe()`.
+- Live `subscribe()` and the durable configuration event use the same start
+  coordinate field and union. For example, `startAfter: number | "head"`, where
+  `0` means the beginning and `"head"` means events committed after this live
+  open or configuration event. Do not expose separate `after` and `from`
+  vocabularies for the same concept.
+- Subscribers implement singular `processEvent(event)`. The source does not
+  make one RPC call per event: the subscription helper creates a receiver-local
+  adapter, the source sends one private bounded frame to that adapter, and the
+  adapter invokes `processEvent` once per event in order. The callback never
+  receives or knows about the frame envelope.
 - `read` exposes scan progress and observed head; convenience point/head helpers
   are library utilities rather than additional kernel concepts.
 - `waitForEvent` composes read and ephemeral subscribe, advances its cursor
   before async predicate work, rebinds after reset, and accepts an external
   `AbortSignal`.
 
-The exact durable subscription lifecycle shape is the highest-priority human API
-decision. Do not start runtime code while it is still represented indirectly as
-an event-schema accident.
+The remaining API naming decision is the exact durable event helper and shared
+start-coordinate spelling. The ownership decision is settled: the event is
+canonical, the SQL row is its projection, and live `subscribe()` is not
+overloaded.
 
 ### 6. Rollback and data erase
 
@@ -283,19 +298,19 @@ data-compatible fallback or automatic destructive migration.
 
 ### Durable ownership
 
-| Fact                                                   | Authority                                                                   |
-| ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| Event, offset, idempotency, floor                      | Source `StreamSql` journal                                                  |
-| Subscription configuration and epoch                   | Source normalized config row, atomically projected from command/audit event |
-| Ephemeral replay/live cursor                           | Session memory only                                                         |
-| Generic push/webhook/cross-post cursor and exact claim | Source outbox row                                                           |
-| Processor effect progress                              | Existing receiver runner checkpoint                                         |
-| Processor source observation/retry                     | Source processor-link row                                                   |
-| Fresh parsed payload                                   | Demand-bound frame cache only                                               |
-| Retry deadline and terminal park                       | Mode-specific durable row                                                   |
-| Alarm target                                           | Derived from due rows                                                       |
-| Recovery generation                                    | Source metadata row                                                         |
-| Wait progress                                          | Client utility memory                                                       |
+| Fact                                                   | Authority                                                                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| Event, offset, idempotency, floor                      | Source `StreamSql` journal                                                           |
+| Subscription configuration and epoch                   | Canonical journal event; normalized source row is its atomic, rebuildable projection |
+| Ephemeral replay/live cursor                           | Session memory only                                                                  |
+| Generic push/webhook/cross-post cursor and exact claim | Source outbox row                                                                    |
+| Processor effect progress                              | Existing receiver runner checkpoint                                                  |
+| Processor source observation/retry                     | Source processor-link row                                                            |
+| Fresh parsed payload                                   | Demand-bound frame cache only                                                        |
+| Retry deadline and terminal park                       | Mode-specific durable row                                                            |
+| Alarm target                                           | Derived from due rows                                                                |
+| Recovery generation                                    | Source metadata row                                                                  |
+| Wait progress                                          | Client utility memory                                                                |
 
 ### SQLite shape
 
@@ -451,8 +466,8 @@ runner refactoring.
 
 Resolve these before implementation:
 
-1. Does `subscribe` directly create both ephemeral and durable subscriptions,
-   and what is the durable replace/remove handle shape?
+1. What exact helper names and shared start-coordinate spelling should expose
+   canonical durable subscription events without overloading live `subscribe()`?
 2. Are arbitrary Itx delivery expressions still a product requirement, or can
    the rewrite use a closed first-party target union?
 3. Can every required processor host be addressed directly and return plain
