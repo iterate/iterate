@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: small
 ---
 
@@ -7,7 +7,7 @@ size: small
 
 ## Status
 
-Nearly complete. The consumer is pinned to Middlewright's post-dialog pacing commit and the unchanged IDE spec passes with a clean one-second tail after the final OK. The refreshed clip still needs uploading and the updated PR head needs CI confirmation.
+Complete. The consumer is pinned to Middlewright's post-dialog pacing commit, the unchanged IDE spec passes with a clean one-second tail after the final OK, the refreshed clips render inline, and all PR checks and reviews are green.
 
 ## Goal
 
@@ -28,7 +28,7 @@ Consume the dialog-aware middlewright build in Iterate so video-mode Playwright 
 - [x] Open a draft PR with a reviewer-oriented body and matching before/after video attachments. *PR #2098 includes two GitHub-hosted inline WebM players uploaded through the authenticated attachment flow.*
 - [x] Monitor CI and review threads; address or reply to every item. *All seven checks passed at the implementation head; no review threads were opened.*
 - [x] Verify renderer-owned post-dialog pacing in the unchanged consumer spec. *With no spec delay added, the focused run generated `video-mode-dialog-post-frame.png`; its last second remains on the clean “No changes” IDE state (SSIM 0.998 across the tail).*
-- [ ] Replace the Iterate “after” attachment and re-check the updated PR. *The regenerated WebM is ready in the ignored media workspace.*
+- [x] Replace the Iterate “after” attachment and re-check the updated PR. *Uploaded through Playwriter, verified two inline video players, and all eight checks passed with no unresolved review threads.*
 
 ## Implementation log
 
@@ -37,3 +37,4 @@ Consume the dialog-aware middlewright build in Iterate so video-mode Playwright 
 - 2026-07-17: CI is green for preview deploy/e2e, lint/typecheck, tests, formatting autofix, LOC reporting, publishing, and the package preview. No review threads are open at this point.
 - 2026-07-17: Uploaded the matching clips to PR #2098, preserved the generated LOC and Cloudflare preview blocks, and verified both attachments render as inline `<video>` players.
 - 2026-07-17: Pinned the refreshed Middlewright preview at `3e00f54` so package-manager caching cannot silently reuse an older PR-alias tarball. The unchanged discard spec passed and the resulting 11.56-second video ends with the renderer-generated clean page frame rather than a test-side wait.
+- 2026-07-17: Replaced the after attachment through Playwriter and verified the PR body still renders both WebMs inline. The final head passed package publication, LOC, lint/typecheck, unit tests, autofix, Bugbot, and the 57-test Cloudflare preview lane; no review threads remain.
