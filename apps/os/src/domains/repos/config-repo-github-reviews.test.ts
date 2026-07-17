@@ -120,7 +120,9 @@ function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null 
   const repoGet = vi.fn(() => ({ processor: { snapshot } }));
   const project = {
     agents: { get: agentGet },
-    projectId: "prj_1",
+    // Cap'n Web property reads are promise-like at runtime even though the
+    // generated Project surface exposes the resolved property type.
+    projectId: Promise.resolve("prj_1"),
     repos: { get: repoGet },
   };
   // This fake implements the handler's three RPC calls; the generated Project
@@ -188,6 +190,7 @@ describe("userspace GitHub pull-request routing", () => {
         ],
       },
     });
+    expect(test.appendBatches[0]?.events[0]?.source?.crossPostedFrom?.[0]?.projectId).toBe("prj_1");
     expect(test.appendBatches[0]?.events[1]).toMatchObject({
       idempotencyKey: "github-pr/review:install-789:101:acme/widgets:iterate:1:head-abc",
       payload: {

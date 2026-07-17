@@ -240,7 +240,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
             createdAt: event.createdAt,
             offset: event.offset,
             path: event.path,
-            projectId: itx.projectId,
+            projectId: await itx.projectId,
             type: event.type,
           },
         ],
