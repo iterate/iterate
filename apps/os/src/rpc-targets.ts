@@ -5833,11 +5833,10 @@ export function itxForScope(props: {
 
 /**
  * The deployment-global trusted root: what a GLOBAL (`projectId: null`)
- * stream's delivery dial evaluates expressions against (`ItxEntrypoint.get()`
- * with `projectId: null` props). Session-shaped on purpose — deployment-wide
- * repos/streams live on the session — so a global repo stream's wake
- * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
- * walks the same shape a project stream's does.
+ * stream's delivery dial evaluates expressions against. Session-shaped on
+ * purpose — deployment-wide repos/streams live on the session — so a global
+ * repo stream's wake expression (`["repos", ["get", path], "processor",
+ * "wakeStreamSubscriber"]`) walks the same shape a project stream's does.
  */
 export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
   return new SessionRpcTarget(props);

@@ -1,8 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
+import { streamDeliveryAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
+import {
+  deploymentItxForInternal,
+  itxForScope,
+  StreamSubscriptionRpcTarget,
+} from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
@@ -106,6 +111,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
+        createAuthorityRoot: () => this.createSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -128,6 +134,18 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   #coreProcessorState: CoreProcessorState;
 
+  /**
+   * Creates the local root used by stream-configured delivery expressions.
+   * The standalone streams playground overrides this host boundary with its
+   * no-op project worker; OS always uses the narrowly branded delivery auth.
+   */
+  protected createSubscriberAuthorityRoot(): unknown {
+    const auth = streamDeliveryAuthContext();
+    return this.name.projectId === null
+      ? deploymentItxForInternal({ auth, ctx: this.ctx })
+      : itxForScope({ auth, ctx: this.ctx, path: "/", projectId: this.name.projectId });
+  }
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
@@ -145,7 +163,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         type: "events.iterate.com/stream/created",
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
-      if (this.name.projectId !== null) {
+      // The standalone streams playground reuses this DO without hosting a
+      // project worker. Do not invent a fake subscriber there: OS's PROJECT
+      // binding is the capability that makes this feed real.
+      if (this.name.projectId !== null && "PROJECT" in this.env) {
         this.append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
@@ -159,9 +180,9 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "skip",
           } satisfies SubscriptionConfiguredPayload,
         });
-        // The standalone streams playground reuses this DO without OS's
-        // PostHog credential or receiver. Deployed OS environments require
-        // the credential, so its presence is the deployment boundary.
+        // The standalone streams playground also has no PostHog credential or
+        // receiver. Deployed OS environments require the credential, so its
+        // presence is the integration boundary.
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
