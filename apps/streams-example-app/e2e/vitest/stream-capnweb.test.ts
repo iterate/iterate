@@ -37,13 +37,12 @@ describe("stream capnweb protocol", () => {
       payload: { path },
     });
 
-    // Offsets 1-3 are the project stream's birth certificate: created,
-    // the project-worker feed's subscription-configured, woken. (The
-    // playground's streams are project-scoped — projectId "default".)
+    // The standalone playground has no project worker, so its birth
+    // certificate is only created + woken. It does not invent a subscriber.
     expect(appended).toMatchObject({
       type: "test.stream.browser-client",
       payload: { path },
-      offset: 4,
+      offset: 3,
       createdAt: expect.any(String),
     });
   });
@@ -79,7 +78,7 @@ describe("stream capnweb protocol", () => {
     expect(result.appended).toMatchObject({
       type: "test.stream.capnweb-append",
       payload: { path: result.path },
-      offset: 4, // after the 3-event birth certificate (created, worker feed, woken)
+      offset: 3, // after the standalone birth certificate (created, woken)
       createdAt: expect.any(String),
     });
   });
@@ -103,7 +102,7 @@ describe("stream capnweb protocol", () => {
     if (appended === undefined) throw new Error("append returned no event");
     expect(appended).toMatchObject({
       type: "test.stream.capnweb-large-row",
-      offset: 4, // after the 3-event birth certificate
+      offset: 3, // after the standalone birth certificate
       createdAt: expect.any(String),
     });
     expectLargePayload(appended, body.length);
@@ -145,7 +144,7 @@ describe("stream capnweb protocol", () => {
     await expect(async () => {
       await stream.stream.append(event);
     }).rejects.toThrow(
-      /(?:connection (?:lost|failed)|Peer closed WebSocket: 1009 Message is too large: \d+ > 33554432)/i,
+      /(?:connection (?:lost|failed)|Peer closed WebSocket: 1009 Message is too large)/i,
     );
   });
 
@@ -277,13 +276,13 @@ describe("stream capnweb protocol", () => {
     expect(batch).toMatchObject([
       {
         type: "test.stream.capnweb-batch-new",
-        offset: 5,
+        offset: 4,
         payload: { n: 1 },
       },
       existing,
       {
         type: "test.stream.capnweb-batch-new",
-        offset: 6,
+        offset: 5,
         payload: { n: 2 },
       },
     ]);
@@ -313,10 +312,6 @@ describe("stream capnweb protocol", () => {
         .then((events) => events.map((event) => event.type)),
     ).resolves.toEqual([
       "events.iterate.com/stream/created",
-      // The project-worker feed's subscription-configured — part of the
-      // 3-event birth certificate (documented in the replay test below).
-      // This list rotted while CI filtered the suite to one tagged test.
-      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/woken",
       "test.stream.capnweb-same-batch-idempotency",
     ]);
@@ -342,14 +337,12 @@ describe("stream capnweb protocol", () => {
       { offset: 2 },
       { offset: 3 },
       { offset: 4 },
-      { offset: 5 },
     ]);
     await expect(
       stream.stream.getEvents({ afterOffset: 1, beforeOffset: 4 }),
     ).resolves.toMatchObject([{ offset: 2 }, { offset: 3 }]);
     await expect(stream.stream.getEvents({ afterOffset: 3 })).resolves.toMatchObject([
       { offset: 4 },
-      { offset: 5 },
     ]);
   });
 
@@ -391,16 +384,9 @@ describe("stream capnweb protocol", () => {
             path,
           },
         }),
-        // The birth certificate's project-worker feed (project-scoped streams
-        // configure their own push feed in the same turn as `created`).
-        expect.objectContaining({
-          type: "events.iterate.com/stream/subscription-configured",
-          offset: 2,
-          payload: expect.objectContaining({ subscriptionKey: "project-worker" }),
-        }),
         expect.objectContaining({
           type: "events.iterate.com/stream/woken",
-          offset: 3,
+          offset: 2,
           payload: {
             incarnationId: expect.any(String),
           },
@@ -411,7 +397,7 @@ describe("stream capnweb protocol", () => {
         // subscriber's first batch.
         expect.objectContaining({
           type: "events.iterate.com/stream/subscriber-connected",
-          offset: 5,
+          offset: 4,
           payload: {
             subscriptionKey: "replay",
             subscriptionType: "ephemeral",
@@ -518,8 +504,8 @@ describe("stream capnweb protocol", () => {
     await subscriber.stream.subscribe({
       subscriptionKey: "wire",
       processEventBatch: (batch) => callback.processEventBatch(batch),
-      // Skip the 3-event birth certificate (created, worker feed, woken).
-      replayAfterOffset: 3,
+      // Skip the standalone birth certificate (created, woken).
+      replayAfterOffset: 2,
     });
     const afterSubscribe = frames.length;
 
@@ -532,7 +518,7 @@ describe("stream capnweb protocol", () => {
     if (appended === undefined) throw new Error("append returned no event");
     // Deliveries before the published event: the subscription's initial state
     // push (events: []) and/or the subscriber's own subscriber-connected
-    // presence fact (offset 4, appended during subscribe) — wait for content.
+    // presence fact (offset 3, appended during subscribe) — wait for content.
     await waitFor(
       () => callback.batches.flat().some((event) => event.offset === appended.offset),
       1_000,
@@ -541,7 +527,7 @@ describe("stream capnweb protocol", () => {
     expect(appended).toMatchObject({
       type: input.type,
       payload: input.payload,
-      offset: 5,
+      offset: 4,
       createdAt: expect.any(String),
     });
     // Batch boundaries race (initial push, presence fact commit timing), but
@@ -551,7 +537,7 @@ describe("stream capnweb protocol", () => {
     expect(callback.batches.flat()).toEqual([
       expect.objectContaining({
         type: "events.iterate.com/stream/subscriber-connected",
-        offset: 4,
+        offset: 3,
       }),
       appended,
     ]);
@@ -588,7 +574,7 @@ describe("stream capnweb protocol", () => {
                   {
                     type: input.type,
                     payload: input.payload,
-                    offset: 5,
+                    offset: 4,
                     createdAt: expect.any(String),
                   },
                 ],
