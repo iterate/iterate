@@ -50,7 +50,18 @@ test("itx-api.generated.ts resolves its exact vendor types from iterate's depend
   const script = `
     import type { Project, StreamEvent } from "./itx-api.generated.ts";
     export async function run(itx: Project): Promise<StreamEvent> {
-      const [event] = await itx.streams.get("/demo").append({ type: "demo/ping" });
+      await itx.streams.get("/demo").append({ type: "demo/ping" });
+      const [event] = await itx.agents.get("/agents/researcher").append({
+        type: "events.iterate.com/agent/status-changed",
+        payload: { title: "Flight researcher", shortStatus: "comparing prices" },
+      });
+      // @ts-expect-error agent append only accepts event types its processor consumes
+      await itx.agents.get("/agents/researcher").append({ type: "demo/ping" });
+      await itx.agents.get("/agents/researcher").append({
+        type: "events.iterate.com/agent/status-changed",
+        // @ts-expect-error the payload comes from the status-changed event schema
+        payload: { busy: "yes" },
+      });
       await itx.repo.edit({ message: "m", path: "a.ts", oldString: "x", newString: "y" });
       return event;
     }

@@ -1,6 +1,10 @@
 import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import {
+  defineProcessorContract,
+  type ConsumedInput,
+  type ProcessorState,
+} from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
   CoreProcessorContract,
@@ -1126,6 +1130,9 @@ export const AgentProcessorContract = defineProcessorContract({
  * `ConsumedEvent<AgentProcessorContract>`.
  */
 export type AgentProcessorContract = typeof AgentProcessorContract;
+
+/** Append inputs accepted by the agent processor, derived from its consumed events. */
+export type AgentAppendInput = ConsumedInput<AgentProcessorContract>;
 
 /**
  * The agent processor's reduced state, inferred from the contract's

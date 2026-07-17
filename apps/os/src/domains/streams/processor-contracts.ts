@@ -135,10 +135,10 @@ type EventDefinitionForType<
 // -----------------------------------------------------------------------------
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
-type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
-  StreamEventInput,
-  "payload" | "type"
-> & {
+export type TypedStreamEventInput<
+  Type extends string = string,
+  Payload = Record<string, unknown>,
+> = Omit<StreamEventInput, "payload" | "type"> & {
   type: Type;
   payload?: Payload;
 };
@@ -189,6 +189,15 @@ type InputFromType<
     : never
   : never;
 
+/** Union of append-input shapes for a `consumes` tuple; `"*"` means any input. */
+type InputFromTypes<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Types extends readonly string[],
+> = "*" extends Types[number]
+  ? StreamEventInput
+  : InputFromType<Events, ProcessorDeps, Types[number]>;
+
 /** Parsed append input for one resolved type (payload validated, so required). */
 type ParsedInputFromType<
   Events extends EventCatalog,
@@ -209,6 +218,14 @@ export type ConsumedEvent<Contract> = Contract extends {
   consumes: infer Consumes extends readonly string[];
 }
   ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
+  : never;
+
+/** Union of append-input shapes for the events in a contract's `consumes` list. */
+export type ConsumedInput<Contract> = Contract extends {
+  events: EventCatalog;
+  consumes: infer Consumes extends readonly string[];
+}
+  ? InputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
 /** Union of append-input shapes a contract's `emits` list allows a processor to append. */

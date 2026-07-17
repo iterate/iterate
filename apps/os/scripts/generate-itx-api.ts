@@ -354,7 +354,9 @@ export function generateItxApi(): string {
       out = out.replaceAll(new RegExp(`\\b${className}\\b`, "g"), publicName);
     }
     // zod's JSON helper prints its internal alias; the public name is JsonValue.
-    out = out.replaceAll(/\bz\.core\.util\.JSONType\b/g, "JsonValue");
+    out = out
+      .replaceAll(/\bz\.(?:core\.)?util\.(?:JSONType|JsonValue)\b/g, "JsonValue")
+      .replaceAll(/\bJSONType\b/g, "JsonValue");
     // Scan code only — docstring prose is full of capitalized words.
     // Inline type imports are already self-resolving package references in a
     // standalone declaration (`import("octokit").Octokit`). Do not mistake

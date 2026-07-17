@@ -237,6 +237,7 @@ import type {
   SearchResultChunk,
 } from "./domains/search/search-corpus.ts";
 import type {
+  AgentAppendInput,
   AgentFileAttachment,
   AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
@@ -4263,6 +4264,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
+  /** Append events consumed by this agent's processor. */
+  append(...events: AgentAppendInput[]): Promise<StreamEvent[]> {
+    return this.stream.append(...events);
+  }
+
   /** The agent's web-chat door (what the user sees). */
   get chat(): AgentChatRpcTarget {
     return new AgentChatRpcTarget({
@@ -4512,6 +4518,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
+        append: "Append events consumed by this agent's processor.",
         ask: "Send a message and wait for the agent's next chat reply.",
         capabilityHost:
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
