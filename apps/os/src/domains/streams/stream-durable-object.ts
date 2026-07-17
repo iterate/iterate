@@ -9,9 +9,14 @@ import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/processors";
+import { streamDeliveryAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
+import {
+  deploymentItxForInternal,
+  itxForScope,
+  StreamSubscriptionRpcTarget,
+} from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
@@ -31,10 +36,7 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
-import {
-  createSubscriberDial,
-  type StreamSubscriberAuthorityRootLease,
-} from "./subscriber-sinks.ts";
+import { createSubscriberDial } from "./subscriber-sinks.ts";
 import type { StreamEventWaitLeaseInput, StreamEventWaitLeaseResult } from "./wait-for-event.ts";
 import {
   STREAM_IDEMPOTENCY_KEY_HEADER,
@@ -84,30 +86,6 @@ const StreamIdempotencyWaitAttachment = z
  * capability; the methods here are storage/runtime implementation methods,
  * and the append/read methods that touch SQLite/KV must remain synchronous.
  */
-type StreamSubscriberAuthorityRootFactory = (args: {
-  ctx: DurableObjectState;
-  projectId: string | null;
-}) => StreamSubscriberAuthorityRootLease;
-
-let streamSubscriberAuthorityRootFactory: StreamSubscriberAuthorityRootFactory | undefined;
-let streamDurableObjectConstructed = false;
-
-/**
- * Selects the local ITX authority host for a Worker embedding the shared stream
- * Durable Object. Call once during module initialization, before any instance
- * can be constructed; late or repeated replacement is a configuration error.
- */
-export function configureStreamSubscriberAuthorityRoot(
-  factory: StreamSubscriberAuthorityRootFactory,
-): void {
-  if (streamDurableObjectConstructed || streamSubscriberAuthorityRootFactory !== undefined) {
-    throw new Error(
-      "stream subscriber authority root must be configured exactly once before DO construction",
-    );
-  }
-  streamSubscriberAuthorityRootFactory = factory;
-}
-
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
@@ -141,7 +119,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
-        acquireAuthorityRoot: () => this.acquireSubscriberAuthorityRoot(),
+        createAuthorityRoot: () => this.#createSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -167,28 +145,18 @@ export class StreamDurableObject extends DurableObject<Env> {
   #coreProcessorState: CoreProcessorState;
 
   /**
-   * Creates the local authority root used by configured stream deliveries.
-   *
-   * The stream implementation is also embedded by the standalone streams
-   * playground, whose project root intentionally acks the two platform feeds
-   * as no-ops. Keep that application boundary explicit: every host registers
-   * and constructs its own root locally, while only the selected receiver
-   * capability crosses Workers RPC.
+   * Creates a fresh in-isolate root for one stream delivery evaluation. It
+   * carries narrowly branded delivery auth and owns no Workers RPC lifetime.
    */
-  protected acquireSubscriberAuthorityRoot(): StreamSubscriberAuthorityRootLease {
-    const factory = streamSubscriberAuthorityRootFactory;
-    if (factory === undefined) {
-      throw new Error("stream subscriber authority root host was not configured");
-    }
-    return factory({
-      ctx: this.ctx,
-      projectId: this.name.projectId,
-    });
+  #createSubscriberAuthorityRoot(): unknown {
+    const auth = streamDeliveryAuthContext();
+    return this.name.projectId === null
+      ? deploymentItxForInternal({ auth, ctx: this.ctx })
+      : itxForScope({ auth, ctx: this.ctx, path: "/", projectId: this.name.projectId });
   }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    streamDurableObjectConstructed = true;
     this.#coreProcessorState = this.#readCoreProcessorState();
 
     // The first boot appends the stream's birth certificate; every wake
@@ -207,12 +175,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         type: "events.iterate.com/stream/created",
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
-      if (this.name.projectId !== null) {
+      // The standalone streams playground reuses this DO but has no project
+      // worker or platform search receiver. PROJECT is the capability boundary
+      // that makes both OS feeds real.
+      if (this.name.projectId !== null && "PROJECT" in this.env) {
         this.append(projectWorkerSubscriptionEvent());
         this.append(searchIndexSubscriptionEvent());
-        // The standalone streams playground reuses this DO without OS's
-        // PostHog credential or receiver. Deployed OS environments require
-        // the credential, so its presence is the deployment boundary.
+        // Deployed OS environments require the PostHog credential, so its
+        // presence is the separate integration boundary for that feed.
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }

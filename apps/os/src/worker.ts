@@ -24,13 +24,7 @@ import { WORKER_FETCH_DISPATCH_HEADER } from "./domains/workers/worker-fetch-dis
 import { projectWorkerFetchStatusResponse } from "./domains/workers/project-worker-fetch-status.ts";
 import { applyProjectWorkerOverlay } from "./domains/workers/worker-serve-overlay.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
-import {
-  deploymentItxForInternal,
-  itxForScope,
-  UnauthenticatedOsRpcTarget,
-} from "./rpc-targets.ts";
-import { streamDeliveryAuthContext } from "./auth.ts";
-import { configureStreamSubscriberAuthorityRoot } from "./domains/streams/stream-durable-object.ts";
+import { UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
 import { defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
@@ -46,27 +40,6 @@ import {
 import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
-
-configureStreamSubscriberAuthorityRoot(({ ctx, projectId }) => {
-  const auth = streamDeliveryAuthContext();
-  const root =
-    projectId === null
-      ? deploymentItxForInternal({ auth, ctx })
-      : itxForScope({
-          auth,
-          ctx,
-          path: "/",
-          projectId,
-        });
-  return {
-    root,
-    // This host constructs a local server-side RpcTarget, so acquiring it
-    // creates no client reference to release. The explicit lease keeps that
-    // ownership decision at the host boundary instead of making the stream
-    // infer it from the root's shape.
-    [Symbol.dispose]() {},
-  };
-});
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;

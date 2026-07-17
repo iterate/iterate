@@ -90,7 +90,11 @@ export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
   opts: {
     onDeliveryError?: (error: unknown) => void;
-    /** Release capabilities whose lifetime is tied to this retained sink. */
+    /**
+     * Runs after the retained stub is disposed — the hook that lets a caller
+     * tie the handshake's runtime-state and ping capabilities to this sink,
+     * so those sidecars outlive every batch call but not the connection.
+     */
     onDisposed?: () => void;
   } = {},
 ): RetainedProcessEventBatch {
@@ -227,12 +231,11 @@ type RetainedWakeHandshakeResponse = {
  * disposal group. Duplicate each capability needed by the live connection,
  * then dispose that original result immediately; otherwise workerd eventually
  * reports the dropped group as an undisposed RPC stub. The retained
- * capabilities and authority-root chain are all tied to the sink's lifetime.
+ * capabilities and any caller-owned resources are tied to the sink's lifetime.
  */
 export function retainWakeHandshakeResponse(args: {
   value: unknown;
   onDeliveryError: (error: unknown) => void;
-  onDisposed: () => void;
 }): RetainedWakeHandshakeResponse {
   let originalReleased = false;
   const releaseOriginal = () => {
@@ -245,14 +248,13 @@ export function retainWakeHandshakeResponse(args: {
   let ping: RetainedSubscriberPing | undefined;
   let sink: RetainedProcessEventBatch | undefined;
   let retainedReleased = false;
-  const releaseRetainedAndRoot = () => {
+  const releaseRetained = () => {
     if (retainedReleased) return;
     retainedReleased = true;
     let firstError: unknown;
     for (const release of [
       () => ping?.[Symbol.dispose](),
       () => getRuntimeState?.[Symbol.dispose](),
-      args.onDisposed,
     ]) {
       try {
         release();
@@ -270,7 +272,7 @@ export function retainWakeHandshakeResponse(args: {
     ping = retainSubscriberPing(response.ping);
     sink = retainProcessEventBatch(response.sink, {
       onDeliveryError: args.onDeliveryError,
-      onDisposed: releaseRetainedAndRoot,
+      onDisposed: releaseRetained,
     });
     releaseOriginal();
     ownershipTransferred = true;
@@ -284,7 +286,7 @@ export function retainWakeHandshakeResponse(args: {
   } finally {
     if (!ownershipTransferred) {
       try {
-        if (sink === undefined) releaseRetainedAndRoot();
+        if (sink === undefined) releaseRetained();
         else sink[Symbol.dispose]();
       } finally {
         releaseOriginal();
@@ -298,40 +300,25 @@ export function retainWakeHandshakeResponse(args: {
 // =============================================================================
 
 /**
- * One explicit acquisition of the authority used to evaluate a subscriber
- * expression. Releasing the lease tears down resources created by the host to
- * produce the root; it does not imply that the raw root itself is disposable.
- * In-process hosts therefore return a no-op lease, while a transport-backed
- * host can release its binding and root chain here.
- */
-export type StreamSubscriberAuthorityRootLease = {
-  readonly root: unknown;
-  [Symbol.dispose](): void;
-};
-
-/**
  * Builds the spine's {@link SubscriberDial}. Wake and push share ONE lane: the
- * persisted itx expression is evaluated against the stream's authority root.
- * The owning Durable Object supplies that root from the same scoped-itx factory
- * as `env.ITX.get()`, but directly: putting an in-process delivery behind a
- * loopback Worker RPC made receiver backoff surface as an entrypoint exception
- * and added an avoidable round trip. Everything transport-shaped — retention
- * of returned sinks and expression walking over RPC — stays here.
+ * persisted itx expression is evaluated against a fresh local authority root.
+ * The owning Durable Object constructs that root through the same scoped-itx
+ * factory as `env.ITX.get()`, without turning in-process delivery into a
+ * loopback Worker invocation. Everything transport-shaped — retention of
+ * returned sinks, result ownership, and expression walking over RPC — stays
+ * here.
  */
 export function createSubscriberDial(deps: {
   /** The stream's projectId; `null` = global stream (deployment authority root). */
   projectId: string | null;
-  /** The Durable Object's `ctx.exports`, used to mint project egress bindings. */
+  /** The Durable Object's `ctx.exports`, used only for project-egress webhooks. */
   exports: unknown;
-  /**
-   * Acquires one explicitly owned authority-root lease from the embedding
-   * host. Push owns it for one batch; wake transfers it to the retained sink.
-   */
-  acquireAuthorityRoot(): StreamSubscriberAuthorityRootLease;
+  /** Creates a fresh in-process, stream-delivery-authorized itx root. */
+  createAuthorityRoot(): unknown;
   /** Where durable-sink delivery rejections land (spine: close → re-poke). */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void;
 }): SubscriberDial {
-  /** The webhook lane's cached project-egress fetcher. */
+  /** The webhook lane's cached project-egress fetcher, dropped on failure. */
   let webhookEgress: ReturnType<typeof projectEgressFetcher> | undefined;
 
   return {
@@ -341,26 +328,17 @@ export function createSubscriberDial(deps: {
      * (returned-stub semantics:
      * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/).
      * The sink is retained with the durable lane's result-pulling liveness
-     * policy attached.
+     * policy attached. The local root owns no remote lifetime; the returned
+     * handshake value still transfers its own RPC disposal group.
      */
     async poke(expression: ItxExpression, request: StreamSubscriberWakeRequest) {
-      const authority = deps.acquireAuthorityRoot();
-      let value: unknown;
-      try {
-        ({ value } = await evaluateItxExpression(
-          authority.root,
-          toInvocation(expression, request),
-        ));
-      } catch (error) {
-        authority[Symbol.dispose]();
-        throw error;
-      }
+      const { value } = await evaluateItxExpression(
+        deps.createAuthorityRoot(),
+        toInvocation(expression, request),
+      );
       return retainWakeHandshakeResponse({
         value,
         onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
-        // The returned capabilities may proxy through the authority chain, so
-        // its lease belongs to the retained sink rather than the poke call.
-        onDisposed: () => authority[Symbol.dispose](),
       });
     },
 
@@ -371,17 +349,21 @@ export function createSubscriberDial(deps: {
      * `["streams", ["get", path], "acceptCrossPost"]` reaches a sibling stream —
      * through exactly the calls ordinary user code would make. The
      * awaited resolve is the ack; a reject propagates to the spine's
-     * retry/park machine. Each batch owns a fresh host lease and releases it
-     * after the evaluation settles. With the OS host's local RpcTarget, only
-     * the receiver hop crosses RPC, so a modelled receiver rejection stays in
-     * the spine's backoff state instead of poisoning entrypoint telemetry.
+     * retry/park machine. Each evaluation receives a fresh local root; only
+     * the receiver selected by the expression crosses RPC.
      */
     async push(expression: ItxExpression, batch: StreamPushEventBatch) {
-      const authority = deps.acquireAuthorityRoot();
+      const { value } = await evaluateItxExpression(
+        deps.createAuthorityRoot(),
+        toInvocation(expression, batch),
+      );
       try {
-        await evaluateItxExpression(authority.root, toInvocation(expression, batch));
-      } finally {
-        authority[Symbol.dispose]();
+        disposeIgnoredRpcResult(value);
+      } catch (error) {
+        // Evaluation resolving is the subscriber's acknowledgement. A cleanup
+        // failure is observable, but must not turn that ack into a retry and
+        // deliver the same batch twice.
+        console.warn("stream push RPC result dispose failed after acknowledgement", { error });
       }
     },
 
@@ -434,7 +416,7 @@ export function createSubscriberDial(deps: {
  * a property step naming the method, and the dial turns it into a CALL step
  * so the invocation happens receiver-bound on the remote side. Reading the
  * method as a property and applying it locally worked in-process but DETACHED
- * the method from `this` across the real loopback RPC hop on deployed workerd
+ * the method from `this` across Workers RPC to the selected remote receiver
  * (thermo round 2, blocker 1: every cross-post delivery failed with "Cannot read
  * properties of undefined (reading 'auth')"). Config validation enforces the
  * tail shape at append time; this re-check protects hand-edited state.

@@ -259,12 +259,10 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
   // Every other wake expression walks real getters (agents.get(p).processor,
   // repos.get(p).processor, ...). The slack router's walks the integrations
   // collection's DYNAMIC dotted proxy — ["integrations", "slack", ["get", <conn>],
-  // "processor", "wakeStreamSubscriber"] — over the loopback RPC: awaited
-  // property steps over proxy/function stubs, a different transport mechanic
-  // entirely, and it replaced the old typed-target dial with no other running
-  // coverage (thermo round 3, blocker 2). This pins the whole walk live: the
-  // poke resolves the handshake through the proxy and a durable connection
-  // lands on the stream.
+  // "processor", "wakeStreamSubscriber"] — through awaited property steps
+  // over proxy/function stubs, a different transport mechanic from the typed
+  // getters. This pins the whole walk live: the poke resolves the handshake
+  // through the proxy and a durable connection lands on the stream.
   const marker = crypto.randomUUID();
   const connection = `e2e-${marker.slice(0, 8)}`;
 

@@ -124,7 +124,7 @@ export async function evaluateItxExpression(
     return { receiver, value: finalValue };
   } catch (error) {
     // The failed walk owns everything it materialized — release it all. The
-    // The caller owns the authority root separately.
+    // root itself is caller-owned and deliberately excluded above.
     disposeIntermediates([]);
     throw error;
   }
