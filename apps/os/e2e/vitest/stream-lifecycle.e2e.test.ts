@@ -381,90 +381,6 @@ test("project streams are born with a project-worker push feed callers cannot re
   expect(record?.latestConfiguredEvent?.payload?.selector).toBeUndefined();
 });
 
-test("stream idle teardown severs configured processor subscriptions", async () => {
-  const marker = crypto.randomUUID();
-
-  using session = withItxSession();
-  using itx = session.authenticate({
-    type: "admin-secret",
-    secret: adminSecret(),
-  });
-  using project = itx.projects.create({ slug: `lifecycle-idle-${marker}` });
-  using stream = project.streams.get("/");
-
-  const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
-
-  await forceStreamIdleTeardown(stream);
-
-  await waitForCondition(
-    async () => {
-      const state = asStreamRuntimeState(await stream.runtimeState());
-      return keys.every((key) => state.runtime.connections[key] === undefined);
-    },
-    {
-      description: `configured processor connections to be severed by idle teardown (${keys.join(", ")})`,
-      // Severance is asynchronous fan-out across three cross-script RPC
-      // connections; 1.5s flaked under the CI-parallel lane profile (4 files x
-      // concurrency 3 on one slot). The assertion is about eventual severance,
-      // not a latency SLA.
-      timeoutMs: 10_000,
-    },
-  );
-
-  const events = await stream.getEvents({ afterOffset: 0 });
-  for (const key of keys) {
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            reason: "idle",
-            subscriptionKey: key,
-          }),
-          type: "events.iterate.com/stream/subscriber-disconnected",
-        }),
-      ]),
-    );
-  }
-});
-
-test("append after idle teardown re-wakes configured subscriber from its checkpoint", async () => {
-  const marker = crypto.randomUUID();
-
-  using session = withItxSession();
-  using itx = session.authenticate({
-    type: "admin-secret",
-    secret: adminSecret(),
-  });
-  using project = itx.projects.create({ slug: `lifecycle-redial-${marker}` });
-  using stream = project.streams.get("/");
-
-  const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
-
-  await forceStreamIdleTeardown(stream);
-
-  await waitForCondition(
-    async () => {
-      const state = asStreamRuntimeState(await stream.runtimeState());
-      return keys.every((key) => state.runtime.connections[key] === undefined);
-    },
-    {
-      description: `configured processor connections to be absent before re-wake (${keys.join(", ")})`,
-      // Same asynchronous fan-out as above — 1.5s flaked under CI-parallel load.
-      timeoutMs: 10_000,
-    },
-  );
-
-  await stream.append({
-    type: "events.iterate.test/lifecycle-redial-trigger",
-    payload: { marker },
-  });
-
-  const { state } = await waitForConfiguredProcessorConnections(stream, { expectedKeys: keys });
-  for (const key of keys) {
-    expect(state.runtime.connections[key]?.subscriptionType).toBe("configured");
-  }
-});
-
 test("closing a Cap'n Web session without unsubscribe removes its stream subscription", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/lifecycle-session-close-${marker}`;
@@ -699,17 +615,6 @@ async function waitForWaitForEventConnection(stream: Stream): Promise<string> {
     },
   );
   return key!;
-}
-
-async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
-  // Test-only, admin-guarded operator path: exercise the idle teardown behavior
-  // without waiting for the production five-minute timer. The raw DO stub is
-  // intentionally not reachable through the public Cap'n Web target.
-  await (
-    stream as unknown as {
-      runIdleTeardownNow(): Promise<void>;
-    }
-  ).runIdleTeardownNow();
 }
 
 function configuredSubscriptionKeys(state: StreamRuntimeState): string[] {

@@ -105,6 +105,7 @@ import {
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import {
+  assertCanonicalProjectWorkerDeliveryEnvelope,
   assertPlatformEventWriteAllowed,
   assertCanonicalPosthogDeliveryEnvelope,
   batchContainsCanonicalStreamCreated,
@@ -663,14 +664,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
     return Promise.resolve(this.#durableObjectStub.acceptCrossPost(batch));
-  }
-
-  /** @internal Test-only control, deliberately guarded instead of exposing the raw DO stub. */
-  runIdleTeardownNow(): Promise<void> {
-    if (!this.props.auth.isAdmin()) {
-      throw new Error("forcing stream idle teardown requires an admin principal");
-    }
-    return Promise.resolve(this.#durableObjectStub.runIdleTeardownNow());
   }
 
   /**
@@ -5523,6 +5516,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     if (batch.projectId !== this.#props.projectId) {
       throw new Error("stream delivery project does not match its itx authority");
     }
+    assertCanonicalProjectWorkerDeliveryEnvelope(batch);
     await this.#installPosthogSubscriptionForCreatedStream(batch);
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);

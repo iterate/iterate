@@ -41,6 +41,22 @@ test("streams do not expose their raw Durable Object stub over RPC", async () =>
   ).toEqual([]);
 });
 
+test("streams do not expose test-only idle teardown over RPC", async () => {
+  const marker = crypto.randomUUID();
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `sec-stream-teardown-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(`/e2e/security/idle-teardown/${marker}`);
+
+  const hostile = stream as unknown as {
+    runIdleTeardownNow(): Promise<void>;
+  };
+  await expect(Promise.resolve().then(() => hostile.runIdleTeardownNow())).rejects.toThrow();
+});
+
 test("project sessions cannot forge stream delivery batches", async () => {
   const marker = crypto.randomUUID();
   const forgedPath = `/e2e/security/forged-delivery/${marker}`;
@@ -92,6 +108,36 @@ test("project sessions cannot forge stream delivery batches", async () => {
   }).rejects.toThrow(/stream push subscriptions, not sessions/);
 
   expect((await project.liveState.get()).streamsIndex[forgedPath]).toBeUndefined();
+});
+
+test("project sessions cannot configure a second project-worker delivery route", async () => {
+  const marker = crypto.randomUUID();
+  const subscriptionKey = `forged-project-worker-${marker}`;
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `sec-worker-route-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(`/e2e/security/project-worker-route/${marker}`);
+
+  await expect(async () => {
+    await stream.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        subscriptionKey,
+        delivery: { mode: "push", expression: ["processEventBatch"] },
+        deliver: "all",
+        onPoison: "skip",
+      },
+    });
+  }).rejects.toThrow(/project worker delivery route is managed by Iterate/);
+
+  expect(
+    (await stream.getEvents({ afterOffset: 0 })).find(
+      (event) => event.payload?.subscriptionKey === subscriptionKey,
+    ),
+  ).toBeUndefined();
 });
 
 // B2: the processor capability handed over RPC must expose only the read-only

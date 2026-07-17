@@ -104,13 +104,27 @@ function isCanonicalProjectWorkerConfiguration(event: StreamEventInput): boolean
   );
 }
 
-/** Only the stream's immutable offset-one birth certificate provisions its feed. */
-export function batchContainsCanonicalStreamCreated(batch: StreamPushEventBatch): boolean {
+function hasCanonicalProjectWorkerDeliveryEnvelope(batch: StreamPushEventBatch): boolean {
   return (
+    batch.projectId !== null &&
     batch.subscriptionKey === PROJECT_WORKER_SUBSCRIPTION_KEY &&
     batch.configuredEvent.offset === 2 &&
     batch.configuredEvent.path === batch.path &&
-    isCanonicalProjectWorkerConfiguration(batch.configuredEvent) &&
+    isCanonicalProjectWorkerConfiguration(batch.configuredEvent)
+  );
+}
+
+/** Reject any userspace subscription trying to replay the platform project-worker sink. */
+export function assertCanonicalProjectWorkerDeliveryEnvelope(batch: StreamPushEventBatch): void {
+  if (!hasCanonicalProjectWorkerDeliveryEnvelope(batch)) {
+    throw new Error("project worker dispatch only accepts Iterate's canonical stream subscription");
+  }
+}
+
+/** Only the stream's immutable offset-one birth certificate provisions its feed. */
+export function batchContainsCanonicalStreamCreated(batch: StreamPushEventBatch): boolean {
+  return (
+    hasCanonicalProjectWorkerDeliveryEnvelope(batch) &&
     batch.events.some(
       (event) =>
         event.offset === 1 &&
@@ -189,11 +203,16 @@ export function assertPlatformEventWriteAllowed(
         : undefined;
     const routesToPosthog =
       Array.isArray(expression) && expression[0] === "integrations" && expression[1] === "posthog";
+    const routesToProjectWorker =
+      Array.isArray(expression) && expression.length === 1 && expression[0] === "processEventBatch";
     if (key === POSTHOG_SUBSCRIPTION_KEY) {
       throw new Error("the first-party PostHog subscription is managed by Iterate");
     }
     if (routesToPosthog) {
       throw new Error("the first-party PostHog delivery route is managed by Iterate");
+    }
+    if (routesToProjectWorker) {
+      throw new Error("the project worker delivery route is managed by Iterate");
     }
   }
 }

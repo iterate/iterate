@@ -6,6 +6,7 @@ import {
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
+  assertCanonicalProjectWorkerDeliveryEnvelope,
   assertCanonicalPosthogDeliveryEnvelope,
   assertPlatformEventWriteAllowed,
   batchContainsCanonicalStreamCreated,
@@ -147,6 +148,37 @@ describe("first-party PostHog stream integration", () => {
     ).toThrow(/canonical stream subscription/);
   });
 
+  it("accepts only the immutable project-worker birth subscription envelope", () => {
+    const canonical = projectWorkerBatch([streamEvent()]);
+    expect(() => assertCanonicalProjectWorkerDeliveryEnvelope(canonical)).not.toThrow();
+    for (const forged of [
+      { ...canonical, subscriptionKey: "customer-feed" },
+      {
+        ...canonical,
+        configuredEvent: { ...canonical.configuredEvent, offset: 3 },
+      },
+      {
+        ...canonical,
+        configuredEvent: { ...canonical.configuredEvent, path: "/other" },
+      },
+      {
+        ...canonical,
+        configuredEvent: {
+          ...canonical.configuredEvent,
+          payload: {
+            ...canonical.configuredEvent.payload,
+            delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+          },
+        },
+      },
+      { ...canonical, projectId: null },
+    ] satisfies StreamPushEventBatch[]) {
+      expect(() => assertCanonicalProjectWorkerDeliveryEnvelope(forged)).toThrow(
+        /canonical stream subscription/,
+      );
+    }
+  });
+
   it("reserves the platform key, idempotency key, and delivery route", () => {
     expect(() =>
       assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], projectStream),
@@ -179,6 +211,20 @@ describe("first-party PostHog stream integration", () => {
         projectStream,
       ),
     ).toThrow(/delivery route is managed by Iterate/);
+    expect(() =>
+      assertPlatformEventWriteAllowed(
+        [
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: "duplicate-project-worker",
+              delivery: { mode: "push", expression: ["processEventBatch"] },
+            },
+          },
+        ],
+        projectStream,
+      ),
+    ).toThrow(/project worker delivery route is managed by Iterate/);
     expect(() =>
       assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], {
         authority: "admin",
