@@ -12,13 +12,69 @@
 // registry, an itx-dialed stream handle, and the project worker poking the
 // host when guestbook events land.
 import { z } from "zod";
-import { defineProcessorContract, StreamProcessor } from "iterate/processors";
+import {
+  defineProcessorContract,
+  StreamProcessor,
+  type StreamEventInput,
+} from "iterate/processors";
+import type { DynamicWorkerRef } from "iterate/sdk";
 
 export const GUESTBOOK_STREAM_PATH = "/guestbook";
 
 /** Stable idempotency key for the one birth append — every signer offers the
  * same birth batch and the stream dedupes it to a single created event. */
 export const GUESTBOOK_CREATED_IDEMPOTENCY_KEY = "guestbook/created";
+
+// One declarative ref for the guestbook host, shared by the HTTP route
+// (fetchDynamicWorker), the wake subscription below, and anything else that
+// needs to name the same Durable Object (addressed by its durableWorkerKey).
+export const GUESTBOOK_APP_REF = {
+  type: "stateful",
+  path: "/",
+  className: "GuestbookApp",
+  durableWorkerKey: "app-guestbook",
+  source: {
+    files: { type: "repo", repoPath: "/repos/config" },
+    options: { entryPoint: "worker.ts" },
+  },
+} satisfies DynamicWorkerRef;
+
+/** The wake subscription's stable identity on the stream's roster. */
+export const GUESTBOOK_SUBSCRIPTION_KEY = "app-guestbook#guestbook";
+
+/**
+ * The guestbook's creation batch: the birth certificate plus the durable
+ * WAKE subscription that puts the GuestbookApp Durable Object on the
+ * stream's own delivery spine — the platform evaluates the persisted
+ * expression (`workers.get(ref).processor.wakeStreamSubscriber`, resolved
+ * via the dynamic capability fallback into the app's `processor` getter),
+ * performs the wake handshake, and pushes event frames straight into the
+ * registry's runner. Same machinery, same lane as the platform's own
+ * domain processors. Both events are idempotency-keyed, so every creator
+ * (the app's /sign handler, a script, a test) offers this same batch and
+ * the stream collapses it to one birth and one subscription.
+ */
+export function guestbookCreationEvents(): StreamEventInput[] {
+  return [
+    {
+      type: "events.iterate.com/guestbook/created",
+      payload: { config: { title: "Guestbook" } },
+      idempotencyKey: GUESTBOOK_CREATED_IDEMPOTENCY_KEY,
+    },
+    {
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        subscriptionKey: GUESTBOOK_SUBSCRIPTION_KEY,
+        delivery: {
+          mode: "wake",
+          expression: ["workers", ["get", GUESTBOOK_APP_REF], "processor", "wakeStreamSubscriber"],
+          processorSlug: "guestbook",
+        },
+      },
+      idempotencyKey: "guestbook/subscription",
+    },
+  ];
+}
 
 const GuestbookBirthCertificate = z.object({
   config: z.object({ title: z.string() }),

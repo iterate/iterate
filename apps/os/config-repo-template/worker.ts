@@ -2,14 +2,19 @@ import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
   itxProjectStream,
-  type DynamicWorkerRef,
   type StreamEvent,
 } from "iterate/sdk";
-import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type StreamProcessorRegistry,
+  type StreamSubscriberWakeRequest,
+  type StreamSubscriberWakeResponse,
+} from "iterate/processors";
 import { processGithubReviewEvent } from "./github-reviews.ts";
 import {
-  GUESTBOOK_CREATED_IDEMPOTENCY_KEY,
+  GUESTBOOK_APP_REF,
   GUESTBOOK_STREAM_PATH,
+  guestbookCreationEvents,
   GuestbookProcessor,
 } from "./guestbook.ts";
 
@@ -42,24 +47,6 @@ const GITHUB_REVIEWS = {
 // dispatch — any getter or method you add becomes a capability surface), and
 // `fetchDynamicWorker` (HTTP into sibling workers, WebSockets included). Env
 // defaults to `{ ITX: ItxBinding }`, the one binding the platform supplies.
-
-// One declarative ref for the guestbook host, shared by the HTTP route
-// (fetchDynamicWorker) and the event poke (project.workers.get): the same
-// Durable Object either way, addressed by its durableWorkerKey.
-const GUESTBOOK_APP_REF = {
-  type: "stateful",
-  path: "/",
-  className: "GuestbookApp",
-  durableWorkerKey: "app-guestbook",
-  source: {
-    files: { type: "repo", repoPath: "/repos/config" },
-    options: { entryPoint: "worker.ts" },
-  },
-} satisfies DynamicWorkerRef;
-
-type GuestbookHostApi = {
-  wakeStreamProcessors(input: { projectId: string }): Promise<void>;
-};
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
@@ -140,24 +127,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         } catch {}
       }
     }
-    if (event.path === GUESTBOOK_STREAM_PATH) {
-      // Wake the guestbook host: the platform already delivers every project
-      // event to THIS worker (at-least-once, per-stream order), and the
-      // host's runner pulls the journal itself — the poke is only a hint, so
-      // a missed one is healed by the next. Throwing here holds this
-      // stream's checkpoint and the batch redelivers, which retries the poke.
-      const itx = await this.env.ITX.get();
-      try {
-        const { projectId } = await itx.__describe();
-        await itx.workers
-          .get<GuestbookHostApi>(GUESTBOOK_APP_REF)
-          .wakeStreamProcessors({ projectId });
-      } finally {
-        try {
-          itx[Symbol.dispose]?.();
-        } catch {}
-      }
-    }
+    // The guestbook needs no lane here: its events reach GuestbookApp through
+    // the durable WAKE subscription its creation batch configures (see
+    // guestbookCreationEvents) — the stream spine dials the app directly.
   }
 }
 
@@ -274,16 +246,18 @@ function escapeHtml(text: string): string {
 // project stream at /guestbook, driven by the platform's own processor
 // machinery (`iterate/processors`; the processor + contract live in
 // guestbook.ts). This Durable Object is only the HOST: it wires a registry to
-// an itx-dialed stream handle, and the ProjectWorker above pokes it whenever
-// guestbook events land (`wakeStreamProcessors`) — the runner then pulls the
-// journal itself, folds, and lets the processor emit its milestone facts.
+// an itx-dialed stream handle, and the stream's own delivery spine wakes it —
+// the creation batch (guestbookCreationEvents) configures a durable wake
+// subscription whose expression names this app's `processor` getter, so the
+// platform performs the same handshake here that it performs against its own
+// domain Durable Objects and pushes event frames straight into the runner.
 // Delete this object's storage and replay rebuilds everything.
 export class GuestbookApp extends IterateDurableObject {
   #host: { guestbook: GuestbookProcessor; registry: StreamProcessorRegistry } | undefined;
 
   // Hosting is constructed lazily, not in the constructor: the registry and
   // the processor's provenance stamps need the owning project's id, which
-  // arrives with the first poke or is read from __describe on first fetch.
+  // arrives with the wake request or is read from __describe on first fetch.
   #ensureHost(projectId: string): {
     guestbook: GuestbookProcessor;
     registry: StreamProcessorRegistry;
@@ -304,11 +278,24 @@ export class GuestbookApp extends IterateDurableObject {
     return this.#host;
   }
 
-  /** The ProjectWorker's poke lane: pull this host's runner to the journal
-   * head. Only a hint — delivery correctness lives in the runner's own
-   * cursor, so a missed poke is healed by the next one. */
-  async wakeStreamProcessors(input: { projectId: string }): Promise<void> {
-    await this.#ensureHost(input.projectId).registry.catchUp("guestbook");
+  /** The wake door the stream spine dials — the subscription's persisted
+   * expression is `workers.get(ref).processor.wakeStreamSubscriber`, which
+   * the platform's dynamic capability dispatch flattens into an
+   * invokeCapability walk that lands here. The request carries the stream's
+   * coordinates, so the host can construct itself before answering the
+   * handshake (checkpoint + a live sink the stream then delivers frames to). */
+  get processor() {
+    return {
+      wakeStreamSubscriber: async (
+        request: StreamSubscriberWakeRequest,
+      ): Promise<StreamSubscriberWakeResponse> => {
+        if (request.stream.projectId === null) {
+          throw new Error("the guestbook subscribes on project streams only");
+        }
+        const { registry } = this.#ensureHost(request.stream.projectId);
+        return await registry.wakeStreamSubscriber(request);
+      },
+    };
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -323,27 +310,20 @@ export class GuestbookApp extends IterateDurableObject {
         const name = String(form.get("name") ?? "").trim();
         const message = String(form.get("message") ?? "").trim();
         if (name !== "" && message !== "") {
-          // One atomic batch: the idempotency-keyed birth (every signer
-          // offers it; the stream dedupes to a single created event) plus
-          // this entry. Raw appends — the app is the CREATOR here; the
-          // processor only ever emits milestone facts.
-          await project.streams.get(GUESTBOOK_STREAM_PATH).append(
-            {
-              type: "events.iterate.com/guestbook/created",
-              payload: { config: { title: "Guestbook" } },
-              idempotencyKey: GUESTBOOK_CREATED_IDEMPOTENCY_KEY,
-            },
-            {
-              type: "events.iterate.com/guestbook/entry-signed",
-              payload: { message, name },
-              idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
-            },
-          );
+          // One atomic batch: the idempotency-keyed creation events (birth +
+          // wake subscription — every signer offers them; the stream dedupes
+          // to one of each) plus this entry. Raw appends — the app is the
+          // CREATOR here; the processor only ever emits milestone facts.
+          await project.streams.get(GUESTBOOK_STREAM_PATH).append(...guestbookCreationEvents(), {
+            type: "events.iterate.com/guestbook/entry-signed",
+            payload: { message, name },
+            idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
+          });
         }
         return new Response(null, { headers: { location: `${prefix}/` }, status: 303 });
       }
 
-      // Read-your-writes before every render: the poke lane is asynchronous,
+      // Read-your-writes before every render: wake delivery is asynchronous,
       // so pull the runner to head, then read the fold through the
       // registry's runner-backed snapshot.
       await registry.catchUp("guestbook");
