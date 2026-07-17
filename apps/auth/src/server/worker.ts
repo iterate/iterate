@@ -4,6 +4,10 @@ import type {
   InternalIntrospectOAuthAccessTokenInput,
   ProjectInput,
 } from "@iterate-com/auth-contract";
+import type {
+  MintProjectAppSessionInput,
+  ValidateProjectAppSessionInput,
+} from "@iterate-com/auth-contract/worker";
 import { AuthWorker as AuthWorkerContract } from "@iterate-com/auth-contract/worker";
 import {
   OAUTH_RESOURCE_PARAMETER,
@@ -27,6 +31,10 @@ import type { CloudflareEnv } from "./env.ts";
 import { appendSetCookieHeaders, resolveAuthLogoutReturnTo } from "./logout.ts";
 import { makeAuthorizationResponseIssuerOptional } from "./oauth-metadata.ts";
 import { introspectAccessToken } from "./oauth-token-introspection.ts";
+import {
+  mintProjectAppSession as mintProjectAppSessionToken,
+  validateProjectAppSession as validateProjectAppSessionToken,
+} from "./project-app-session.ts";
 import {
   createProjectForOrganization,
   getProjectBySlug,
@@ -203,6 +211,14 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
     return listProjectsForUser(input, db);
   }
 
+  mintProjectAppSession(input: MintProjectAppSessionInput) {
+    return mintProjectAppSessionToken(input, projectAppSessionDependencies());
+  }
+
+  validateProjectAppSession(input: ValidateProjectAppSessionInput) {
+    return validateProjectAppSessionToken(input, projectAppSessionDependencies());
+  }
+
   mintProjectId() {
     return mintProjectId();
   }
@@ -214,4 +230,12 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
       issuer: `${config.authAppOrigin.replace(/\/+$/, "")}/api/auth`,
     });
   }
+}
+
+function projectAppSessionDependencies() {
+  return {
+    secret: config.betterAuthSecret.exposeSecret(),
+    userHasProject: async ({ projectId, userId }: { projectId: string; userId: string }) =>
+      (await listProjectsForUser({ userId }, db)).some((project) => project.id === projectId),
+  };
 }
