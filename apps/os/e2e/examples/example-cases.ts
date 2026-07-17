@@ -216,14 +216,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     vars: ({ marker }) => ({ path: `/repl/ephemeral-demo-${marker}` }),
     assert: (result, _ctx, expect) => {
       const shaped = result as {
+        doneOffset: number;
         tickOffset: number;
         defaultOffsets: number[];
         rawOffsets: number[];
       };
-      // Consecutive offsets; the ephemeral tick is excluded from the default
-      // read and present (flagged position first) in the raw read.
-      expect(shaped.defaultOffsets).toEqual([shaped.tickOffset + 1]);
-      expect(shaped.rawOffsets).toEqual([shaped.tickOffset, shaped.tickOffset + 1]);
+      // The ephemeral tick is excluded from the default read and present in
+      // the raw read. Platform lifecycle facts may occupy intervening offsets.
+      expect(shaped.defaultOffsets).toEqual([shaped.doneOffset]);
+      expect(shaped.rawOffsets).toEqual([shaped.tickOffset, shaped.doneOffset]);
     },
   },
   "run-script": {

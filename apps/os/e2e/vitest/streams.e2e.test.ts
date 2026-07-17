@@ -7,10 +7,6 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
-import {
-  POSTHOG_SUBSCRIPTION_KEY,
-  posthogSubscriptionEvent,
-} from "../../src/domains/integrations/posthog.ts";
 import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -19,6 +15,22 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
 const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
+const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
+const EXPECTED_POSTHOG_SUBSCRIPTION = {
+  type: "events.iterate.com/stream/subscription-configured",
+  idempotencyKey: "iterate-platform-posthog-subscription-v1",
+  payload: {
+    subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+    description: "Iterate's first-party, all-event PostHog feed",
+    delivery: {
+      mode: "push",
+      expression: ["integrations", "posthog", "processEventBatch"],
+    },
+    deliver: "all",
+    includeEphemeral: true,
+    onPoison: "park",
+  },
+} as const;
 
 type CoreStreamState = {
   eventCount: number;
@@ -117,9 +129,9 @@ test("stream birth installs the first-party PostHog subscription through itx.pro
   );
 
   expect(configuration).toMatchObject({
-    idempotencyKey: posthogSubscriptionEvent().idempotencyKey,
-    payload: posthogSubscriptionEvent().payload,
-    type: posthogSubscriptionEvent().type,
+    idempotencyKey: EXPECTED_POSTHOG_SUBSCRIPTION.idempotencyKey,
+    payload: EXPECTED_POSTHOG_SUBSCRIPTION.payload,
+    type: EXPECTED_POSTHOG_SUBSCRIPTION.type,
   });
 });
 

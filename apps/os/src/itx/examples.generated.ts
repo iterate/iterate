@@ -135,16 +135,26 @@ const [tick] = await stream.append({
 });
 
 // The durable truth is its own ordinary event — THIS is what processors fold.
+// Platform lifecycle facts may commit between these two appends, so select
+// the product event types rather than assuming adjacent raw offsets.
 const [done] = await stream.append({
   type: "events.iterate.repl/work-completed",
   payload: { result: "ok" },
 });
 
-const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
-const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
+const eventTypes = [
+  "events.iterate.repl/progress-ticked",
+  "events.iterate.repl/work-completed",
+];
+const defaults = await stream.getEvents({ afterOffset: tick.offset - 1, eventTypes });
+const raw = await stream.getEvents({
+  afterOffset: tick.offset - 1,
+  eventTypes,
+  includeEphemeral: true,
+});
 return {
   tickOffset: tick.offset, // ephemeral rows consume offsets like any commit
-  doneOffset: done.offset, // the durable event landed right after it
+  doneOffset: done.offset,
   defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
   rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]
 };
