@@ -95,14 +95,16 @@ the project-controlled repo path:
 /repos/team/service -> /agents/repos/team/service/pr/42
 ```
 
-Only `pull_request:opened` calls the idempotent, zero-argument
-`agent.create()`. The router then uses `agent.append(...)` for the stable
-policy and presentation metadata consumed by the Agent processor. It appends
-the typed GitHub binding, raw webhook copy, and referencing task atomically
-through `agent.stream.append` because the binding and webhook intentionally sit
-outside the Agent processor's consumed vocabulary. Later events require the
-canonical agent birth event, so they cannot create an agent by accident. A
-valid delivery can append the following facts to the PR stream:
+Only `pull_request:opened` or a trusted explicit mention calls the idempotent,
+zero-argument `agent.create()`. The router then uses `agent.append(...)` for
+the stable policy and presentation metadata consumed by the Agent processor.
+It appends the GitHub binding, raw webhook copy, and referencing task
+atomically through `agent.stream.append`; the raw API is needed because the
+webhook sits outside the Agent processor's vocabulary, while valid binding and
+context events retain exactly the same reducer meaning through either append
+API. Other later events require the canonical agent birth event, so they cannot
+create an agent by accident. A valid delivery can append the following groups
+of facts to the PR stream:
 
 - a keyed, versioned developer-policy context item;
 - stable presentation metadata and a GitHub pull-request binding;
@@ -166,11 +168,13 @@ A newly created PR comment, submitted review, or created review comment can
 wake the agent when it mentions the receiving App slug and GitHub identifies
 its non-bot author as an owner, member, or collaborator. The task then calls
 `repos.checkCollaborator` through the configured Octokit connection before
-following the referenced request. GitHub text remains untrusted input.
+following the referenced request. If the PR agent does not exist yet, the
+trusted mention creates it first. GitHub text remains untrusted input.
 
 ## Proof-of-concept limits
 
-- PRs opened before the worker observed `opened` are not backfilled.
+- PRs opened before the worker observed `opened` are backfilled only by a
+  trusted explicit mention.
 - Globs, suppressions, and findings are enforced by the agent contract, not a
   deterministic validation engine.
 - Reviews are advisory `COMMENT` reviews; there is no Check Run, commit status,

@@ -222,7 +222,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(task).toContain("<!-- iterate-ai-lint:101:policy:1:head:head-abc -->");
   });
 
-  it("creates only from pull_request:opened", async () => {
+  it("does not create from an unmentioned later delivery", async () => {
     const test = harness();
 
     await handleGithubPullRequestWebhook(
@@ -354,6 +354,24 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
     expect(ignored.appendBatches[0]?.events).toHaveLength(2);
+  });
+
+  it("creates the pull-request agent from a trusted mention", async () => {
+    const test = harness();
+    await handleGithubPullRequestWebhook(
+      test.itx,
+      webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
+    );
+
+    expect(test.create).toHaveBeenCalledOnce();
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+      payload: {
+        actor: { login: "jonas", senderType: "User", type: "github" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+      type: "events.iterate.com/agents/context-added",
+    });
   });
 
   it("creates draft history without waking a review", async () => {
