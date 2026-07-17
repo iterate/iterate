@@ -15,12 +15,12 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@iterate-com/ui
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { useItx, useItxQuery } from "iterate/react";
 import {
   listGithubConnections,
   type InstallationRepo,
 } from "~/components/github-installation-repos.ts";
 import { InstallationRepoList } from "~/components/github-installation-repos.tsx";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 const REPO_PATH_PATTERN = /^\/repos\/.+$/;
 

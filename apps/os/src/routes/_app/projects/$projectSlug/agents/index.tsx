@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { useItx } from "iterate/react";
 import { AgentRosterList } from "~/components/agent-roster.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTree } from "~/components/stream-tree.tsx";
@@ -11,7 +12,6 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx } from "~/itx/itx-react.tsx";
 
 const AGENTS_ROOT = "/agents";
 

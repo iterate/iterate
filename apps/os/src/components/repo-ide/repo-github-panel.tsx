@@ -5,6 +5,7 @@ import { ExternalLinkIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { useItx, useItxQuery, useLiveState } from "iterate/react";
 import type { RepoProcessorState } from "../../domains/repos/repo-processor-contract.ts";
 import {
   GITHUB_UI_FORCE_PULL_DEPTH,
@@ -18,7 +19,6 @@ import {
   type InstallationRepo,
 } from "~/components/github-installation-repos.ts";
 import { InstallationRepoPicker } from "~/components/github-installation-repos.tsx";
-import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
 type Conflict = {
   owner: string;

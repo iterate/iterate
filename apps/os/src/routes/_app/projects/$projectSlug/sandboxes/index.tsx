@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Copy, ExternalLink, SquareTerminal } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { useItx } from "iterate/react";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import {
@@ -17,7 +18,6 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx } from "~/itx/itx-react.tsx";
 
 const SANDBOXES_ROOT = "/sandboxes";
 

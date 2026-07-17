@@ -12,7 +12,7 @@ It combines:
   the public contract (generated from the RpcTarget classes + zod schemas).
 - **The dashboard** — TanStack Start, TanStack Router, and TanStack Query for
   the authenticated UI (`src/routes/`, `src/components/`), talking to the
-  itx through the React hooks (`src/itx/itx-react.tsx`).
+  itx through the React hooks (`iterate/react` — see `docs/frontend-development.md`).
 - **The Iterate Auth Worker** for sessions, organizations, and project claims
   — and as the **project directory**: OS has no database of its own; slug →
   project id resolution goes through the auth worker with a `PROJECT_DIRECTORY`
@@ -181,7 +181,8 @@ Project-scoped and platform-wide operator browser sessions are documented in
   processors), `worker.ts` (the product entry), and `builder.ts`,
   `typechecker.ts`, `script-executor.ts` (sidecar entries). See
   [src/README.md](./src/README.md).
-- `src/itx/` — the client-side itx surface: `itx-react.tsx` (browser hooks),
+- `src/itx/` — client-side itx support (browser hooks now live in the `iterate`
+  package — `iterate/client` + `iterate/react`):
   `browser-repl.ts` (REPL compiler), `examples.ts` (the example catalogue),
   `e2e/` (the example matrix). itx itself lives in `src/`.
 - `src/config.ts` — the `AppConfig` runtime config schema.

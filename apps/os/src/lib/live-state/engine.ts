@@ -1,11 +1,10 @@
+import { diff, type LiveUpdate } from "iterate/live-state";
 import {
   disposeIgnoredRpcResult,
   isThenable,
   retainCallback,
   type RetainedCallback,
 } from "../rpc/retain.ts";
-import { diff } from "./diff.ts";
-import type { LiveUpdate } from "./protocol.ts";
 
 /** Handle returned by `LiveState.subscribe` — the ownership + liveness surface for one subscriber. */
 export type LiveStateSubscription = {

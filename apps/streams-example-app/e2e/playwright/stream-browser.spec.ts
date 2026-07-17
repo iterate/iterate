@@ -45,6 +45,30 @@ test("stream page appends through the shared browser mirror", async ({ page }) =
   await expect(eventMeta(page, type).first()).toBeVisible();
 });
 
+test("collapsed event rows keep a stable height with long metadata", async ({ page }) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  const type = `events.iterate.com/debug/${"long-segment/".repeat(24)}`;
+  await appendComposerEvent(page, {
+    type,
+    payload: { streamPath, value: crypto.randomUUID() },
+  });
+
+  const metadata = eventMeta(page, type).first();
+  await expect(metadata).toBeVisible();
+  await expect
+    .poll(() =>
+      metadata.evaluate((element) => {
+        const row = element.closest('[data-testid="virtual-row"]');
+        if (!(row instanceof HTMLElement)) throw new Error("event metadata must be inside a row");
+        return Math.round(row.getBoundingClientRect().height);
+      }),
+    )
+    .toBe(40);
+});
+
 // The pre-itx-v4 hosted circuit-breaker processor (via the removed
 // StreamProcessorRunner DO) is gone; on itx the pause door is core
 // stream behavior, driven directly through the sidebar's pause/resume gate.
@@ -813,6 +837,9 @@ test("split view disposes a replaced same-stream pane and keeps leadership", asy
 test("large streams stay virtualized and can scroll from tail to earliest rows", async ({
   page,
 }) => {
+  // The narrowest desktop width keeps the sidebar open and puts maximum
+  // wrapping pressure on the virtual row metadata columns.
+  await page.setViewportSize({ width: 761, height: 720 });
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();

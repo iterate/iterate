@@ -69,6 +69,10 @@ export default defineConfig({
   },
   resolve: {
     tsconfigPaths: true,
+    // apps/os consumes the workspace `iterate` package as TS source; dedupe
+    // pins the React trio to ONE instance even if a resolver walks into the
+    // linked package's own node_modules (two reacts = invalid-hook-call).
+    dedupe: ["react", "react-dom", "@tanstack/react-query"],
   },
   server: {
     host,

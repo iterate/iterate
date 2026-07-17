@@ -120,16 +120,16 @@ export async function runApprovalCli(input: {
           message: messageFor(input.projectId, offset, payload),
           request: payload,
         });
-        if (verdict.decision === "ignored") {
+        if (verdict.decision === "granted") {
+          signature = verdict.signature;
+        } else if (verdict.decision === "ignored") {
           prompts.log.info(`Ignored #${offset} — it can be answered elsewhere or expire.`);
           return "next";
-        }
-        if (verdict.decision === "rejected") {
+        } else {
           await reject(stream, offset);
           prompts.log.warn(`Rejected #${offset}.`);
           return "next";
         }
-        signature = verdict.signature;
       } else {
         const approved = await prompts.confirm({
           message: `Approve ${payload.method} ${safeHost(payload.url)}?`,

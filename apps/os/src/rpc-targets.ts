@@ -28,6 +28,7 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import type { LiveUpdate } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -325,7 +326,6 @@ import type {
 } from "./domains/streams/stream-subscribers.ts";
 import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
 import type { StreamProcessorRegistry } from "./domains/streams/stream-processor-registry.ts";
-import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";

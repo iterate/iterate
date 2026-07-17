@@ -3,7 +3,7 @@
 
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
-import { connectItx } from "../../src/itx-client.ts";
+import { connectItx } from "iterate/node";
 import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
