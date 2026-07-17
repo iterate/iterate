@@ -1,4 +1,4 @@
-import { StreamEvent, type StreamEvent as StreamEventValue } from "~/domains/streams/schemas.ts";
+import { StreamEvent, type StreamEvent as StreamEventValue } from "iterate/processors";
 import {
   ScriptExecutionSettlement,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,

@@ -3,8 +3,8 @@
 // (exact-`true` conditions, "*" wildcard, intersection), and the compile cache.
 
 import { describe, expect, it, test } from "vitest";
+import type { StreamEvent } from "iterate/processors";
 import { compileEventSelector, compileJsonataExpression, EventSelector } from "./event-selector.ts";
-import type { StreamEvent } from "./schemas.ts";
 
 function evt(type: string, payload?: Record<string, unknown>): StreamEvent {
   return {

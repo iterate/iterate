@@ -3,7 +3,7 @@
 // sibling of SlackProcessorContract.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processors";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
@@ -11,6 +11,10 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 const TelegramBirthCertificate = z.object({
   config: z.object({ connection: z.string() }),
 });
+
+export const TelegramAllowedUserIds = z
+  .array(z.string().trim().regex(/^\d+$/, "Telegram user IDs contain digits only"))
+  .transform((ids) => [...new Set(ids)]);
 
 export const TelegramAgentBirthCertificate = z.object({
   config: z.object({
@@ -27,6 +31,7 @@ export type TelegramAgentBirthCertificate = z.output<typeof TelegramAgentBirthCe
 const SessionStart = z.object({
   date: z.number(),
   messageId: z.number(),
+  senderId: z.string(),
   sessionPath: z.string(),
 });
 
@@ -65,10 +70,18 @@ const SessionStart = z.object({
  */
 export const TelegramProcessorContract = defineProcessorContract({
   slug: "telegram",
-  version: "0.2.0",
+  version: "0.4.0",
   description: "Routes raw Telegram webhook updates into Telegram-backed agent streams.",
   stateSchema: z.object({
     birthCertificate: TelegramBirthCertificate.nullable().default(null),
+    /** False only while replaying a legacy journal that predates access
+     * policy events. The first policy filters that reconstructed session
+     * history to newly authorized senders; subsequent policy edits do not
+     * erase sessions created while those senders were authorized. */
+    accessPolicyConfigured: z.boolean().default(false),
+    /** Immutable Telegram user ids authorized to reach project agents through
+     * this bot connection. Empty is deliberately deny-all. */
+    allowedUserIds: z.array(z.string()).default([]),
     /**
      * Per-chat `/new` session starts, oldest first, keyed by the chat's path
      * suffix (`chat-{chatId}` or `chat-{chatId}/topic-{threadId}`). The last
@@ -91,6 +104,19 @@ export const TelegramProcessorContract = defineProcessorContract({
         {
           description: "A Telegram connection router is born for one bot connection.",
           payload: { config: { connection: "support-bot" } },
+        },
+      ],
+    },
+    "events.iterate.com/telegram/access-configured": {
+      description:
+        "Replaces the Telegram user-id allowlist for this bot connection. Empty denies every inbound user.",
+      payloadSchema: z.object({
+        allowedUserIds: TelegramAllowedUserIds,
+      }),
+      examples: [
+        {
+          description: "Two Telegram users may talk to this project bot.",
+          payload: { allowedUserIds: ["555123", "777456"] },
         },
       ],
     },
@@ -162,6 +188,7 @@ export const TelegramProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/telegram/created",
+    "events.iterate.com/telegram/access-configured",
     "events.iterate.com/telegram/webhook-received",
     "events.iterate.com/telegram/message-sent",
   ],

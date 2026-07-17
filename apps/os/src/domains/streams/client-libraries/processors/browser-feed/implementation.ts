@@ -4,8 +4,8 @@ import {
   type AgentUiActivity,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { StreamProcessor } from "../../../stream-processor.ts";
-import type { StreamEvent } from "../../../schemas.ts";
+import { StreamProcessor } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import { ensureBrowserProcessorProgressSchema } from "../../browser/processor-state-storage.ts";
 import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";

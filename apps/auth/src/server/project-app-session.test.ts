@@ -7,70 +7,70 @@ const projectId = "prj_demo";
 const secret = "test-project-app-session-secret";
 
 describe("project app sessions", () => {
-  it("mints an origin-scoped token and re-checks membership on validation", async () => {
-    let member = true;
-    const userHasProject = async (input: { projectId: string; userId: string }) => {
+  it("mints an origin-scoped token and re-checks access on validation", async () => {
+    let canAccess = true;
+    const userCanAccessProject = async (input: { projectId: string; userId: string }) => {
       assert.deepEqual(input, { projectId, userId: "usr_one" });
-      return member;
+      return canAccess;
     };
     const issued = await mintProjectAppSession(
       { audience, projectId, userId: "usr_one" },
-      { secret, userHasProject },
+      { secret, userCanAccessProject },
     );
     assert.ok(issued);
 
     const valid = await validateProjectAppSession(
       { audience, projectId, token: issued.token },
-      { secret, userHasProject },
+      { secret, userCanAccessProject },
     );
     assert.ok(valid?.expiresAt && valid.expiresAt > Date.now() / 1000);
 
-    member = false;
+    canAccess = false;
     assert.equal(
       await validateProjectAppSession(
         { audience, projectId, token: issued.token },
-        { secret, userHasProject },
+        { secret, userCanAccessProject },
       ),
       null,
     );
   });
 
-  it("does not mint for a non-member", async () => {
+  it("does not mint without project access", async () => {
     assert.equal(
       await mintProjectAppSession(
         { audience, projectId, userId: "usr_outsider" },
-        { secret, userHasProject: async () => false },
+        { secret, userCanAccessProject: async () => false },
       ),
       null,
     );
   });
 
   it("rejects a token outside its project or app origin", async () => {
-    const userHasProject = async () => true;
+    const userCanAccessProject = async () => true;
     const issued = await mintProjectAppSession(
       { audience, projectId, userId: "usr_one" },
-      { secret, userHasProject },
+      { secret, userCanAccessProject },
     );
     assert.ok(issued);
 
     assert.equal(
       await validateProjectAppSession(
         { audience: "https://other.iterate.app", projectId, token: issued.token },
-        { secret, userHasProject },
+        { secret, userCanAccessProject },
       ),
       null,
     );
     assert.equal(
       await validateProjectAppSession(
         { audience, projectId: "prj_other", token: issued.token },
-        { secret, userHasProject },
+        { secret, userCanAccessProject },
       ),
       null,
     );
     assert.equal(
       await validateProjectAppSession(
         { audience, projectId, token: "not-a-token" },
-        { secret, userHasProject },
+        { secret, userCanAccessProject },
       ),
       null,
     );
