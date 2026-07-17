@@ -24,6 +24,10 @@ If you've really come up against a case where you truly think it's better to add
 
 For common developer pitfalls, instead of littering your test code with defensive try/catch statements and custom selectors for app error UI, just add the `data-type="error"` attribute to relevant UI elements. Then, the `ui-error-reporter` plugin will pick up any errors on screen automatically (including toasts rendered using the `sonner` library). The plugin will find elements annotated in this way and include their text content in error reports, so agents and humans will quickly be able to get an indication of what went wrong.
 
+## Videos
+
+When features are exercised by playwright specs, you can capture videos of them simply by running `VIDEO_MODE=1 pnpm spec -g whichever-test`. This will capture a video annotated with mouse movements, click pointers, dead-air speedup, and brief pauses for meaningful actions. It uses [middlewright](https://github.com/iterate/middlewright).
+
 ## Screenshots
 
 Set `PLAYWRIGHT_SCREENSHOT` to semicolon-separated regular expressions matched
