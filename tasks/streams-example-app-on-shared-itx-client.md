@@ -1,5 +1,5 @@
 ---
-state: todo
+state: done
 priority: medium
 size: small
 dependsOn: []
@@ -8,16 +8,21 @@ tags: [streams-example-app, itx, iterate-package, consolidation]
 
 # streams-example-app: drop the hand-rolled dial for the shared itx client
 
-`apps/streams-example-app/src/lib/stream-rpc.ts` (~67 LOC),
-`capnweb-stream-browser-client.ts`, and `stream-connection.ts` re-implement
-pieces the `iterate` package now owns: `newWebSocketRpcSession` dialing, the
-ws/wss protocol swap (`apiWebSocketUrl` in the package), and
-connecting/connected/closed/error status plumbing.
+**Resolved 2026-07-17 — mostly a false positive; the real slice shipped.**
 
-Replace with `iterate/client` (or the react hooks where the app is React) so
-the example app demonstrates the blessed way to connect — it is example code,
-so it should model the pattern we want copied. Its e2e
-(`e2e/vitest/stream-capnweb.test.ts`, `stream-processor-node.test.ts`) is the
-proof lane.
+On contact with the code, the "hand-rolled dial" turned out to be deliberate
+playground scaffolding, not a duplicate of the shared client: the app never
+speaks the OS `/api` session surface. Its worker serves its OWN bare capnweb
+endpoint (`/api/streams`) exposing `PlaygroundStream` — the public `Stream`
+contract plus playground-only `kill`/`reset` operator verbs — and its
+connection modules exist to demo exactly that: a raw per-stream socket with a
+wire-frame inspector tapping in/out frames. No `authenticate()`, no Session,
+no credentials — so the `iterate/client` keeper (whose whole job is the
+authenticated one-session socket) is the wrong shape here BY DESIGN, and the
+~10-line dial-and-wrap is the demonstration, not debt.
 
-Context: PR #2063's consolidation-sweep findings.
+What WAS genuinely shared-pattern shipped in the resolving PR: the app's five
+`~/itx-api.generated.ts` cross-app type imports now come from `iterate/sdk`
+(type-only, erased at build). The `~` alias into `apps/os/src` remains ONLY
+for the browser-mirror machinery (`domains/streams/client-libraries/…`),
+which is gated on `tasks/stream-mirror-collapse-vs-move.md`.
