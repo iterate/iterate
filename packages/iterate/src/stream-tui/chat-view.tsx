@@ -6,7 +6,6 @@
  * shared clock store.
  */
 import { StyledText, bg, fg } from "@opentui/core";
-import { COLORS } from "./chat-colors.ts";
 import { useCallback, useSyncExternalStore } from "react";
 import type {
   AgentUiActivity,
@@ -14,6 +13,7 @@ import type {
   AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { ItxSubscriptionStatus } from "../itx/itx-react.ts";
+import { COLORS } from "./chat-colors.ts";
 import {
   formatActivitySummary,
   formatLiveActivityLabel,
