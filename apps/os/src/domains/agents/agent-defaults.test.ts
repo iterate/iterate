@@ -64,7 +64,7 @@ describe("agentCreationForPath", () => {
     const paths = [
       "/agents/email/t42",
       "/agents/onboarding",
-      `/agents/repos/g~${"0".repeat(64)}/pull-requests/7`,
+      "/agents/repos/config/pr/7",
       "/agents/slack/main/C123/ts-99/helper",
     ];
 

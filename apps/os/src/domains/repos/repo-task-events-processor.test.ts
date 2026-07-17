@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
-import {
-  GITHUB_LINK,
-  MemoryStream,
-  MemoryStreamNetwork,
-  webhookPayload,
-} from "./github-agent-test-helpers.ts";
+import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import type { RepoCommittedFileChange } from "./repo-task-events.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -59,8 +54,53 @@ const REPO_READY = {
 
 const GITHUB_LINK_CONFIGURED = {
   type: "events.iterate.com/repo/github-link-configured" as const,
-  payload: GITHUB_LINK,
+  payload: {
+    connection: "install-789",
+    installationId: "789",
+    owner: "acme",
+    repo: "widgets",
+    repositoryId: 101,
+  },
 };
+
+function githubPush(input?: {
+  connection?: string;
+  installationId?: string;
+  provenance?: boolean;
+  repositoryId?: number;
+  subscriptionKey?: string;
+}) {
+  const connection = input?.connection ?? "install-789";
+  return {
+    type: "events.iterate.com/github/webhook-received" as const,
+    payload: {
+      body: {
+        ref: "refs/heads/main",
+        before: "before123",
+        after: "after456",
+        repository: { id: input?.repositoryId ?? 101 },
+      },
+      delivery: { id: "delivery-1", name: "push" },
+      installationId: input?.installationId ?? "789",
+    },
+    ...(input?.provenance === false
+      ? {}
+      : {
+          source: {
+            crossPostedFrom: [
+              {
+                subscriptionKey: input?.subscriptionKey ?? "github-repo:/repos/config",
+                createdAt: "2026-07-17T12:00:00.000Z",
+                offset: 12,
+                path: `/integrations/github/${connection}`,
+                projectId: "prj_1",
+                type: "events.iterate.com/github/webhook-received",
+              },
+            ],
+          },
+        }),
+  };
+}
 
 function artifactPush(branch: string) {
   return {
@@ -96,13 +136,7 @@ describe("RepoProcessor task change events", () => {
     const taskChangesForArtifactPush = vi.fn(async () => []);
     const repo = newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, {
-      type: "events.iterate.com/github/webhook-received",
-      payload: webhookPayload(
-        { ref: "refs/heads/main", before: "before123", after: "after456" },
-        "push",
-      ),
-    });
+    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, githubPush());
     await repo.runner.catchUp();
 
     expect(syncFromGithubPush).not.toHaveBeenCalled();
@@ -145,6 +179,30 @@ describe("RepoProcessor task change events", () => {
     expect(refoldSync).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["a direct unprovenanced event", { provenance: false }],
+    ["the wrong connection", { connection: "install-other" }],
+    ["the wrong installation", { installationId: "456" }],
+    ["the wrong repository", { repositoryId: 202 }],
+    ["the wrong subscription", { subscriptionKey: "userspace:other" }],
+  ])("does not import %s", async (_case, webhookInput) => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const syncFromGithubPush = vi.fn(async () => ({ commitOid: "github-head" }));
+    const repo = newRepoProcessor(stream, async () => [], syncFromGithubPush);
+
+    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, githubPush(webhookInput));
+    await repo.runner.catchUp();
+    await repo.runner.catchUp();
+
+    expect(syncFromGithubPush).not.toHaveBeenCalled();
+    expect(
+      stream.events.some(
+        (event) => event.type === "events.iterate.com/repo/github-import-requested",
+      ),
+    ).toBe(false);
+  });
+
   it("journals an import failure without pinning later repo events", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
@@ -154,13 +212,7 @@ describe("RepoProcessor task change events", () => {
     const taskChangesForArtifactPush = vi.fn(async () => []);
     const repo = newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, {
-      type: "events.iterate.com/github/webhook-received",
-      payload: webhookPayload(
-        { ref: "refs/heads/main", before: "before123", after: "after456" },
-        "push",
-      ),
-    });
+    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, githubPush());
     await repo.runner.catchUp();
     await repo.runner.catchUp();
     await vi.waitFor(() =>

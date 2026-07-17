@@ -744,7 +744,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** The current GitHub link, or null when this repo is not linked. */
   getGithubLink(): GithubRepoLink | null {
     const stored = this.ctx.storage.kv.get<unknown>(GITHUB_LINK_KV_KEY);
-    return isGithubLinkRecord(stored) ? stored : null;
+    if (stored === undefined) return null;
+    if (isGithubLinkRecord(stored)) return stored;
+    throw new Error("Stored GitHub link does not satisfy GithubRepoLink.");
   }
 
   // In both link verbs the journal append comes FIRST and the KV write last:
@@ -769,7 +771,12 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (link === null) return null;
     await this.#stream.append({
       type: "events.iterate.com/repo/github-unlinked",
-      payload: { connection: link.connection, owner: link.owner, repo: link.repo },
+      payload: {
+        connection: link.connection,
+        owner: link.owner,
+        repo: link.repo,
+        repositoryId: link.repositoryId,
+      },
     });
     this.ctx.storage.kv.delete(GITHUB_LINK_KV_KEY);
     return link;
@@ -1735,7 +1742,10 @@ function isGithubLinkRecord(value: unknown): value is GithubRepoLink {
     typeof record.connection === "string" &&
     typeof record.installationId === "string" &&
     typeof record.owner === "string" &&
-    typeof record.repo === "string"
+    typeof record.repo === "string" &&
+    typeof record.repositoryId === "number" &&
+    Number.isSafeInteger(record.repositoryId) &&
+    record.repositoryId > 0
   );
 }
 
