@@ -1,11 +1,12 @@
 import { slugify } from "@iterate-com/shared/slugify";
+import type { TestInfo } from "@playwright/test";
 import type { Plugin } from "middlewright";
 
 const ENVIRONMENT_VARIABLE = "PLAYWRIGHT_SCREENSHOT";
+const occurrencesByTest = new WeakMap<TestInfo, Map<string, number>>();
 
 export const screenshot = (): Plugin => {
   const matchers = parseMatchers(process.env[ENVIRONMENT_VARIABLE] || "");
-  const occurrences = new Map<string, number>();
 
   if (matchers.length === 0 || process.env.PWDEBUG) return { name: "screenshot" };
 
@@ -17,6 +18,8 @@ export const screenshot = (): Plugin => {
       const result = await next();
 
       if (matches) {
+        const occurrences = occurrencesByTest.get(context.testInfo) || new Map<string, number>();
+        occurrencesByTest.set(context.testInfo, occurrences);
         const locatorSlug = slugify(locatorDescription, { maxLength: 160 });
         const occurrence = (occurrences.get(locatorSlug) || 0) + 1;
         occurrences.set(locatorSlug, occurrence);
