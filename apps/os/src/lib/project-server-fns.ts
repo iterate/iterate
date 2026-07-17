@@ -20,7 +20,7 @@ import type { RequestContext } from "~/request-context.ts";
  *
  * These are deliberately minimal: the browser talks to the itx session
  * directly (`session.projects.list()` / `session.projects.create()` — see
- * ~/itx/itx-react.tsx consumers). What remains here is only what MUST run
+ * iterate/react consumers). What remains here is only what MUST run
  * server-side:
  * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
  * - `getRootProjectRedirectServerFn` — the root `/` redirect decision (SSR);
