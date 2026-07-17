@@ -170,9 +170,11 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   });
 
   // The deeper mount owns its subtree: reads route to the side repo, and the
-  // merged listing shows both repos' files.
+  // merged listing shows both repos' files (repos.create seeds the template,
+  // so the side mount carries those files too — assert containment).
   expect(await workspace.readFile("/side/side.md")).toBe("side repo truth");
-  expect(await workspace.glob("/side/**")).toEqual(["/side/side.md"]);
+  expect(await workspace.glob("/side/**")).toContain("/side/side.md");
+  expect(await workspace.glob("/side/**")).not.toContain("/worker.ts");
 
   // Writes under a read-only mount stay private and refuse to commit.
   await workspace.writeFile("/side/attempt.md", "not committable");
