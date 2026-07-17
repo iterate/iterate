@@ -18,13 +18,19 @@ import {
   type StreamProcessorRegistry,
 } from "../streams/stream-processor-registry.ts";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
-import { GITHUB_LINK } from "./github-agent-test-helpers.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const HOME = "/repos/config";
 const PROJECT_ID = "prj_1";
 const SLUG = RepoProcessorContract.slug;
+const GITHUB_LINK = {
+  connection: "install-789",
+  installationId: "789",
+  owner: "acme",
+  repo: "widgets",
+  repositoryId: 101,
+};
 
 const createdArtifact = {
   artifactName: "prj_1--L3JlcG9zL2NvbmZpZw",
