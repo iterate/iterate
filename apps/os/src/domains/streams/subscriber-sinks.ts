@@ -90,9 +90,8 @@ export function retainProcessEventBatch(
     onDeliveryError?: (error: unknown) => void;
     /**
      * Runs after the retained stub is disposed — the hook that lets a caller
-     * tie OTHER stubs' lifetimes to this sink's (the wake dial parks the
-     * loopback chain that carried the sink here, so the chain outlives every
-     * batch call but not the connection).
+     * tie the handshake's runtime-state and ping capabilities to this sink,
+     * so those sidecars outlive every batch call but not the connection.
      */
     onDisposed?: () => void;
   } = {},

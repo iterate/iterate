@@ -14,8 +14,8 @@ const started = { timeout: TUI_TEST_TIMEOUT_MS };
 
 // A fresh agent path per run: the project processor configures the agent
 // subscription on first append, so any /agents/* path is chattable.
-const agentPath = `/agents/tui-test-${Date.now()}`;
-const agentName = agentPath.slice("/agents/".length);
+const visibleAgentPath = "/agents/tui-test-";
+const agentPath = `${visibleAgentPath}${Date.now()}`;
 const projectId = process.env.OS_E2E_TUI_PROJECT_ID || "missing-os-tui-project";
 const testWithProject = process.env.OS_E2E_TUI_PROJECT_ID ? test : test.skip;
 const snapshotTest =
@@ -38,9 +38,12 @@ test.use({
 
 testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({ terminal }) => {
   // Wait for a UI-only marker first. The PTY echoes the launch command before
-  // OpenTUI enters alternate-screen mode, and that command contains agentName.
+  // OpenTUI enters alternate-screen mode, and that command contains agentPath.
   await expect(terminal.getByText("Message the agent", { strict: false })).toBeVisible(started);
-  await expect(terminal.getByText(agentName, { strict: false })).toBeVisible(visible);
+  // The 100-column header intentionally truncates the timestamped suffix. The
+  // stable path prefix proves the right agent rendered without asserting text
+  // that cannot fit in the viewport.
+  await expect(terminal.getByText(visibleAgentPath, { strict: false })).toBeVisible(visible);
 
   // The live subscription round trip completes (capnweb websocket + subscribe).
   await expect(terminal.getByText("live", { strict: false })).toBeVisible(visible);
@@ -66,7 +69,7 @@ testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({
   await expect(terminal.getByText("Message the agent", { strict: false })).toBeVisible(visible);
 
   const view = terminal.serialize().view;
-  expect(view).toContain(agentName);
+  expect(view).toContain(visibleAgentPath);
   expect(view).toContain(projectId);
   expect(view).toContain("●");
   expect(view).toContain("Message the agent");
@@ -75,7 +78,7 @@ testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({
 
 snapshotTest("captures a manual aesthetic snapshot", async ({ terminal }) => {
   await expect(terminal.getByText("Message the agent", { strict: false })).toBeVisible(visible);
-  await expect(terminal.getByText(agentName, { strict: false })).toBeVisible(visible);
+  await expect(terminal.getByText(visibleAgentPath, { strict: false })).toBeVisible(visible);
 
   terminal.submit("snapshot review message");
 
