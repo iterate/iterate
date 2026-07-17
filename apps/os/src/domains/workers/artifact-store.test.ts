@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFailureMessageFromError,
   KvWorkerBuildArtifactStore,
   WORKER_BUILD_ARTIFACT_SCHEMA_VERSION,
   type WorkerBuildArtifact,
@@ -23,6 +24,10 @@ class FakeKv {
     this.putOrder.push(key);
     this.putTtls.push(options?.expirationTtl);
     this.data.set(key, value);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.data.delete(key);
   }
 }
 
@@ -82,5 +87,43 @@ describe("KvWorkerBuildArtifactStore", () => {
     for (const key of kv.data.keys()) {
       expect(key.startsWith(`${PREFIX}/`)).toBe(true);
     }
+  });
+
+  it("a failed build clears the in-flight marker so callers never outwait a dead build", async () => {
+    const kv = new FakeKv();
+    await store(kv).markBuildInFlight("abc123");
+    expect(await store(kv).isBuildInFlight("abc123")).toBe(true);
+    await store(kv).clearBuildInFlight("abc123");
+    expect(await store(kv).isBuildInFlight("abc123")).toBe(false);
+  });
+
+  it("round-trips a build failure with a short TTL", async () => {
+    const kv = new FakeKv();
+    const failure = { at: "2026-07-17T00:00:00.000Z", commitOid: "c0ffee", message: "boom" };
+    expect(await store(kv).getBuildFailure("abc123")).toBeNull();
+    await store(kv).putBuildFailure("abc123", failure);
+    expect(await store(kv).getBuildFailure("abc123")).toEqual(failure);
+    // Deliberately short-lived: a transient failure must heal on its own.
+    expect(kv.putTtls[0]).toBeLessThanOrEqual(10 * 60);
+    expect(kv.putTtls[0]).toBeGreaterThan(0);
+  });
+
+  it("bounds failure messages — they travel in a response header per request", () => {
+    expect(buildFailureMessageFromError(new Error("short"))).toBe("short");
+    expect(buildFailureMessageFromError("not an error")).toBe("not an error");
+    const huge = buildFailureMessageFromError(new Error("x".repeat(100_000)));
+    expect(huge.length).toBeLessThan(3_000);
+    expect(huge).toContain("(truncated)");
+  });
+
+  it("round-trips the last-good pointer with cache-lifetime TTL", async () => {
+    const kv = new FakeKv();
+    const record = { at: "2026-07-17T00:00:00.000Z", buildKey: "abc123", commitOid: "c0ffee" };
+    expect(await store(kv).getLastGood("worker-x")).toBeNull();
+    await store(kv).putLastGood("worker-x", record);
+    expect(await store(kv).getLastGood("worker-x")).toEqual(record);
+    // The pointer must not outlive the artifacts it can point at, and must
+    // not be immortal either.
+    expect(kv.putTtls[0]).toBeGreaterThan(0);
   });
 });

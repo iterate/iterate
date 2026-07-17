@@ -20,11 +20,11 @@ import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
-import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import {
   WORKER_FETCH_DISPATCH_HEADER,
-  workerBuildingResponse,
+  workerBuildStatusResponse,
 } from "./domains/workers/worker-fetch-dispatch.ts";
+import { applyProjectWorkerOverlay } from "./domains/workers/worker-serve-overlay.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import {
   deploymentItxForInternal,
@@ -236,18 +236,24 @@ async function apiFetch(
       waitUntil: (promise) => ctx.waitUntil(promise),
     });
     try {
-      return await runner.fetch({
+      const response = await runner.fetch({
         buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
         ref,
         request: new Request(route.fetch.url, init),
         traceRole: "project_config",
       });
+      // HTML documents get the @iterate overlay (build status in the corner)
+      // injected from the serve header the runner just stamped.
+      return applyProjectWorkerOverlay(request, response);
     } catch (error) {
-      // A cold build (first use after a commit) shows a refreshing "building"
-      // page rather than hanging the request; the build keeps running in the
-      // builder worker and refreshes hit the artifact cache.
-      if (!isWorkerBuildInProgressError(error)) throw error;
-      return workerBuildingResponse();
+      // A first-ever build shows the polling "building" page rather than
+      // hanging the request (the build keeps running in the builder worker);
+      // a failed first-ever build shows the builder's error. Both self-heal —
+      // once a good build exists, the runner serves it stale instead of
+      // landing here.
+      const buildStatus = workerBuildStatusResponse(error);
+      if (buildStatus !== null) return buildStatus;
+      throw error;
     }
   }
 
