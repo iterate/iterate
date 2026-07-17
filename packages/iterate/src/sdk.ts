@@ -253,66 +253,58 @@ export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream
   };
 }
 
+/** Where the platform-delivered self ref lives in this worker's own storage
+ * (see {@link IterateDurableObject.__stashSelfRef}). */
+const SELF_REF_STORAGE_KEY = "iterate:self-ref";
+
 /**
  * Durable alarms for a stateful dynamic worker, presented as the ordinary
- * `DurableObjectState` alarm API.
+ * `DurableObjectState` alarm API — what `IterateDurableObject` installs as
+ * `this.ctx`, so alarms on stateful workers just work.
  *
  * workerd does not implement alarms for facet-hosted Durable Objects — the
  * hosting model for stateful dynamic workers (workerd#6810; a facet
  * `setAlarm` even appears to succeed, then poisons the commit path). So the
  * platform Durable Object that hosts this worker keeps the real alarm on its
- * behalf: the trio here dials `itx.workers.get(ref).setAlarm/getAlarm`
- * through the worker's own ref, and the parent's fire calls this class's
- * `alarm(alarmInfo)` method — retried by the platform if it throws, exactly
- * like a native alarm handler.
+ * behalf: the trio here dials `itx.workers.get(ref).setAlarm/getAlarm` on the
+ * worker's own ref — delivered by the host before any other traffic and
+ * stashed durably ({@link IterateDurableObject.__stashSelfRef}) — and the
+ * host's fire calls this class's `alarm(alarmInfo)` method, retried by the
+ * platform if it throws, exactly like a native alarm handler.
  *
  * Everything except the three alarm methods is the worker's own `ctx`,
  * untouched (`storage.kv`, `waitUntil`, WebSocket APIs, …), so code written
- * against the returned state uses only standard Durable Object concepts, and
- * if workerd ships facet alarms this shim disappears without a caller
- * changing. Two honest divergences: the alarm methods ignore the native
- * `options` bag, and alarms armed inside `storage.transaction()` bypass the
- * shim. One more: native `setAlarm` rejects a class with no `alarm()`
- * handler at arm time; this shim cannot check, so a missing handler shows up
- * as a failing, platform-retried fire instead. (Fires are delivered through
- * the worker's `invokeCapability` dispatcher — workerd reserves `alarm` as
- * an RPC method name — and `IterateDurableObject` carries that dispatcher,
- * so extending it is all a class needs.)
- *
- * ```ts
- * export class MyApp extends IterateDurableObject {
- *   // Construct the registry lazily — it needs the project id, which a
- *   // stateful worker learns asynchronously (see the template guestbook's
- *   // #ensureHost for the reference shape).
- *   #registry(projectId: string) {
- *     return createStreamProcessorRegistry(
- *       withStatefulWorkerAlarms(this.ctx, this.env, MY_APP_REF),
- *       { projectId, ... },
- *     );
- *   }
- *   async alarm(alarmInfo?: AlarmInvocationInfo) {
- *     await this.#ensureRegistry().handleAlarm(alarmInfo);
- *   }
- * }
- * ```
+ * against this state uses only standard Durable Object concepts, and if
+ * workerd ships facet alarms the shim disappears without a caller changing.
+ * Honest divergences: the alarm methods ignore the native `options` bag,
+ * alarms armed inside `storage.transaction()` bypass the shim, and a class
+ * with no `alarm()` handler fails at fire time (native `setAlarm` rejects at
+ * arm time; the shim cannot check).
  */
-export function withStatefulWorkerAlarms(
-  ctx: DurableObjectState,
-  env: IterateEnv,
-  ref: StatefulDynamicWorkerRef,
-): DurableObjectState {
-  const withWorker = <T>(fn: (worker: DynamicWorkerCapability) => Promise<T>): Promise<T> =>
-    withProject(env, (project) => fn(project.workers.get(ref)));
+function selfAlarmState<State extends DurableObjectState>(ctx: State, env: IterateEnv): State {
+  const withSelf = <T>(fn: (worker: DynamicWorkerCapability) => Promise<T>): Promise<T> => {
+    const ref = ctx.storage.kv.get<StatefulDynamicWorkerRef>(SELF_REF_STORAGE_KEY);
+    if (ref === undefined) {
+      // Unreachable after any platform contact — every call, fetch, and
+      // alarm fire delivers the ref first. Constructor bodies run before
+      // that first contact, hence the carve-out in the error.
+      throw new Error(
+        "this worker's own ref has not been delivered yet — alarms are unavailable in the " +
+          "constructor; arm from a handler instead",
+      );
+    }
+    return withProject(env, (project) => fn(project.workers.get(ref)));
+  };
   return overlay(ctx, {
     storage: overlay(ctx.storage, {
       setAlarm: (scheduledTime: number | Date) =>
-        withWorker((worker) =>
+        withSelf((worker) =>
           worker.setAlarm(
             typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime(),
           ),
         ),
-      deleteAlarm: () => withWorker((worker) => worker.setAlarm(null)),
-      getAlarm: () => withWorker((worker) => worker.getAlarm()),
+      deleteAlarm: () => withSelf((worker) => worker.setAlarm(null)),
+      getAlarm: () => withSelf((worker) => worker.getAlarm()),
     }),
   });
 }
@@ -382,12 +374,30 @@ export class IterateWorkerEntrypoint<
  * under a `durableWorkerKey`). Same platform surface as
  * `IterateWorkerEntrypoint` — see its docstring for the event-delivery and
  * capability-dispatch contracts — on a DurableObject, so state survives
- * across requests and WebSockets can be served from `fetch`.
+ * across requests and WebSockets can be served from `fetch`. Durable alarms
+ * work natively — `this.ctx.storage.setAlarm(...)` plus an `alarm()` method
+ * on the class — even though this object is hosted as a workerd facet with
+ * no alarms of its own; see {@link selfAlarmState} for the mechanism.
  */
 export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends DurableObject<Env> {
   constructor(ctx: ConstructorParameters<typeof DurableObject<Env>>[0], env: Env) {
     super(ctx, env);
     this.env = wrapIterateEnv(env);
+    // Read back through the property so the overlay carries the exact ctx
+    // type the base class declares in every typecheck context.
+    this.ctx = selfAlarmState(this.ctx, this.env);
+  }
+
+  /**
+   * Platform bootstrap door: the Durable Object hosting this worker delivers
+   * the worker's OWN ref here before any other traffic in its incarnation —
+   * a facet has no channel to learn its identity by itself, and the ref is
+   * what the alarm shim dials (`itx.workers.get(ref)` resolves back to the
+   * hosting DO). Stashed durably, so a warm facet under a fresh host needs
+   * no re-delivery to keep working.
+   */
+  __stashSelfRef(ref: StatefulDynamicWorkerRef): void {
+    this.ctx.storage.kv.put(SELF_REF_STORAGE_KEY, ref);
   }
 
   /** A real fetch hop into a sibling dynamic worker — see
