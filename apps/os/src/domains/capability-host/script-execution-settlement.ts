@@ -32,8 +32,9 @@ export function scriptSettlementFromEvent(
 // attempt is bounded by the same interval; a timeout rejects the tracked
 // attempt and the keepalive/reconciler retries the idempotent completion.
 export const SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS = 15_000;
-/** Time for an already-committed completion to traverse the processor before
- * the public RPC gives up. This never extends the execution deadline. */
+/** Final allowance for a recovery settlement to commit and reach the exact-key
+ * observer after the execution obligation expires. This never extends the
+ * execution deadline. */
 export const SCRIPT_COMPLETION_OBSERVATION_GRACE_MS = 15_000;
 
 const WORKER_EXECUTION_DEADLINE_ERROR =

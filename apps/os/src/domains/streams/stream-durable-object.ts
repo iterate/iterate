@@ -38,6 +38,11 @@ import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-run
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import type { StreamEventWaitLeaseInput, StreamEventWaitLeaseResult } from "./wait-for-event.ts";
 import {
+  STREAM_IDEMPOTENCY_KEY_HEADER,
+  STREAM_IDEMPOTENCY_WAIT_PATH,
+  STREAM_IDEMPOTENCY_WAIT_SOCKET_TAG,
+} from "./wait-for-idempotency-key.ts";
+import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
@@ -51,6 +56,10 @@ const MAX_GET_EVENTS_LIMIT = 500;
 const RECOVERY_EXPORT_PAGE_BYTE_LIMIT = 1024 * 1024;
 /** Bound CPU per RPC; the client continues the same fixed export window. */
 const RECOVERY_EXPORT_SESSION_PAGE_LIMIT = 32;
+
+const StreamIdempotencyWaitAttachment = z
+  .object({ idempotencyKey: z.string().trim().min(1) })
+  .strict();
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -89,11 +98,13 @@ const SEARCH_INDEX_SUBSCRIPTION_KEY = "platform-search-index";
  *    `subscriber-sinks.ts`; this class only decides policy (who may
  *    subscribe, what a config event means, which facts to append).
  *
- * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
- * exposes this DO through `StreamRpcTarget`. This class is deliberately NOT
- * `implements Stream`: `Stream` is the public async capability; the methods
- * here are storage/runtime implementation methods, and the append/read methods
- * that touch SQLite/KV must remain synchronous.
+ * Public HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker,
+ * which exposes this DO through `StreamRpcTarget`. The one private `fetch`
+ * lane below is different: a direct-DO hibernatable WebSocket that observes
+ * one exact idempotency key without polling or exposing a network route. This
+ * class is deliberately NOT `implements Stream`: `Stream` is the public async
+ * capability; the methods here are storage/runtime implementation methods,
+ * and the append/read methods that touch SQLite/KV must remain synchronous.
  */
 type StreamSubscriberAuthorityRootFactory = (args: {
   ctx: DurableObjectState;
@@ -255,6 +266,66 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Private fetch-native lane for an exact durable-event wait. A WebSocket is
+   * accepted through the Hibernation API, so the Stream DO can go idle for the
+   * whole script run without severing the caller or consuming another Worker
+   * invocation every few seconds. Direct Durable Object stubs are the only
+   * callers; no public Worker route forwards this path.
+   */
+  fetch(request: Request): Response {
+    const url = new URL(request.url);
+    if (request.method !== "GET" || url.pathname !== STREAM_IDEMPOTENCY_WAIT_PATH) {
+      return new Response("not found", { status: 404 });
+    }
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("expected websocket", { status: 426 });
+    }
+    const attachment = StreamIdempotencyWaitAttachment.safeParse({
+      idempotencyKey: request.headers.get(STREAM_IDEMPOTENCY_KEY_HEADER),
+    });
+    if (!attachment.success) {
+      return new Response("expected a valid idempotency key", { status: 400 });
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.ctx.acceptWebSocket(server, [STREAM_IDEMPOTENCY_WAIT_SOCKET_TAG]);
+    server.serializeAttachment(attachment.data);
+
+    // The point read and socket acceptance share one synchronous DO turn with
+    // append. Either the event is already durable and is sent here, or a later
+    // append sees this accepted socket. There is no subscribe/read race.
+    const existing = this.getEvent({ idempotencyKey: attachment.data.idempotencyKey });
+    if (existing !== undefined) this.#deliverIdempotencyWaitEvent(server, existing);
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /** Clients never send frames on this one-way internal protocol. */
+  webSocketMessage(socket: WebSocket): void {
+    socket.close(1008, "idempotency wait is server-to-client only");
+  }
+
+  /** Complete the server side of the close handshake after peer disconnect. */
+  webSocketClose(socket: WebSocket, code: number, reason: string): void {
+    try {
+      socket.close(code, reason);
+    } catch {
+      // Already closed is the expected terminal state.
+    }
+  }
+
+  /** A transport error is modeled as a reconnectable client-side lifecycle break. */
+  webSocketError(socket: WebSocket): void {
+    try {
+      socket.close(1011, "idempotency wait transport error");
+    } catch {
+      // The peer may already have observed and closed the failed transport.
+    }
+  }
+
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
   alarm(): void {
     this.#alarmArmedForMs = null;
@@ -394,6 +465,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
 
+    // Exact-key waiters are notification only; the committed event row is the
+    // durable source of truth and is point-read again after any disconnect.
+    this.#notifyIdempotencyWaiters(newEvents);
+
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
     // live connection pumps re-arm, lagging wake subscribers get poked,
@@ -414,6 +489,39 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#subscribers.armOrClearIdleTimer();
 
     return events;
+  }
+
+  #notifyIdempotencyWaiters(events: readonly StreamEvent[]): void {
+    if (events.every((event) => event.idempotencyKey === undefined)) return;
+    const byKey = new Map<string, StreamEvent>();
+    for (const event of events) {
+      if (event.idempotencyKey !== undefined) byKey.set(event.idempotencyKey, event);
+    }
+    for (const socket of this.ctx.getWebSockets(STREAM_IDEMPOTENCY_WAIT_SOCKET_TAG)) {
+      const attachment = StreamIdempotencyWaitAttachment.safeParse(socket.deserializeAttachment());
+      if (!attachment.success) {
+        console.error("stream idempotency wait socket has an invalid attachment", attachment.error);
+        try {
+          socket.close(1011, "invalid idempotency wait attachment");
+        } catch {
+          // The invariant failure has already been reported above.
+        }
+        continue;
+      }
+      const event = byKey.get(attachment.data.idempotencyKey);
+      if (event !== undefined) this.#deliverIdempotencyWaitEvent(socket, event);
+    }
+  }
+
+  #deliverIdempotencyWaitEvent(socket: WebSocket, event: StreamEvent): void {
+    try {
+      socket.send(JSON.stringify(event));
+      socket.close(1000, "event delivered");
+    } catch {
+      // The client can disconnect between getWebSockets() and send(). Its
+      // bounded reconnect point-reads this committed event, so this race is an
+      // explicitly modeled transport outcome, not data loss.
+    }
   }
 
   /**

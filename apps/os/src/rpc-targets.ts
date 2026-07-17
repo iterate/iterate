@@ -66,7 +66,6 @@ import { capabilityHostBirthEvents } from "./domains/capability-host/capability-
 import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   scriptSettlementFromEvent,
-  type ScriptExecutionSettlement,
 } from "./domains/capability-host/script-execution-settlement.ts";
 import type {
   StreamRecoveryExportPage,
@@ -160,6 +159,11 @@ import {
   rethrowStreamUnavailable,
 } from "./domains/streams/stream-unavailable.ts";
 import { waitForStreamEvent } from "./domains/streams/wait-for-event.ts";
+import {
+  connectStreamIdempotencyWaitSocket,
+  StreamIdempotencyWaitTimeoutError,
+  waitForStreamIdempotencyKey,
+} from "./domains/streams/wait-for-idempotency-key.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -5088,27 +5092,31 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     result: unknown;
   }> {
     const request = await this.#durableObject.requestScript(code);
-    let settlement: ScriptExecutionSettlement | undefined;
     let completedEvent: StreamEvent;
     try {
-      completedEvent = await this.#stream.waitForEvent({
-        afterOffset: request.requestedOffset,
-        eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
-        predicate: (event) => {
-          settlement = scriptSettlementFromEvent(event, request.executionId);
-          return settlement !== undefined;
-        },
+      completedEvent = await waitForStreamIdempotencyKey({
+        connect: (idempotencyKey) =>
+          connectStreamIdempotencyWaitSocket(this.#stream.durableObjectStub, idempotencyKey),
+        idempotencyKey: request.completionIdempotencyKey,
         timeoutMs: Math.max(
           1,
           request.expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - Date.now(),
         ),
       });
     } catch (error) {
+      if (!(error instanceof StreamIdempotencyWaitTimeoutError)) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Script execution "${request.executionId}" settlement observation failed: ${detail}`,
+          { cause: error },
+        );
+      }
       throw new Error(
         `Script execution "${request.executionId}" did not settle before its absolute deadline.`,
         { cause: error },
       );
     }
+    const settlement = scriptSettlementFromEvent(completedEvent, request.executionId);
     if (settlement === undefined) {
       throw new Error(`script execution "${request.executionId}" completed without a settlement`);
     }

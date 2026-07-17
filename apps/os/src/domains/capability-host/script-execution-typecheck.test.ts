@@ -149,6 +149,7 @@ async function scriptResult(stream: MemoryStream, request: ScriptRunRequest) {
     );
     expect(completed).toBeDefined();
   });
+  expect(completed?.idempotencyKey).toBe(request.completionIdempotencyKey);
   const settlement = scriptSettlementFromEvent(completed!, request.executionId);
   if (settlement === undefined) throw new Error("completion carried no valid settlement");
   if (settlement.status === "failed") throw new Error(settlement.error);
@@ -274,21 +275,10 @@ describe("script execution typecheck gate", () => {
       code: expect.any(String),
     });
     expect(describeCapabilities).not.toHaveBeenCalled();
-    expect(recordedSpans.map((span) => span.name)).toEqual([
-      "capability_host.script_execution",
-      "capability_host.script_typecheck",
-      "capability_host.script_started_append",
-      "capability_host.script_loopback",
-      "capability_host.script_completion_append",
-      "capability_host.script_completion_consume",
-    ]);
-    expect(recordedSpans[1]?.attributes).toMatchObject({
-      "iterate.capability_host.typecheck_surface": "platform",
-      "iterate.capability_host.has_emitted_js": true,
-    });
-    expect(recordedSpans[0]?.attributes).toMatchObject({
-      "iterate.capability_host.script_outcome": "succeeded",
-    });
+    // The execution is detached from requestScript under waitUntil. Custom
+    // spans are request-scoped, so emitting them here would let their request
+    // parent close first and publish an incoherent trace.
+    expect(recordedSpans).toEqual([]);
   });
 
   it("an unchecked verdict runs the script (permissive on unknowns)", async () => {
@@ -431,10 +421,7 @@ describe("script execution typecheck gate", () => {
     // must fold its own committed completion offset instead of parking the
     // public call on the asynchronous subscription lane.
     await expect(result).resolves.toMatchObject({ result: "ok" });
-    expect(
-      recordedSpans.find((span) => span.name === "capability_host.script_completion_consume")
-        ?.attributes,
-    ).toMatchObject({ "iterate.capability_host.completion_offset": 4 });
+    expect((await harness.runner.snapshot()).offset).toBe(4);
     expect(
       recordedSpans.find((span) => span.name === "capability_host.script_request_append")
         ?.attributes,
@@ -485,11 +472,8 @@ describe("script execution typecheck gate", () => {
     expect(results.map(({ result }) => result)).toEqual(
       Array.from({ length: 20 }, (_, index) => `async () => ${index}`),
     );
-    expect(
-      recordedSpans
-        .filter((span) => span.name === "capability_host.script_execution")
-        .map((span) => span.attributes["iterate.capability_host.script_launch_owner"]),
-    ).toEqual(Array.from({ length: 20 }, () => "foreground"));
+    expect(stream.events.filter((event) => event.type === T.started)).toHaveLength(20);
+    expect(stream.events.filter((event) => event.type === T.completed)).toHaveLength(20);
   });
 
   it("preserves earlier journal ordering around its committed request", async () => {
