@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { unifiedMergeView } from "@codemirror/merge";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import { useItxQuery } from "iterate/react";
 import { repoFileKind } from "./repo-file-kinds.ts";
 import { EmptyPane, FileChrome } from "./repo-editor-pane.tsx";
-import { useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
  * Readonly diff of one file in one commit against that commit's first parent

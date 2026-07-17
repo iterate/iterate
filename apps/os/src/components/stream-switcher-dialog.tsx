@@ -9,12 +9,12 @@ import {
 } from "@iterate-com/ui/components/dialog";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { useLiveState } from "iterate/react";
 import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathParent } from "~/lib/stream-links.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
 // segments separated by single slashes, no trailing slash. `~` is legal — GitHub

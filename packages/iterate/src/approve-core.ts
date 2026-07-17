@@ -10,11 +10,11 @@
 
 import type { RpcStub } from "capnweb";
 
-import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import {
   buildApprovalMessage,
   type HumanApprovalRequestedPayload,
 } from "../../../apps/os/src/domains/projects/egress-approvals.ts";
+import { connectItx } from "./itx/itx-node-client.ts";
 import type {
   ItxAuthCredentials,
   Project,

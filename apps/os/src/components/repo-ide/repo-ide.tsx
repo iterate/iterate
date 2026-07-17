@@ -20,6 +20,7 @@ import {
   ResizablePanelGroup,
 } from "@iterate-com/ui/components/resizable";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { useItx, useItxQuery } from "iterate/react";
 import { isBinaryRepoPath } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { CommitDiffPane } from "./commit-diff-pane.tsx";
@@ -42,7 +43,6 @@ import {
   type FileEntry,
   type WorkingTreeChanges,
 } from "./staged-changes.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
  * The repo mini-IDE: pierre file tree + per-kind file renderers over one

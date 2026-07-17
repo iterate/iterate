@@ -36,4 +36,18 @@ export default defineConfig([
     clean: false,
     copy: [{ from: "src/worker.d.mts", to: "dist" }],
   },
+  {
+    // The itx client entries. ONE config object on purpose: rolldown splits
+    // their shared modules (the session keeper, live-state) into common chunks,
+    // so `iterate/client` and `iterate/react` share ONE keeper module instance
+    // in the published artifact — separate objects would inline a private copy
+    // each and fork the one-socket module state. No dts here for the same
+    // reason as sdk (the generated contract crashes rolldown-plugin-dts);
+    // declarations come from `tsc -p tsconfig.sdk.json`.
+    entry: ["src/client.ts", "src/node.ts", "src/react.ts"],
+    format: "esm",
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
 ]);

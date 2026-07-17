@@ -4,32 +4,35 @@
 /**
  * React/OpenTUI terminal chat with one project agent.
  *
- * The data layer is the shared client stack, not a bespoke stream client:
- * `connectItx` (apps/os/src/itx-client.ts) hands us the same `Agent`
- * capability the web app uses, a live `stream.subscribe` pumps events into
- * the shared agent-ui reducer (@iterate-com/ui), and sends go through
- * `agent.message`. This file owns only terminal runtime state and
- * rendering.
+ * The data layer is the SAME client stack the web app renders from: the
+ * one-socket session keeper (`iterate/client`, pointed at the deployment via
+ * `configureIterateSession`) and the shared React hooks (`iterate/react` —
+ * `useItxSubscription` owns reconnect, watchdog, and re-subscribe recovery),
+ * folding stream events through the shared agent-ui reducer
+ * (@iterate-com/ui). Sends go through `agent.message` on the same socket.
+ * This file owns only terminal runtime state and rendering — OpenTUI is just
+ * another React renderer, so the hooks (TanStack Query included) run here
+ * unchanged.
  */
 import { StyledText, bg, fg } from "@opentui/core";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
 import { useCallback, useState, useSyncExternalStore } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   AgentUiActivity,
   AgentUiItem,
   AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
-  ONBOARDING_AGENT_PATH,
-  onboardingAgentCreateInput,
-} from "../../../../apps/os/src/lib/onboarding-agent.ts";
+  configureIterateSession,
+  connectItx,
+  useItxSubscription,
+  type Itx,
+  type ItxSubscriptionStatus,
+} from "../itx/itx-react.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
-import {
-  connectAgentFeed,
-  resolveItxAuth,
-  type AgentConnectionStatus,
-} from "./agent-connection.ts";
+import { resolveItxAuth } from "./itx-auth.ts";
 import {
   formatActivitySummary,
   formatLiveActivityLabel,
@@ -54,58 +57,74 @@ const COLORS = {
   agent: "#a78bfa",
 } as const;
 
+// The onboarding agent is born server-side at project creation with its own
+// system prompt; the TUI must never birth a prompt-less stand-in for it. The
+// path is public contract (also the `iterate chat` default agent path).
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+
 const args = parseArgs(process.argv.slice(2));
 
-// ---------------------------------------------------------------------------
-// App state: one feed model + one connection, exposed to React through a tiny
-// external store (the connection callbacks fire outside React).
-// ---------------------------------------------------------------------------
+// One keeper socket for the whole process — the TUI's equivalent of the
+// browser tab. Everything below (subscription, sends) rides it.
+configureIterateSession({
+  baseUrl: args.baseUrl,
+  credentials: resolveItxAuth({ configName: process.env.ITERATE_CONFIG_NAME }),
+});
 
-type AppState = {
-  feed: AgentFeedSnapshot;
-  status: AgentConnectionStatus;
-  notice: string;
-};
+// ---------------------------------------------------------------------------
+// App state: one feed model, exposed to React through a tiny external store
+// (the subscription's event batches arrive outside React).
+// ---------------------------------------------------------------------------
 
 const model = createAgentFeedModel();
-let appState: AppState = {
-  feed: model.snapshot(),
-  status: { kind: "connecting" },
-  notice: "",
-};
-const listeners = new Set<() => void>();
+let feedSnapshot: AgentFeedSnapshot = model.snapshot();
+const feedListeners = new Set<() => void>();
 
-function patchAppState(patch: Partial<AppState>) {
-  appState = { ...appState, ...patch };
-  for (const listener of listeners) listener();
+function publishFeed() {
+  feedSnapshot = model.snapshot();
+  for (const listener of feedListeners) listener();
 }
 
-const connection = connectAgentFeed({
-  auth: resolveItxAuth({ configName: process.env.ITERATE_CONFIG_NAME }),
-  baseUrl: args.baseUrl,
-  projectId: args.projectId,
-  agentPath: args.agentPath,
-  createInput:
-    args.agentPath === ONBOARDING_AGENT_PATH ? onboardingAgentCreateInput(args.projectId) : {},
-  replayAfterOffset: () => model.snapshot().lastOffset,
-  onEvents: (events) => {
-    if (model.applyEvents(events)) patchAppState({ feed: model.snapshot() });
-  },
-  onStatus: (status) => patchAppState({ status }),
-});
+/**
+ * Establish the live agent feed on the shared socket: ensure the agent exists
+ * (explicit birth only for scratch agents — see ONBOARDING_AGENT_PATH), then
+ * subscribe from the feed model's resume cursor. useItxSubscription re-runs
+ * this on every recovery, so the cursor read is per-(re)subscribe and replay
+ * overlap is folded out by the model's offset dedupe.
+ */
+async function subscribeAgentFeed(itx: Itx) {
+  const snapshot = await itx.agents.get(args.agentPath).processor.snapshot();
+  if (snapshot.state.birthCertificate === null) {
+    if (args.agentPath === ONBOARDING_AGENT_PATH) {
+      throw new Error(
+        "this project's onboarding agent has not been born yet — open the project in the dashboard once, then retry",
+      );
+    }
+    await itx.agents.get(args.agentPath).create({});
+  }
+  return await itx.agents.get(args.agentPath).stream.subscribe({
+    processEventBatch: (batch) => {
+      if (model.applyEvents(batch.events)) publishFeed();
+    },
+    replayAfterOffset: model.snapshot().lastOffset,
+    subscriber: { description: "iterate chat TUI" },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
 function AgentChatApp() {
-  const state = useSyncExternalStore(
+  const feed = useSyncExternalStore(
     useCallback((listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      feedListeners.add(listener);
+      return () => feedListeners.delete(listener);
     }, []),
-    () => appState,
+    () => feedSnapshot,
   );
+  const subscription = useItxSubscription(subscribeAgentFeed, [], { slug: args.projectId });
+  const [notice, setNotice] = useState("");
   const [composerValue, setComposerValue] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
 
@@ -123,14 +142,12 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
       clearComposer();
-      patchAppState({ notice: "sending…" });
-      connection
-        .sendMessage(message)
-        .then(() => patchAppState({ notice: "" }))
+      setNotice("sending…");
+      connectItx(args.projectId)
+        .then((itx) => itx.agents.get(args.agentPath).message(message))
+        .then(() => setNotice(""))
         .catch((error: unknown) => {
-          patchAppState({
-            notice: `send failed: ${error instanceof Error ? error.message : String(error)}`,
-          });
+          setNotice(`send failed: ${error instanceof Error ? error.message : String(error)}`);
         });
     },
     [clearComposer],
@@ -138,7 +155,12 @@ function AgentChatApp() {
 
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={COLORS.bg}>
-      <ChatHeader status={state.status} notice={state.notice} eventCount={state.feed.eventCount} />
+      <ChatHeader
+        status={subscription.status}
+        detail={subscription.error}
+        notice={notice}
+        eventCount={feed.eventCount}
+      />
       <scrollbox
         width="100%"
         flexGrow={1}
@@ -150,15 +172,15 @@ function AgentChatApp() {
         stickyStart="bottom"
         contentOptions={{ flexDirection: "column", paddingLeft: 1, paddingRight: 1, gap: 1 }}
       >
-        {state.feed.items.length === 0 && state.feed.live == null ? (
+        {feed.items.length === 0 && feed.live == null ? (
           <text fg={COLORS.textMuted}>
             No messages yet — say something to {args.agentPath.slice("/agents/".length)}.
           </text>
         ) : null}
-        {state.feed.items.map((item) => (
+        {feed.items.map((item) => (
           <FeedItem key={item.id} item={item} />
         ))}
-        {state.feed.live == null ? null : <LiveActivity activity={state.feed.live} />}
+        {feed.live == null ? null : <LiveActivity activity={feed.live} />}
       </scrollbox>
       <box
         width="100%"
@@ -192,17 +214,22 @@ function AgentChatApp() {
   );
 }
 
-function ChatHeader(props: { status: AgentConnectionStatus; notice: string; eventCount: number }) {
+function ChatHeader(props: {
+  status: ItxSubscriptionStatus;
+  detail: string | undefined;
+  notice: string;
+  eventCount: number;
+}) {
   const statusLabel =
-    props.status.kind === "live"
+    props.status === "live"
       ? "live"
-      : props.status.kind === "connecting"
+      : props.status === "connecting"
         ? "connecting"
-        : `${props.status.kind} (${props.status.detail})`;
+        : `error (${props.detail ?? "unknown"})`;
   const statusColor =
-    props.status.kind === "live"
+    props.status === "live"
       ? COLORS.accent
-      : props.status.kind === "connecting"
+      : props.status === "connecting"
         ? COLORS.warning
         : COLORS.danger;
   const meta = [
@@ -401,5 +428,11 @@ const renderer = await createCliRenderer({
   screenMode: "alternate-screen",
   consoleMode: "disabled",
 });
-process.on("exit", () => connection.dispose());
-createRoot(renderer).render(<AgentChatApp />);
+// TanStack Query rides OpenTUI like any other React renderer; the provider is
+// here so feature code can use the shared query hooks, not just subscriptions.
+const queryClient = new QueryClient();
+createRoot(renderer).render(
+  <QueryClientProvider client={queryClient}>
+    <AgentChatApp />
+  </QueryClientProvider>,
+);

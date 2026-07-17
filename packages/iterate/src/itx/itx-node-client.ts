@@ -4,9 +4,14 @@ import {
   type RpcCompatible as CapnRpcCompatible,
   type RpcStub as CapnRpcStub,
 } from "capnweb";
-import { withOwnedRpcSession } from "./domains/itx/utils.ts";
-import type { ItxAuthCredentials } from "./auth.ts";
-import type { Agent, Project, Session, UnauthenticatedOs } from "./itx-api.generated.ts";
+import type {
+  Agent,
+  ItxAuthCredentials,
+  Project,
+  Session,
+  UnauthenticatedOs,
+} from "../itx-api.generated.ts";
+import { withOwnedRpcSession } from "./owned-rpc-session.ts";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 

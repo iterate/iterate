@@ -30,10 +30,10 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
+import { isItxTransportError, useIterateSession } from "iterate/react";
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { isItxTransportError, useIterateSession } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -86,7 +86,7 @@ type AdminAuthority = { status: "checking" } | { status: "locked" } | { status: 
 function AdminGate() {
   // The admin handle is the itx SESSION — the SAME one socket the rest of the
   // tab uses (one browser itx primitive, one /api route; see
-  // ~/itx/itx-react.tsx). Its global authority comes from the operator cookie on
+  // iterate/react). Its global authority comes from the operator cookie on
   // the WebSocket handshake. The CLI redemption flow loads this page only after
   // installing that cookie, so this component never handles admin material.
   const session = useIterateSession();

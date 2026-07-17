@@ -9,6 +9,20 @@ If you only read one thing: **you talk to the backend through `itx`.** `itx` is 
 capnweb `RpcStub` — a capability handle you call like a local object; the calls
 travel over the tab's single `/api` WebSocket and the server answers or pushes.
 
+The client lives in the published **`iterate` package** and is layered so every
+runtime shares one implementation:
+
+| Entry            | What it is                                                                                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/react`  | The hooks below. **Renderer-agnostic** — the same module runs under react-dom (this dashboard), `@opentui/react` (the chat TUI), and React Native.          |
+| `iterate/client` | The framework-free layer under them: the one-socket session keeper, the live-state snapshot+patch codec, transport-error classification. No React anywhere. |
+| `iterate/node`   | The node one-shot dial (`ws`, custom headers, frame observer) for scripts and e2e — `using`-scoped, no keeper.                                              |
+
+In a browser the keeper needs zero configuration (it dials the page's `/api`
+with cookie auth); non-browser consumers point it at a deployment with
+`configureIterateSession({ baseUrl, credentials })` — that is the entire
+difference between the dashboard and the chat TUI's data layer.
+
 ## The stack
 
 | Concern              | What we use                                                                 |
@@ -42,7 +56,8 @@ generated contract [`apps/os/src/itx-api.generated.ts`](../apps/os/src/itx-api.g
 The whole tab shares **one** WebSocket — at most one active socket at a time,
 `authenticate()`d with the signed-in session cookie, and everything — the sidebar
 catalog, every project page, the stream mirror — rides it. The connection layer
-([`apps/os/src/itx/itx-react.tsx`](../apps/os/src/itx/itx-react.tsx)) keeps it in
+([`packages/iterate/src/itx/itx-session.ts`](../packages/iterate/src/itx/itx-session.ts),
+exported as `iterate/client`) keeps it in
 module state (outside React) so it survives client-side navigation, and makes
 **reconnect invisible**: the last session is kept across a transport gap, so a
 dropped socket re-dials in the background without re-suspending the UI or showing
@@ -68,8 +83,9 @@ React owns local interaction):
 
 ## The hooks
 
-Everything a component needs is in one file,
-[`apps/os/src/itx/itx-react.tsx`](../apps/os/src/itx/itx-react.tsx).
+Everything a component needs comes from one import,
+`import { … } from "iterate/react"`
+([`packages/iterate/src/itx/itx-react.ts`](../packages/iterate/src/itx/itx-react.ts)).
 
 ### Get a handle
 
@@ -185,6 +201,7 @@ state. A `slug` argument also accepts a `prj_…` id.
 | `reconnectIterateSession()`              | fn        | The deliberate **semantic reset** — drop + re-dial the socket to pick up new claims (after creating a project / unlocking admin). Distinct from the automatic, invisible transport reconnect. Pair with `invalidateQueries({ queryKey: ["itx"] })` when cached reads must refresh under the new claims. |
 | `isItxTransportError(e)`                 | fn        | Is an error a transport-close (retryable), vs auth/validation/app (not)?                                                                                                                                                                                                                                |
 | `reportTransportSuspicion()`             | fn        | Escape hatch for the **non-React** transport consumer (the browser stream mirror): "this socket looks half-open." Routes to the socket-owned verifier — which two-strike-checks and may re-dial — but **never** closes the socket itself.                                                               |
+| `configureIterateSession(config)`        | fn        | Point the keeper at a deployment explicitly (`{ baseUrl, credentials }`) — the **non-browser** entry into the one-socket model (the chat TUI, keeper-based scripts). Browser apps never call it. Must run before the first connect.                                                                     |
 | `Itx` (type)                             | type      | `RpcStub<Project>` — a project handle, for typing helpers that take one.                                                                                                                                                                                                                                |
 | `ItxLiveSubscriptionHandle` (type)       | type      | What any `subscribe()` returns — `ping()` + `unsubscribe()` (+ optional `[Symbol.dispose]`; the hook both unsubscribes AND disposes on teardown). The shape `useItxSubscription` drives.                                                                                                                |
 | `ItxSubscriptionStatus` (type)           | type      | `"connecting" \| "live" \| "error"` — the lifecycle a subscription reports.                                                                                                                                                                                                                             |
@@ -192,9 +209,11 @@ state. A `slug` argument also accepts a `prj_…` id.
 Mutations have no hook — you call the capability on the handle
 (`itx.chat.sendMessage(text)`), usually inside a `useMutation`.
 
-That's the whole surface — 15 exports from one file, no others. The everyday four
-are `useIterateSession` / `useItx` / `useItxQuery` / `useLiveState`; the rest are
-imperative siblings, the mount, the one escape hatch, and types.
+That's the whole surface — one entry (`iterate/react`), no others. The everyday
+four are `useIterateSession` / `useItx` / `useItxQuery` / `useLiveState`; the
+rest are imperative siblings, the mount, the one escape hatch, and types. The
+chat TUI consumes the SAME entry under OpenTUI — its data layer is
+`configureIterateSession` + `useItxSubscription` and nothing else.
 
 ## The one exception (for now): the stream feed
 
@@ -223,10 +242,11 @@ component needs project data, call `useItxQuery`/`useLiveState` at the leaf.
 
 ## Where this is going
 
-The model is ~95% in place. The remaining steps — capability-aligned live
-projections so mutable lists (integrations, scheduler) stop hand-invalidating, a
-non-React transport core, and retiring the browser stream mirror for server-owned
-live views — are laid out in
+The model is ~95% in place. The non-React transport core now exists
+(`iterate/client` — the TUI runs on it; React Native is the next consumer). The
+remaining steps — capability-aligned live projections so mutable lists
+(integrations, scheduler) stop hand-invalidating, and retiring the browser
+stream mirror for server-owned live views — are laid out in
 [`apps/os/docs/itx-frontend-model-roadmap.md`](../apps/os/docs/itx-frontend-model-roadmap.md).
 (We deliberately did **not** collapse the two read hooks into a `useRead({ from })`:
 TanStack splits suspense/non-suspense reads, so a merged hook would need an option

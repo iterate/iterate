@@ -5,7 +5,7 @@
 // useQuery consumers — no effects, no hand-rolled socket state.
 //
 // Recovery is deliberately simpler than the web's useItxSubscription
-// (apps/os/src/itx/itx-react.tsx): a ping watchdog per subscription; on any
+// (`iterate/react`'s useItxSubscription): a ping watchdog per subscription; on any
 // failure the subscription and itx session are dropped so the next watchdog
 // tick or screen focus re-dials and replays from the last seen offset.
 

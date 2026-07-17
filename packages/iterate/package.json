@@ -26,6 +26,9 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./node": "./src/node.ts",
+    "./react": "./src/react.ts",
     "./sdk": "./src/sdk.ts",
     "./worker": "./src/worker.ts"
   },
@@ -33,16 +36,34 @@
     "access": "public",
     "exports": {
       ".": {
+        "types": "./dist/index.d.mts",
         "import": "./dist/index.mjs",
-        "types": "./dist/index.d.mts"
+        "default": "./dist/index.mjs"
+      },
+      "./client": {
+        "types": "./dist/client.d.ts",
+        "import": "./dist/client.mjs",
+        "default": "./dist/client.mjs"
+      },
+      "./node": {
+        "types": "./dist/node.d.ts",
+        "import": "./dist/node.mjs",
+        "default": "./dist/node.mjs"
+      },
+      "./react": {
+        "types": "./dist/react.d.ts",
+        "import": "./dist/react.mjs",
+        "default": "./dist/react.mjs"
       },
       "./sdk": {
+        "types": "./dist/sdk.d.ts",
         "import": "./dist/sdk.mjs",
-        "types": "./dist/sdk.d.ts"
+        "default": "./dist/sdk.mjs"
       },
       "./worker": {
+        "types": "./dist/worker.d.mts",
         "import": "./dist/worker.mjs",
-        "types": "./dist/worker.d.mts"
+        "default": "./dist/worker.mjs"
       }
     }
   },
@@ -65,16 +86,25 @@
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@types/node": "^22.0.0",
-    "capnweb": "^0.8.0",
+    "@types/ws": "^8.18.1",
+    "capnweb": "https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz",
     "octokit": "^5.0.5",
-    "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
     "zod": "4.1.12"
   },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5",
+    "react": "^19.2.0"
+  },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",
+    "@tanstack/react-query": "^5.91.0",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "27.4.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
     "vitest": "4.0.15"

@@ -18,11 +18,11 @@ import type {
   ItxBinding,
   StreamEvent,
   StreamPushEventBatch,
-} from "./itx-api.generated";
+} from "./itx-api.generated.ts";
 
 // Extensionless on purpose: this specifier lands verbatim in the published
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
-export type * from "./itx-api.generated";
+export type * from "./itx-api.generated.ts";
 
 /** The one binding the platform supplies to every dynamic worker: `get()`
  * for capability method calls, `fetch()` for HTTP into sibling workers. */
