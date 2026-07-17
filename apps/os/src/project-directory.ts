@@ -22,6 +22,18 @@ export type ProjectDirectoryRecord = {
   name: string;
 };
 
+/**
+ * What `itx.identity()` returns: the directory's canonical project record,
+ * with the itx surface's `projectId` field name (the surface always says
+ * `projectId`; `id` is the directory/list convention).
+ */
+export type ProjectIdentity = {
+  projectId: string;
+  slug: string;
+  organizationId: string | null;
+  name: string;
+};
+
 const MEMO_TTL_MS = 15_000;
 // These writes are exact and idempotent. One retry absorbs a transient KV
 // stall while two short windows keep this required create step bounded.

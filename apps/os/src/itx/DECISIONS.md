@@ -334,11 +334,16 @@ been circling:
   lives, nothing more.
 - **Project creation is event-sourced and explicitly born.** `projects.create`
   appends `project/created` (the processor birth certificate) plus its
-  subscription, then waits until the project processor has consumed that
-  batch. The processor explicitly births the root capability host, scheduler,
-  config repo, and email router; `project/ready` records completion. The
-  default call waits for readiness, while `waitUntilReady: false` returns
-  after birth so the dashboard can render progress from live processor state.
+  subscription. The processor explicitly births the root capability host,
+  scheduler, config repo, and email router; `project/ready` records
+  completion. The default call waits through birth and readiness. Pass
+  `waitUntilReady: false` to return as soon as the project exists (identity
+  registered, directory primed, birth events appended); create still drives
+  processor birth via a post-response nudge so the saga never depends on the
+  caller. `itx.waitUntilReady()` is the composable wait, and `itx.identity()`
+  pipelines the canonical slug through the create round trip — the dashboard
+  uses exactly that to land on the project home checklist immediately and
+  render progress from live processor state.
   The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd
