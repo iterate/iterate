@@ -6,7 +6,7 @@ branch: mobile-ide-poc
 
 # Mobile repo IDE POC
 
-**Status summary:** research and implementation are complete. The POC adds a real config-repo working tree (browse/search/open/edit/create/delete/discard/batch commit), a deliberately bad native baseline, and two CodeMirror-in-an-Expo-DOM-WebView layouts behind a prototype switcher. Typecheck, lint, unit tests, and the iOS/DOM export pass. Missing: the on-phone pass against a real project, screenshots, and the final interaction verdict from that pass.
+**Status summary:** the selected POC direction is implemented: a native slide-out repo tree powered by `react-native-tree-multi-select`, CodeMirror in an Expo DOM WebView, and a web-OS-shaped Git rail/commit panel. Browse/search/open/edit/create/delete/discard/batch commit work, and tapping a file dismisses the drawer. Browser interaction evidence, typecheck, lint, tests, and bundle verification pass. Missing: an on-phone pass against a real project.
 
 ## Ask
 
@@ -16,7 +16,7 @@ Worktreeify an experimental IDE for the mobile app. It does not need desktop fea
 
 Can a phone-native repo browser/editor be useful enough with an off-the-shelf React Native component, or should Iterate explicitly use a WebView-backed web editor?
 
-The POC should make the answer visible in the running app, not merely assert it in notes. Where practical, compare three structurally different mobile IDE layouts from one project-scoped route, selected with a prototype switcher. The editor-engine choice itself will follow the research rather than forcing three weak dependencies into the bundle.
+The POC should make the answer visible in the running app, not merely assert it in notes. After comparing three initial layouts, commit to one direction rather than retaining a switcher: a native slide-out file drawer over a CodeMirror editor, with source control available from a Git icon in the drawer rail.
 
 ## Assumptions
 
@@ -34,10 +34,13 @@ The POC should make the answer visible in the running app, not merely assert it 
 - [x] Add a project-scoped IDE entry point to the mobile app — _IDE action in the project chat header opens `/project/[projectId]/ide-prototype`_
 - [x] Load the config repo's file list and text contents through the existing authenticated itx session — _`project.repo.listFiles()` plus lazy `readFile()`; known binary extensions are counted and hidden_
 - [x] Support browse/search, open, edit, create, delete, pending-change review, and a user-triggered batch commit — _in-memory store builds one explicit `repo.commitFiles()` batch; no autosave-to-main_
-- [x] Provide three meaningfully different layouts behind an obvious prototype switcher, without duplicating repo state/mutation logic — _native explorer/editor baseline, hybrid horizontal explorer, and review-first working tree; `?variant=native|hybrid|review`_
+- [x] Collapse the layout exploration to one selected interaction and delete the losing variants — _native animated drawer over CodeMirror; `>>` opens it, `<<` hides it, and selecting a file hides it automatically_
+- [x] Use the researched tree library rather than a flat file list — _`react-native-tree-multi-select` supplies FlashList virtualization and expansion state; a custom row removes its checkbox/drag product model_
+- [x] Put source control in the drawer's web-OS-shaped Git rail — _Git branch icon carries the pending count and opens commit message, change list, discard, and batch commit controls_
 - [x] Keep prototype state in memory and clearly label the surface as experimental — _module store only; yellow experimental banner and prototype filenames/comments_
-- [x] Verify typecheck, formatting/lint, Expo bundle health, and the focused mobile tests — _mobile typecheck + 30 tests, root lint, and `expo export --platform ios` all pass; DOM bundle is 1.21 MB and native Hermes bundle 4.1 MB_
-- [ ] Exercise the POC against a real local/preview project and capture visual evidence for the PR
+- [x] Verify typecheck, formatting/lint, Expo bundle health, and the focused mobile tests — _mobile typecheck + 30 tests, root lint, and `expo export --platform ios` all pass; DOM bundle is 1.21 MB and native Hermes bundle 4.57 MB with the tree/icon dependencies_
+- [ ] Exercise the POC against a real local/preview project on a phone
+- [x] Capture phone-width interaction evidence for the PR — _390×844 browser pass covers drawer animation, folder tree, file-open dismissal, CodeMirror edit, Git dirty badge, change review, and demo commit_
 - [x] Record the verdict and the smallest credible production follow-up — _provisional verdict: hybrid native chrome + CodeMirror; production follow-up must compare Expo DOM with an OTA-friendly manually bundled WebView after the phone pass_
 
 ## Research verdict (2026-07-17)
@@ -61,11 +64,12 @@ The POC should make the answer visible in the running app, not merely assert it 
 
 ### File tree
 
-- [`react-native-tree-multi-select`](https://github.com/JairajJangle/react-native-tree-multi-select) is a surprisingly credible active MIT option: Expo Go support, FlashList virtualization, search, custom rows, accessibility, and drag/drop. Its default product model is checkbox multi-selection plus reparenting, though, which adds dependencies and dangerous affordances that do not match “tap a path to edit it.”
-- The POC therefore uses native `FlatList` path browsing/search. If the on-phone pass proves thousands of paths or collapsible hierarchy are essential, the package is worth a focused follow-up; editor technology is the risky unknown, not converting slash-delimited paths into rows.
+- [`react-native-tree-multi-select`](https://github.com/JairajJangle/react-native-tree-multi-select) is a surprisingly credible active MIT option: Expo Go support, FlashList virtualization, search, custom rows, accessibility, and drag/drop. Its default product model is checkbox multi-selection plus reparenting, but its `CustomNodeRowComponent` retains the library's expansion/virtualization behavior while handing the whole row interaction to us.
+- The selected POC uses that custom-row seam for a conventional repo tree: folders expand, files open, dirty files get a marker, and checkbox/drag affordances are absent. This is more dependency than a hand-written flat list, but it answers the user's hierarchy question directly and gives large repos a credible virtualization path.
 
 ## Implementation log
 
 - 2026-07-17: created from `origin/main` in `/Users/mmkal/src/worktrees/iterate/mobile-ide-poc`. Scope intentionally favors learning about editor technology and phone interaction over desktop IDE parity.
-- 2026-07-17: selected CodeMirror 6 in Expo DOM after upstream/registry research. Built three shareable variants over one in-memory store. `expo export` successfully emitted the native bundle plus the offline DOM editor bundle, proving the SDK 54/Expo Go packaging path rather than assuming it.
-- 2026-07-17: headed browser pass at 390×844 through the explicit `?demo=1` fixture: opened and edited CodeMirror content, observed the pending count, switched across all three variants without losing the edit, created a nested file, and completed a simulated batch commit while retaining the new clean file. Screenshots: `docs/pr-assets/mobile-ide-poc-{native,hybrid,review}.png`. Browser console had only React Native Web's existing deprecation warnings. This proves rendered layout/state and browser CodeMirror behavior, not iOS WebView touch/IME or a real itx mutation; that remains the one required phone pass.
+- 2026-07-17: selected CodeMirror 6 in Expo DOM after upstream/registry research. The initial three-layout comparison shared one in-memory store. `expo export` successfully emitted the native bundle plus the offline DOM editor bundle, proving the SDK 54/Expo Go packaging path rather than assuming it.
+- 2026-07-17: user selected one direction. Removed the switcher and losing layouts; installed `react-native-tree-multi-select`, its Expo-compatible FlashList peer, and Expo icons. The winner uses a native animated drawer, custom virtualized tree rows, and a files/source-control icon rail modeled on web OS.
+- 2026-07-17: headed browser pass at 390×844 through `?demo=1`: collapsed/expanded the drawer, opened a file (which dismissed the drawer), edited CodeMirror content, observed the Git badge, reviewed the modified file, and completed a simulated commit back to a clean tree. Screenshots: `docs/pr-assets/mobile-ide-poc-{drawer,git}.png`. Browser console had React Native Web's style/pointer-event deprecations and its expected JS fallback for `Animated`; no application exception. This proves rendered layout/state and browser CodeMirror behavior, not iOS WebView touch/IME or a real itx mutation; that remains the required phone pass.

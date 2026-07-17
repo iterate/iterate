@@ -4,11 +4,11 @@
 
 import { useSyncExternalStore } from "react";
 
-export type PrototypeVariant = "native" | "hybrid" | "review";
-
 type Snapshot = {
   buffers: Record<string, { current: string | null; head: string | null; loaded: boolean }>;
   commitMessage: string;
+  drawerOpen: boolean;
+  drawerView: "files" | "git";
   filter: string;
   headChanged: boolean;
   headCommitOid: string | null;
@@ -26,6 +26,8 @@ class PrototypeRepoStore {
   #snapshot: Snapshot = {
     buffers: {},
     commitMessage: "Edit project files from mobile",
+    drawerOpen: true,
+    drawerView: "files",
     filter: "",
     headChanged: false,
     headCommitOid: null,
@@ -181,6 +183,14 @@ class PrototypeRepoStore {
 
   setCommitMessage(commitMessage: string) {
     this.#update({ commitMessage });
+  }
+
+  closeDrawer() {
+    this.#update({ drawerOpen: false });
+  }
+
+  openDrawer(drawerView: "files" | "git") {
+    this.#update({ drawerOpen: true, drawerView });
   }
 
   setFilter(filter: string) {

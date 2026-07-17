@@ -1,47 +1,43 @@
-// PROTOTYPE — three mobile repo-management layouts behind ?variant=. This is
-// intentionally disposable; the research verdict lives in tasks/mobile-ide-poc.md.
+// PROTOTYPE — a native repo drawer around a bundled CodeMirror DOM component.
+// This is intentionally disposable; the research verdict lives in tasks/mobile-ide-poc.md.
 
+import Feather from "@expo/vector-icons/Feather";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { router, Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams } from "expo-router";
+import { Component, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
+  Animated,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
+import { TreeView, type NodeRowProps, type TreeNode } from "react-native-tree-multi-select";
 import CodeEditorPrototype from "../../../components/code-editor-prototype.tsx";
 import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import {
   prototypeRepoStore,
   usePrototypeRepo,
   type PendingRepoChange,
-  type PrototypeVariant,
 } from "../../../lib/repo-ide-prototype.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
-const variants: { key: PrototypeVariant; label: string }[] = [
-  { key: "native", label: "Native baseline" },
-  { key: "hybrid", label: "Hybrid explorer" },
-  { key: "review", label: "Review first" },
-];
-
 export default function RepoIdePrototypeScreen() {
-  const params = useLocalSearchParams<{ demo?: string; projectId: string; variant?: string }>();
+  const params = useLocalSearchParams<{ demo?: string; projectId: string }>();
   const projectId = params.projectId;
   const demo = params.demo === "1";
-  const variant = variants.some((entry) => entry.key === params.variant)
-    ? (params.variant as PrototypeVariant)
-    : "hybrid";
   const queryClient = useQueryClient();
   const repoState = usePrototypeRepo(projectId);
   const store = prototypeRepoStore(projectId);
+  const { width } = useWindowDimensions();
+  const drawerWidth = Math.min(width - 28, 420);
 
   const files = useQuery({
     queryKey: ["mobile-repo-ide-prototype", projectId, demo ? "demo" : "live", "files"],
@@ -50,10 +46,7 @@ export default function RepoIdePrototypeScreen() {
       if (demo) {
         const paths = Object.keys(demoRepo).sort();
         if (store.getSnapshot().headCommitOid === null) store.setHead("demo1234567890", paths);
-        if (
-          store.getSnapshot().selectedPath === null &&
-          store.getSnapshot().headCommitOid === "demo1234567890"
-        )
+        if (store.getSnapshot().selectedPath === null)
           store.open("src/worker.ts", demoRepo["src/worker.ts"]!);
         const current = store.getSnapshot();
         return {
@@ -81,8 +74,7 @@ export default function RepoIdePrototypeScreen() {
         if (content === undefined) throw new Error(`Demo file no longer exists: ${path}`);
         return { commitOid: "demo1234567890", content, path };
       }
-      const repo = await getProjectRepo(projectId);
-      const file = await repo.readFile({ path });
+      const file = await (await getProjectRepo(projectId)).readFile({ path });
       if (file === null) throw new Error(`File no longer exists: ${path}`);
       return file;
     },
@@ -98,7 +90,7 @@ export default function RepoIdePrototypeScreen() {
       const current = store.getSnapshot();
       const pending = store.pendingChanges();
       const message = current.commitMessage.trim();
-      if (current.headChanged) throw new Error("HEAD changed. Discard or reload this prototype.");
+      if (current.headChanged) throw new Error("HEAD changed. Reload before committing.");
       if (message === "") throw new Error("Enter a commit message.");
       if (pending.length === 0) throw new Error("There are no changes to commit.");
       const result = demo
@@ -141,34 +133,18 @@ export default function RepoIdePrototypeScreen() {
   });
 
   const openPath = (path: string) => {
+    store.closeDrawer();
     if (repoState.buffers[path]) store.select(path);
     else openFile.mutate(path);
   };
   const filteredPaths = repoState.paths.filter((path) =>
     path.toLowerCase().includes(repoState.filter.toLowerCase()),
   );
-  const workspaceProps: WorkspaceProps = {
-    buffers: repoState.buffers,
-    filter: repoState.filter,
-    isOpening: openFile.isPending,
-    onChange: (content) => store.updateSelected(content),
-    onDelete: (path) =>
-      Alert.alert("Delete file?", path, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Delete", style: "destructive", onPress: () => store.remove(path) },
-      ]),
-    onDiscard: (path) => store.discard(path),
-    onFilter: (filter) => store.setFilter(filter),
-    onOpen: openPath,
-    paths: filteredPaths,
-    pending: repoState.pending,
-    selectedBuffer: repoState.selectedBuffer,
-    selectedPath: repoState.selectedPath,
-  };
+  const tree = repoTree(filteredPaths, repoState.buffers, repoState.selectedPath, openPath);
 
   return (
     <View style={styles.screen}>
-      <Stack.Screen options={{ title: "IDE prototype" }} />
+      <Stack.Screen options={{ title: "Repo" }} />
       <View style={styles.prototypeBanner}>
         <Text style={styles.prototypeLabel}>
           EXPERIMENTAL · {demo ? "DEMO DATA" : "CONFIG REPO"}
@@ -180,322 +156,204 @@ export default function RepoIdePrototypeScreen() {
             : ""}
         </Text>
       </View>
-      <CreateFileBar
-        newPath={repoState.newPath}
-        onChange={(newPath) => store.setNewPath(newPath)}
-        onCreate={() => {
-          try {
-            store.create();
-          } catch (error) {
-            Alert.alert(
-              "Could not create file",
-              error instanceof Error ? error.message : "Invalid path",
-            );
-          }
-        }}
-      />
-      {files.isPending ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.textMuted} />
-          <Text style={styles.muted}>Loading config repo…</Text>
-        </View>
-      ) : files.isError ? (
-        <View style={styles.center}>
-          <Text style={styles.error}>{files.error.message}</Text>
-          <Pressable style={styles.outlineButton} onPress={() => files.refetch()}>
-            <Text style={styles.buttonText}>Retry</Text>
-          </Pressable>
-        </View>
-      ) : variant === "native" ? (
-        <NativeWorkbench {...workspaceProps} />
-      ) : variant === "review" ? (
-        <ReviewWorkbench {...workspaceProps} />
-      ) : (
-        <HybridWorkbench {...workspaceProps} />
-      )}
-      <CommitDock
-        commitMessage={repoState.commitMessage}
-        committing={commit.isPending}
-        headChanged={repoState.headChanged}
-        onChange={(message) => store.setCommitMessage(message)}
-        onCommit={() => commit.mutate()}
-        onReload={() =>
-          Alert.alert("Discard local changes?", "Reload the repo's latest HEAD.", [
-            { text: "Cancel", style: "cancel" },
-            {
-              text: "Discard and reload",
-              style: "destructive",
-              onPress: () => {
-                if (files.data) store.replaceHead(files.data.commitOid, files.data.textPaths);
-              },
-            },
-          ])
-        }
-        pending={repoState.pending}
-      />
-      {__DEV__ ? <PrototypeSwitcher current={variant} /> : null}
-    </View>
-  );
-}
-
-type WorkspaceProps = {
-  buffers: Record<string, { current: string | null; head: string | null; loaded: boolean }>;
-  filter: string;
-  isOpening: boolean;
-  onChange: (content: string) => void;
-  onDelete: (path: string) => void;
-  onDiscard: (path: string) => void;
-  onFilter: (filter: string) => void;
-  onOpen: (path: string) => void;
-  paths: string[];
-  pending: PendingRepoChange[];
-  selectedBuffer: { current: string | null; head: string | null; loaded: boolean } | undefined;
-  selectedPath: string | null;
-};
-
-function NativeWorkbench(props: WorkspaceProps) {
-  return (
-    <View style={styles.workbench}>
-      <View style={styles.nativeExplorer}>
-        <VariantHeading
-          title="Native baseline"
-          detail="FlatList + multiline TextInput: zero bridge, zero syntax highlighting"
-        />
-        <FileSearch value={props.filter} onChange={props.onFilter} />
-        <FileList {...props} />
-      </View>
-      <View style={styles.nativeEditor}>
-        <EditorHeader {...props} />
-        {props.selectedPath && props.selectedBuffer?.current !== null ? (
-          <TextInput
-            autoCapitalize="none"
-            autoCorrect={false}
-            multiline
-            onChangeText={props.onChange}
-            selectionColor={colors.accent}
-            spellCheck={false}
-            style={styles.nativeInput}
-            value={props.selectedBuffer?.current || ""}
-          />
-        ) : (
-          <EmptyEditor isOpening={props.isOpening} />
-        )}
-      </View>
-    </View>
-  );
-}
-
-function HybridWorkbench(props: WorkspaceProps) {
-  return (
-    <View style={styles.workbench}>
-      <VariantHeading
-        title="Hybrid explorer"
-        detail="Native file chrome with a bundled CodeMirror WebView"
-      />
-      <FileSearch value={props.filter} onChange={props.onFilter} />
-      <View style={styles.hybridFiles}>
-        <FileList {...props} horizontal />
-      </View>
-      <View style={styles.webEditor}>
-        <EditorHeader {...props} />
-        <WebEditor {...props} />
-      </View>
-    </View>
-  );
-}
-
-function ReviewWorkbench(props: WorkspaceProps) {
-  return (
-    <View style={styles.workbench}>
-      <VariantHeading
-        title="Review first"
-        detail="Pending mutations stay visible while the editor occupies the middle"
-      />
-      <View style={styles.pendingPanel}>
-        <Text style={styles.sectionLabel}>PENDING ({props.pending.length})</Text>
-        <PendingList pending={props.pending} onDiscard={props.onDiscard} onOpen={props.onOpen} />
-      </View>
-      <View style={styles.reviewEditor}>
-        <EditorHeader {...props} />
-        <WebEditor {...props} />
-      </View>
-      <View style={styles.reviewBrowser}>
-        <FileSearch value={props.filter} onChange={props.onFilter} compact />
-        <FileList {...props} horizontal />
-      </View>
-    </View>
-  );
-}
-
-function WebEditor(props: WorkspaceProps) {
-  if (!props.selectedPath || props.selectedBuffer?.current === null)
-    return <EmptyEditor isOpening={props.isOpening} />;
-  return (
-    <CodeEditorPrototype
-      dom={{ scrollEnabled: false, style: { flex: 1 } }}
-      onChange={async (content) => props.onChange(content)}
-      path={props.selectedPath}
-      value={props.selectedBuffer?.current || ""}
-    />
-  );
-}
-
-function FileList(props: WorkspaceProps & { horizontal?: boolean }) {
-  return (
-    <FlatList
-      contentContainerStyle={
-        props.horizontal ? styles.horizontalFilesContent : styles.fileListContent
-      }
-      data={props.paths}
-      horizontal={props.horizontal}
-      keyboardShouldPersistTaps="handled"
-      keyExtractor={(path) => path}
-      ListEmptyComponent={<Text style={styles.muted}>No matching text files.</Text>}
-      renderItem={({ item: path }) => {
-        const dirty = props.buffers[path]?.current !== props.buffers[path]?.head;
-        return (
-          <Pressable
-            onPress={() => props.onOpen(path)}
-            style={[
-              props.horizontal ? styles.fileChip : styles.fileRow,
-              props.selectedPath === path && styles.fileSelected,
-            ]}
-          >
-            <Text numberOfLines={1} style={styles.fileName}>
-              {dirty ? "● " : ""}
-              {path.split("/").pop()}
-            </Text>
-            {!props.horizontal ? (
-              <Text numberOfLines={1} style={styles.fileParent}>
-                {path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "/"}
-              </Text>
-            ) : null}
-          </Pressable>
-        );
-      }}
-      showsHorizontalScrollIndicator={false}
-    />
-  );
-}
-
-function PendingList({
-  onDiscard,
-  onOpen,
-  pending,
-}: {
-  onDiscard: (path: string) => void;
-  onOpen: (path: string) => void;
-  pending: PendingRepoChange[];
-}) {
-  if (pending.length === 0) return <Text style={styles.muted}>Working tree clean.</Text>;
-  return (
-    <ScrollView horizontal contentContainerStyle={styles.pendingContent}>
-      {pending.map((change) => (
-        <View key={change.path} style={styles.changeChip}>
-          <Pressable disabled={change.kind === "delete"} onPress={() => onOpen(change.path)}>
-            <Text style={styles.changeKind}>{change.kind.toUpperCase()}</Text>
-            <Text numberOfLines={1} style={styles.changePath}>
-              {change.path}
-            </Text>
-          </Pressable>
-          <Pressable onPress={() => onDiscard(change.path)}>
-            <Text style={styles.discardText}>Discard</Text>
-          </Pressable>
-        </View>
-      ))}
-    </ScrollView>
-  );
-}
-
-function EditorHeader(props: WorkspaceProps) {
-  const dirty =
-    props.selectedPath !== null && props.selectedBuffer?.current !== props.selectedBuffer?.head;
-  return (
-    <View style={styles.editorHeader}>
-      <Text numberOfLines={1} style={styles.editorPath}>
-        {props.selectedPath ? `${dirty ? "● " : ""}${props.selectedPath}` : "No file open"}
-      </Text>
-      {props.selectedPath ? (
-        <View style={styles.editorActions}>
-          {dirty ? (
-            <Pressable onPress={() => props.onDiscard(props.selectedPath!)}>
-              <Text style={styles.headerAction}>Discard</Text>
+      <View style={styles.workbench}>
+        {files.isPending ? (
+          <EmptyEditor label="Loading config repo…" />
+        ) : files.isError ? (
+          <View style={styles.center}>
+            <Text style={styles.error}>{files.error.message}</Text>
+            <Pressable style={styles.outlineButton} onPress={() => files.refetch()}>
+              <Text style={styles.buttonText}>Retry</Text>
             </Pressable>
-          ) : null}
-          <Pressable onPress={() => props.onDelete(props.selectedPath!)}>
-            <Text style={styles.deleteAction}>Delete</Text>
-          </Pressable>
-        </View>
-      ) : null}
+          </View>
+        ) : (
+          <>
+            <EditorHeader
+              dirty={
+                repoState.selectedPath !== null &&
+                repoState.selectedBuffer?.current !== repoState.selectedBuffer?.head
+              }
+              onDelete={() => {
+                const path = repoState.selectedPath;
+                if (!path) return;
+                Alert.alert("Delete file?", path, [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Delete", style: "destructive", onPress: () => store.remove(path) },
+                ]);
+              }}
+              onDiscard={() => {
+                if (repoState.selectedPath) store.discard(repoState.selectedPath);
+              }}
+              onOpenDrawer={() => store.openDrawer("files")}
+              path={repoState.selectedPath}
+            />
+            {repoState.selectedPath && repoState.selectedBuffer?.current !== null ? (
+              <CodeEditorPrototype
+                dom={{ scrollEnabled: false, style: { flex: 1 } }}
+                onChange={async (content) => store.updateSelected(content)}
+                path={repoState.selectedPath}
+                value={repoState.selectedBuffer?.current || ""}
+              />
+            ) : (
+              <EmptyEditor
+                label={openFile.isPending ? "Opening file…" : "Choose a file to edit."}
+              />
+            )}
+          </>
+        )}
+
+        <SlidingDrawer open={repoState.drawerOpen} width={drawerWidth}>
+          <View style={styles.drawerRail}>
+            <DrawerIcon
+              active={repoState.drawerView === "files"}
+              icon="folder"
+              label="Files"
+              onPress={() => store.openDrawer("files")}
+            />
+            <DrawerIcon
+              active={repoState.drawerView === "git"}
+              badge={repoState.pending.length}
+              icon="git-branch"
+              label="Source control"
+              onPress={() => store.openDrawer("git")}
+            />
+          </View>
+          <View style={styles.drawerContent}>
+            <View style={styles.drawerHeader}>
+              <View>
+                <Text style={styles.drawerEyebrow}>
+                  {repoState.drawerView === "files" ? "EXPLORER" : "SOURCE CONTROL"}
+                </Text>
+                <Text style={styles.drawerTitle}>
+                  {repoState.drawerView === "files" ? "Project files" : "Working tree"}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Hide drawer"
+                hitSlop={12}
+                onPress={() => store.closeDrawer()}
+              >
+                <Text style={styles.drawerToggle}>{"<<"}</Text>
+              </Pressable>
+            </View>
+            {repoState.drawerView === "files" ? (
+              <FileDrawer
+                filter={repoState.filter}
+                newPath={repoState.newPath}
+                onCreate={() => {
+                  try {
+                    store.create();
+                    store.closeDrawer();
+                  } catch (error) {
+                    Alert.alert(
+                      "Could not create file",
+                      error instanceof Error ? error.message : "Invalid path",
+                    );
+                  }
+                }}
+                onFilter={(filter) => store.setFilter(filter)}
+                onNewPath={(newPath) => store.setNewPath(newPath)}
+                tree={tree}
+              />
+            ) : (
+              <GitDrawer
+                commitMessage={repoState.commitMessage}
+                committing={commit.isPending}
+                headChanged={repoState.headChanged}
+                onChange={(message) => store.setCommitMessage(message)}
+                onCommit={() => commit.mutate()}
+                onDiscard={(path) => store.discard(path)}
+                onOpen={openPath}
+                onReload={() =>
+                  Alert.alert("Discard local changes?", "Reload the repo's latest HEAD.", [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Discard and reload",
+                      style: "destructive",
+                      onPress: () => {
+                        if (files.data)
+                          store.replaceHead(files.data.commitOid, files.data.textPaths);
+                      },
+                    },
+                  ])
+                }
+                pending={repoState.pending}
+              />
+            )}
+          </View>
+        </SlidingDrawer>
+      </View>
     </View>
   );
 }
 
-function EmptyEditor({ isOpening }: { isOpening: boolean }) {
-  return (
-    <View style={styles.center}>
-      {isOpening ? <ActivityIndicator color={colors.textMuted} /> : null}
-      <Text style={styles.muted}>{isOpening ? "Opening file…" : "Choose a file to edit."}</Text>
-    </View>
-  );
-}
-
-function FileSearch({
-  compact = false,
-  onChange,
-  value,
-}: {
-  compact?: boolean;
-  onChange: (value: string) => void;
-  value: string;
-}) {
-  return (
-    <TextInput
-      autoCapitalize="none"
-      autoCorrect={false}
-      onChangeText={onChange}
-      placeholder="Filter paths…"
-      placeholderTextColor={colors.textFaint}
-      style={[styles.search, compact && styles.searchCompact]}
-      value={value}
-    />
-  );
-}
-
-function CreateFileBar({
+function FileDrawer({
+  filter,
   newPath,
-  onChange,
   onCreate,
+  onFilter,
+  onNewPath,
+  tree,
 }: {
+  filter: string;
   newPath: string;
-  onChange: (value: string) => void;
   onCreate: () => void;
+  onFilter: (value: string) => void;
+  onNewPath: (value: string) => void;
+  tree: RepoTreeNode[];
 }) {
   return (
-    <View style={styles.createBar}>
+    <View style={styles.drawerPanel}>
       <TextInput
         autoCapitalize="none"
         autoCorrect={false}
-        onChangeText={onChange}
-        onSubmitEditing={onCreate}
-        placeholder="new/path.ts"
+        onChangeText={onFilter}
+        placeholder="Filter paths…"
         placeholderTextColor={colors.textFaint}
-        style={styles.createInput}
-        value={newPath}
+        style={styles.search}
+        value={filter}
       />
-      <Pressable style={styles.smallButton} onPress={onCreate}>
-        <Text style={styles.smallButtonText}>New file</Text>
-      </Pressable>
+      <View style={styles.treeFrame}>
+        {tree.length === 0 ? (
+          <Text style={styles.muted}>No matching text files.</Text>
+        ) : (
+          <TreeView
+            CustomNodeRowComponent={RepoTreeRow}
+            data={tree}
+            indentationMultiplier={16}
+            preExpandedIds={directoryIds(tree)}
+            selectionPropagation={{ toChildren: false, toParents: false }}
+            treeFlashListProps={{ keyboardShouldPersistTaps: "handled" }}
+          />
+        )}
+      </View>
+      <View style={styles.createBar}>
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={onNewPath}
+          onSubmitEditing={onCreate}
+          placeholder="new/path.ts"
+          placeholderTextColor={colors.textFaint}
+          style={styles.createInput}
+          value={newPath}
+        />
+        <Pressable style={styles.smallButton} onPress={onCreate}>
+          <Feather color={colors.text} name="file-plus" size={16} />
+        </Pressable>
+      </View>
     </View>
   );
 }
 
-function CommitDock({
+function GitDrawer({
   commitMessage,
   committing,
   headChanged,
   onChange,
   onCommit,
+  onDiscard,
+  onOpen,
   onReload,
   pending,
 }: {
@@ -504,61 +362,255 @@ function CommitDock({
   headChanged: boolean;
   onChange: (value: string) => void;
   onCommit: () => void;
+  onDiscard: (path: string) => void;
+  onOpen: (path: string) => void;
   onReload: () => void;
   pending: PendingRepoChange[];
 }) {
   const disabled = committing || (!headChanged && pending.length === 0);
   return (
-    <View style={styles.commitDock}>
-      <TextInput
-        onChangeText={onChange}
-        placeholder="Commit message"
-        placeholderTextColor={colors.textFaint}
-        style={styles.commitInput}
-        value={commitMessage}
+    <View style={styles.drawerPanel}>
+      <View style={styles.commitForm}>
+        <TextInput
+          onChangeText={onChange}
+          placeholder="Commit message"
+          placeholderTextColor={colors.textFaint}
+          style={styles.commitInput}
+          value={commitMessage}
+        />
+        <Pressable
+          disabled={disabled}
+          onPress={headChanged ? onReload : onCommit}
+          style={[styles.commitButton, disabled && styles.buttonDisabled]}
+        >
+          <Feather color="#07120f" name="git-commit" size={15} />
+          <Text style={styles.commitButtonText}>
+            {headChanged ? "Reload HEAD" : committing ? "Committing…" : `Commit ${pending.length}`}
+          </Text>
+        </Pressable>
+      </View>
+      <View style={styles.changeHeading}>
+        <Text style={styles.drawerEyebrow}>CHANGES</Text>
+        <Text style={styles.changeCount}>{pending.length}</Text>
+      </View>
+      <ScrollView contentContainerStyle={styles.changeList}>
+        {pending.length === 0 ? <Text style={styles.muted}>Working tree clean.</Text> : null}
+        {pending.map((change) => (
+          <View key={change.path} style={styles.changeRow}>
+            <Pressable
+              disabled={change.kind === "delete"}
+              onPress={() => onOpen(change.path)}
+              style={styles.changePathButton}
+            >
+              <Text numberOfLines={1} style={styles.changePath}>
+                {change.path}
+              </Text>
+            </Pressable>
+            <Text style={styles.changeKind}>
+              {change.kind === "create" ? "A" : change.kind === "delete" ? "D" : "M"}
+            </Text>
+            <Pressable
+              accessibilityLabel={`Discard ${change.path}`}
+              onPress={() => onDiscard(change.path)}
+            >
+              <Feather color={colors.textMuted} name="rotate-ccw" size={14} />
+            </Pressable>
+          </View>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+type RepoTreeNode = TreeNode<string> & {
+  dirty: boolean;
+  kind: "directory" | "file";
+  onOpen?: () => void;
+  path: string;
+  selected: boolean;
+};
+
+function RepoTreeRow({ isExpanded, level, node, onExpand }: NodeRowProps<string>) {
+  const repoNode = node as RepoTreeNode;
+  const directory = repoNode.kind === "directory";
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={directory ? onExpand : repoNode.onOpen}
+      style={[
+        styles.treeRow,
+        { paddingLeft: 8 + level * 16 },
+        repoNode.selected && styles.treeRowSelected,
+      ]}
+    >
+      <Feather
+        color={directory ? colors.working : colors.textMuted}
+        name={directory ? (isExpanded ? "folder-minus" : "folder-plus") : "file-text"}
+        size={15}
       />
-      <Pressable
-        disabled={disabled}
-        onPress={headChanged ? onReload : onCommit}
-        style={[styles.commitButton, disabled && styles.buttonDisabled]}
+      <Text numberOfLines={1} style={styles.treeName}>
+        {repoNode.name}
+      </Text>
+      {repoNode.dirty ? <Text style={styles.dirtyDot}>●</Text> : null}
+    </Pressable>
+  );
+}
+
+function DrawerIcon({
+  active,
+  badge = 0,
+  icon,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  badge?: number;
+  icon: "folder" | "git-branch";
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={[styles.railButton, active && styles.railButtonActive]}
+    >
+      <Feather color={active ? colors.text : colors.textMuted} name={icon} size={20} />
+      {badge > 0 ? (
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{badge}</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+class SlidingDrawer extends Component<{
+  children: ReactNode;
+  open: boolean;
+  width: number;
+}> {
+  translateX = new Animated.Value(this.props.open ? 0 : -this.props.width);
+
+  componentDidUpdate(previous: Readonly<{ open: boolean; width: number }>) {
+    if (previous.open === this.props.open && previous.width === this.props.width) return;
+    Animated.spring(this.translateX, {
+      bounciness: 0,
+      speed: 24,
+      toValue: this.props.open ? 0 : -this.props.width,
+      useNativeDriver: true,
+    }).start();
+  }
+
+  render() {
+    return (
+      <Animated.View
+        pointerEvents={this.props.open ? "auto" : "none"}
+        style={[
+          styles.drawer,
+          { transform: [{ translateX: this.translateX }], width: this.props.width },
+        ]}
       >
-        <Text style={styles.commitButtonText}>
-          {headChanged ? "Reload HEAD" : committing ? "Committing…" : `Commit ${pending.length}`}
-        </Text>
+        {this.props.children}
+      </Animated.View>
+    );
+  }
+}
+
+function EditorHeader({
+  dirty,
+  onDelete,
+  onDiscard,
+  onOpenDrawer,
+  path,
+}: {
+  dirty: boolean;
+  onDelete: () => void;
+  onDiscard: () => void;
+  onOpenDrawer: () => void;
+  path: string | null;
+}) {
+  return (
+    <View style={styles.editorHeader}>
+      <Pressable accessibilityLabel="Show file drawer" hitSlop={8} onPress={onOpenDrawer}>
+        <Text style={styles.drawerToggle}>{">>"}</Text>
       </Pressable>
+      <Text numberOfLines={1} style={styles.editorPath}>
+        {path ? `${dirty ? "● " : ""}${path}` : "No file open"}
+      </Text>
+      {path ? (
+        <View style={styles.editorActions}>
+          {dirty ? (
+            <Pressable onPress={onDiscard}>
+              <Text style={styles.headerAction}>Discard</Text>
+            </Pressable>
+          ) : null}
+          <Pressable onPress={onDelete}>
+            <Text style={styles.deleteAction}>Delete</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
 
-function VariantHeading({ detail, title }: { detail: string; title: string }) {
+function EmptyEditor({ label }: { label: string }) {
   return (
-    <View style={styles.variantHeading}>
-      <Text style={styles.variantTitle}>{title}</Text>
-      <Text numberOfLines={1} style={styles.variantDetail}>
-        {detail}
-      </Text>
+    <View style={styles.center}>
+      {label.endsWith("…") ? <ActivityIndicator color={colors.textMuted} /> : null}
+      <Text style={styles.muted}>{label}</Text>
     </View>
   );
 }
 
-function PrototypeSwitcher({ current }: { current: PrototypeVariant }) {
-  const index = variants.findIndex((variant) => variant.key === current);
-  const go = (offset: number) => {
-    const next = variants[(index + offset + variants.length) % variants.length];
-    if (next) router.setParams({ variant: next.key });
-  };
-  return (
-    <View style={styles.switcher}>
-      <Pressable hitSlop={12} onPress={() => go(-1)}>
-        <Text style={styles.switchArrow}>‹</Text>
-      </Pressable>
-      <Text style={styles.switchLabel}>
-        {index + 1}/{variants.length} · {variants[index]?.label}
-      </Text>
-      <Pressable hitSlop={12} onPress={() => go(1)}>
-        <Text style={styles.switchArrow}>›</Text>
-      </Pressable>
-    </View>
+function repoTree(
+  paths: string[],
+  buffers: Record<string, { current: string | null; head: string | null }>,
+  selectedPath: string | null,
+  onOpen: (path: string) => void,
+) {
+  const roots: RepoTreeNode[] = [];
+  for (const path of paths) {
+    const segments = path.split("/");
+    let children = roots;
+    let parentPath = "";
+    for (const [index, name] of segments.entries()) {
+      const nodePath = parentPath ? `${parentPath}/${name}` : name;
+      const kind = index === segments.length - 1 ? "file" : "directory";
+      let node = children.find((candidate) => candidate.path === nodePath);
+      if (!node) {
+        node = {
+          id: `${kind}:${nodePath}`,
+          name,
+          path: nodePath,
+          kind,
+          dirty: kind === "file" && buffers[path]?.current !== buffers[path]?.head,
+          selected: kind === "file" && path === selectedPath,
+          ...(kind === "directory" ? { children: [] } : { onOpen: () => onOpen(path) }),
+        };
+        children.push(node);
+      }
+      children = node.children as RepoTreeNode[];
+      parentPath = nodePath;
+    }
+  }
+  sortTree(roots);
+  return roots;
+}
+
+function sortTree(nodes: RepoTreeNode[]) {
+  nodes.sort((left, right) => {
+    if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+    return left.name.localeCompare(right.name);
+  });
+  for (const node of nodes) if (node.children) sortTree(node.children as RepoTreeNode[]);
+}
+
+function directoryIds(nodes: RepoTreeNode[]): string[] {
+  return nodes.flatMap((node) =>
+    node.kind === "directory"
+      ? [node.id, ...directoryIds((node.children || []) as RepoTreeNode[])]
+      : [],
   );
 }
 
@@ -620,6 +672,7 @@ export default app;
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
+  workbench: { flex: 1, minHeight: 0 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.sm },
   muted: { color: colors.textMuted, fontSize: 13 },
   error: { color: colors.danger, fontSize: 13, textAlign: "center", padding: spacing.md },
@@ -632,70 +685,11 @@ const styles = StyleSheet.create({
   },
   prototypeLabel: { color: colors.working, fontSize: 10, fontWeight: "800", letterSpacing: 0.8 },
   headLabel: { color: colors.textMuted, fontSize: 10, fontFamily: "Menlo" },
-  createBar: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    padding: spacing.sm,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-  },
-  createInput: {
-    flex: 1,
-    color: colors.text,
-    backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontFamily: "Menlo",
-    fontSize: 12,
-  },
-  smallButton: {
-    justifyContent: "center",
-    backgroundColor: colors.surfaceRaised,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12,
-  },
-  smallButtonText: { color: colors.text, fontSize: 12, fontWeight: "700" },
-  workbench: { flex: 1, minHeight: 0 },
-  variantHeading: { paddingHorizontal: spacing.sm, paddingTop: 6, paddingBottom: 4 },
-  variantTitle: { color: colors.text, fontSize: 12, fontWeight: "800" },
-  variantDetail: { color: colors.textFaint, fontSize: 10 },
-  nativeExplorer: { flex: 4, minHeight: 0, borderBottomWidth: 1, borderColor: colors.border },
-  nativeEditor: { flex: 6, minHeight: 0 },
-  search: {
-    color: colors.text,
-    backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    marginHorizontal: spacing.sm,
-    marginBottom: spacing.xs,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    fontSize: 12,
-  },
-  searchCompact: { minWidth: 140, marginBottom: 0 },
-  fileListContent: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, gap: 4 },
-  horizontalFilesContent: { paddingHorizontal: spacing.sm, gap: 6, alignItems: "center" },
-  fileRow: {
-    borderRadius: radius.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: colors.surface,
-  },
-  fileChip: {
-    maxWidth: 180,
-    borderRadius: radius.full,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    backgroundColor: colors.surface,
-  },
-  fileSelected: { backgroundColor: "#233b35", borderColor: colors.accent, borderWidth: 1 },
-  fileName: { color: colors.text, fontSize: 12, fontFamily: "Menlo" },
-  fileParent: { color: colors.textFaint, fontSize: 10, fontFamily: "Menlo" },
   editorHeader: {
-    minHeight: 34,
+    minHeight: 38,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 10,
     paddingHorizontal: spacing.sm,
     borderBottomWidth: 1,
     borderColor: colors.border,
@@ -705,91 +699,162 @@ const styles = StyleSheet.create({
   editorActions: { flexDirection: "row", gap: spacing.sm },
   headerAction: { color: colors.textMuted, fontSize: 11 },
   deleteAction: { color: colors.danger, fontSize: 11 },
-  nativeInput: {
-    flex: 1,
-    color: colors.text,
-    padding: 12,
-    paddingBottom: 100,
-    fontFamily: "Menlo",
-    fontSize: 14,
-    lineHeight: 21,
-    textAlignVertical: "top",
-  },
-  hybridFiles: { height: 42 },
-  webEditor: { flex: 1, minHeight: 0, borderTopWidth: 1, borderColor: colors.border },
-  pendingPanel: { height: 94, paddingHorizontal: spacing.sm },
-  sectionLabel: {
-    color: colors.textFaint,
-    fontSize: 9,
-    fontWeight: "800",
-    letterSpacing: 0.7,
-    marginBottom: 4,
-  },
-  pendingContent: { gap: 6 },
-  changeChip: {
-    width: 150,
-    justifyContent: "space-between",
+  drawerToggle: { color: colors.text, fontFamily: "Menlo", fontSize: 15, fontWeight: "800" },
+  drawer: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    zIndex: 20,
+    flexDirection: "row",
     backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    padding: 7,
+    borderRightColor: colors.border,
+    borderRightWidth: 1,
+    shadowColor: "#000",
+    shadowOpacity: 0.55,
+    shadowRadius: 16,
+    elevation: 16,
   },
-  changeKind: { color: colors.accent, fontSize: 9, fontWeight: "800" },
-  changePath: { color: colors.text, fontFamily: "Menlo", fontSize: 10 },
-  discardText: { color: colors.textMuted, fontSize: 9 },
-  reviewEditor: {
-    flex: 1,
-    minHeight: 0,
-    borderTopWidth: 1,
+  drawerRail: {
+    width: 48,
+    alignItems: "center",
+    paddingTop: spacing.sm,
+    gap: spacing.xs,
+    backgroundColor: colors.background,
+    borderRightColor: colors.border,
+    borderRightWidth: 1,
+  },
+  railButton: {
+    width: 40,
+    height: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    borderLeftColor: "transparent",
+    borderLeftWidth: 2,
+  },
+  railButtonActive: { backgroundColor: colors.surfaceRaised, borderLeftColor: colors.accent },
+  badge: {
+    position: "absolute",
+    right: 2,
+    top: 2,
+    minWidth: 16,
+    height: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.full,
+    backgroundColor: colors.accent,
+  },
+  badgeText: { color: "#07120f", fontSize: 9, fontWeight: "900" },
+  drawerContent: { flex: 1, minWidth: 0 },
+  drawerHeader: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    borderBottomColor: colors.border,
     borderBottomWidth: 1,
-    borderColor: colors.border,
   },
-  reviewBrowser: { height: 48, flexDirection: "row", alignItems: "center" },
-  commitDock: {
+  drawerEyebrow: { color: colors.textFaint, fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
+  drawerTitle: { color: colors.text, fontSize: 14, fontWeight: "800", marginTop: 2 },
+  drawerPanel: { flex: 1, minHeight: 0 },
+  search: {
+    color: colors.text,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    margin: spacing.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 12,
+  },
+  treeFrame: { flex: 1, minHeight: 0, paddingHorizontal: spacing.xs },
+  treeRow: {
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingRight: 8,
+    borderRadius: radius.sm,
+  },
+  treeRowSelected: { backgroundColor: "#233b35" },
+  treeName: { flex: 1, color: colors.text, fontFamily: "Menlo", fontSize: 12 },
+  dirtyDot: { color: colors.accent, fontSize: 10 },
+  createBar: {
     flexDirection: "row",
     gap: spacing.sm,
     padding: spacing.sm,
-    paddingBottom: 54,
     borderTopWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
   },
-  commitInput: {
+  createInput: {
     flex: 1,
     color: colors.text,
     backgroundColor: colors.background,
     borderRadius: radius.sm,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 8,
+    fontFamily: "Menlo",
+    fontSize: 12,
+  },
+  smallButton: {
+    width: 38,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.sm,
+  },
+  commitForm: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderBottomWidth: 1,
+    borderColor: colors.border,
+  },
+  commitInput: {
+    color: colors.text,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
     fontSize: 12,
   },
   commitButton: {
-    minWidth: 94,
+    minHeight: 38,
+    flexDirection: "row",
+    gap: 7,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.accent,
     borderRadius: radius.sm,
-    paddingHorizontal: 10,
   },
   commitButtonText: { color: "#07120f", fontSize: 12, fontWeight: "800" },
   buttonDisabled: { opacity: 0.35 },
-  switcher: {
-    position: "absolute",
-    bottom: 8,
-    alignSelf: "center",
-    height: 38,
+  changeHeading: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
-    backgroundColor: "#ececf1",
-    borderRadius: radius.full,
-    paddingHorizontal: 14,
-    shadowColor: "#000",
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 5,
   },
-  switchArrow: { color: "#0b0b0f", fontSize: 27, lineHeight: 29 },
-  switchLabel: { color: "#0b0b0f", fontSize: 11, fontWeight: "800" },
+  changeCount: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 11 },
+  changeList: { paddingHorizontal: spacing.sm, paddingBottom: spacing.md },
+  changeRow: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.sm,
+  },
+  changePathButton: { flex: 1 },
+  changePath: { color: colors.text, fontFamily: "Menlo", fontSize: 11 },
+  changeKind: {
+    width: 12,
+    color: colors.accent,
+    fontFamily: "Menlo",
+    fontSize: 11,
+    fontWeight: "800",
+  },
   outlineButton: {
     borderColor: colors.border,
     borderWidth: 1,
