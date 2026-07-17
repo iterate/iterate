@@ -1,17 +1,36 @@
 import type { WorkerBuildOptions } from "./schemas.ts";
+import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 
 /**
  * The one dynamic-worker build recipe, shared verbatim by every runner: the
  * project's builder sandbox (deployed envs), the vite dev server's
- * `/__dev/worker-build` endpoint (local dev), and — later — the deploy-time
- * template seeder. One module generating identical files and commands is what
- * keeps those environments from growing separate resolution semantics; the
- * runner only supplies a directory, a way to execute shell commands, and a way
- * to read the outputs back.
+ * `/__dev/worker-build` endpoint (local dev), and the deploy-time template
+ * seeder. One module generating identical files and commands is what keeps
+ * those environments from growing separate resolution semantics; the runner
+ * only supplies a directory, a way to execute shell commands, and a way to
+ * read the outputs back.
  *
  * This module is deliberately pure (no env, no I/O) so node-side tooling can
  * import it without dragging worker bindings in.
  */
+
+/**
+ * Every bundled dynamic worker build can `import ... from "iterate/sdk"`: the
+ * platform supplies the sdk RUNTIME as a virtual module, pinned to this
+ * deployment — the seeded `iterate` devDependency exists for typechecking and
+ * editors, never as the runtime the platform executes. Injection happens
+ * BEFORE the build key is computed, and `options` is hashed into the key
+ * wholesale, so an sdk change invalidates cached artifacts instead of serving
+ * stale builds. A source that supplies its own `iterate/sdk` virtual module
+ * wins. Lives here (pure) because the deploy-time template seeder must inject
+ * the SAME module the runtime resolver does, or their build keys fork.
+ */
+export function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
+  return {
+    ...options,
+    virtualModules: { "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE, ...options.virtualModules },
+  };
+}
 
 /** Dynamic-worker compatibility, hashed into every build key (worker-loader).
  * Deliberately distinct from the OS worker's own COMPATIBILITY_DATE — dynamic
@@ -100,27 +119,21 @@ export function workerBuildRecipe(input: {
   // Wrangler infers the worker FORMAT from the entry: no default export means
   // "service-worker format", which then rejects `cloudflare:workers` imports.
   // Dynamic workers legitimately export only named entrypoints / Durable
-  // Object classes, so an entry that doesn't obviously default-export gets a
-  // generated shim entry that re-exports everything and forwards (or
-  // supplies) the default. The detection regex can miss exotic default
-  // re-export chains — harmless: the shim forwards a real default when one
-  // exists, so shimming is always CORRECT, just unnecessary in the common
-  // template case (which keeps its own entry name).
-  const hasDefaultExport = /export\s+default\b|export\s*\{[^}]*\bas\s+default\b/.test(
-    input.files[entryPoint]!,
-  );
-  const main = hasDefaultExport ? entryPoint : ENTRY_SHIM_FILE;
+  // Object classes, so EVERY build goes through a generated shim entry that
+  // re-exports the real entry and forwards (or supplies) its default.
+  // Unconditional on purpose: any syntactic detection of "has a default
+  // export" misclassifies strings/comments/re-export chains, and the shim is
+  // correct either way (`export *` carries the named exports; the explicit
+  // default line carries a real default when one exists).
   const entrySpecifier = JSON.stringify(`./${entryPoint}`);
-  const entryShim: Record<string, string> = hasDefaultExport
-    ? {}
-    : {
-        [ENTRY_SHIM_FILE]: [
-          `import * as entry from ${entrySpecifier};`,
-          `export * from ${entrySpecifier};`,
-          `export default (entry as { default?: unknown }).default ?? {};`,
-          ``,
-        ].join("\n"),
-      };
+  const entryShim: Record<string, string> = {
+    [ENTRY_SHIM_FILE]: [
+      `import * as entry from ${entrySpecifier};`,
+      `export * from ${entrySpecifier};`,
+      `export default (entry as { default?: unknown }).default ?? {};`,
+      ``,
+    ].join("\n"),
+  };
 
   const virtualModules = Object.entries(input.options.virtualModules ?? {});
   const alias = Object.fromEntries(
@@ -132,7 +145,7 @@ export function workerBuildRecipe(input: {
 
   const config = {
     name: "dynamic-worker-build",
-    main,
+    main: ENTRY_SHIM_FILE,
     compatibility_date: WORKER_COMPATIBILITY_DATE,
     compatibility_flags: WORKER_COMPATIBILITY_FLAGS,
     ...(virtualModules.length > 0 ? { alias } : {}),
@@ -167,7 +180,7 @@ export function workerBuildRecipe(input: {
         ]),
       ),
     },
-    mainModule: entryEmitName(main),
+    mainModule: entryEmitName(ENTRY_SHIM_FILE),
     outputDir: OUTPUT_DIR,
   };
 }

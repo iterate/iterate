@@ -15,8 +15,11 @@ import {
   type ResolvedWorkerFileSource,
 } from "./build-key.ts";
 import { executeWorkerBuild } from "./build-backend.ts";
-import { WORKER_COMPATIBILITY_DATE, WORKER_COMPATIBILITY_FLAGS } from "./build-recipe.ts";
-import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
+import {
+  WORKER_COMPATIBILITY_DATE,
+  WORKER_COMPATIBILITY_FLAGS,
+  withIterateSdkVirtualModule,
+} from "./build-recipe.ts";
 import type { WorkerServeInfo } from "./worker-serve-info.ts";
 import { stableSha256 } from "./utils.ts";
 
@@ -135,23 +138,6 @@ async function withBuildBudget(
   } finally {
     clearTimeout(timer);
   }
-}
-
-/**
- * Every bundled dynamic worker build can `import ... from "iterate/sdk"`: the
- * platform supplies the sdk RUNTIME as a virtual module, pinned to this
- * deployment — the seeded `iterate` devDependency exists for typechecking and
- * editors, never as the runtime the platform executes. Injection happens
- * BEFORE the build key is computed, and `options` is hashed into the key
- * wholesale, so an sdk change invalidates cached artifacts instead of serving
- * stale builds. A source that supplies its own `iterate/sdk` virtual module
- * wins.
- */
-function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
-  return {
-    ...options,
-    virtualModules: { "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE, ...options.virtualModules },
-  };
 }
 
 /** The resolve-scoped inputs the serve policy works with: which project,

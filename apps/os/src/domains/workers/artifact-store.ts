@@ -49,11 +49,13 @@ function moduleKey(buildKey: string, moduleName: string) {
   return `${KV_PREFIX}/${buildKey}/modules/${encodeURIComponent(moduleName)}`;
 }
 
-/** How long an in-flight marker suppresses duplicate budgeted builds. Long
- * enough to cover a cold npm-install build; short enough that a crashed
- * builder only delays budgeted callers, never blocks them forever (the
- * artifact write always wins over the marker). */
-const BUILD_IN_FLIGHT_TTL_SECONDS = 180;
+/** How long an in-flight marker suppresses duplicate budgeted builds. Must
+ * cover the recipe's whole per-build ceiling (install + bundle timeouts plus
+ * container-boot slack — see build-recipe.ts), or duplicate builds pile on
+ * exactly when a build is slowest; short enough that a crashed builder only
+ * delays budgeted callers, never blocks them forever (the artifact write
+ * always wins over the marker). */
+const BUILD_IN_FLIGHT_TTL_SECONDS = 360;
 
 function inFlightKey(buildKey: string) {
   return `${KV_PREFIX}/${buildKey}/building`;

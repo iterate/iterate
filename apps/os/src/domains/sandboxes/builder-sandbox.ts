@@ -81,16 +81,32 @@ export async function getOrCreateBuilderSandbox(
     // the catalogue append and the Durable Object call, or a durable
     // `creationPending` record from an interrupted birth — `create` is the
     // documented recovery for all three (it resumes the idempotent birth
-    // batch). A racing sibling's "already exists" is success by another name.
+    // batch). A racing sibling winning the birth is success by another name:
+    // "already exists" (it finished) or "creation is already in progress"
+    // (it is mid-birth) — for the latter, the assert loop below waits it out
+    // rather than flaking the first concurrent builds of a fresh project.
     try {
       await sandbox.create({ instanceType: BUILDER_SANDBOX_INSTANCE_TYPE, path, projectId });
     } catch (error) {
       if (isDestroyedSandboxError(error)) continue;
-      const raceWinnerExists = error instanceof Error && error.message.includes("already exists");
-      if (!raceWinnerExists) throw error;
+      const siblingIsBirthing =
+        error instanceof Error &&
+        (error.message.includes("already exists") ||
+          error.message.includes("creation is already in progress"));
+      if (!siblingIsBirthing) throw error;
     }
-    await sandbox.assertCreated(identity);
-    return { path, sandbox };
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await sandbox.assertCreated(identity);
+        return { path, sandbox };
+      } catch (error) {
+        // A sibling's in-flight birth answers "creation did not finish"
+        // until its batch commits — brief bounded waits cover the normal
+        // case; past them the error propagates as a retryable build error.
+        if (attempt >= 4 || !isUnbornSandboxError(error)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1_500));
+      }
+    }
   }
 
   throw new Error(

@@ -22,12 +22,12 @@ describe("workerBuildRecipe", () => {
       string,
       unknown
     >;
-    expect(config.main).toBe("worker.ts");
+    expect(config.main).toBe(".iterate-build.entry.ts");
     // OS owns dynamic-worker compatibility — never read from the source's own
     // wrangler config (a second compat channel would bypass the build key).
     expect(config.compatibility_date).toBe(WORKER_COMPATIBILITY_DATE);
     expect(config.compatibility_flags).toEqual(WORKER_COMPATIBILITY_FLAGS);
-    expect(recipe.mainModule).toBe("worker.js");
+    expect(recipe.mainModule).toBe(".iterate-build.entry.js");
     expect(recipe.outputDir).toBe(".iterate-build.out");
   });
 
@@ -67,39 +67,22 @@ describe("workerBuildRecipe", () => {
     expect(recipe.files[aliasTarget.slice(2)]).toBe("export const s = 1;");
   });
 
-  it("derives the emitted entry name from the entry's base name", () => {
-    const recipe = workerBuildRecipe({
-      files: { "src/index.ts": "export default {};" },
-      options: { entryPoint: "src/index.ts" },
-    });
-    expect(recipe.mainModule).toBe("index.js");
-  });
-
-  it("shims entries without a default export so wrangler builds module format", () => {
+  it("routes every build through the entry shim so wrangler always sees module format", () => {
     // Named-exports-only entries (a WorkerEntrypoint or Durable Object class
     // exported by name) would otherwise be inferred as service-worker format,
-    // which rejects cloudflare:workers imports.
+    // which rejects cloudflare:workers imports. Unconditional — syntactic
+    // "has a default export" detection misclassifies strings and comments,
+    // and the shim is correct either way.
     const recipe = workerBuildRecipe({
       files: {
-        "worker.ts":
+        "swr/probe.ts":
           'import { WorkerEntrypoint } from "cloudflare:workers";\nexport class Api extends WorkerEntrypoint {}',
       },
-      options: { entryPoint: "worker.ts" },
+      options: { entryPoint: "swr/probe.ts" },
     });
-    const config = JSON.parse(recipe.files[".iterate-build.wrangler.jsonc"]!) as { main: string };
-    expect(config.main).toBe(".iterate-build.entry.ts");
-    expect(recipe.files[".iterate-build.entry.ts"]).toContain('export * from "./worker.ts"');
+    expect(recipe.files[".iterate-build.entry.ts"]).toContain('export * from "./swr/probe.ts"');
+    expect(recipe.files[".iterate-build.entry.ts"]).toContain("entry.default ?? {}");
     expect(recipe.mainModule).toBe(".iterate-build.entry.js");
-
-    // An entry WITH a default export keeps its own name — no shim.
-    const direct = workerBuildRecipe({
-      files: { "worker.ts": "export default {};" },
-      options: { entryPoint: "worker.ts" },
-    });
-    expect(JSON.parse(direct.files[".iterate-build.wrangler.jsonc"]!)).toMatchObject({
-      main: "worker.ts",
-    });
-    expect(direct.files[".iterate-build.entry.ts"]).toBeUndefined();
   });
 
   it("defaults the entry to worker.ts and rejects a missing entry", () => {

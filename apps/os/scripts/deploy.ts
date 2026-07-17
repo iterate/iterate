@@ -56,6 +56,7 @@ import {
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
+import { seedTemplateWorkerArtifact } from "./lib/seed-template-worker-artifact.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 
@@ -205,6 +206,21 @@ export default async function deploy(
           (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
         ),
         compatibilityDate: COMPATIBILITY_DATE,
+      });
+
+      // Prebuild the project template's worker artifact into the env's
+      // artifact cache under the trusted content-only key. Project birth
+      // delivers events to the default project worker, which blocks on its
+      // build — without this seed, EVERY fresh project puts a builder-sandbox
+      // container cold-boot on `projects.create`'s 60s repo-ready deadline
+      // (observed wedging creation fleet-wide on preview). The spec here must
+      // match what the deployed worker's config carries — the block above
+      // just set it for previews.
+      await seedTemplateWorkerArtifact({
+        accountId: ctx.env.cloudflareAccountId,
+        apiToken: credentials.CLOUDFLARE_API_TOKEN!,
+        iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
+        kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
       });
 
       // The typechecker sidecar deploys FIRST: the os worker's TYPECHECKER

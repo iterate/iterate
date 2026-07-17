@@ -45,6 +45,7 @@ import {
   readCheckoutFileBytes,
   readCheckoutFiles,
   readCheckoutTextFile,
+  repoContentHash,
   walkCheckoutPaths,
 } from "./checkout-files.ts";
 import { diffFileMaps } from "./line-diff.ts";
@@ -1782,16 +1783,6 @@ function assertCommitOid(commitOid: string): void {
   if (!/^[0-9a-f]{40}$/.test(commitOid)) {
     throw new Error(`commitOid must be a full 40-character hex sha, got "${commitOid}".`);
   }
-}
-
-/**
- * Whole-checkout content identity. Build keys hash this plus the ref's masks,
- * so a commit touching only mask-excluded files still changes every build key
- * for the repo — a spurious cache miss (correct output, one extra build), the
- * accepted cost of getting fresh-seed artifact dedupe without per-mask hashes.
- */
-async function repoContentHash(files: Record<string, string>): Promise<string> {
-  return await stableSha256({ files, type: "repo-content" });
 }
 
 function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInput {
