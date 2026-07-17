@@ -5,7 +5,7 @@ size: large
 
 # Mobile native capabilities
 
-**Status summary:** implementation is roughly 85% complete. The signed development-build lane and first location-reminder slice are implemented, including a visible source-build stamp, agent list/create/edit/cancel guidance, device ownership, live/foreground reconciliation, semantic place resolution, geofencing, one-shot notification delivery, offline receipts, cold-start routing, cancellation, and an in-app device-disable path. Remaining: a real agent-to-device acceptance pass, physical background-delivery/tap-through evidence, refreshing places during long trips that never foreground the app, and the separate Secure Enclave/push-token work.
+**Status summary:** implementation is roughly 75% complete. The signed development-build lane and first location-reminder slice are implemented, including a visible source-build stamp, agent list/create/edit/cancel guidance, device ownership, live/foreground reconciliation, semantic place resolution, geofencing, one-shot notification delivery, offline receipts, cold-start routing, cancellation, and an in-app device-disable path. Push is now specified as a first-class `/devices/<id>` domain so any discoverable itx script can enumerate an enrolled phone and append a durable notification request. Remaining: implement and physically prove that push slice, complete the real agent-to-device acceptance pass, refresh places during long trips that never foreground the app, and add Secure Enclave signing.
 
 ## Why this exists
 
@@ -34,7 +34,37 @@ The existing mobile approver remains genuine: it signs the server-verified `appr
 ## Other native capabilities unlocked by the build
 
 - [ ] **Hardware-backed approval signing.** Use `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAccessControlBiometryCurrentSet`, either through a small Swift Expo module/config plugin or a vetted React Native library. `expo-secure-store` protects a stored value with biometrics but does not by itself keep signing inside the Secure Enclave.
-- [ ] **Push notifications for held requests.** Register and persist a push token, send a push when `human-approval-requested` lands, and deep-link a tapped notification into `/project/[projectId]/approvals`. Model token rotation/removal and delivery failures explicitly.
+
+## Scriptable device push notifications
+
+The public abstraction is an enrolled device, not a singleton notification service. Each installation is a durable domain object at `/devices/<deviceId>` and is discoverable through the ordinary collection shape:
+
+```ts
+const devices = await itx.devices.list()
+const phone = itx.devices.get(devices[0].id)
+
+await phone.append({
+  type: 'events.iterate.com/device/notification-requested',
+  idempotencyKey: 'buy-milk-at-supermarket:v1',
+  payload: {
+    title: 'Reminder',
+    body: 'Buy milk',
+    expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+    destination: { kind: 'project' },
+  },
+})
+```
+
+`append(...)` is the primary notification door and derives its input from the device processor contract. Do not add a one-event `notify()` wrapper. Named lifecycle methods earn their place only where they add server-owned semantics that a raw event cannot safely express: authenticated ownership, token validation/encryption, stream birth/subscription, rotation, and revocation.
+
+- [ ] **Add the device domain and discoverable ITX collection.** Expose `itx.devices.list()` plus `itx.devices.get(deviceId)`, backed by `/devices/<deviceId>`. Safe list/live-state projections may include installation id, label, platform, owner, app version, notification permission/status, and lifecycle timestamps, but must never expose the push token or encrypted credential. Device birth must also make the device discoverable from project state, following existing collection prior art.
+- [ ] **Enroll the physical app with authenticated provenance.** Generate/reuse a stable installation id, obtain an Expo push token, and call a named device lifecycle method that derives the user/project from the authenticated session, validates the token, encrypts it at the exact stream position, creates the device stream, and installs its durable processor subscription atomically. Model token rotation, permission changes, sign-out/revocation, and reinstall explicitly; raw append must not accept plaintext credentials or fabricated ownership facts.
+- [ ] **Make notification requests ordinary typed appends.** Consume a `device/notification-requested` event containing a stable idempotency key, visible title/body, explicit expiry, and a validated deep-link destination. Any itx snippet—including the web REPL, CLI, scheduler, agent code, and approval processor—must be able to discover an authorized device and append the same request shape.
+- [ ] **Deliver with a durable server-side obligation processor.** A platform-hosted `DeviceProcessor` owns requested/started/terminal notification obligations and calls Expo/APNs while the app is suspended. It must act only from an at-head fold, bound work by `expiresAt`, journal attempt evidence before vendor I/O, and settle an evicted started attempt as an explicit uncertain outcome rather than retrying a potentially duplicated push. Expo acceptance and APNs receipts are vendor outcomes; neither may be labelled as proof that a human saw the notification.
+- [ ] **Use ephemeral subscription only for foreground UX.** The app may subscribe while connected to refresh device status or correlate notification interactions quickly. This lane is optional acceleration only: disconnect/suspension loses it, no durable delivery obligation depends on it, and reconnect catches up from the durable device stream.
+- [ ] **Route notification taps and record device observations.** A request destination deep-links into the intended project surface; approval pushes open `/project/[projectId]/approvals`. When the app observes receipt/opening it appends a correlated device fact without rewriting the server's earlier vendor outcome.
+- [ ] **Compose automatic approval notifications through the same door.** When a held `human-approval-requested` obligation becomes current, cross-append notification requests to the opted-in devices with deterministic keys derived from the approval identity. Cancellation/completion and expiry must prevent stale approval pushes; no approval-specific vendor call may bypass the device stream.
+- [ ] **Prove scriptability and eviction safety.** Start with a public-interface tracer test that discovers a device and appends a notification request, then add processor tests for normal delivery, duplicate append/redelivery, expiry, vendor rejection, token invalidation, lost incarnation after `started`, and full-journal refold with zero extra vendor calls/events. Add a discoverable runnable itx example and execute it against a real enrolled iPhone.
 
 ## Verification
 
@@ -69,3 +99,4 @@ The existing mobile approver remains genuine: it signs the server-verified `appr
 - 2026-07-17: expanded the agent-discoverable itx example to reduce/list active reminders and perform retry-safe create, edit, and cancel operations. This also fixed the original fixed idempotency key, which had silently prevented an edit that reused a reminder id.
 - 2026-07-17: added the exact source-build stamp `2026-07-17T20:47:11Z` as a small persistent overlay so screenshots and device reports identify the JavaScript revision actually running.
 - 2026-07-17: added a plain immediate notification smoke test and moved the updated `2026-07-17T21:53:59Z` source stamp to a centered safe-area position.
+- 2026-07-18: specified remote push as a plural `/devices/<deviceId>` domain with `itx.devices.list()/get()` and a typed `Device.append(...)` notification door. Recent prior art confirms durable wake subscribers can host processors (#2073) and stateful worker alarms now recover their work (#2108); neither changes the suspension boundary on iOS, so a foreground phone subscription remains optional UX acceleration while a server-hosted device processor owns delivery.
