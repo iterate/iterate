@@ -216,6 +216,87 @@ export type RetainedSubscriberPing = ((
 ) => StreamPingReply | Promise<StreamPingReply>) &
   Disposable;
 
+type RetainedWakeHandshakeResponse = {
+  checkpointOffset: number;
+  sink: RetainedProcessEventBatch;
+  subscriber?: unknown;
+  getRuntimeState?: GetProcessorRuntimeState & Disposable;
+  ping?: RetainedSubscriberPing;
+};
+
+/**
+ * Takes ownership of a wake handshake returned over Workers RPC.
+ *
+ * The result object owns the original sink/runtime-state/ping stubs as one
+ * disposal group. Duplicate each capability needed by the live connection,
+ * then dispose that original result immediately; otherwise workerd eventually
+ * reports the dropped group as an undisposed RPC stub. The retained
+ * capabilities and authority-root chain are all tied to the sink's lifetime.
+ */
+export function retainWakeHandshakeResponse(args: {
+  value: unknown;
+  onDeliveryError: (error: unknown) => void;
+  onDisposed: () => void;
+}): RetainedWakeHandshakeResponse {
+  let originalReleased = false;
+  const releaseOriginal = () => {
+    if (originalReleased) return;
+    originalReleased = true;
+    disposeIgnoredRpcResult(args.value);
+  };
+
+  let getRuntimeState: (GetProcessorRuntimeState & Disposable) | undefined;
+  let ping: RetainedSubscriberPing | undefined;
+  let sink: RetainedProcessEventBatch | undefined;
+  let retainedReleased = false;
+  const releaseRetainedAndRoot = () => {
+    if (retainedReleased) return;
+    retainedReleased = true;
+    let firstError: unknown;
+    for (const release of [
+      () => ping?.[Symbol.dispose](),
+      () => getRuntimeState?.[Symbol.dispose](),
+      args.onDisposed,
+    ]) {
+      try {
+        release();
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    if (firstError !== undefined) throw firstError;
+  };
+
+  let ownershipTransferred = false;
+  try {
+    const response = parseWakeHandshake(args.value);
+    getRuntimeState = retainGetProcessorRuntimeState(response.getRuntimeState);
+    ping = retainSubscriberPing(response.ping);
+    sink = retainProcessEventBatch(response.sink, {
+      onDeliveryError: args.onDeliveryError,
+      onDisposed: releaseRetainedAndRoot,
+    });
+    releaseOriginal();
+    ownershipTransferred = true;
+    return {
+      checkpointOffset: response.checkpointOffset,
+      sink,
+      subscriber: response.subscriber,
+      getRuntimeState,
+      ping,
+    };
+  } finally {
+    if (!ownershipTransferred) {
+      try {
+        if (sink === undefined) releaseRetainedAndRoot();
+        else sink[Symbol.dispose]();
+      } finally {
+        releaseOriginal();
+      }
+    }
+  }
+}
+
 // =============================================================================
 // The dial: how the spine reaches subscribers over real transports.
 // =============================================================================
@@ -311,26 +392,20 @@ export function createSubscriberDial(deps: {
      */
     async poke(expression: ItxExpression, request: StreamSubscriberWakeRequest) {
       const { root, dispose } = await acquireAuthorityRoot();
-      let response: StreamSubscriberWakeResponse;
+      let value: unknown;
       try {
-        const { value } = await evaluateItxExpression(root, toInvocation(expression, request));
-        response = parseWakeHandshake(value);
+        ({ value } = await evaluateItxExpression(root, toInvocation(expression, request)));
       } catch (error) {
         // Disposing the chain releases whatever the failed/misshapen
         // evaluation exported along the way.
         dispose();
         throw error;
       }
-      return {
-        checkpointOffset: response.checkpointOffset,
-        sink: retainProcessEventBatch(response.sink, {
-          onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
-          onDisposed: dispose,
-        }),
-        subscriber: response.subscriber,
-        getRuntimeState: response.getRuntimeState,
-        ping: response.ping,
-      };
+      return retainWakeHandshakeResponse({
+        value,
+        onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
+        onDisposed: dispose,
+      });
     },
 
     /**
