@@ -12,10 +12,11 @@ const snapshotTest =
 test.use({
   columns: 100,
   rows: 32,
-  // TUI Test owns only the terminal harness. The app still starts through the
-  // same `pnpm iterate chat` path a user runs from the repo. The OS base URL
-  // comes from the config file that run.ts writes (via XDG_CONFIG_HOME), and
-  // auth comes from the admin secret in the inherited doppler environment.
+  // TUI Test owns only the terminal harness. The app starts through the same
+  // public `pnpm iterate chat` bin a user runs; run.ts builds first and forces
+  // that bin onto dist, so a source-only success cannot make this spec green.
+  // The OS base URL comes from its throwaway XDG config and auth comes from the
+  // admin secret in the inherited Doppler environment.
   // Primary API reference: https://github.com/microsoft/tui-test#terminal-program
   program: {
     file: "pnpm",

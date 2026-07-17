@@ -7,36 +7,44 @@
  * The data layer is the SAME client stack the web app renders from: the
  * one-socket session keeper (`iterate/client`, pointed at the deployment via
  * `configureIterateSession`) and the shared React hooks (`iterate/react` —
- * `useItxSubscription` owns reconnect, watchdog, and re-subscribe recovery),
- * folding stream events through the shared agent-ui reducer
- * (@iterate-com/ui). Sends go through `agent.message` on the same socket.
- * This file owns the app shell and terminal runtime state; the presentational
- * components live in ./chat-view.tsx. OpenTUI is just another React renderer,
- * so the hooks (TanStack Query included) run here unchanged.
+ * `useItxQuery` seeds durable history and `useItxSubscription` owns reconnect,
+ * watchdog, and re-subscribe recovery), folding stream events through the
+ * shared agent-ui reducer (@iterate-com/ui). Sends use TanStack Query's
+ * mutation lifecycle and `agent.message` on the same socket. This file owns
+ * the app shell and terminal runtime state; the presentational components live
+ * in ./chat-view.tsx. OpenTUI is just another React renderer, so the browser's
+ * query policy and hooks run here unchanged.
  */
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { QueryClientProvider, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   configureIterateSession,
   connectItx,
+  createIterateQueryClient,
+  ProjectScope,
+  useItxQuery,
   useItxSubscription,
   type Itx,
 } from "../itx/itx-react.ts";
+import type { StreamEvent } from "../itx-api.generated.ts";
 import {
   ONBOARDING_AGENT_PATH,
   onboardingAgentCreateInput,
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
+import { mergeAgentFeedHistory, readAgentFeedHistory } from "./agent-feed-query.ts";
 import { resolveItxAuth } from "./itx-auth.ts";
 import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
 import { COLORS } from "./chat-colors.ts";
+import { LoadingTerminal, TerminalErrorBoundary } from "./terminal-shell.tsx";
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
 }
 
 const args = parseArgs(process.argv.slice(2));
+const historyQueryKey = ["agent-feed-history", args.projectId, args.agentPath] as const;
 
 // One keeper socket for the whole process — the TUI's equivalent of the
 // browser tab. Everything below (subscription, sends) rides it.
@@ -46,33 +54,19 @@ configureIterateSession({
 });
 
 // ---------------------------------------------------------------------------
-// App state: one feed model, exposed to React through a tiny external store
-// (the subscription's event batches arrive outside React).
+// The app shell
 // ---------------------------------------------------------------------------
 
-const model = createAgentFeedModel();
-let feedSnapshot: AgentFeedSnapshot = model.snapshot();
-const feedListeners = new Set<() => void>();
-
-function publishFeed() {
-  feedSnapshot = model.snapshot();
-  for (const listener of feedListeners) listener();
-}
-
-/**
- * Establish the live agent feed on the shared socket: ensure the agent exists,
- * then subscribe from the feed model's resume cursor. The onboarding agent is
- * deliberately NOT born at project bootstrap (a birth costs a real LLM turn) —
- * opening its chat births it, in the web dashboard and here alike, with the
- * same explicit birth batch. useItxSubscription re-runs this on every
- * recovery, so the cursor read is per-(re)subscribe and replay overlap is
- * folded out by the model's offset dedupe.
- */
-async function subscribeAgentFeed(itx: Itx) {
-  // ONE agent path stub per (re)subscribe cycle, released once the
-  // subscription handle exists — on the process-long keeper socket an
-  // undisposed stub per recovery cycle would grow the import table forever.
-  const agent = itx.agents.get(args.agentPath);
+async function openAgentFeedSubscription(input: {
+  itx: Itx;
+  model: ReturnType<typeof createAgentFeedModel>;
+  publishFeed: () => void;
+  recordDurableEvents: (events: readonly StreamEvent[]) => void;
+}) {
+  // One agent path stub per (re)subscribe cycle, released once the returned
+  // subscription handle exists. useItxSubscription owns and releases that
+  // handle on dependency changes, reconnect, and unmount.
+  const agent = input.itx.agents.get(args.agentPath);
   try {
     const snapshot = await agent.processor.snapshot();
     if (snapshot.state.birthCertificate === null) {
@@ -82,9 +76,10 @@ async function subscribeAgentFeed(itx: Itx) {
     }
     return await agent.stream.subscribe({
       processEventBatch: (batch) => {
-        if (model.applyEvents(batch.events)) publishFeed();
+        input.recordDurableEvents(batch.events);
+        if (input.model.applyEvents(batch.events)) input.publishFeed();
       },
-      replayAfterOffset: model.snapshot().lastOffset,
+      replayAfterOffset: input.model.snapshot().lastOffset,
       subscriber: { description: "iterate chat TUI" },
     });
   } finally {
@@ -92,39 +87,72 @@ async function subscribeAgentFeed(itx: Itx) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// The app shell
-// ---------------------------------------------------------------------------
-
 function AgentChatApp() {
-  const feed = useSyncExternalStore(
-    useCallback((listener: () => void) => {
-      feedListeners.add(listener);
-      return () => feedListeners.delete(listener);
-    }, []),
-    () => feedSnapshot,
-  );
-  const subscription = useItxSubscription(subscribeAgentFeed, [], { slug: args.projectId });
-  // The browser parks non-transport subscribe failures behind refresh buttons
-  // and page reloads; a terminal has neither, and the TUI's failures here are
-  // overwhelmingly transient (claims catching up right after project creation,
-  // a Durable Object rebooting through a deploy). Retry on the old TUI's
-  // linear backoff. A parked terminal-auth failure just re-reads the same
-  // rejected promise — the keeper dials nothing while parked — so looping is
-  // harmless there too.
-  const retryAttemptRef = useRef(0);
+  // The immutable/durable half is a finite TanStack query, exactly like a
+  // browser route read. The live subscription starts at that query's cursor,
+  // closes the read→subscribe race with replay, then owns the tail.
+  const history = useItxQuery({
+    key: historyQueryKey,
+    query: (itx) => readAgentFeedHistory(itx, args.agentPath),
+  });
+  const [model] = useState(() => {
+    const next = createAgentFeedModel();
+    next.applyEvents(history);
+    return next;
+  });
+  const [feed, setFeed] = useState<AgentFeedSnapshot>(() => model.snapshot());
   useEffect(() => {
-    if (subscription.status === "live") {
-      retryAttemptRef.current = 0;
-      return;
-    }
-    if (subscription.status !== "error") return;
-    retryAttemptRef.current += 1;
-    const delay = Math.min(1_000 * retryAttemptRef.current, 15_000);
-    const timer = setTimeout(subscription.refresh, delay);
-    return () => clearTimeout(timer);
-  }, [subscription.status, subscription.refresh]);
-  const [notice, setNotice] = useState("");
+    if (model.applyEvents(history)) setFeed(model.snapshot());
+  }, [history, model]);
+  const publishFeed = useCallback(() => setFeed(model.snapshot()), [model]);
+  const queryClient = useQueryClient();
+  const recordDurableEvents = useCallback(
+    (events: readonly StreamEvent[]) => {
+      queryClient.setQueryData<StreamEvent[]>(["itx", ...historyQueryKey], (current = []) =>
+        mergeAgentFeedHistory(current, events),
+      );
+    },
+    [queryClient],
+  );
+
+  /**
+   * Establish the live agent feed on the shared socket: ensure the agent
+   * exists, then subscribe from the query-seeded model's resume cursor. The
+   * onboarding agent is deliberately not born at project bootstrap (a birth
+   * costs a real LLM turn); opening either browser or terminal chat births it
+   * with the same explicit batch. Recovery rereads the current cursor and the
+   * model folds replay overlap out by offset.
+   */
+  const subscribeAgentFeed = useCallback(
+    (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed, recordDurableEvents }),
+    [model, publishFeed, recordDurableEvents],
+  );
+  const subscription = useItxSubscription(subscribeAgentFeed, [model], {
+    slug: args.projectId,
+  });
+  const sendMessage = useMutation({
+    mutationFn: async (message: string) => {
+      const itx = await connectItx(args.projectId);
+      const agent = itx.agents.get(args.agentPath);
+      try {
+        return await agent.message(message);
+      } finally {
+        (agent as Partial<Disposable>)[Symbol.dispose]?.();
+      }
+    },
+    // The mutation response and subscription can race. Fold both through the
+    // same offset-aware cache merge; the live model has the same dedupe rule.
+    onSuccess: (event) => {
+      queryClient.setQueryData<StreamEvent[]>(["itx", ...historyQueryKey], (current = []) =>
+        mergeAgentFeedHistory(current, [event]),
+      );
+    },
+  });
+  const notice = sendMessage.isPending
+    ? "sending…"
+    : sendMessage.error != null
+      ? `send failed: ${sendMessage.error instanceof Error ? sendMessage.error.message : String(sendMessage.error)}`
+      : "";
   const [composerValue, setComposerValue] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
 
@@ -142,20 +170,9 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
       clearComposer();
-      setNotice("sending…");
-      connectItx(args.projectId)
-        .then((itx) => {
-          const agent = itx.agents.get(args.agentPath);
-          return Promise.resolve(agent.message(message)).finally(() =>
-            (agent as Partial<Disposable>)[Symbol.dispose]?.(),
-          );
-        })
-        .then(() => setNotice(""))
-        .catch((error: unknown) => {
-          setNotice(`send failed: ${error instanceof Error ? error.message : String(error)}`);
-        });
+      sendMessage.mutate(message);
     },
-    [clearComposer],
+    [clearComposer, sendMessage],
   );
 
   return (
@@ -253,11 +270,15 @@ const renderer = await createCliRenderer({
   screenMode: "alternate-screen",
   consoleMode: "disabled",
 });
-// TanStack Query rides OpenTUI like any other React renderer; the provider is
-// here so feature code can use the shared query hooks, not just subscriptions.
-const queryClient = new QueryClient();
+const queryClient = createIterateQueryClient();
 createRoot(renderer).render(
   <QueryClientProvider client={queryClient}>
-    <AgentChatApp />
+    <TerminalErrorBoundary>
+      <ProjectScope slug={args.projectId}>
+        <Suspense fallback={<LoadingTerminal />}>
+          <AgentChatApp />
+        </Suspense>
+      </ProjectScope>
+    </TerminalErrorBoundary>
   </QueryClientProvider>,
 );

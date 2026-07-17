@@ -19,6 +19,9 @@ catalogs:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
+  # OpenTUI is exact-pinned in its two consumers. Allow deliberate same-day
+  # upgrades without weakening the age gate for the rest of the dependency graph.
+  - '@opentui/*'
   - miniflare
   - wrangler
   - workerd
@@ -68,8 +71,8 @@ overrides:
   '@orpc/shared': 1.13.14
   '@orpc/tanstack-query': 1.13.14
   '@orpc/zod': 1.13.14
-  '@tanstack/query-core': 5.91.0
-  '@tanstack/react-query': 5.91.0
+  '@tanstack/query-core': 5.101.2
+  '@tanstack/react-query': 5.101.2
   agents>viem: '-'
   agents>x402: '-'
   axios: 1.13.6

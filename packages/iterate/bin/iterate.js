@@ -35,6 +35,11 @@ const isEphemeralPackageRunner = () =>
   process.env.npm_command === "exec" &&
   (process.env.npm_lifecycle_event === "npx" || process.env.npm_lifecycle_event === "bunx");
 
+// The black-box PTY lane builds the package, then exercises this same public
+// bin while the monorepo source tree is still present. Force the published
+// artifact path so that test cannot accidentally fall back to TypeScript.
+const forceBuiltPackage = process.env.ITERATE_FORCE_BUILT_PACKAGE === "1";
+
 /**
  * Find a local version of the iterate CLI that differs from the currently
  * running script. Returns an importable module path, or null.
@@ -71,7 +76,7 @@ const findLocalModule = () => {
   return null;
 };
 
-const localModule = isEphemeralPackageRunner() ? null : findLocalModule();
+const localModule = isEphemeralPackageRunner() || forceBuiltPackage ? null : findLocalModule();
 if (localModule) {
   const { runCli } = await import(localModule);
   await runCli();
@@ -80,7 +85,7 @@ if (localModule) {
   // In monorepo dev: src/index.ts exists. Published: dist/index.mjs exists.
   const srcPath = join(pkgRoot, "src/index.ts");
   const distPath = join(pkgRoot, "dist/index.mjs");
-  const modulePath = existsSync(srcPath) ? srcPath : distPath;
+  const modulePath = !forceBuiltPackage && existsSync(srcPath) ? srcPath : distPath;
   const { runCli } = await import(modulePath);
   await runCli();
 }

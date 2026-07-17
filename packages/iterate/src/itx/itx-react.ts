@@ -99,6 +99,7 @@ export {
   type ItxLiveSubscriptionHandle,
   type IterateSessionConfig,
 } from "./itx-session.ts";
+export { createIterateQueryClient } from "./query-client.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Connection: <ProjectScope> (ambient slug + pre-warm) + useIterateSession/useItx
