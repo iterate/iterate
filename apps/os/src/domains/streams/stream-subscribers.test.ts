@@ -1282,11 +1282,13 @@ describe("StreamSubscribers", () => {
       await lifecycleHarness.settle();
 
       expect(consoleWarn).toHaveBeenCalledWith(
-        "stream durable sink delivery interrupted by subscriber lifecycle; backing off before re-poke",
+        "stream durable sink unavailable; backing off before re-poke",
         { subscriptionKey: "k", error: lifecycleError },
       );
       expect(consoleError).not.toHaveBeenCalled();
+      expect(lifecycleHarness.subscribers.hasConnection("k")).toBe(false);
       expect(lifecycleHarness.row("k")).toMatchObject({ attempt: 1 });
+      expect(lifecycleHarness.row("k")?.nextAttemptAt).not.toBeNull();
 
       consoleWarn.mockClear();
       const applicationHarness = await makeConnectedHarness();

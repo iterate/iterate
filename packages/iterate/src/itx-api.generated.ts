@@ -901,6 +901,13 @@ export interface ProjectRepoCollection extends RepoCollection {
  */
 export interface SandboxCollection {
   __describe(): Promise<Description>;
+  /** The sandbox's hosted reducer. Kept on the collection as an isolate-side
+   * relay because `get(path)` deliberately returns the bare SDK stub, and a
+   * Workers RPC property read cannot itself be pipelined through. */
+  processor(path: string): WakeableStreamProcessorRpc<SandboxProcessorState>;
+  /** Push-driven reduced lifecycle state for one sandbox, including a
+   * destroyed sandbox whose command door is no longer usable. */
+  liveState(path: string): LiveStateRpc<SandboxProcessorState>;
   /** Create a sandbox. Strict: an existing or destroyed path is an error.
    * Returns the path to `get`. */
   create(
@@ -2772,6 +2779,19 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
+/** The sandbox processor's reduced lifecycle projection. */
+export type SandboxProcessorState = {
+  birthCertificate: {
+    config: {
+      instanceType: "basic" | "lite" | "standard-1" | "standard-2" | "standard-3" | "standard-4";
+    };
+  } | null;
+  status: "created" | "destroyed" | "running" | "stopped" | null;
+  running: boolean;
+  lastBackupId: string | null;
+  env: Record<string, string>;
+};
+
 /** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
  * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
 export type SandboxCreateInput = {
@@ -2812,9 +2832,9 @@ export type SandboxInstanceType =
  * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
  * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
- * contract re-declares only the everyday command door, `exec` (the rest
- * stays undeclared, same stance as `McpClientRpc`, so new SDK methods need
- * no forwarding code here); https://developers.cloudflare.com/sandbox/api/
+ * contract re-declares lifecycle controls and the everyday command door,
+ * `exec` (the rest stays undeclared, same stance as `McpClientRpc`, so new SDK
+ * methods need no forwarding code here); https://developers.cloudflare.com/sandbox/api/
  * is the authoritative reference. The image is the stock Cloudflare sandbox
  * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
  * you need at runtime.
@@ -2845,6 +2865,14 @@ export type SandboxInstanceType =
  *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object & {
+  /** Boot the container now. */
+  start(): Promise<void>;
+  /** Snapshot `/workspace` and tear the container down. */
+  sleep(): Promise<void>;
+  /** Snapshot, tear down, and boot a fresh container. */
+  restart(): Promise<void>;
+  /** Permanently destroy the sandbox and retire its name. */
+  destroy(): Promise<void>;
   /** Run one shell command to completion and return its captured output —
    * the SDK's `exec`, declared with the data fields that travel over every
    * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —

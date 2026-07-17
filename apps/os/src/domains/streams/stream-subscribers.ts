@@ -52,6 +52,7 @@ import type {
   StreamWebhookDelivery,
 } from "./rpc-types.ts";
 import { isStreamReceiverUnavailableError } from "./rpc-types.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,
@@ -82,7 +83,6 @@ import {
   MAX_DELIVERY_ATTEMPTS,
   SKIP_CONFIRM_ATTEMPTS,
 } from "./subscriber-math.ts";
-import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 
 const LIFECYCLE_RECONCILE_RETRY_MS = 2_000;
 
@@ -1410,24 +1410,15 @@ export class StreamSubscribers {
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
+    const details = { subscriptionKey, error };
     if (isDurableObjectLifecycleError(error)) {
-      // Deploys, evictions, overload, and an incarnation ending between a
-      // recovery alarm and its replay are workerd lifecycle outcomes. The
-      // durable cursor deliberately turns all of them into the same bounded
-      // backoff + replay path below, so keep them observable without putting
-      // an expected, recovered transport interruption in the error signal.
-      console.warn(
-        "stream durable sink delivery interrupted by subscriber lifecycle; backing off before re-poke",
-        { subscriptionKey, error },
-      );
+      // A killed, evicted, deployed, or overloaded subscriber is a modelled
+      // availability transition: the durable cursor stays put and the
+      // bounded backoff below reconnects it. Keep that expected transition
+      // out of the error signal while retaining an observable warning.
+      console.warn("stream durable sink unavailable; backing off before re-poke", details);
     } else {
-      // An application rejection is not a lifecycle interruption: it may be
-      // deterministic and eventually park this subscription, so it remains a
-      // real error until an operator or a deploy fixes the receiver.
-      console.error("stream durable sink delivery failed; backing off before re-poke", {
-        subscriptionKey,
-        error,
-      });
+      console.error("stream durable sink delivery failed; backing off before re-poke", details);
     }
     this.#onDeliveryFailure(subscriptionKey, error);
     connection.close("delivery-failed");

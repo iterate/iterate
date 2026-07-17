@@ -30,6 +30,28 @@ describe("ProcessorRelayRpcTarget", () => {
     throw new Error("not used");
   };
 
+  it("resolves an asynchronous data-only host for reads and wake delivery", async () => {
+    const requests: ProcessorReadRequest[] = [];
+    const wake = vi.fn(async () => ({ accepted: true as const })) as never;
+    const relay = new ProcessorRelayRpcTarget<{ running: boolean }>({
+      auth,
+      host: async () => ({
+        readStreamProcessor: async (request) => {
+          requests.push(request);
+          return { offset: 4, state: { running: true } };
+        },
+        wakeStreamSubscriber: wake,
+      }),
+      processorSlug: "sandbox",
+    });
+
+    await expect(relay.snapshot()).resolves.toEqual({ offset: 4, state: { running: true } });
+    const request = { processorSlug: "sandbox", subscriptionKey: "sandbox-test" } as never;
+    await expect(relay.wakeStreamSubscriber(request)).resolves.toEqual({ accepted: true });
+    expect(requests).toEqual([{ operation: "snapshot", processorSlug: "sandbox" }]);
+    expect(wake).toHaveBeenCalledWith(request);
+  });
+
   it("uses the host's data-only processor operation with an explicit slug", async () => {
     const requests: ProcessorReadRequest[] = [];
     const relay = new ProcessorRelayRpcTarget<{ seen: number }>({
@@ -90,6 +112,31 @@ describe("ProcessorRelayRpcTarget", () => {
     expect(calls).toBe(2);
   });
 
+  it("re-dials once when a deploy resets asynchronous host acquisition", async () => {
+    let acquisitions = 0;
+    const reads = vi.fn(async () => ({ offset: 2, state: {} }));
+    const lifecycleReset = Object.assign(
+      new Error("Durable Object reset because its code was updated."),
+      { durableObjectReset: true },
+    );
+    const host = {
+      readStreamProcessor: reads,
+      wakeStreamSubscriber,
+    };
+    const relay = new ProcessorRelayRpcTarget({
+      auth,
+      host: () => {
+        acquisitions += 1;
+        return acquisitions === 1 ? Promise.reject(lifecycleReset) : Promise.resolve(host);
+      },
+      processorSlug: "sandbox",
+    });
+
+    await expect(relay.snapshot()).resolves.toEqual({ offset: 2, state: {} });
+    expect(acquisitions).toBe(2);
+    expect(reads).toHaveBeenCalledOnce();
+  });
+
   it("does not retry processor application errors", async () => {
     let calls = 0;
     const applicationError = new Error("duplicate created event");
@@ -143,6 +190,29 @@ describe("ProcessorRelayRpcTarget", () => {
         { offset: 3, timeoutMs: 100 },
         { offset: 3, timeoutMs: 30 },
       ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("does not start a data call when asynchronous host acquisition consumes the deadline", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readStreamProcessor = vi.fn(async () => undefined);
+    const relay = new ProcessorRelayRpcTarget({
+      auth,
+      host: async () => {
+        now = 1_100;
+        return { readStreamProcessor, wakeStreamSubscriber };
+      },
+      processorSlug: "sandbox",
+    });
+
+    try {
+      await expect(relay.waitUntilProcessed({ offset: 3, timeoutMs: 100 })).rejects.toThrow(
+        "waitUntilProcessed timed out after 100ms waiting for offset 3",
+      );
+      expect(readStreamProcessor).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
     }
