@@ -2,10 +2,9 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
-import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import {
   takeWorkerFetchDispatch,
-  workerBuildingResponse,
+  workerBuildStatusResponse,
 } from "../workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts";
@@ -81,9 +80,11 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       });
     } catch (error) {
       // Fetch responses can't carry a named error across the hop the way RPC
-      // does; a budget-expired cold build becomes the retryable building page.
-      if (!isWorkerBuildInProgressError(error)) throw error;
-      return workerBuildingResponse();
+      // does; a budget-expired cold build becomes the retryable building
+      // page, a failed first-ever build the build-failed page.
+      const buildStatus = workerBuildStatusResponse(error);
+      if (buildStatus !== null) return buildStatus;
+      throw error;
     }
   }
 }

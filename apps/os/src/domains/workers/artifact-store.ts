@@ -56,6 +56,77 @@ function inFlightKey(buildKey: string) {
   return `${KV_PREFIX}/${buildKey}/building`;
 }
 
+/**
+ * How long a recorded build failure short-circuits budgeted callers into the
+ * last-good fallback without re-running the failed build. Deliberately short:
+ * a deterministic failure only costs a redundant rebuild attempt every couple
+ * of minutes, while a transient one (npm weather) heals on its own. Any source
+ * change makes a new build key, so a fix is never gated on this TTL.
+ */
+const BUILD_FAILURE_TTL_SECONDS = 120;
+
+function buildFailureKey(buildKey: string) {
+  return `${KV_PREFIX}/${buildKey}/failed`;
+}
+
+/** What went wrong building one exact build key — the record the serve-side
+ * overlay shows a browser when the platform falls back to a previous build. */
+export type WorkerBuildFailure = {
+  at: string;
+  /** The commit whose build failed (absent for inline sources). */
+  commitOid?: string;
+  message: string;
+};
+
+/**
+ * The build genuinely ran and failed — the message is the bundler's own
+ * error (compile errors, unresolvable dependencies). The builder wraps ONLY
+ * real bundler failures in this name; transport/cancellation errors stay
+ * unwrapped so callers retry them instead of recording a failure. Name-based
+ * matching because the error crosses Workers RPC (which preserves
+ * `error.name` but not class identity). Lives here (not worker-loader.ts)
+ * because the builder worker throws it and must not import the loader's env.
+ */
+export class WorkerBuildFailedError extends Error {
+  override readonly name = "WorkerBuildFailedError";
+}
+
+export function isWorkerBuildFailedError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === "WorkerBuildFailedError";
+}
+
+/**
+ * Bundler error dumps scale with error count and quote user-controlled
+ * source; the message travels in a response header on every stale-serving
+ * request, so it must stay a small bounded string.
+ */
+const BUILD_FAILURE_MESSAGE_LIMIT = 2_000;
+
+export function buildFailureMessageFromError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > BUILD_FAILURE_MESSAGE_LIMIT
+    ? `${message.slice(0, BUILD_FAILURE_MESSAGE_LIMIT)}… (truncated)`
+    : message;
+}
+
+/**
+ * The per-worker "previous good build" pointer — the ONE mutable record in
+ * this store (everything else is content-addressed). Keyed by worker identity
+ * (project + repo path + build options — see workerLastGoodKey), it names the
+ * newest artifact that built successfully so the fetch lane can keep serving
+ * it while a newer commit builds or after that build fails.
+ */
+export type WorkerLastGoodBuild = {
+  at: string;
+  buildKey: string;
+  /** The commit the pointed-at artifact was built from (when known). */
+  commitOid?: string;
+};
+
+function lastGoodKey(workerKey: string) {
+  return `worker-last-good/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}/${workerKey}`;
+}
+
 /** `get` returns null on any incomplete artifact (no manifest, or a listed
  * module missing): both are cache misses that a rebuild from the
  * deterministic input repairs. */
@@ -82,6 +153,37 @@ export class KvWorkerBuildArtifactStore {
   async markBuildInFlight(buildKey: string): Promise<void> {
     await this.kv.put(inFlightKey(buildKey), new Date().toISOString(), {
       expirationTtl: BUILD_IN_FLIGHT_TTL_SECONDS,
+    });
+  }
+
+  /** The marker means "a build is actually running": a failed build clears it
+   * so budgeted callers retry (or serve the recorded failure) instead of
+   * waiting out a marker TTL that outlives the shorter-lived failure record.
+   * Best-effort — the TTL remains the backstop for a crashed builder. */
+  async clearBuildInFlight(buildKey: string): Promise<void> {
+    await this.kv.delete(inFlightKey(buildKey));
+  }
+
+  async getBuildFailure(buildKey: string): Promise<WorkerBuildFailure | null> {
+    return await this.kv.get<WorkerBuildFailure>(buildFailureKey(buildKey), "json");
+  }
+
+  async putBuildFailure(buildKey: string, failure: WorkerBuildFailure): Promise<void> {
+    await this.kv.put(buildFailureKey(buildKey), JSON.stringify(failure), {
+      expirationTtl: BUILD_FAILURE_TTL_SECONDS,
+    });
+  }
+
+  async getLastGood(workerKey: string): Promise<WorkerLastGoodBuild | null> {
+    return await this.kv.get<WorkerLastGoodBuild>(lastGoodKey(workerKey), "json");
+  }
+
+  /** Pointer updates ride cold builds and once-per-isolate cache-hit notes
+   * (see noteLastGoodBuild in worker-loader.ts) — never the per-request hot
+   * path, which would trip KV's one-write-per-second-per-key limit. */
+  async putLastGood(workerKey: string, record: WorkerLastGoodBuild): Promise<void> {
+    await this.kv.put(lastGoodKey(workerKey), JSON.stringify(record), {
+      expirationTtl: this.options.expirationTtlSeconds ?? WORKER_BUILD_ARTIFACT_TTL_SECONDS,
     });
   }
 
