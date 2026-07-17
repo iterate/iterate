@@ -203,6 +203,74 @@ describe("TelegramProcessor (webhook router)", () => {
     ]);
   });
 
+  it("sends a forum-topic denial back to the topic where the user wrote", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const telegramCalls: Array<{ body: Record<string, unknown>; connection: string }> = [];
+    const processor = newTelegramRouter({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      sendTelegramMessage: async (input: { body: Record<string, unknown>; connection: string }) => {
+        telegramCalls.push(input);
+      },
+    });
+    const driver = driveProcessor(processor, stream);
+    const payload = humanMessageWebhookPayload({ chatId: -1004242, chatType: "supergroup" });
+    const message = payload.body.message as Record<string, unknown>;
+    message.is_topic_message = true;
+    message.message_thread_id = 77;
+    await stream.append(
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: [] },
+      },
+      { type: "events.iterate.com/telegram/webhook-received", payload },
+    );
+
+    await driver.deliver();
+
+    expect(telegramCalls[0]?.body).toMatchObject({ chat_id: -1004242, message_thread_id: 77 });
+  });
+
+  it("does not block allowed traffic when a best-effort denial send fails", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const processor = newTelegramRouter({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      sendTelegramMessage: async () => {
+        throw new Error("user blocked the bot");
+      },
+    });
+    const driver = driveProcessor(processor, stream);
+    await stream.append(
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: [] },
+      },
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({ messageId: 1, text: "denied" }),
+      },
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: ["555"] },
+      },
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({ messageId: 2, text: "allowed" }),
+      },
+    );
+
+    await expect(driver.deliver()).resolves.toBeUndefined();
+
+    expect(
+      telegramWebhooksAt(network, `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`),
+    ).toHaveLength(1);
+  });
+
   it("does not resend denial messages while refolding historical webhooks", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);

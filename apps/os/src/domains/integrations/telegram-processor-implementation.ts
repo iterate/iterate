@@ -114,6 +114,7 @@ export class TelegramProcessor extends StreamProcessor<
     appendTo,
     blockProcessorWhile,
     event,
+    runInBackground,
     state,
   }: Parameters<StreamProcessor<TelegramProcessorContract>["processEvent"]>[0]): undefined {
     // Event-less at-head pass: this processor has no at-head work.
@@ -140,7 +141,11 @@ export class TelegramProcessor extends StreamProcessor<
         readRecord(readRecord(event.payload.body)?.message) !== null &&
         webhookAckIsFresh(event, this.deps.now())
       ) {
-        blockProcessorWhile(async () => {
+        // The handoff is useful but not an authorization obligation. A user
+        // may have blocked the bot or Telegram may reject this chat; that
+        // must not wedge the connection router and hold later allowed users
+        // behind an undeliverable denial.
+        runInBackground(async () => {
           if (this.projectId === null) {
             throw new Error("Telegram router cannot build access settings without a project id");
           }
@@ -152,6 +157,9 @@ export class TelegramProcessor extends StreamProcessor<
             connection,
             body: {
               chat_id: coerceTelegramId(target.chatId),
+              ...(target.messageThreadId === undefined
+                ? {}
+                : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
               text: telegramAccessDeniedMessage({ settingsUrl, userId: senderId }),
             },
           });
