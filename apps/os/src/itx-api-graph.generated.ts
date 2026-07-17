@@ -2,7 +2,7 @@
 // Regenerate with: pnpm generate:itx-api
 // Freshness is enforced by itx-api.generated.test.ts.
 //
-// The Itx Type Graph: every exported declaration of itx-api.generated.ts as
+// The Itx Type Graph: every declaration of itx-api.generated.ts as
 // one record, in file order — same generator run, same content, kept
 // per-declaration so runtime consumers (itx.docs, __describe) can assemble
 // bounded slices instead of shipping the whole flat file.
@@ -1821,7 +1821,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "TypedConsumedEventInput",
     kind: "typeAlias",
     sourceText:
-      '/**\n * A durable processor input. Wake processors never receive ephemeral rows, so\n * a domain object\'s processor-typed append door must not claim that they do.\n */\nexport type TypedConsumedEventInput<\n  Type extends string = string,\n  Payload = Record<string, unknown>,\n> = Omit<TypedStreamEventInput<Type, Payload>, "ephemeral"> & { ephemeral?: never };',
+      '/**\n * A durable processor input. Wake processors never receive ephemeral rows, so\n * a domain object\'s processor-typed append door must not claim that they do.\n */\ntype TypedConsumedEventInput<\n  Type extends string = string,\n  Payload = Record<string, unknown>,\n> = Omit<TypedStreamEventInput<Type, Payload>, "ephemeral"> & { ephemeral?: never };',
     summary: "A durable processor input.",
     memberSummaries: {},
     referencedTypeNames: ["TypedStreamEventInput"],
@@ -2104,7 +2104,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "TypedStreamEventInput",
     kind: "typeAlias",
     sourceText:
-      '/** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */\nexport type TypedStreamEventInput<\n  Type extends string = string,\n  Payload = Record<string, unknown>,\n> = Omit<StreamEventInput, "payload" | "type"> & {\n  type: Type;\n  payload: Payload;\n};',
+      '/** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */\ntype TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<\n  StreamEventInput,\n  "payload" | "type"\n> & {\n  type: Type;\n  payload: Payload;\n};',
     summary: "`StreamEventInput` with `type`/`payload` narrowed to one event definition.",
     memberSummaries: {},
     referencedTypeNames: ["StreamEventInput"],

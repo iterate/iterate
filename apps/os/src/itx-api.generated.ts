@@ -3591,7 +3591,7 @@ export type AgentStatusRecord = {
  * A durable processor input. Wake processors never receive ephemeral rows, so
  * a domain object's processor-typed append door must not claim that they do.
  */
-export type TypedConsumedEventInput<
+type TypedConsumedEventInput<
   Type extends string = string,
   Payload = Record<string, unknown>,
 > = Omit<TypedStreamEventInput<Type, Payload>, "ephemeral"> & { ephemeral?: never };
@@ -3976,10 +3976,10 @@ export type StreamPingInput = { t0: number };
 export type StreamPingReply = { t0: number; t1: number; t2: number };
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
-export type TypedStreamEventInput<
-  Type extends string = string,
-  Payload = Record<string, unknown>,
-> = Omit<StreamEventInput, "payload" | "type"> & {
+type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
+  StreamEventInput,
+  "payload" | "type"
+> & {
   type: Type;
   payload: Payload;
 };
