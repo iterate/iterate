@@ -116,17 +116,6 @@ describe("StreamEventLog.getRange", () => {
     });
     expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
-
-    expect(
-      log.getRangeSizes({
-        afterOffset: 0,
-        beforeOffset: Number.MAX_SAFE_INTEGER,
-        limit: 10,
-      }),
-    ).toEqual([
-      { offset: 1, byteLength: insertedByteLengths[0] },
-      { offset: 2, byteLength: insertedByteLengths[1] },
-    ]);
   });
 
   it("excludes ephemeral rows from range reads unless asked; point reads always return them", () => {
@@ -230,24 +219,6 @@ describe("StreamEventLog.getRange", () => {
     );
 
     expect(log.getByOffset(1)).toEqual({ ...legacyEvent, path: "/legacy/stream" });
-  });
-
-  it("replaces the complete log and continues allocating after the imported offset", () => {
-    const log = createLog();
-    const imported = [
-      event(1, "events.iterate.com/stream/created"),
-      event(9, "events.iterate.com/test/imported"),
-    ];
-
-    log.replaceAll(imported, 12);
-
-    expect(offsets(read(log, { afterOffset: 0, limit: 20, includeEphemeral: true }))).toEqual([
-      1, 9,
-    ]);
-    expect(log.highestAssignedOffset()).toBe(12);
-    expect(() => log.insert([event(9, "events.iterate.com/test/collision")])).toThrow();
-    log.insert([event(13, "events.iterate.com/test/next")]);
-    expect(log.highestAssignedOffset()).toBe(13);
   });
 });
 

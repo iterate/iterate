@@ -63,8 +63,12 @@ export interface GithubApp {
  * signing secret, and backdoor toggles.
  */
 export interface PetshopState {
-  /** Bumping this invalidates every outstanding access token (they seal the epoch they were minted under). */
+  /** Legacy baseline for tokens minted before revocation became client-scoped. */
   accessTokenEpoch: number;
+  /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
+   * so concurrent integration tests can expire their own credentials without
+   * invalidating an unrelated client's freshly refreshed token. */
+  accessTokenEpochs?: Record<string, number>;
   clients: Record<string, OauthClient>;
   /** `jti` values of refresh tokens the backdoor has revoked. */
   revokedRefreshTokenIds: string[];
@@ -79,6 +83,13 @@ export interface PetshopState {
    * segment of `POST /app/installations/<id>/access_tokens`). Seeded with the
    * well-known default; extended/replaced via `POST /__backdoor/apps`. */
   apps: Record<string, GithubApp>;
+}
+
+/** Resolve the revocation epoch for one token client. The legacy scalar is
+ * the fallback so a deployment can continue validating already-minted tokens
+ * and state blobs written before client-scoped revocation existed. */
+export function accessTokenEpochFor(state: PetshopState, clientId: string): number {
+  return state.accessTokenEpochs?.[clientId] ?? state.accessTokenEpoch;
 }
 
 /** The seeded default GitHub App installation — well-known ids, no verifying
@@ -115,6 +126,7 @@ export class PetshopStateDurableObject extends DurableObject {
     }
     const initial: PetshopState = {
       accessTokenEpoch: 0,
+      accessTokenEpochs: {},
       clients: {
         [DEFAULT_CLIENT_ID]: {
           clientSecret: DEFAULT_CLIENT_SECRET,
@@ -161,11 +173,13 @@ export class PetshopStateDurableObject extends DurableObject {
     return { clientId, clientSecret };
   }
 
-  async expireAccessTokens(): Promise<number> {
+  async expireAccessTokens(clientId: string): Promise<number> {
     const state = await this.#load();
-    state.accessTokenEpoch += 1;
+    const next = accessTokenEpochFor(state, clientId) + 1;
+    state.accessTokenEpochs ??= {};
+    state.accessTokenEpochs[clientId] = next;
     await this.#save(state);
-    return state.accessTokenEpoch;
+    return next;
   }
 
   async revokeRefreshToken(refreshTokenId: string): Promise<void> {

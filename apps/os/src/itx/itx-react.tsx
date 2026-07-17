@@ -651,7 +651,10 @@ export function useItxQuery<T>({
  * renders the hook fully inert — no dial, no setup.
  */
 function useItxEffect(
-  setup: (itx: ItxHandle) => void | (() => void) | Promise<void | (() => void)>,
+  setup: (
+    itx: ItxHandle,
+    connection: { address: ItxAddress; promise: Promise<ItxHandle> } | undefined,
+  ) => void | (() => void) | Promise<void | (() => void)>,
   deps: unknown[],
   opts?: {
     itx?: ItxHandle;
@@ -688,7 +691,8 @@ function useItxEffect(
     let cleanup: void | (() => void);
     const apply = (handle: ItxHandle) => {
       if (disposed) return;
-      const result = setup(handle);
+      const connection = promise === undefined ? undefined : { address: selectedAddress, promise };
+      const result = setup(handle, connection);
       if (result instanceof Promise) {
         // Async: the cleanup lands later. If we unmounted in the meantime, run it
         // immediately so nothing leaks (React's documented async-effect guard).
@@ -738,7 +742,10 @@ const LIVENESS_INTERVAL_MS = 45_000;
 const LIVENESS_PING_TIMEOUT_MS = 10_000;
 /** How long useItxSubscription waits before retrying a failed subscribe. */
 const SUBSCRIBE_RETRY_MS = 10_000;
+/** A subscribe RPC must either establish or give recovery ownership back to the hook. */
+const SUBSCRIBE_TIMEOUT_MS = 15_000;
 const PING_TIMED_OUT = Symbol("itx-ping-timed-out");
+const SUBSCRIBE_TIMED_OUT = Symbol("itx-subscribe-timed-out");
 
 /**
  * Poll a subscription handle's `ping()` until it stops answering `true`, then
@@ -898,13 +905,37 @@ export function useItxSubscription(
   }, [enabled]);
 
   useItxEffect(
-    async (effectItx) => {
+    async (effectItx, connection) => {
       setState({ status: "connecting" });
       let disposed = false;
 
       let subscription: ItxLiveSubscriptionHandle;
       try {
-        subscription = await subscribe(effectItx);
+        const pending = subscribe(effectItx);
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const result = await Promise.race([
+          pending,
+          new Promise<typeof SUBSCRIBE_TIMED_OUT>((resolve) => {
+            timeout = setTimeout(() => resolve(SUBSCRIBE_TIMED_OUT), SUBSCRIBE_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(timeout));
+        if (result === SUBSCRIBE_TIMED_OUT) {
+          // A transport can disappear after the server accepted subscribe but
+          // before the browser receives its handle. No handle means no ping
+          // watchdog, and a half-open WebSocket emits no close event: without
+          // this bound the UI stays "connecting" forever. Retire only the
+          // exact transport this effect used; a concurrent recovery may
+          // already have installed a healthy successor.
+          if (connection !== undefined) {
+            evictItxSocketIfCurrent(connection.address, connection.promise);
+          }
+          void pending.then(
+            (late) => late.unsubscribe(),
+            () => {},
+          );
+          throw new Error(`itx subscription did not establish within ${SUBSCRIBE_TIMEOUT_MS}ms`);
+        }
+        subscription = result;
       } catch (error) {
         if (disposed) return;
         setState({

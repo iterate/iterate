@@ -266,6 +266,31 @@ through; the old per-projection materialization is gone.) See also flake 15 —
 serialized writes mean the recorded head can only move forward, never behind our
 last push.
 
+**2026-07-17, explicit-births follow-up:** requiring a mutation clone to see
+the exact advertised head closed the replica-lag case, but a retries-disabled
+preview run exposed a distinct writer. The failed repo stream had no user
+commit fact, while its Artifact history contained two consecutive
+`Seed minimal itx project worker` commits. An at-head creation obligation had
+been driven twice; the old seed path always made and force-pushed a commit even
+after cloning an existing branch, so it moved `main` between the mutation's
+checked clone and push.
+
+The creation call now shares the Repo DO's write serializer with mutations.
+Seeding is strictly create-if-absent: cloning any existing branch returns it
+untouched, including user commits. Two genuine first drives that both observe
+an empty Artifact produce the same root oid from a fixed synthetic seed
+identity and timestamp, making their pushes equivalent. Initial publication is
+also a normal fast-forward push, never forced: if a different head wins the
+race, creation fails instead of replacing it.
+
+The same retries-disabled run found an independent first-use secret race. A
+GitHub App token mint read secret state at offset 5; a
+`subscriber-connected` telemetry fact advanced the raw stream to offset 6;
+the material append's explicit offset then conflicted and was incorrectly
+reported as `secret_not_found`. Refreshed material now retries bounded offset
+conflicts while the reduced secret's `updatedOffset` and refresh policy remain
+unchanged. Any actual secret update still invalidates the in-flight mint.
+
 ### 7. Local harness must match the CI contract (vitest retry)
 
 The e2e vitest lane configures `retry: ci ? 1 : 0` — Depot CI absorbs one
@@ -425,10 +450,21 @@ structural one. The Repo DO now serializes every write through a `#writeChain`
 repo can never be in flight at once: each clones the latest HEAD, commits, and
 fast-forward pushes with **no `force`**. With a single writer at a time there is
 no compare-and-swap race to lose and no force-push to clobber a concurrent commit
-— the two failure modes above are structurally impossible. (`seedArtifactRepo`
-keeps its one force-push: it runs once at repo creation, never concurrently.)
+— the two failure modes above are structurally impossible. Repo seeding now
+uses the same non-forced publication rule.
 The diagnosis is retained here because it explains _why_ main dropped `force` and
 serialized writes; the marathon re-verifies it end-to-end.
+
+**2026-07-17 correction:** serialization prevents two calls in one Repo DO
+from overlapping, but it does not make the Artifacts clone endpoint strongly
+consistent. A second serialized write can clone a replica that still advertises
+the pre-first-write head and then lose the server's ref compare-and-swap with
+`stale ref`. Mutations now record the seed and every successful push, and wait
+boundedly until their clone's branch HEAD equals that last pushed commit before
+changing anything. Merely finding the commit object in the clone is not enough:
+Artifacts can supply the object while its advertised ref still lags. A later
+rejection therefore really does identify an out-of-band writer that moved the
+ref after the checked clone.
 
 ### 16. Marathon methodology: an incremental deploy splits the fleet head
 

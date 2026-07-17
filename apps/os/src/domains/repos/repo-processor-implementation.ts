@@ -111,7 +111,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): undefined {
     const { blockProcessorWhile, event, state, append, appendTo } = args;
-    if (event.type === "events.iterate.com/repo/created") {
+    if (event !== null && event.type === "events.iterate.com/repo/created") {
       blockProcessorWhile(() =>
         appendTo("/", {
           type: "events.iterate.com/repo/created",
@@ -128,6 +128,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (args.delivery.caughtUp) {
       args.blockProcessorWhileCaughtUp(() => this.#reconcileObligations(args));
     }
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+    if (event === null) return;
     if (event.type === "events.iterate.com/repo/created") return;
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);
@@ -280,10 +282,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
   /**
    * At-head reconciliation of the repo's two durable obligations against the
-   * final fold. `processEvent` invokes it under `delivery.caughtUp` (the last
-   * consumed event of a batch that reached head — the `checkpointOffset >=
-   * streamMaxOffset` gate the legacy `processEventBatch` override carried lives
-   * in the runner now); the refold path runs reduce-only, so it never reaches
+   * final fold. `processEvent` invokes it under `delivery.caughtUp` after the
+   * scan reaches head (on the last consumed event or an eventless pass); the
+   * refold path runs reduce-only, so it never reaches
    * this reconcile. RECOVERY rides this same path:
    * `events.iterate.com/stream/processor-revived` — the fact the keepalive's revival pass
    * journals after an eviction took in-flight work — is consumed by the
@@ -294,14 +295,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * reaction: a journal refold (the normal aftermath of a state-schema
    * deploy) replays the `repo/created` birth certificate, but the at-head fold
    * (`args.state`, NOT `previousState`) has already absorbed any journaled
-   * `repo/ready` fact —
-   * so `createRepoArtifact`, whose seeding force-pushes the seed commit and
-   * would clobber user commits, provably never re-runs. The `ready`
+   * `repo/ready` fact — so `createRepoArtifact`, an already-completed external
+   * creation obligation, provably never re-runs. The `ready`
    * idempotency key binds NO event offset (`this.idempotencyKey("ready")`),
    * so a redelivery/revival cannot rotate it and re-seed. No expiry on
-   * purpose: "this repo should exist" does not go stale, and the vendor call
-   * is idempotent (get-or-create + re-seed of a fresh repo folds to a no-op),
-   * so a create-succeeded/append-failed retry is safe.
+   * purpose: "this repo should exist" does not go stale. The creation
+   * implementation leaves any existing branch untouched, gives concurrent
+   * first seeds the same commit oid, and serializes creation with branch
+   * mutation, so a create-succeeded/append-failed retry is safe.
    */
   async #reconcileObligations(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],

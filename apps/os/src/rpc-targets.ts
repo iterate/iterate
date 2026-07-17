@@ -67,12 +67,6 @@ import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   scriptSettlementFromEvent,
 } from "./domains/capability-host/script-execution-settlement.ts";
-import type {
-  StreamRecoveryExportPage,
-  StreamRecoveryExportSink,
-  StreamRecoveryExportSummary,
-  StreamRecoveryRestoreInput,
-} from "./domains/streams/recovery.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -155,6 +149,7 @@ import type {
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
+  isDurableObjectLifecycleError,
   retryStreamUnavailable,
   rethrowStreamUnavailable,
 } from "./domains/streams/stream-unavailable.ts";
@@ -417,6 +412,10 @@ const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
+// Public create calls are acknowledgement boundaries, not indefinite leases.
+// A wedged processor must fail the caller loudly instead of parking an RPC
+// forever; the durable birth events remain committed for ordinary redelivery.
+const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -785,61 +784,6 @@ class StreamCollectionRpcTarget<
   }
 }
 
-/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
-class StreamRecoveryCollectionRpcTarget extends IterateRpcTarget<"StreamRecoveryCollection"> {
-  constructor(readonly props: { auth: ItxAuth }) {
-    super();
-    if (!props.auth.isAdmin()) throw new Error("stream recovery requires an admin principal");
-  }
-
-  get(input: { projectId: string | null; path: string }): StreamRecoveryRpcTarget {
-    return new StreamRecoveryRpcTarget({
-      projectId: input.projectId,
-      path: normalizePath(input.path),
-    });
-  }
-}
-
-/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
-class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
-  constructor(readonly props: { projectId: string | null; path: string }) {
-    super();
-  }
-
-  get #stream() {
-    return env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(this.props, { allowNullProjectId: true }),
-    );
-  }
-
-  exportForRecovery(args?: {
-    afterOffset?: number;
-    limit?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportPage> {
-    return this.#stream.exportForRecovery(args);
-  }
-
-  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
-  exportToRecovery(args: {
-    sink: StreamRecoveryExportSink;
-    afterOffset?: number;
-    limit?: number;
-    maxPages?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportSummary> {
-    return this.#stream.exportToRecovery(args);
-  }
-
-  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
-    restoredEventCount: number;
-    lastImportedOffset: number;
-    currentMaxOffset: number;
-  }> {
-    return this.#stream.restoreFromRecovery(input);
-  }
-}
-
 /** Project-scoped stream catalog with reduced-state listing. */
 class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"ProjectStreamCollection"> {
   constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
@@ -939,7 +883,10 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("scheduler create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
@@ -1039,7 +986,10 @@ async function requestRepoCreate(input: {
   const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
   if (createOffset === 0) throw new Error("repo create committed no events");
   const repo = new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
-  await repo.processor.waitUntilProcessed({ offset: createOffset });
+  await repo.processor.waitUntilProcessed({
+    offset: createOffset,
+    timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+  });
 
   await timedStep("create-timing", timing, "wait-repo-ready", () =>
     stream.waitForEvent({
@@ -4211,8 +4161,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("agent create committed no events");
     await Promise.all([
-      this.processor.waitUntilProcessed({ offset }),
-      this.capabilityHost.processor.waitUntilProcessed({ offset }),
+      this.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
+      this.capabilityHost.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
     ]);
   }
 
@@ -4744,6 +4700,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     await timedStep("create-timing", timing, "wait-project-birth", () =>
       project.processor.waitUntilProcessed({
         offset: Math.max(created.offset, subscription.offset),
+        // A create must never leave its caller parked behind a wedged
+        // processor indefinitely. One project birth frame has a shared 60s
+        // sibling-barrier deadline; 75s leaves 15s for durable-delivery
+        // backoff and transport redial.
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     );
     // Project birth atomically appends every universal sibling's birth batch.
@@ -5023,7 +4984,10 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     const committed = [birth, ...rest];
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("capability host create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
@@ -5650,7 +5614,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
     try {
-      return await this.worker.processEventBatch(batch);
+      await this.worker.processEventBatch(batch);
     } catch (error) {
       // The bootstrap window: the worker cannot be MATERIALIZED yet (config
       // repo unseeded, or its first build still in flight). That is this
@@ -5895,7 +5859,6 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       children: {
         projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
         repos: "Deployment-wide repos (admin only; projectId: null).",
-        streamRecovery: "Admin-only exact-offset Stream Durable Object recovery.",
         streams: "Deployment-wide streams (admin only; projectId: null).",
       },
       parent: "the /api unauthenticated entrypoint, via authenticate(credentials)",
@@ -5917,11 +5880,6 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       auth: this.props.auth,
       projectId: null,
     });
-  }
-
-  /** Admin-only exact-offset Stream Durable Object recovery. */
-  get streamRecovery(): StreamRecoveryCollectionRpcTarget {
-    return new StreamRecoveryCollectionRpcTarget({ auth: this.props.auth });
   }
 
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
@@ -6319,7 +6277,11 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    await this.#catchUpBeforeSnapshot?.();
+    // The runner waiter registers first, then starts its own serialized
+    // self-pull. Its timeout therefore bounds the WHOLE read-your-writes
+    // operation. Awaiting catchUpBeforeSnapshot here first made timeoutMs
+    // dishonest: a stuck catch-up could hold this call forever before the
+    // timed waiter even existed.
     await this.#reads.waitUntilEvent(input);
   }
 }
@@ -6610,7 +6572,7 @@ type ProcessorHostStub = ProcessorReadHost & {
  * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
  * exists to close for `ingest`).
  */
-class ProcessorRelayRpcTarget<State>
+export class ProcessorRelayRpcTarget<State>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements WakeableStreamProcessorRpc<State>
 {
@@ -6625,16 +6587,54 @@ class ProcessorRelayRpcTarget<State>
     this.#processorSlug = args.processorSlug;
   }
 
+  async #callProcessor<Result>(
+    call: (host: ProcessorHostStub) => Promise<Result>,
+  ): Promise<Result> {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await call(this.#host());
+      } catch (error) {
+        if (attempt === 1 && isDurableObjectLifecycleError(error)) {
+          // Deploys and evictions may reset a processor-hosting DO while its
+          // data-only method call is in flight. A fresh host dial reaches the
+          // replacement incarnation; retry exactly once so this expected
+          // lifecycle transition does not strand a durable frame. App errors
+          // are never retried, and a second lifecycle failure propagates.
+          console.info("processor relay retrying after Durable Object lifecycle reset");
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error("processor relay exhausted its bounded lifecycle retry");
+  }
+
   async snapshot(): Promise<ProcessorSnapshot<State>> {
-    return await readProcessorSnapshot<State>(this.#host(), this.#processorSlug);
+    return await this.#callProcessor((host) =>
+      readProcessorSnapshot<State>(host, this.#processorSlug),
+    );
   }
 
   async getRuntimeState(): Promise<ProcessorRuntimeState<State>> {
-    return await readProcessorRuntimeState<State>(this.#host(), this.#processorSlug);
+    return await this.#callProcessor((host) =>
+      readProcessorRuntimeState<State>(host, this.#processorSlug),
+    );
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
-    await waitUntilProcessorOffset(this.#host(), this.#processorSlug, input);
+    const deadline = input.timeoutMs === undefined ? undefined : Date.now() + input.timeoutMs;
+    await this.#callProcessor((host) => {
+      if (deadline === undefined) {
+        return waitUntilProcessorOffset(host, this.#processorSlug, input);
+      }
+      const timeoutMs = deadline - Date.now();
+      if (timeoutMs <= 0) {
+        throw new Error(
+          `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
+        );
+      }
+      return waitUntilProcessorOffset(host, this.#processorSlug, { ...input, timeoutMs });
+    });
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */

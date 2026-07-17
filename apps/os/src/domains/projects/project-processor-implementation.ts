@@ -104,6 +104,8 @@ export class ProjectProcessor extends StreamProcessor<
     // included) pumps its own events into the worker's `processEventBatch`
     // with a durable checkpoint (see streams/project-worker-delivery.ts).
 
+    // Event-less at-head pass: this processor has no at-head work.
+    if (event === null) return;
     if (event.type !== "events.iterate.com/project/created" && state.birthCertificate === null) {
       return;
     }
@@ -239,11 +241,10 @@ export class ProjectProcessor extends StreamProcessor<
           ]);
           // This processor owns the durable sibling APPENDS, not their
           // execution. Waiting for sibling processors here is a recursive RPC
-          // cycle: their stream delivery calls project.processEventBatch(),
-          // whose search-index fan-in re-enters this same Project Durable
-          // Object while it is suspended on those siblings. Once these
-          // appends commit, each sibling's read-through processor facade
-          // catches itself up independently at the point of use.
+          // cycle: their stream delivery can call project.processEventBatch()
+          // while this Project Durable Object is suspended on those siblings.
+          // Once these appends commit, each sibling's read-through processor
+          // facade catches itself up independently at the point of use.
           await siblingBirths;
         });
         break;

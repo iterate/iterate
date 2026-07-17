@@ -514,10 +514,11 @@ export function localDevAuthJwks(input: {
   forgePrivateJwk: string | undefined;
   deployedEnv: string | undefined;
 }) {
-  // The generated top-level block is local dev, but Wrangler still compares
-  // it with the selected env during `vite build`. Never emit this local-only
-  // var in a deployed build: the env receives the authoritative JWKS as an
-  // atomic Worker secret from deploy.ts.
+  // The forge key is inherited from _shared in deployed Doppler configs, but
+  // this derived public JWKS is only a local-dev binding. Emitting it at the
+  // top level during a CLOUDFLARE_ENV build makes Wrangler correctly warn
+  // that the selected env does not inherit it; deployed workers receive the
+  // freshly baked JWKS atomically via --secrets-file in deploy.ts instead.
   if (input.deployedEnv?.trim()) return undefined;
 
   const forgePrivateJwk = input.forgePrivateJwk?.trim();

@@ -53,10 +53,12 @@ class EchoExampleProcessor extends StreamProcessor<EchoExampleContract> {
   protected override processEvent(
     args: Parameters<StreamProcessor<EchoExampleContract>["processEvent"]>[0],
   ): undefined {
+    const event = args.event;
+    if (event === null) return;
     args.blockProcessorWhile(() =>
       args.append({
         type: "events.iterate.com/echo-example/output-echoed",
-        payload: { echoedOffset: args.event.offset },
+        payload: { echoedOffset: event.offset },
       }),
     );
   }

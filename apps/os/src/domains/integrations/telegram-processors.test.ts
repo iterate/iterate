@@ -709,11 +709,11 @@ describe("TelegramAgentProcessor", () => {
     // readPageSize 1 makes one catch-up deliver the lifecycle fact in a frame
     // stamped BEHIND the head (a later stream fact follows it — the lagging
     // fold), and the frame that reaches head carries no typing-worthy fact of
-    // its own: a bot-authored webhook — CONSUMED (the at-head pass is
-    // `processEvent` under `delivery.caughtUp`, so only a consumed head event
-    // fires it) but inert (no input, no typing of its own). The carried fact
-    // is what paints — exactly once, at the at-head pulse, never per behind
-    // frame.
+    // its own: a bot-authored webhook — CONSUMED but inert (no input, no typing
+    // of its own). This scenario therefore exercises the normal consumed-event
+    // at-head pass; an unconsumed tail would exercise the runner's eventless
+    // pass instead. The carried fact paints exactly once at head, never per
+    // behind frame.
     const { deliver, stream, telegramCalls } = setup({ readPageSize: 1 });
     // Establish the chat.
     await stream.append({

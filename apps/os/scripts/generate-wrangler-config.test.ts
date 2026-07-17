@@ -13,6 +13,23 @@ import {
   envShapedVars,
 } from "./generate-wrangler-config.ts";
 
+it("does not emit the local forge JWKS into deployed builds", () => {
+  const forgePrivateJwk = JSON.stringify({
+    kty: "OKP",
+    kid: "test-forge",
+    crv: "Ed25519",
+    x: "public-key",
+    d: "private-key",
+  });
+
+  expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: "prd" })).toBeUndefined();
+  expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: undefined })).toBe(
+    JSON.stringify({
+      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", x: "public-key" }],
+    }),
+  );
+});
+
 it.each([
   "APP_CONFIG_LOGS",
   "APP_CONFIG_GEMINI_API_KEY",

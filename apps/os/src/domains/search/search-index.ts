@@ -114,19 +114,37 @@ export async function triggerProjectSearchSync(projectId: string): Promise<void>
  * file mirroring, repo commits): at most one trigger per project per interval
  * per isolate, so passive content becomes searchable in minutes instead of
  * waiting for the hourly schedule. Never creates instances — a project nobody
- * has ever searched keeps costing nothing (the trigger 404s and is swallowed);
- * once a first query/index creates the instance, the passive lanes keep it
- * fresh. Isolate-local state means restarts re-trigger early — harmless, the
- * jobs API itself rate-limits at one per 30s.
+ * has ever searched keeps costing nothing. The namespace is listed before
+ * taking an instance handle, so that expected no-instance state is a clean
+ * no-op; once a first query/index creates the instance, the passive lanes keep
+ * it fresh. Isolate-local state means restarts re-trigger early — harmless,
+ * the jobs API itself rate-limits at one per 30s.
  */
 const lastPassiveSyncTrigger = new Map<string, number>();
 const PASSIVE_SYNC_DEBOUNCE_MS = 120_000;
-export function triggerProjectSearchSyncDebounced(projectId: string): Promise<void> {
+export async function triggerProjectSearchSyncDebounced(projectId: string): Promise<void> {
   const last = lastPassiveSyncTrigger.get(projectId);
   const now = Date.now();
-  if (last !== undefined && now - last < PASSIVE_SYNC_DEBOUNCE_MS) return Promise.resolve();
+  if (last !== undefined && now - last < PASSIVE_SYNC_DEBOUNCE_MS) return;
   lastPassiveSyncTrigger.set(projectId, now);
-  return triggerProjectSearchSync(projectId);
+  const id = projectSearchInstanceId(projectId);
+  try {
+    const { result } = await itxEnv.SEARCH_INSTANCES.list({
+      per_page: 100,
+      search: id,
+    });
+    if (!result.some((instance) => instance.id === id)) return;
+  } catch (error) {
+    // A failed control-plane lookup did not trigger anything, so it must not
+    // consume the debounce window. Let the next passive write retry promptly.
+    lastPassiveSyncTrigger.delete(projectId);
+    console.warn("search sync instance lookup failed", {
+      projectId,
+      error: String(error).slice(0, 200),
+    });
+    return;
+  }
+  await triggerProjectSearchSync(projectId);
 }
 
 /**
@@ -207,11 +225,9 @@ export async function indexStreamOffsets(input: {
       segment,
     });
     if (document === null) {
-      // Nothing indexable in the segment (all housekeeping/ephemeral). Delete
-      // rather than skip so a segment that RENDERED before but no longer does
-      // (e.g. after a disallow-list change) self-heals instead of serving a
-      // stale document forever.
-      await deleteR2ObjectIfPresent(itxEnv.SEARCH_BUCKET, key);
+      // Append-only segments containing only housekeeping events never had a
+      // document. R2 reports missing head/delete operations as native errors,
+      // so the ordinary no-document case is simply a no-op.
       continue;
     }
     const { first: firstOffset, last: lastOffset } = segmentOffsetRange(segment);

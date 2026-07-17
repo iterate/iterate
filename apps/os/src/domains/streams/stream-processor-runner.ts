@@ -182,15 +182,12 @@ export type DeliveryContext = {
   /** How far this event trails `observedHeadOffset`; 0 = at the observed head. */
   eventsBehindObservedHead: number;
   /**
-   * `eventsBehindObservedHead === 0` — this event WAS the observed head when
-   * delivered, so the fold through it is everything the runner has seen. This
-   * is the at-head reconcile signal: a processor drives its undriven
-   * obligations / settles dead ones under this flag (there is no separate
-   * hook). It is TRUE for exactly the last consumed event of a batch that
-   * reached head; a batch whose tail is a type this processor does not consume
-   * simply defers the pass to the next consumed-at-head event (or the
-   * `stream/processor-revived` fact recovery appends) — see the runner's
-   * delivery loop.
+   * The at-head reconciliation signal: the scan has reached the highest raw
+   * stream offset the runner has observed, so `state` is the complete fold it
+   * has seen. It is true on the last consumed event of a head-reaching frame.
+   * If that frame contains no consumed event, the runner makes one eventless
+   * `processEvent` call (`event: null`) with this flag instead; an unconsumed
+   * tail must not strand obligations on an otherwise quiet stream.
    */
   caughtUp: boolean;
   /** The processing cursor's current fencing token (see {@link ProcessingProgress}). */
@@ -379,9 +376,10 @@ export class StreamProcessorRunner<
         // the cursor parks below head, the last consumed event's
         // `delivery.caughtUp` never becomes true, and the obligation the frame
         // opened wedges. Every behind frame therefore gets a trailing
-        // type-UNFILTERED self-pull that folds the tail up to head (its final
-        // page reports its own tail as the head, so the last consumed event is
-        // delivered at head and its reconcile fires). It rides the runner's chain — serialized
+        // type-UNFILTERED self-pull that folds the tail up to head. Its final
+        // page either marks the last consumed event caught up or supplies the
+        // eventless at-head pass when the tail contains no consumed event. It
+        // rides the runner's chain — serialized
         // with frames, reading the freshest cursor — and the keepalive lane,
         // NOT the promise returned to the transport: a failed trailing pull
         // reads as FAILURE to the keepalive, blocking the quiet-clean disarm
@@ -628,6 +626,15 @@ export class StreamProcessorRunner<
     for (const event of pending) {
       if (this.driver.isDeliverable(event)) lastDeliveredOffset = event.offset;
     }
+    // Whether a CONSUMED event carried `caughtUp` this frame. If the batch
+    // reached head but nothing it delivered did (all its head-reaching tail is
+    // unconsumed — a self-pull that folded only foreign events, or a filtered
+    // wake batch whose durable head is an unconsumed presence fact), the runner
+    // still owes the processor an at-head reconcile: it fires an EVENT-LESS
+    // pass after the loop (below). Without it a reconcile obligation strands
+    // whenever an unconsumed event (e.g. stream/subscriber-disconnected) sits
+    // at head — the late-agent preview regression.
+    let firedCaughtUp = false;
 
     const ctx: FrameContext<ProcessorState<Contract>> = {
       revision: committed.processing.cursorRevision,
@@ -655,6 +662,7 @@ export class StreamProcessorRunner<
           // (not `offset >= head` — that never fires for a subset-consuming
           // processor whose head is a later unconsumed event).
           const caughtUp = batchReachesHead && event.offset === lastDeliveredOffset;
+          if (caughtUp) firedCaughtUp = true;
           const delivery: DeliveryContext = {
             phase: event.offset >= observedHeadOffset ? "live" : "catching-up",
             observedHeadOffset,
@@ -712,13 +720,49 @@ export class StreamProcessorRunner<
         ctx.eventsSinceCommit += 1;
         ctx.uncommittedEvents.push(event);
       }
-      // The at-head reconcile rides `processEvent` for the LAST CONSUMED event
-      // of a head-reaching batch (`delivery.caughtUp`). A head-reaching batch
-      // that consumed NOTHING (a self-pull that folded only an unconsumed
-      // durable tail) carries no such event, so it does NOT reconcile this
-      // pass: the obligation defers to the next consumed-at-head event, or the
-      // consumed `stream/processor-revived` fact recovery appends. Reconcile
-      // never fires without a real consumed event at head.
+      // EVENT-LESS at-head reconcile. Normally the reconcile rides the last
+      // consumed event of a head-reaching batch (`delivery.caughtUp`). But a
+      // batch can reach head with NO consumed event carrying that flag — a
+      // self-pull that folded only an unconsumed tail, or a filtered wake batch
+      // whose durable head is an unconsumed presence fact (e.g.
+      // stream/subscriber-disconnected). Deferring the reconcile to "the next
+      // consumed event" strands the obligation when the stream then goes quiet
+      // (the late-agent preview regression). So the
+      // runner drives the reconcile itself over the final fold: `event` is null
+      // (the processor skips its per-event switch), appends are unstamped, and
+      // obligation keys are offset-free (`this.idempotencyKey`), stable across
+      // passes. Its blockers are awaited before the deferred frame-end commit.
+      if (batchReachesHead && !firedCaughtUp) {
+        const delivery: DeliveryContext = {
+          phase: "live",
+          observedHeadOffset,
+          eventsBehindObservedHead: 0,
+          caughtUp: true,
+          cursorRevision: ctx.revision,
+        };
+        const atHeadWork: (() => Promise<unknown>)[] = [];
+        // With no per-event switch to run, both lanes are equivalent here:
+        // collect the reconcile work and run it before the frame-end commit.
+        const collect = (work: () => Promise<unknown>) => atHeadWork.push(work);
+        this.driver.processEvent({
+          event: null,
+          previousState: ctx.state,
+          state: ctx.state,
+          streamMaxOffset: observedHeadOffset,
+          checkpointOffset: frameCheckpointOffset,
+          delivery,
+          blockProcessorWhile: collect,
+          blockProcessorWhileCaughtUp: collect,
+          runInBackground: (work) => this.#runInBackground(work),
+          append: (...input) => this.driver.append({}, input),
+          appendTo: (path, ...input) => this.driver.appendTo(path, {}, input),
+        });
+        for (const work of atHeadWork) {
+          const attempt = this.#keepAliveBackedWork(work);
+          startedBlockers.push(attempt);
+          await attempt;
+        }
+      }
       // The frame's scan proof covers omitted rows too. They are deliberate
       // no-ops for this processor, but both cursors must advance across them
       // atomically with the durable events above — including an empty scan.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
@@ -55,6 +55,8 @@ function makeHarness(options: { workerResponses?: Response[] } = {}) {
     workerFetchCalls: () => workerFetchCalls,
   };
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("ProjectProcessor bootstrap", () => {
   it("creates each required sibling processor explicitly", async () => {

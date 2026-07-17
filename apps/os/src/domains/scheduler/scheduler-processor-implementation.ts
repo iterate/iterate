@@ -171,9 +171,8 @@ export class SchedulerProcessor extends StreamProcessor<
   ): undefined {
     if (args.state.birthCertificate === null) return;
     const { event } = args;
-    // AT-HEAD alarm derivation (was `onCaughtUp`): fires only when this event
-    // was the observed stream head at delivery, so `args.state` is the whole
-    // fold. It rides a `blockProcessorWhile` closure, which the runner awaits
+    // AT-HEAD alarm derivation: `delivery.caughtUp` means `args.state` is the
+    // whole observed fold. It rides a `blockProcessorWhile` closure, which the runner awaits
     // BEFORE the frame's final commit — the alarm always reflects the fold
     // that is about to be acknowledged, and a failed repoint fails the frame
     // so the transport redelivers it (the await is as load-bearing as the old
@@ -185,6 +184,8 @@ export class SchedulerProcessor extends StreamProcessor<
         await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
       });
     }
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+    if (event === null) return;
     if (event.type !== "events.iterate.com/scheduler/trigger-requested") return;
     // No gate here — #execute does all the gating after its barrier: pending
     // recheck against committed state, plus a completion-existence read so a
