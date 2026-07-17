@@ -56,13 +56,14 @@ export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 /**
- * The wrangler pin that IS the build toolchain. Three places must agree:
- * apps/os's own `wrangler` devDependency (the host/dev runner — asserted by
- * build-recipe.test.ts), the sandbox image's global install
- * (sandbox/Dockerfile), and this constant, which participates in the build
- * key so a toolchain bump invalidates cached artifacts instead of serving
- * output from an older bundler. esbuild rides inside wrangler — there is no
- * separate bundler pin.
+ * The wrangler pin that IS the build toolchain. Two places must agree:
+ * apps/os's own `wrangler` devDependency (the host/dev runner and the deploy
+ * seeder — asserted by build-key.test.ts) and this constant, which the
+ * container lane installs from directly (build-backend.ts — deliberately NOT
+ * baked into the sandbox image; see sandbox/Dockerfile) and which
+ * participates in the build key so a toolchain bump invalidates cached
+ * artifacts instead of serving output from an older bundler. esbuild rides
+ * inside wrangler — there is no separate bundler pin.
  */
 export const WRANGLER_VERSION = "4.107.0";
 export const BUILD_TOOLCHAIN_VERSION = `wrangler@${WRANGLER_VERSION}`;

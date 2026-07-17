@@ -91,20 +91,17 @@ describe("workerBuildKey", () => {
     expect(projectKey).not.toBe(sharedKey);
   });
 
-  it("pins the wrangler toolchain constant to the repo pin and the sandbox image", () => {
-    // The toolchain version participates in every build key; the three pins
-    // (constant, workspace override backing apps/os's wrangler devDependency,
-    // sandbox image global install) must agree or the host/dev runner and the
-    // container build different bytes under one key.
+  it("pins the wrangler toolchain constant to the repo's own wrangler pin", () => {
+    // The toolchain version participates in every build key; the constant and
+    // the workspace override backing apps/os's wrangler devDependency (what
+    // the host/dev runner and the deploy seeder execute) must agree or two
+    // runners build different bytes under one key. The container lane needs
+    // no third pin: build-backend.ts installs wrangler@WRANGLER_VERSION from
+    // this same constant.
     const workspaceYaml = readFileSync(
       new URL("../../../../../pnpm-workspace.yaml", import.meta.url),
       "utf8",
     );
     expect(workspaceYaml).toMatch(new RegExp(`^  wrangler: ${WRANGLER_VERSION}$`, "m"));
-    const dockerfile = readFileSync(
-      new URL("../../../sandbox/Dockerfile", import.meta.url),
-      "utf8",
-    );
-    expect(dockerfile).toContain(`npm install -g wrangler@${WRANGLER_VERSION}`);
   });
 });

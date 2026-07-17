@@ -1,7 +1,12 @@
 import { itxEnv as env } from "../../env.ts";
 import { getOrCreateBuilderSandbox } from "../sandboxes/builder-sandbox.ts";
 import { buildFailureMessageFromError, WorkerBuildFailedError } from "./artifact-store.ts";
-import { collectRecipeOutputs, workerBuildRecipe, type WorkerBuildRecipe } from "./build-recipe.ts";
+import {
+  collectRecipeOutputs,
+  workerBuildRecipe,
+  WRANGLER_VERSION,
+  type WorkerBuildRecipe,
+} from "./build-recipe.ts";
 import type { WorkerBuildOptions } from "./schemas.ts";
 
 /**
@@ -74,6 +79,26 @@ async function buildInSandbox(
   input: { buildKey: string; projectId: string },
 ): Promise<{ mainModule: string; modules: Record<string, string> }> {
   const { sandbox } = await getOrCreateBuilderSandbox(input.projectId);
+
+  // The builder runs the STOCK sandbox image and installs its own toolchain
+  // once per container life. Baking wrangler into the image was tried and
+  // reverted: the stock image is cached on effectively every container host,
+  // but a per-account derived layer is not — every fresh placement paid a
+  // cold image pull measured in MINUTES, observed live as sandbox exec
+  // hanging fleet-wide (every sandbox in the deployment shares the image,
+  // so the builder's layer taxed sandboxes that never build anything).
+  // A failed install throws a PLAIN error — provisioning weather, retryable,
+  // never recorded as a build failure of the source.
+  const toolchain = await sandbox.exec(
+    `command -v wrangler >/dev/null || npm install -g wrangler@${WRANGLER_VERSION} --no-audit --no-fund`,
+    { env: { npm_config_cache: "/build/.npm-cache" }, timeout: 120_000 },
+  );
+  if (!toolchain.success) {
+    throw new Error(
+      `builder toolchain install failed (exit ${toolchain.exitCode}): ${toolchain.stderr.slice(-500)}`,
+    );
+  }
+
   // Ephemeral by choice: /build is outside /workspace, so build trees and the
   // npm cache never enter workspace snapshots (the builder's backups stay
   // empty). The cache warms rebuilds only while the container stays up —
