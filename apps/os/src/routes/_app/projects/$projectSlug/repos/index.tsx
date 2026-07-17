@@ -24,7 +24,6 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { AddRepoFromGithub } from "~/components/add-repo-from-github.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
@@ -63,16 +62,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
       routeConfig: await getPublicRouteConfig(),
       streamBreadcrumb: streamBreadcrumb(context.project, "/repos"),
     }),
-  component: ProjectReposIndexPage,
+  component: ProjectReposIndexContent,
 });
-
-function ProjectReposIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectReposIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectReposIndexContent() {
   const params = Route.useParams();

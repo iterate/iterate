@@ -12,7 +12,6 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import type { ScheduleView, SchedulerRecurrence } from "../../../../domains/scheduler/types.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SCHEDULER_PRIMARY_PATH } from "~/domains/scheduler/utils.ts";
 import { formatRelativeTime, formatTimeAgo } from "~/lib/format-relative-time.ts";
@@ -33,16 +32,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/scheduler")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, SCHEDULER_PRIMARY_PATH),
     }),
-  component: ProjectSchedulerPage,
+  component: ProjectSchedulerContent,
 });
-
-function ProjectSchedulerPage() {
-  return (
-    <ItxBoundary>
-      <ProjectSchedulerContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectSchedulerContent() {
   const { project } = Route.useLoaderData();

@@ -1,6 +1,6 @@
-import { Suspense, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
-/** The one muted-text placeholder both the socket-connect and first-read waits render. */
+/** The muted-text placeholder the labelled connect/first-read waits render. */
 function ItxPending({ children }: { children: ReactNode }) {
   return (
     <div className="p-4 text-sm text-muted-foreground" data-spinner="true">
@@ -9,15 +9,12 @@ function ItxPending({ children }: { children: ReactNode }) {
   );
 }
 
-/** Suspense wrapper shared by every route that reads through itx. */
-export function ItxBoundary({ children }: { children: ReactNode }) {
-  return <Suspense fallback={<ItxPending>Connecting to itx…</ItxPending>}>{children}</Suspense>;
-}
-
 /**
- * A labelled "Loading X…" Suspense fallback — used where a route suspends on a
- * specific itx read (e.g. the project layout connecting + first read) and wants
- * to name what it's waiting for rather than show the bare "Connecting to itx…".
+ * A labelled "Loading X…" Suspense fallback for the project layout / collect-
+ * secret mounts, which want to name what they're waiting for. Ordinary project
+ * pages need NO explicit boundary: TanStack Router already wraps every route
+ * match in `<Suspense>` with the router's `defaultPendingComponent` (see
+ * router.tsx), so a page that suspends on `useItxQuery` shows that fallback.
  */
 export function ItxResourceLoading({ label }: { label: string }) {
   return <ItxPending>Loading {label}…</ItxPending>;

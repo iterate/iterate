@@ -193,8 +193,16 @@ export interface RepoCollection {
 /** Catalog of projects reachable from a {@link Session}. */
 export interface ProjectCollection {
   __describe(): Promise<Description>;
-  /** The itx at the project root for a `prj_…` id. */
-  get(projectId: string): Promise<Project>;
+  /**
+   * The itx at the project root, addressable by `prj_…` id OR by URL slug — the
+   * browser passes `params.projectSlug` straight through, no client-side
+   * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution
+   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},
+   * which passes `prj_` ids through untouched and resolves slugs); slugs are
+   * immutable, so a slug handle can't silently repoint. Confinement stays keyed
+   * on the resolved id — the access check runs on the id, never the raw input.
+   */
+  get(idOrSlug: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
    * bootstrap saga has committed `project/ready` — convenient for scripts
