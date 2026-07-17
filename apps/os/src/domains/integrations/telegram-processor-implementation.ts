@@ -6,7 +6,7 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
-import { readRecord, telegramChatStreamPath } from "./utils.ts";
+import { readRecord, telegramChatStreamPath, webhookAckIsFresh } from "./utils.ts";
 import {
   TelegramProcessorContract,
   type TelegramProcessorState,
@@ -20,7 +20,19 @@ type TelegramReplyHint = {
   sessionPath: string;
 };
 
-export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract> {
+type TelegramProcessorDeps = {
+  now(): number;
+  sendTelegramMessage(input: {
+    body: Record<string, unknown>;
+    connection: string;
+  }): Promise<unknown>;
+  telegramAccessSettingsUrl(input: { connection: string; projectId: string }): Promise<string>;
+};
+
+export class TelegramProcessor extends StreamProcessor<
+  TelegramProcessorContract,
+  TelegramProcessorDeps
+> {
   readonly contract = TelegramProcessorContract;
 
   protected override reduce({
@@ -33,6 +45,8 @@ export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract
           throw new Error("Telegram processor received more than one telegram/created event");
         }
         return { ...state, birthCertificate: event.payload };
+      case "events.iterate.com/telegram/access-configured":
+        return { ...state, allowedUserIds: [...new Set(event.payload.allowedUserIds)] };
       case "events.iterate.com/telegram/webhook-received": {
         // `/new` starts a session: fold it straight off the webhook — the
         // webhook event itself is the session-start fact, so replay rebuilds
@@ -108,6 +122,36 @@ export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract
     // handles chat-scoped updates only.
     const target = telegramChatFromUpdate(event.payload.body);
     if (target == null) return;
+
+    const senderId = telegramSenderIdFromUpdate(event.payload.body);
+    if (senderId === undefined) return;
+    if (!state.allowedUserIds.includes(senderId)) {
+      // Denial is deterministic processor work: no agent stream, context, or
+      // LLM exists for an unauthorized sender. Only ordinary messages receive
+      // the handoff; service updates and button callbacks are denied silently.
+      if (
+        readRecord(readRecord(event.payload.body)?.message) !== null &&
+        webhookAckIsFresh(event, this.deps.now())
+      ) {
+        blockProcessorWhile(async () => {
+          if (this.projectId === null) {
+            throw new Error("Telegram router cannot build access settings without a project id");
+          }
+          const settingsUrl = await this.deps.telegramAccessSettingsUrl({
+            connection,
+            projectId: this.projectId,
+          });
+          await this.deps.sendTelegramMessage({
+            connection,
+            body: {
+              chat_id: coerceTelegramApiId(target.chatId),
+              text: telegramAccessDeniedMessage({ settingsUrl, userId: senderId }),
+            },
+          });
+        });
+      }
+      return;
+    }
 
     // Everything routes to the chat's LATEST session — `state` is post-reduce,
     // so a `/new` update routes ITSELF (and its trailing text) into the fresh
@@ -344,4 +388,36 @@ function readTelegramId(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
   if (typeof value === "string" && value !== "") return value;
   return undefined;
+}
+
+/** The human who caused one update. This identity, not the chat, is the
+ * authorization principal: a permitted group must not grant every member
+ * project access. */
+function telegramSenderIdFromUpdate(body: unknown): string | undefined {
+  const update = readRecord(body);
+  const sender =
+    readRecord(readRecord(update?.message)?.from) ||
+    readRecord(readRecord(update?.edited_message)?.from) ||
+    readRecord(readRecord(update?.channel_post)?.from) ||
+    readRecord(readRecord(update?.edited_channel_post)?.from) ||
+    readRecord(readRecord(update?.callback_query)?.from) ||
+    readRecord(readRecord(update?.my_chat_member)?.from) ||
+    readRecord(readRecord(update?.chat_member)?.from) ||
+    readRecord(readRecord(update?.chat_join_request)?.from);
+  if (sender?.is_bot === true) return undefined;
+  return readTelegramId(sender?.id);
+}
+
+function coerceTelegramApiId(id: string): number | string {
+  const numeric = Number(id);
+  return Number.isSafeInteger(numeric) && String(numeric) === id ? numeric : id;
+}
+
+function telegramAccessDeniedMessage(input: { settingsUrl: string; userId: string }): string {
+  return [
+    "Access denied. This Telegram account is not allowed to use this Iterate project.",
+    `Ask a project owner to add Telegram user ID ${input.userId} to this bot's allowlist:`,
+    input.settingsUrl,
+    "You can forward this message to them.",
+  ].join("\n\n");
 }

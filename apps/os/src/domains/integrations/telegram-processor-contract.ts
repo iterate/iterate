@@ -12,6 +12,10 @@ const TelegramBirthCertificate = z.object({
   config: z.object({ connection: z.string() }),
 });
 
+export const TelegramAllowedUserIds = z
+  .array(z.string().trim().regex(/^\d+$/, "Telegram user IDs contain digits only"))
+  .transform((ids) => [...new Set(ids)]);
+
 export const TelegramAgentBirthCertificate = z.object({
   config: z.object({
     connection: z.string(),
@@ -65,10 +69,13 @@ const SessionStart = z.object({
  */
 export const TelegramProcessorContract = defineProcessorContract({
   slug: "telegram",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Routes raw Telegram webhook updates into Telegram-backed agent streams.",
   stateSchema: z.object({
     birthCertificate: TelegramBirthCertificate.nullable().default(null),
+    /** Immutable Telegram user ids authorized to reach project agents through
+     * this bot connection. Empty is deliberately deny-all. */
+    allowedUserIds: z.array(z.string()).default([]),
     /**
      * Per-chat `/new` session starts, oldest first, keyed by the chat's path
      * suffix (`chat-{chatId}` or `chat-{chatId}/topic-{threadId}`). The last
@@ -91,6 +98,19 @@ export const TelegramProcessorContract = defineProcessorContract({
         {
           description: "A Telegram connection router is born for one bot connection.",
           payload: { config: { connection: "support-bot" } },
+        },
+      ],
+    },
+    "events.iterate.com/telegram/access-configured": {
+      description:
+        "Replaces the Telegram user-id allowlist for this bot connection. Empty denies every inbound user.",
+      payloadSchema: z.object({
+        allowedUserIds: TelegramAllowedUserIds,
+      }),
+      examples: [
+        {
+          description: "Two Telegram users may talk to this project bot.",
+          payload: { allowedUserIds: ["555123", "777456"] },
         },
       ],
     },
@@ -162,6 +182,7 @@ export const TelegramProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/telegram/created",
+    "events.iterate.com/telegram/access-configured",
     "events.iterate.com/telegram/webhook-received",
     "events.iterate.com/telegram/message-sent",
   ],

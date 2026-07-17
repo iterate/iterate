@@ -7,7 +7,7 @@ size: medium
 
 ## Status
 
-Specification complete; implementation has not started. The intended design stores access policy as durable events on each Telegram connection stream, rejects unauthorized updates before any agent is created, and gives the sender a self-service handoff to the owning project's dashboard.
+Implementation is roughly 85% complete. Durable deny-by-default policy, router enforcement, deterministic denial replies, public RPC methods, and the dashboard editor are implemented with focused and full OS unit coverage. Remaining work is visible browser QA, repository-wide checks, PR media/review follow-up, and final task completion bookkeeping.
 
 ## Goal
 
@@ -26,15 +26,17 @@ A connected Telegram bot must not grant project-agent access to every Telegram u
 
 ## Checklist
 
-- [ ] Add a contract event and folded Telegram processor state for replacing a connection's allowed user IDs.
-- [ ] Expose project-scoped RPC methods to read and replace a Telegram connection's allowlist.
-- [ ] Reject unauthorized Telegram senders before creating or forwarding to an agent stream.
-- [ ] Send denied users a deterministic, helpful response containing denial, resolution, dashboard deep link, and their numeric user ID.
-- [ ] Add a dashboard allowlist editor for each connected Telegram bot, including deep-link opening and clear numeric-ID guidance.
-- [ ] Cover authorization, denial response, missing sender identity, allowed routing, policy replacement, and dashboard link construction with focused tests.
+- [x] Add a contract event and folded Telegram processor state for replacing a connection's allowed user IDs. *`telegram/access-configured` replaces `TelegramProcessorState.allowedUserIds`; an empty/default list denies all.*
+- [x] Expose project-scoped RPC methods to read and replace a Telegram connection's allowlist. *`getTelegramAccess` and `setTelegramAccess` validate the connection and wait for the router fold.*
+- [x] Reject unauthorized Telegram senders before creating or forwarding to an agent stream. *The connection router checks immutable `from.id` before session routing or agent creation.*
+- [x] Send denied users a deterministic, helpful response containing denial, resolution, dashboard deep link, and their numeric user ID. *Fresh ordinary messages get a direct Bot API handoff; historical refolds and sender-less updates stay silent.*
+- [x] Add a dashboard allowlist editor for each connected Telegram bot, including deep-link opening and clear numeric-ID guidance. *The integrations page exposes a per-bot access Sheet controlled by `?telegramAccess=<connection>`.*
+- [x] Cover authorization, denial response, missing sender identity, allowed routing, policy replacement, and dashboard link construction with focused tests. *Telegram processor coverage exercises the public stream behavior and exact denial body/link.*
 - [ ] Run focused tests and the repository's pre-PR checks; capture visual evidence for the dashboard change.
 - [ ] Update this task's status/log, move it to `tasks/complete/`, and update the pull request body when complete.
 
 ## Implementation log
 
 - 2026-07-17: Chose connection-stream policy events over connection metadata. Connection metadata is a projection of connect/disconnect facts, while access policy is independently mutable operational state; the event-sourced processor is the existing home for comparable email sender authorization.
+- 2026-07-17: Added refold freshness protection so deploying deny-by-default does not send denial messages for historical webhook events. Historical unauthorized content remains blocked from agents without generating outbound traffic.
+- 2026-07-17: `pnpm --dir apps/os test` passed: 182 files, 1,809 passed, 1 skipped. OS typecheck and focused Telegram tests also passed.

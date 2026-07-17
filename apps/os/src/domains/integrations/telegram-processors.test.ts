@@ -15,20 +15,30 @@ import {
   TELEGRAM_NEW_SESSION_ACK_TEXT,
   TelegramAgentProcessor,
 } from "./telegram-agent-processor-implementation.ts";
+import { buildTelegramAccessSettingsUrl } from "./utils.ts";
 
 const BOT_ID = "7000001";
 const CONNECTION = "mishas-helper-bot";
 const CHAT_ID = 42424242;
 
-function newTelegramRouter(
-  input: ConstructorParameters<typeof TelegramProcessor>[0],
-): TelegramProcessor {
+function newTelegramRouter(input: any): TelegramProcessor {
   void input.stream.append({
     type: "events.iterate.com/telegram/created",
     idempotencyKey: "test:telegram-router-created",
     payload: { config: { connection: CONNECTION } },
   });
-  return new TelegramProcessor(input);
+  void input.stream.append({
+    type: "events.iterate.com/telegram/access-configured",
+    idempotencyKey: "test:telegram-access-configured",
+    payload: { allowedUserIds: ["555"] },
+  });
+  return new TelegramProcessor({
+    now: () => 60_000,
+    sendTelegramMessage: async () => undefined,
+    telegramAccessSettingsUrl: async () =>
+      `https://os.iterate.com/projects/acme/integrations?telegramAccess=${CONNECTION}`,
+    ...input,
+  });
 }
 
 function telegramWebhooksAt(network: MemoryStreamNetwork, path: string) {
@@ -82,6 +92,113 @@ describe("TelegramProcessor (webhook router)", () => {
     const routed = telegramWebhooksAt(network, path);
     expect(routed).toHaveLength(1);
     expect(routed[0]!.payload).toEqual(humanMessageWebhookPayload({}));
+  });
+
+  it("does not create an agent or forward a message from a user outside the allowlist", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const processor = newTelegramRouter({ stream, path: stream.path, projectId: "prj_1" });
+    const driver = driveProcessor(processor, stream);
+    await stream.append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds: ["999"] },
+    });
+    await stream.append({
+      type: "events.iterate.com/telegram/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+
+    await driver.deliver();
+
+    expect(network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`)).toEqual([]);
+  });
+
+  it("denies updates without a human sender identity", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const processor = newTelegramRouter({ stream, path: stream.path, projectId: "prj_1" });
+    const driver = driveProcessor(processor, stream);
+    const payload = humanMessageWebhookPayload({});
+    delete (payload.body.message as Record<string, unknown>).from;
+    await stream.append({
+      type: "events.iterate.com/telegram/webhook-received",
+      payload,
+    });
+
+    await driver.deliver();
+
+    expect(network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`)).toEqual([]);
+  });
+
+  it("tells a denied user which id an owner must add and links to this bot's access settings", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const telegramCalls: Array<{ body: Record<string, unknown>; connection: string }> = [];
+    const processor = newTelegramRouter({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      telegramAccessSettingsUrl: async () =>
+        `https://os.iterate.com/projects/acme/integrations?telegramAccess=${CONNECTION}`,
+      sendTelegramMessage: async (input: { body: Record<string, unknown>; connection: string }) => {
+        telegramCalls.push(input);
+      },
+    });
+    const driver = driveProcessor(processor, stream);
+    await stream.append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds: [] },
+    });
+    await stream.append({
+      type: "events.iterate.com/telegram/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+
+    await driver.deliver();
+
+    expect(telegramCalls).toEqual([
+      {
+        connection: CONNECTION,
+        body: {
+          chat_id: CHAT_ID,
+          text: [
+            "Access denied. This Telegram account is not allowed to use this Iterate project.",
+            "Ask a project owner to add Telegram user ID 555 to this bot's allowlist:",
+            `https://os.iterate.com/projects/acme/integrations?telegramAccess=${CONNECTION}`,
+            "You can forward this message to them.",
+          ].join("\n\n"),
+        },
+      },
+    ]);
+  });
+
+  it("does not resend denial messages while refolding historical webhooks", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const telegramCalls: unknown[] = [];
+    const processor = newTelegramRouter({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      now: () => 999_999_999_999,
+      sendTelegramMessage: async (input: unknown) => {
+        telegramCalls.push(input);
+      },
+    });
+    const driver = driveProcessor(processor, stream);
+    await stream.append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds: [] },
+    });
+    await stream.append({
+      type: "events.iterate.com/telegram/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+
+    await driver.deliver();
+
+    expect(telegramCalls).toEqual([]);
+    expect(network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`)).toEqual([]);
   });
 
   it("routes forum-topic messages to a per-topic stream, negative group ids verbatim", async () => {
@@ -155,6 +272,7 @@ describe("TelegramProcessor (webhook router)", () => {
     );
     await driver.deliver();
     expect(driver.state).toEqual({
+      allowedUserIds: ["555"],
       birthCertificate: { config: { connection: CONNECTION } },
       sessionsByChat: {},
       sentMessages: {},
@@ -169,6 +287,9 @@ describe("TelegramProcessor (webhook router)", () => {
       stream,
       path: stream.path,
       projectId: null,
+      now: () => 60_000,
+      sendTelegramMessage: async () => undefined,
+      telegramAccessSettingsUrl: async () => "https://os.iterate.com/projects/acme/integrations",
     });
     const driver = driveProcessor(processor, stream);
 
@@ -200,7 +321,7 @@ describe("TelegramProcessor (webhook router)", () => {
     });
     const driver = driveProcessor(processor, stream);
     await driver.deliver();
-    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 1 });
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 2 });
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
@@ -209,13 +330,13 @@ describe("TelegramProcessor (webhook router)", () => {
     // First delivery: the forward throws. The pass MUST reject and the
     // cursor MUST hold — otherwise the message is gone for good.
     await expect(driver.deliver()).rejects.toThrow(/StreamsCapability/);
-    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 1 });
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 2 });
     expect(routed.events).toHaveLength(0);
 
     // The runner replays the same webhook from the un-advanced cursor; the
     // forward now succeeds and the cursor advances.
     await driver.deliver();
-    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 2 });
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 3 });
     const routedCount = routed.events.length;
     expect(routed.events.slice(0, 3).map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
@@ -1081,6 +1202,18 @@ describe("telegramAgentSystemPrompt", () => {
     expect(prompt).toContain(`itx.integrations.telegram.get("${CONNECTION}")`);
     // v1 media limitation is stated so the agent doesn't hallucinate vision.
     expect(prompt).toContain("[photo]");
+  });
+});
+
+describe("buildTelegramAccessSettingsUrl", () => {
+  it("targets one project's Telegram connection editor", () => {
+    expect(
+      buildTelegramAccessSettingsUrl({
+        baseUrl: "http://localhost:5173",
+        connection: "support-bot",
+        projectSlug: "acme",
+      }),
+    ).toBe("http://localhost:5173/projects/acme/integrations?telegramAccess=support-bot");
   });
 });
 
