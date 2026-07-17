@@ -1,7 +1,9 @@
 import { expect, test } from "vitest";
 import {
   createRepoTask,
+  fallbackTaskCommitMessage,
   isRepoTaskPath,
+  listRepoTaskChanges,
   parseRepoTask,
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
@@ -15,6 +17,7 @@ import {
   repoTaskWithPath,
   repoTaskCreationPaths,
   taskColumnState,
+  taskCommitMessagePrompt,
   taskDirectoryForFolder,
   taskDirectoryForPath,
   taskStateColumns,
@@ -22,6 +25,7 @@ import {
   updateRepoTaskAgent,
   updateRepoTaskState,
 } from "./repo-tasks.ts";
+import { fileChangeForEntry } from "./staged-changes.ts";
 
 test.for([
   { name: "a Markdown file in a root tasks directory", path: "tasks/ship-it.md", expected: true },
@@ -378,4 +382,33 @@ test("filters the board projection and can group multi-label tasks", () => {
   expect(
     queryRepoTaskBoard([task], { filter: "missing", columns: "state", rows: null }).taskCount,
   ).toBe(0);
+});
+
+test("lists only task working-tree changes with board statuses", () => {
+  const changes = new Map([
+    ["tasks/new.md", { working: { type: "write" as const, content: "# Brand new\n" } }],
+    [
+      "tasks/edited.md",
+      { working: { type: "write" as const, content: "---\nstate: done\n---\n# Edited\n" } },
+    ],
+    ["tasks/gone.md", { working: { type: "delete" as const } }],
+    ["src/app.ts", { working: { type: "write" as const, content: "export {}" } }],
+  ]);
+  const headPaths = new Set(["tasks/edited.md", "tasks/gone.md", "src/app.ts"]);
+  const listed = listRepoTaskChanges(changes, headPaths, {
+    "tasks/gone.md": "# Gone task\n",
+  });
+
+  expect(listed.map((change) => [change.path, change.status, change.title])).toEqual([
+    ["tasks/edited.md", "modified", "Edited"],
+    ["tasks/gone.md", "deleted", "Gone task"],
+    ["tasks/new.md", "added", "Brand new"],
+  ]);
+  expect(listed.map((change) => fileChangeForEntry(change.path, change.entry))).toEqual([
+    { path: "tasks/edited.md", content: "---\nstate: done\n---\n# Edited\n" },
+    { path: "tasks/gone.md", delete: true },
+    { path: "tasks/new.md", content: "# Brand new\n" },
+  ]);
+  expect(fallbackTaskCommitMessage(listed)).toBe("Add Brand new, update Edited, delete Gone task");
+  expect(taskCommitMessagePrompt(listed).user).toContain("Added: Brand new");
 });
