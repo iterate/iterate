@@ -211,7 +211,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // MCP server needs OAuth (connect 401s with WWW-Authenticate, e.g. Cloudflare's)? itx.mcp.beginOAuth({ url, path })",
   '  // returns a sign-in link; after the user signs in, connect with field "accessToken". Full flow: `connect-mcp-oauth`.',
   "",
-  "  // LATER / RECURRING — the script string runs later with full project access:",
+  "  // SCHEDULE BY TIME (for location reminders, search docs):",
   "  await itx.scheduler.set({",
   '    key: "daily-report",',
   '    recurrence: { cron: "0 9 * * *", timezone: "Europe/London" },',

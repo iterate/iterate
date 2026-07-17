@@ -1,4 +1,5 @@
 import "react-native-url-polyfill/auto";
+import "../lib/location-reminder-runtime.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";

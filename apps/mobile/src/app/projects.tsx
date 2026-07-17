@@ -12,6 +12,7 @@ import { SignInRequiredError, signOut } from "../lib/auth.ts";
 import { getItxSession, resetItxSession } from "../lib/itx.ts";
 import { stopAllApprovals } from "../lib/live-approvals.ts";
 import { stopAllThreads } from "../lib/live-thread.ts";
+import { stopAllLocationReminders } from "../lib/location-reminder-runtime.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl, setLastProject } from "../lib/storage.ts";
@@ -64,6 +65,7 @@ export default function ProjectsScreen() {
                 const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
                 await signOut(baseUrl);
                 stopAllThreads();
+                await stopAllLocationReminders();
                 stopAllApprovals();
                 resetItxSession();
                 queryClient.clear();

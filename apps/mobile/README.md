@@ -7,14 +7,14 @@ app shares — push, widgets) graft on later.
 
 ## Run it on your phone
 
-v1 is a plain Expo Go app — no custom native modules, no Xcode, no Apple
-Developer account:
+The non-native app still runs in Expo Go — no Xcode or Apple Developer account:
 
 1. Install **Expo Go** from the App Store.
 2. `pnpm --dir apps/mobile start` (repo root) and scan the QR code.
 
-Day-to-day JS changes hot-reload through Metro. (A dev-client/native build
-only becomes necessary when a native module lands — e.g. push notifications.)
+Day-to-day JS changes hot-reload through Metro. Location reminders are the
+first feature that needs Iterate's own development build; Expo Go cannot load
+the MapKit place-search module or run background geofencing.
 
 **The Expo SDK is deliberately pinned to 54**, not latest: the App Store's
 Expo Go (54.0.2, unchanged since 2025-09) only runs SDK 54 projects — newer
@@ -23,6 +23,30 @@ Before bumping `expo`, check what the store actually ships
 (`curl -s "https://itunes.apple.com/lookup?bundleId=host.exp.Exponent" | jq -r '.results[0].version'`);
 if it's still 54.x, a bump means abandoning Expo Go for dev builds (EAS or
 local Xcode).
+
+## Run the native development build
+
+The development profile includes `expo-dev-client`, background location,
+notifications, and the local `IteratePlaceSearch` MapKit module. Building for
+a physical iPhone requires an Expo login, a paid Apple Developer membership,
+and that phone's registered UDID:
+
+```sh
+pnpm --dir apps/mobile dlx eas-cli@21.0.1 login
+pnpm --dir apps/mobile dlx eas-cli@21.0.1 device:create
+pnpm --dir apps/mobile build:development:ios
+pnpm --dir apps/mobile start
+```
+
+Use `build:simulator:ios` for an EAS simulator binary or `build:preview:ios`
+for a production-like internal build without the development launcher. EAS
+performs the native build in the cloud, so local Xcode is not required. After
+installing a development build, enable iOS Developer Mode and use the normal
+`start` command for Metro. Use `start:go` when deliberately testing the
+Expo Go-compatible surface.
+
+This repository does not contain Apple or Expo credentials. As of 2026-07-17,
+the initial physical-device build remains to be run by an enrolled account.
 
 ## Run and test it in a browser
 
@@ -106,6 +130,27 @@ server-side script isolate agents use — and shows the JSON result inline.
 Exists so testing a platform feature never needs a laptop CLI step first:
 every mobile feature here is built by agents, so it needs to be fully
 testable from the phone alone. See `tasks/mobile-examples-runner.md`.
+
+## Location reminders
+
+Agents create location reminders as durable events on
+`/mobile/location-reminders`. The Reminders screen resolves a phrase such as
+“supermarket” near the phone's current position with Apple's `MKLocalSearch`,
+then registers up to 20 iOS regions across the active reminders. Raw location
+stays on the phone; project state records the reminder, arming result, and
+eventual delivery receipt.
+
+The user must open Reminders and grant notification, When In Use, and Always
+location access before a new reminder is armed. Entering a monitored region
+posts a one-shot local notification, removes that reminder's other regions,
+and stores an offline delivery receipt for the next project sync. Cancelling a
+reminder or signing out removes the corresponding device registrations.
+
+Current limitation: candidate places are selected within 25 km of the phone
+when reminders are enabled or refreshed. The app does not yet refresh that
+candidate set after long-distance travel, and cold-start notification routing
+still needs a physical-device pass. The Reminders screen reports unarmed and
+failed states instead of claiming those cases work.
 
 ## Verification
 

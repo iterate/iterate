@@ -119,6 +119,42 @@ return { appended, count: events.length };
 `.trim(),
   },
   {
+    id: "mobile-location-reminder",
+    e2eProven: false,
+    title: "Create or cancel a mobile location reminder",
+    description:
+      "Location reminders are durable events consumed by the Iterate iOS development build. Use them for requests such as ‘remind me to buy milk near a supermarket’; the time scheduler cannot trigger on a place. A requested event saves the intent, but the phone has not armed it yet: tell the user to open Reminders in the mobile app and grant Always location access. Use the same id in a cancelled event to disable it.",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "project-worker"],
+    code: `
+const stream = itx.streams.get("/mobile/location-reminders");
+const id = vars.id || crypto.randomUUID();
+if (vars.action === "cancel") {
+  const [cancelled] = await stream.append({
+    type: "events.iterate.com/location-reminder/cancelled",
+    idempotencyKey: \`location-reminder-cancelled:\${id}\`,
+    payload: { id },
+  });
+  return { id, offset: cancelled.offset, status: "cancelled" };
+}
+
+const [requested] = await stream.append({
+  type: "events.iterate.com/location-reminder/requested",
+  idempotencyKey: \`location-reminder-requested:\${id}\`,
+  payload: {
+    id,
+    message: vars.message || "Buy milk",
+    placeQuery: vars.placeQuery || "supermarket",
+    radiusMeters: vars.radiusMeters || 250,
+    // An agent should pass its own path from the Platform context item so
+    // the notification can deep-link back to the originating chat.
+    sourceAgentPath: vars.sourceAgentPath || "/agents/mobile/example",
+  },
+});
+return { id, offset: requested.offset, status: "requested" };
+`.trim(),
+  },
+  {
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:

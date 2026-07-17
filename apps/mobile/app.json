@@ -16,6 +16,15 @@
       "expo-router",
       "expo-secure-store",
       "expo-web-browser",
+      "expo-dev-client",
+      [
+        "expo-location",
+        {
+          "isIosBackgroundLocationEnabled": true,
+          "locationAlwaysAndWhenInUsePermission": "Allow Iterate to notify you when you arrive near places used by active reminders.",
+          "locationWhenInUsePermission": "Allow Iterate to find nearby places when you create a location reminder."
+        }
+      ],
       [
         "expo-splash-screen",
         {

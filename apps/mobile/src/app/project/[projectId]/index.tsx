@@ -55,6 +55,13 @@ export default function ChatListScreen() {
               </Pressable>
               <Pressable
                 onPress={() =>
+                  router.push({ pathname: "/project/[projectId]/reminders", params: { projectId } })
+                }
+              >
+                <Text style={styles.switchProject}>Reminders</Text>
+              </Pressable>
+              <Pressable
+                onPress={() =>
                   router.push({ pathname: "/project/[projectId]/approvals", params: { projectId } })
                 }
               >
