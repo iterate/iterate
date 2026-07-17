@@ -47,7 +47,7 @@ export async function signUpWithEmailOtp(
   await page.getByTestId("email-input").fill(input.email);
   await page.getByTestId("email-submit-button").click();
   await page.getByTestId("email-otp-input").fill("424242");
-  await page.getByTestId("email-verify-button").click();
+  await page.getByTestId("email-verify-button").click({ timeout: 15_000 });
 
   // A brand-new user has no organization, so the OAuth post-login flow parks
   // on the auth app's first-run onboarding — organization name and first

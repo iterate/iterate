@@ -260,6 +260,13 @@ import type {
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
+import {
+  handleProjectAuthFetch,
+  parseProjectAuthPolicy,
+  projectAuthRequestFromRpc,
+  type ProjectAuthPolicy,
+  type ProjectAuthRpcMetadata,
+} from "./auth/project-auth.ts";
 import type {
   McpBeginOAuthInput,
   McpBeginOAuthResult,
@@ -5201,6 +5208,35 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
     });
   }
 }
+
+/** A partial fetch: return its response, or continue the app when it returns null. */
+class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  /** Bind a project-member gate to this itx's project. */
+  get(policy: ProjectAuthPolicy): ProjectAuthRpcTarget {
+    parseProjectAuthPolicy(policy);
+    return this;
+  }
+
+  /**
+   * Own login, callback, logout, and the host-only cookie. Returns null only
+   * when this request belongs to a current project member. Like any partial
+   * fetch, a null result leaves the request body untouched for the app.
+   */
+  fetch(request: Request): Promise<Response | null>;
+  async fetch(request: ProjectAuthRpcMetadata | Request): Promise<Response | null> {
+    return await handleProjectAuthFetch({
+      osBaseUrl: parseConfig(env).baseUrl,
+      projectId: this.props.projectId,
+      request: projectAuthRequestFromRpc(request),
+      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+    });
+  }
+}
 /**
  * THE one table of project built-ins: member name -> one-line blip. The
  * `children` map in `__describe()` derives from it, so adding a built-in is
@@ -5209,6 +5245,7 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
   ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
+  auth: 'Project-member web auth: auth.get({ policy: "project-member" }).fetch(request).',
   browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
@@ -5422,6 +5459,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
     return new AiRpcTarget();
+  }
+
+  /** Browser auth for project-host web apps. */
+  get auth(): ProjectAuthRpcTarget {
+    return new ProjectAuthRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
   }
 
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */

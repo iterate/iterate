@@ -408,7 +408,7 @@ export async function verifyOperatorGrant(input: {
 
 /** Browser ambient credentials are accepted only from this exact origin.
  * Non-browser clients normally omit Origin and authenticate explicitly. */
-export function isSameOriginBrowserRequest(request: Request): boolean {
+export function isSameOriginBrowserRequest(request: Pick<Request, "headers" | "url">): boolean {
   const rawOrigin = request.headers.get("origin");
   if (rawOrigin === null) return true;
   try {
