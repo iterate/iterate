@@ -1,13 +1,6 @@
 const encoder = new TextEncoder();
 const MINIMUM_TRUNCATED_VALUE = "[truncated]";
 
-export type TruncatedJson = {
-  bytes: number;
-  originalBytes: number;
-  truncated: boolean;
-  value: unknown;
-};
-
 function serialize(value: unknown): string {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) {
@@ -116,6 +109,13 @@ function truncateLargestValue(value: unknown, maxBytes: number): unknown {
     ? truncateArray(value, maxBytes, originalBytes)
     : truncateObject(value as Record<string, unknown>, maxBytes, originalBytes);
 }
+
+type TruncatedJson = {
+  bytes: number;
+  originalBytes: number;
+  truncated: boolean;
+  value: unknown;
+};
 
 /**
  * Keep JSON intact until it crosses a byte boundary, then deterministically
