@@ -52,8 +52,10 @@ function RootStack() {
 const styles = StyleSheet.create({
   buildStamp: {
     position: "absolute",
-    right: 4,
-    bottom: 2,
+    right: 0,
+    bottom: 24,
+    left: 0,
+    alignItems: "center",
     opacity: 0.55,
   },
   buildStampText: {

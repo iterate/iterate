@@ -8,6 +8,7 @@ import {
   loadAndFollowLocationReminders,
 } from "../../../lib/location-reminder-sync.ts";
 import type { DeviceLocationReminder } from "../../../lib/location-reminders.ts";
+import { sendTestReminderNotification } from "../../../lib/notification-runtime.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
@@ -46,6 +47,10 @@ export default function LocationRemindersScreen() {
     onSettled: () => reminders.refetch(),
   });
 
+  const sendTestReminder = useMutation({
+    mutationFn: sendTestReminderNotification,
+  });
+
   const active = reminders.data?.reminders || [];
   const hasOwnedReminders = active.some((reminder) => reminder.ownership === "this-device");
 
@@ -73,30 +78,44 @@ export default function LocationRemindersScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           ListHeaderComponent={
-            active.length > 0 ? (
-              <View style={styles.actions}>
-                <Pressable
-                  style={styles.primaryButton}
-                  disabled={arm.isPending}
-                  onPress={() => arm.mutate(active)}
-                >
-                  <Text style={styles.primaryText}>
-                    {arm.isPending ? "Arming…" : "Enable and refresh reminders"}
-                  </Text>
-                </Pressable>
-                {hasOwnedReminders ? (
+            <View style={styles.actions}>
+              <Pressable
+                style={styles.primaryButton}
+                disabled={sendTestReminder.isPending}
+                onPress={() => sendTestReminder.mutate()}
+              >
+                <Text style={styles.primaryText}>
+                  {sendTestReminder.isPending ? "Sending…" : "Send test reminder now"}
+                </Text>
+              </Pressable>
+              {sendTestReminder.isSuccess ? (
+                <Text style={styles.success}>Reminder sent. You should see it now.</Text>
+              ) : null}
+              {active.length > 0 ? (
+                <>
                   <Pressable
                     style={styles.secondaryButton}
-                    disabled={disable.isPending}
-                    onPress={() => disable.mutate(active)}
+                    disabled={arm.isPending}
+                    onPress={() => arm.mutate(active)}
                   >
                     <Text style={styles.secondaryText}>
-                      {disable.isPending ? "Disabling…" : "Disable on this iPhone"}
+                      {arm.isPending ? "Arming…" : "Enable and refresh reminders"}
                     </Text>
                   </Pressable>
-                ) : null}
-              </View>
-            ) : null
+                  {hasOwnedReminders ? (
+                    <Pressable
+                      style={styles.secondaryButton}
+                      disabled={disable.isPending}
+                      onPress={() => disable.mutate(active)}
+                    >
+                      <Text style={styles.secondaryText}>
+                        {disable.isPending ? "Disabling…" : "Disable on this iPhone"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </>
+              ) : null}
+            </View>
           }
           ListEmptyComponent={
             <Text style={styles.empty}>
@@ -119,6 +138,9 @@ export default function LocationRemindersScreen() {
       {arm.isError ? <Text style={styles.errorBanner}>{arm.error.message}</Text> : null}
       {cancel.isError ? <Text style={styles.errorBanner}>{cancel.error.message}</Text> : null}
       {disable.isError ? <Text style={styles.errorBanner}>{disable.error.message}</Text> : null}
+      {sendTestReminder.isError ? (
+        <Text style={styles.errorBanner}>{sendTestReminder.error.message}</Text>
+      ) : null}
     </View>
   );
 }
@@ -147,6 +169,7 @@ const styles = StyleSheet.create({
   message: { color: colors.text, fontSize: 16, fontWeight: "600" },
   place: { color: colors.textMuted, fontSize: 14 },
   status: { color: colors.textFaint, fontSize: 12 },
+  success: { color: colors.accent, fontSize: 13, textAlign: "center" },
   cancel: { color: colors.danger, fontSize: 14, marginTop: spacing.xs },
   empty: { color: colors.textMuted, fontSize: 14, lineHeight: 20, paddingTop: spacing.lg },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },

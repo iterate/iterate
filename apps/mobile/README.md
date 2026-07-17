@@ -143,6 +143,11 @@ testable from the phone alone. See `tasks/mobile-examples-runner.md`.
 
 ## Location reminders
 
+The Reminders screen also has a **Send test reminder now** smoke test. It asks
+only for notification permission and posts an immediate local notification;
+it does not request location access, create project state, or register a
+geofence.
+
 Agents create location reminders as durable events on
 `/mobile/location-reminders`. The Reminders screen resolves a phrase such as
 “supermarket” near the phone's current position with Apple's `MKLocalSearch`,
