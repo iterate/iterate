@@ -13,6 +13,64 @@ function event(offset: number, type = "events.iterate.test/match"): StreamEvent 
 }
 
 describe("waitForStreamEvent", () => {
+  it("keeps the opening cursor when the first lease loses its incarnation", async () => {
+    const calls: StreamEventWaitLeaseInput[] = [];
+
+    await expect(
+      waitForStreamEvent({
+        args: { eventTypes: ["events.iterate.test/match"], timeoutMs: 10_000 },
+        getStartOffset: async () => 7,
+        lease: async (args) => {
+          calls.push(args);
+          if (calls.length === 1) {
+            throw Object.assign(new Error("restarted"), { durableObjectReset: true });
+          }
+          return { events: [event(8)], scannedThroughOffset: 8 };
+        },
+        now: () => 0,
+      }),
+    ).resolves.toMatchObject({ offset: 8 });
+
+    expect(calls).toEqual([
+      {
+        afterOffset: 7,
+        eventTypes: ["events.iterate.test/match"],
+        replayEphemeralAfterOffset: 7,
+        timeoutMs: 4_000,
+      },
+      {
+        afterOffset: 7,
+        eventTypes: ["events.iterate.test/match"],
+        replayEphemeralAfterOffset: 7,
+        timeoutMs: 4_000,
+      },
+    ]);
+  });
+
+  it("uses the opening cursor only as the ephemeral boundary with a caller cursor", async () => {
+    const lease = vi.fn(async () => ({ events: [event(5)], scannedThroughOffset: 5 }));
+
+    await expect(
+      waitForStreamEvent({
+        args: {
+          afterOffset: 4,
+          eventTypes: ["events.iterate.test/match"],
+          timeoutMs: 10_000,
+        },
+        getStartOffset: async () => 12,
+        lease,
+        now: () => 0,
+      }),
+    ).resolves.toMatchObject({ offset: 5 });
+
+    expect(lease).toHaveBeenCalledWith({
+      afterOffset: 4,
+      eventTypes: ["events.iterate.test/match"],
+      replayEphemeralAfterOffset: 12,
+      timeoutMs: 4_000,
+    });
+  });
+
   it("carries the scanned cursor into a new lease after an incarnation goes idle", async () => {
     let now = 0;
     const calls: StreamEventWaitLeaseInput[] = [];
@@ -29,6 +87,7 @@ describe("waitForStreamEvent", () => {
     await expect(
       waitForStreamEvent({
         args: { eventTypes: ["events.iterate.test/match"], timeoutMs: 90_000 },
+        getStartOffset: async () => 16,
         lease,
         leaseMs: 4_000,
         now: () => now,
@@ -37,18 +96,50 @@ describe("waitForStreamEvent", () => {
 
     expect(calls).toEqual([
       {
-        afterOffset: undefined,
+        afterOffset: 16,
         eventTypes: ["events.iterate.test/match"],
-        replayEphemeralAfterOffset: false,
+        replayEphemeralAfterOffset: 16,
         timeoutMs: 4_000,
       },
       {
         afterOffset: 16,
         eventTypes: ["events.iterate.test/match"],
-        replayEphemeralAfterOffset: true,
+        replayEphemeralAfterOffset: 16,
         timeoutMs: 4_000,
       },
     ]);
+  });
+
+  it("retries lifecycle failures while pinning the opening cursor and bounds a reset storm", async () => {
+    const reset = () => Object.assign(new Error("restarted"), { durableObjectReset: true });
+    let startCalls = 0;
+
+    await expect(
+      waitForStreamEvent({
+        args: { eventTypes: ["events.iterate.test/match"], timeoutMs: 10_000 },
+        getStartOffset: async () => {
+          startCalls += 1;
+          if (startCalls < 3) throw reset();
+          return 7;
+        },
+        lease: async () => ({ events: [event(8)], scannedThroughOffset: 8 }),
+        now: () => 0,
+      }),
+    ).resolves.toMatchObject({ offset: 8 });
+    expect(startCalls).toBe(3);
+
+    await expect(
+      waitForStreamEvent({
+        args: { eventTypes: ["events.iterate.test/match"], timeoutMs: 10_000 },
+        getStartOffset: async () => {
+          throw reset();
+        },
+        lease: async () => {
+          throw new Error("lease must not open without a start cursor");
+        },
+        now: () => 0,
+      }),
+    ).rejects.toThrow("stream-unavailable: restarted");
   });
 
   it("evaluates each predicate candidate once and advances past rejected events", async () => {
@@ -64,6 +155,7 @@ describe("waitForStreamEvent", () => {
     await expect(
       waitForStreamEvent({
         args: { predicate, timeoutMs: 10_000 },
+        getStartOffset: async () => 20,
         lease,
         now: () => 0,
       }),
@@ -86,6 +178,7 @@ describe("waitForStreamEvent", () => {
     await expect(
       waitForStreamEvent({
         args: { predicate: () => false, timeoutMs: 5_000 },
+        getStartOffset: async () => 2,
         lease,
         leaseMs: 4_000,
         now: () => now,
@@ -103,6 +196,7 @@ describe("waitForStreamEvent", () => {
     await expect(
       waitForStreamEvent({
         args: { eventTypes: ["events.iterate.test/match"], timeoutMs: 10_000 },
+        getStartOffset: async () => 7,
         lease: async () => {
           calls += 1;
           if (calls < 3) throw reset();
@@ -116,6 +210,7 @@ describe("waitForStreamEvent", () => {
     await expect(
       waitForStreamEvent({
         args: { eventTypes: ["events.iterate.test/match"], timeoutMs: 10_000 },
+        getStartOffset: async () => 7,
         lease: async () => {
           throw reset();
         },

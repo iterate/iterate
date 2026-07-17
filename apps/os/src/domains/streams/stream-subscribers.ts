@@ -186,7 +186,7 @@ type OpenConnectionArgs = {
    * connections. Public subscribe() never sets this: its historical
    * ephemerals remain invisible by contract.
    */
-  replayEphemeralAfterOffset?: boolean;
+  replayEphemeralAfterOffset?: number;
   /** Stable stream creation identity observed by the caller; null binds to an unborn stream. */
   expectedIncarnation?: string | null;
   /** Reject the open if replay would exceed this many raw offsets. */
@@ -367,7 +367,7 @@ export class StreamSubscribers {
     subscriptionKey: string;
     sink: ProcessEventBatch;
     replayAfterOffset?: number;
-    replayEphemeralAfterOffset?: boolean;
+    replayEphemeralAfterOffset?: number;
     expectedIncarnation?: string | null;
     maxReplayOffsetGap?: number;
     selector?: CompiledEventSelector;
@@ -1129,8 +1129,8 @@ export class StreamSubscribers {
                       (entry) =>
                         entry.event.ephemeral !== true ||
                         entry.event.offset > openedAtOffset ||
-                        (args.replayEphemeralAfterOffset === true &&
-                          entry.event.offset > (args.replayAfterOffset ?? openedAtOffset)),
+                        (args.replayEphemeralAfterOffset !== undefined &&
+                          entry.event.offset > args.replayEphemeralAfterOffset),
                     );
               const delivered =
                 args.selector === undefined

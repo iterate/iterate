@@ -1543,6 +1543,28 @@ describe("StreamSubscribers", () => {
     expect(h.pushes).toHaveLength(1);
   });
 
+  it("z0. internal waits replay ephemerals only after their pinned opening boundary", () => {
+    const h = makeHarness();
+    h.append(
+      evt(1, "durable-before"),
+      { ...evt(2, "ephemeral-before"), ephemeral: true },
+      evt(3, "durable-after"),
+      { ...evt(4, "ephemeral-after"), ephemeral: true },
+    );
+
+    const batches: StreamEventBatch[] = [];
+    h.subscribers.openEphemeral({
+      subscriptionKey: "replacement-wait-lease",
+      sink: (batch) => batches.push(batch),
+      replayAfterOffset: 0,
+      replayEphemeralAfterOffset: 2,
+    });
+
+    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([
+      1, 3, 4,
+    ]);
+  });
+
   it("z1. atomically rejects an unbounded replay before replacing a live connection", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));

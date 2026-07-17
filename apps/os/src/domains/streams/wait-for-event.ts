@@ -5,13 +5,14 @@ import { isDurableObjectLifecycleError, rethrowStreamUnavailable } from "./strea
  * One bounded wait inside one Stream Durable Object incarnation.
  *
  * `scannedThroughOffset` is the lossless hand-off cursor: the next lease can
- * replay every durable row after it, while `replayEphemeralAfterOffset` keeps
- * the tiny lease hand-off gap visible for still-resident ephemeral rows.
+ * replay every durable row after it. `replayEphemeralAfterOffset` is the
+ * separately pinned opening boundary, so historical ephemerals stay hidden
+ * while still-resident ephemerals committed during a lease reset stay visible.
  */
 export type StreamEventWaitLeaseInput = {
-  afterOffset?: number;
+  afterOffset: number;
   eventTypes?: readonly string[];
-  replayEphemeralAfterOffset: boolean;
+  replayEphemeralAfterOffset: number;
   timeoutMs: number;
 };
 
@@ -44,6 +45,7 @@ type WaitForStreamEventArgs = {
  */
 export async function waitForStreamEvent(input: {
   args: WaitForStreamEventArgs;
+  getStartOffset: () => Promise<number>;
   lease: (args: StreamEventWaitLeaseInput) => Promise<StreamEventWaitLeaseResult>;
   /** Test seam only. */
   leaseMs?: number;
@@ -72,8 +74,13 @@ export async function waitForStreamEvent(input: {
   const now = input.now ?? Date.now;
   const deadline = now() + args.timeoutMs;
   const predicate = args.predicate ?? (() => true);
-  let cursor = args.afterOffset;
-  let leaseBoundaryEstablished = false;
+  const startOffset = await acquireStartOffset({
+    deadline,
+    getStartOffset: input.getStartOffset,
+    now,
+    timeoutMs: args.timeoutMs,
+  });
+  let cursor = args.afterOffset ?? startOffset;
   let consecutiveLifecycleFailures = 0;
   let seenCount = 0;
   const recentTypes: string[] = [];
@@ -89,14 +96,13 @@ export async function waitForStreamEvent(input: {
       result = await input.lease({
         afterOffset: cursor,
         eventTypes: args.eventTypes,
-        // The first open preserves the public contract: historical ephemeral
-        // rows are not replayed. Later opens are continuations of THIS wait,
-        // so still-resident ephemerals in the lease hand-off gap are eligible.
-        replayEphemeralAfterOffset: leaseBoundaryEstablished,
+        // Durable history follows the caller/scan cursor. Ephemerals use the
+        // independently pinned opening boundary, so an old caller cursor does
+        // not expose historical ephemerals and a reset cannot erase new ones.
+        replayEphemeralAfterOffset: startOffset,
         timeoutMs: Math.max(1, Math.min(leaseMs, Math.ceil(remainingMs))),
       });
       consecutiveLifecycleFailures = 0;
-      leaseBoundaryEstablished = true;
     } catch (error) {
       if (!isDurableObjectLifecycleError(error)) throw error;
       consecutiveLifecycleFailures += 1;
@@ -110,15 +116,40 @@ export async function waitForStreamEvent(input: {
       // A replay can only repeat an offset if a malformed lease implementation
       // regressed its scanned cursor. Keep predicate side effects exactly-once
       // inside this wait even then.
-      if (cursor !== undefined && event.offset <= cursor) continue;
+      if (event.offset <= cursor) continue;
       cursor = event.offset;
       seenCount += 1;
       recentTypes.push(event.type);
       if (recentTypes.length > 20) recentTypes.shift();
       if (await predicate(event)) return event;
     }
-    cursor = Math.max(cursor ?? 0, result.scannedThroughOffset);
+    cursor = Math.max(cursor, result.scannedThroughOffset);
   }
+}
+
+async function acquireStartOffset(input: {
+  deadline: number;
+  getStartOffset: () => Promise<number>;
+  now: () => number;
+  timeoutMs: number;
+}): Promise<number> {
+  let consecutiveLifecycleFailures = 0;
+  while (input.now() < input.deadline) {
+    try {
+      const offset = await input.getStartOffset();
+      if (!Number.isSafeInteger(offset) || offset < 0) {
+        throw new Error("waitForEvent start offset must be a non-negative safe integer.");
+      }
+      return offset;
+    } catch (error) {
+      if (!isDurableObjectLifecycleError(error)) throw error;
+      consecutiveLifecycleFailures += 1;
+      if (consecutiveLifecycleFailures >= MAX_CONSECUTIVE_LIFECYCLE_FAILURES) {
+        rethrowStreamUnavailable(error);
+      }
+    }
+  }
+  throw waitForEventTimeout(input.timeoutMs, 0, []);
 }
 
 function waitForEventTimeout(

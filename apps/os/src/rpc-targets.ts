@@ -574,6 +574,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }): Promise<StreamEvent> {
     return await waitForStreamEvent({
       args,
+      getStartOffset: () => Promise.resolve(this.durableObjectStub.getWaitForEventStartOffset()),
       lease: (leaseArgs) => this.durableObjectStub.waitForEventLease(leaseArgs),
     });
   }

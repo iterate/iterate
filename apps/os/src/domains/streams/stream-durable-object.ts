@@ -1257,7 +1257,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     args: Parameters<Stream["subscribe"]>[0],
     internal: {
       recordLifecycleFacts?: boolean;
-      replayEphemeralAfterOffset?: boolean;
+      replayEphemeralAfterOffset?: number;
     } = {},
   ): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
@@ -1343,15 +1343,20 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
       throw new Error("waitForEvent lease timeoutMs must be a positive number.");
     }
-    if (
-      args.afterOffset !== undefined &&
-      (!Number.isSafeInteger(args.afterOffset) || args.afterOffset < 0)
-    ) {
+    if (!Number.isSafeInteger(args.afterOffset) || args.afterOffset < 0) {
       throw new Error("waitForEvent afterOffset must be a non-negative safe integer.");
+    }
+    if (
+      !Number.isSafeInteger(args.replayEphemeralAfterOffset) ||
+      args.replayEphemeralAfterOffset < 0
+    ) {
+      throw new Error(
+        "waitForEvent replayEphemeralAfterOffset must be a non-negative safe integer.",
+      );
     }
 
     const found = Promise.withResolvers<StreamEventWaitLeaseResult>();
-    let scannedThroughOffset = args.afterOffset ?? this.#coreProcessorState.maxOffset;
+    let scannedThroughOffset = args.afterOffset;
     let settled = false;
 
     const handle = this.#openEphemeralSubscription(
@@ -1387,6 +1392,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       clearTimeout(timer);
       handle.unsubscribe();
     }
+  }
+
+  /** Atomic opening boundary for one recoverable public wait. */
+  getWaitForEventStartOffset(): number {
+    return this.#coreProcessorState.maxOffset;
   }
 
   getProcessorRuntimeState(args: {
