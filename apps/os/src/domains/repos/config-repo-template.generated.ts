@@ -907,10 +907,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        path: guestbookStreamPath,\n" +
       "        projectId,\n" +
       "        stream,\n" +
-      "        // The crash-loop budget's deploy-reset lane: a facet has no build\n" +
-      "        // identity to hand here yet, so a broken-then-fixed worker waits\n" +
-      "        // out the keepalive backoff instead of resetting on deploy.\n" +
-      "        version: \"0\",\n" +
+      "        // The worker's own build identity: a version change resets a\n" +
+      "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
+      "        // worker recovers on its next build (the antidote deploy).\n" +
+      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
       "      });\n" +
       "      const guestbook = registry.register(\n" +
       "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +

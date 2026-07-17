@@ -11,10 +11,10 @@ branch: stateful-worker-alarms
 > `invokeCapability` dispatcher (workerd reserves `alarm` as an RPC name)
 > and rethrow into native retry; `IterateDurableObject` presents the
 > standard `ctx.storage` alarm API automatically (the host delivers the
-> worker's own ref on first contact); the template guestbook
-> registers with `{ recovery: true }`. Follow-up: the crash-loop budget's
-> deploy-reset lane needs a userspace build identity (registry `version` is
-> a constant in the template until the platform exposes one).
+> worker's own ref on first contact); the template guestbook registers
+> with `{ recovery: true }`, passing its own build identity
+> (`env.ITERATE_WORKER_VERSION`) as the registry version so the crash-loop
+> budget's deploy-reset lane works.
 
 # Facet alarms: parent-owned alarm proxy so userspace processors get keepalive recovery
 

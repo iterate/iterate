@@ -187,16 +187,25 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // channel, worker env is per-isolate) — deliver its ref before any
     // traffic, once per incarnation per ref. The stash is what lets the
     // worker's own code address itself (the SDK's alarm shim dials
-    // `itx.workers.get(ref)`, which resolves back to this DO). Best-effort
-    // by design: a class without the SDK dispatcher (or an SDK without the
-    // door) simply has no self-addressed features, and a transiently failed
-    // delivery heals on the next incarnation.
+    // `itx.workers.get(ref)`, which resolves back to this DO). Marked
+    // delivered only on success (or on a class that structurally cannot
+    // accept identity), so a TRANSIENT failure retries on the next call
+    // instead of silently disabling self-alarms for the incarnation.
     const identity = JSON.stringify(ref);
     if (this.#identityDelivered !== identity) {
-      this.#identityDelivered = identity;
       try {
         await invokeFlattenedPath({ args: [ref], path: ["__stashSelfRef"], target: facet });
-      } catch {}
+        this.#identityDelivered = identity;
+      } catch (error) {
+        // No dispatcher (plain DurableObject class) or no door (an
+        // invokeCapability that doesn't expose __stashSelfRef): this class
+        // can never accept identity — stop offering, and never fail the
+        // caller's actual invocation over it.
+        const cannotAcceptIdentity =
+          isMissingInvokeCapabilityError(error) ||
+          (error instanceof Error && error.message.includes('"__stashSelfRef" is not a method'));
+        if (cannotAcceptIdentity) this.#identityDelivered = identity;
+      }
     }
     return facet;
   }
