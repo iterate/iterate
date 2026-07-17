@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports runtime code from iterate/sdk: the platform supplies that module to every worker build as a virtual module, so the build pipeline never installs it — the devDependency is for typechecking and editor support after `npm install`.",
   "dependencies": {
-    "zod": "^4.3.6"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
