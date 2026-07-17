@@ -54,6 +54,19 @@ testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({
   expect(view).not.toContain("raw event");
 });
 
+testWithProject(
+  "starts the existing computer provider from /use-my-computer",
+  async ({ terminal }) => {
+    await expect(terminal.getByText("live", { strict: false })).toBeVisible();
+
+    terminal.submit("/use-my-computer");
+
+    await expect(terminal.getByText("itx.", { strict: false })).toBeVisible();
+    const view = terminal.serialize().view;
+    expect(view).not.toContain("you › /use-my-computer");
+  },
+);
+
 snapshotTest("captures a manual aesthetic snapshot", async ({ terminal }) => {
   await expect(terminal.getByText(agentName, { strict: false })).toBeVisible();
 

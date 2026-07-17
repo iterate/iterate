@@ -14,6 +14,7 @@
  * components live in ./chat-view.tsx. OpenTUI is just another React renderer,
  * so the hooks (TanStack Query included) run here unchanged.
  */
+import { userInfo } from "node:os";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -32,11 +33,27 @@ import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model
 import { resolveItxAuth } from "./itx-auth.ts";
 import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
 import { COLORS } from "./chat-colors.ts";
+import { createChatComputerSharing, launchUseMyComputerProvider } from "./chat-computer-sharing.ts";
+import { computerCapabilityName, parseChatSlashCommand } from "./chat-slash-command.ts";
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
 }
 
 const args = parseArgs(process.argv.slice(2));
+const computerName = computerCapabilityName(userInfo().username);
+const computerSharing = createChatComputerSharing({
+  name: computerName,
+  launch: () =>
+    launchUseMyComputerProvider({
+      bearerTokenCameFromStoredSession: process.env.ITERATE_CHAT_BEARER_FROM_STORED_SESSION === "1",
+      cliPath: args.cliPath,
+      configName: args.configName,
+      environment: process.env,
+      name: computerName,
+      projectId: args.projectId,
+    }),
+});
+process.on("exit", () => computerSharing[Symbol.dispose]());
 
 // One keeper socket for the whole process — the TUI's equivalent of the
 // browser tab. Everything below (subscription, sends) rides it.
@@ -105,6 +122,7 @@ function AgentChatApp() {
     () => feedSnapshot,
   );
   const subscription = useItxSubscription(subscribeAgentFeed, [], { slug: args.projectId });
+  const computerShare = useSyncExternalStore(computerSharing.subscribe, computerSharing.snapshot);
   // The browser parks non-transport subscribe failures behind refresh buttons
   // and page reloads; a terminal has neither, and the TUI's failures here are
   // overwhelmingly transient (claims catching up right after project creation,
@@ -142,6 +160,10 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
       clearComposer();
+      if (parseChatSlashCommand(message)?.kind === "use-my-computer") {
+        computerSharing.start();
+        return;
+      }
       setNotice("sending…");
       connectItx(args.projectId)
         .then((itx) => {
@@ -164,7 +186,7 @@ function AgentChatApp() {
         title={`${args.projectId} ${args.agentPath}`}
         status={subscription.status}
         detail={subscription.error}
-        notice={notice}
+        notice={[notice, computerShare.notice].filter(Boolean).join(" · ")}
         eventCount={feed.eventCount}
       />
       <scrollbox
@@ -224,17 +246,25 @@ function parseArgs(argv: string[]) {
   const baseUrl = readFlag(argv, "--base-url");
   const projectId = readFlag(argv, "--project-id");
   const agentPath = readFlag(argv, "--agent-path");
+  const cliPath = readFlag(argv, "--cli-path");
+  const configName = readFlag(argv, "--config-name");
 
-  if (baseUrl == null || projectId == null || agentPath == null) {
+  if (
+    baseUrl == null ||
+    projectId == null ||
+    agentPath == null ||
+    cliPath == null ||
+    configName == null
+  ) {
     throw new Error(
-      "Usage: bun agent-chat-terminal.tsx --base-url <url> --project-id <prj_id> --agent-path </agents/name>",
+      "Usage: bun agent-chat-terminal.tsx --base-url <url> --project-id <prj_id> --agent-path </agents/name> --cli-path <path> --config-name <name>",
     );
   }
   if (!agentPath.startsWith("/agents/")) {
     throw new Error(`--agent-path must start with "/agents/", got "${agentPath}".`);
   }
 
-  return { baseUrl, projectId, agentPath };
+  return { baseUrl, projectId, agentPath, cliPath, configName };
 }
 
 function readFlag(argv: string[], flagName: string) {

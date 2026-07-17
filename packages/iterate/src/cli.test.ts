@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 import {
+  buildChatCommand,
   defaultBareInvocationToChat,
   ensureBearerAuthHeadersForChat,
   oauthResourceForOsBaseUrl,
@@ -12,6 +13,34 @@ import {
   resolveChatProject,
   verifyOsSession,
 } from "./cli.ts";
+
+test("chat passes its CLI/config identity to local slash-command providers", () => {
+  expect(
+    buildChatCommand({
+      agentPath: "/agents/test",
+      cliPath: "/opt/iterate/bin/iterate.js",
+      configName: "preview_3",
+      entrypointPath: "/opt/iterate/dist/agent-chat-terminal.mjs",
+      osBaseUrl: "https://os.iterate-preview-3.com",
+      projectId: "prj_test",
+    }),
+  ).toEqual({
+    command: "bun",
+    args: [
+      "/opt/iterate/dist/agent-chat-terminal.mjs",
+      "--base-url",
+      "https://os.iterate-preview-3.com",
+      "--project-id",
+      "prj_test",
+      "--agent-path",
+      "/agents/test",
+      "--cli-path",
+      "/opt/iterate/bin/iterate.js",
+      "--config-name",
+      "preview_3",
+    ],
+  });
+});
 
 const createFakeSession = (input: {
   listError?: unknown;
