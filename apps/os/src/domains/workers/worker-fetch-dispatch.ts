@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRepoNotSeededError } from "../repos/utils.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
 import { isWorkerBuildFailedError } from "./artifact-store.ts";
@@ -84,7 +85,9 @@ export function workerBuildingResponse(): Response {
  * new serve-side state is added in exactly one place.
  */
 export function workerBuildStatusResponse(error: unknown): Response | null {
-  if (isWorkerBuildInProgressError(error)) return workerBuildingResponse();
+  if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
+    return workerBuildingResponse();
+  }
   if (isWorkerBuildFailedError(error)) return workerBuildFailedResponse(error);
   return null;
 }
