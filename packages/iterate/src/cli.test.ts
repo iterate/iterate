@@ -9,6 +9,7 @@ import {
   ensureBearerAuthHeadersForChat,
   oauthResourceForOsBaseUrl,
   refreshOAuthSession,
+  replaceWithInheritedProcess,
   resolveChatProject,
   verifyOsSession,
 } from "./cli.ts";
@@ -147,6 +148,38 @@ describe("defaultBareInvocationToChat", () => {
 
     const help = ["--help"];
     expect(defaultBareInvocationToChat(help)).toBe(help);
+  });
+});
+
+describe("replaceWithInheritedProcess", () => {
+  test("replaces the launcher process with inherited arguments and environment", () => {
+    const replacementReached = new Error("replacement reached");
+    const execve = vi.fn(
+      (_file: string, _args: string[], _environment: Record<string, string>): never => {
+        throw replacementReached;
+      },
+    );
+
+    expect(() =>
+      replaceWithInheritedProcess({
+        command: process.execPath,
+        args: ["entrypoint.mjs", "--flag"],
+        env: {
+          ITERATE_EXECVE_TEST: "inherited",
+          ITERATE_EXECVE_UNSET: undefined,
+        },
+        execve,
+      }),
+    ).toThrow(replacementReached);
+
+    expect(execve).toHaveBeenCalledOnce();
+    expect(execve).toHaveBeenCalledWith(
+      process.execPath,
+      [process.execPath, "entrypoint.mjs", "--flag"],
+      expect.objectContaining({ ITERATE_EXECVE_TEST: "inherited" }),
+    );
+    const environment = execve.mock.calls[0]?.[2];
+    expect(environment).not.toHaveProperty("ITERATE_EXECVE_UNSET");
   });
 });
 
@@ -490,6 +523,27 @@ describe("resolveChatProject", () => {
         createSession: fake.createSession,
       }),
     ).resolves.toBe("prj_manual");
+  });
+
+  test("uses an explicit project id without enumerating accessible projects", async () => {
+    const onConnect = vi.fn();
+    const fake = createFakeSession({
+      listError: new Error("project catalog must not be queried"),
+      onConnect,
+    });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        explicitProject: "prj_explicit",
+        createSession: fake.createSession,
+      }),
+    ).resolves.toBe("prj_explicit");
+
+    expect(onConnect).not.toHaveBeenCalled();
   });
 
   test("does not bypass project resolution when listing accessible projects fails", async () => {

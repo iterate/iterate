@@ -141,7 +141,7 @@ bytes even when later events have arrived.
 
 The public agent birth command is deliberately `agent.create()` with no
 arguments. It installs the generic Agent and Capability Host machinery and the
-platform's base policy. Caller-selected instructions, model configuration, and
+shipped base policy. Caller-selected instructions, model configuration, and
 tasks are later stream events. Additional instructions should use their own
 context key and therefore compose with the base policy. An explicit event using
 the same `agent/system-prompt` key updates that well-known slot; authorization

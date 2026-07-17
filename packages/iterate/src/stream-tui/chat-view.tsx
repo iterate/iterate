@@ -150,9 +150,9 @@ function getLiveCodeClockSnapshot() {
 export function LiveActivity(props: { activity: AgentUiActivity }) {
   // Tick while code runs so "Running code 0.9s" counts up without waiting
   // for feed events (script execution often emits nothing mid-run).
-  const codeRunning =
-    props.activity.steps.some((step) => step.kind === "code" && step.status === "running") ||
-    props.activity.phase === "script";
+  const codeRunning = props.activity.steps.some(
+    (step) => step.kind === "code" && step.status === "running",
+  );
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       if (!codeRunning) return () => {};
