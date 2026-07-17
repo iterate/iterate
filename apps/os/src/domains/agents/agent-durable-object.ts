@@ -118,24 +118,20 @@ export class AgentDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
       callSlackApi: async ({ body, connection, method }) => {
-        // The facet birth certificate supplies the named connection; the
-        // stream path is deliberately unrelated to processor config. These
-        // methods only paint Slack's presentation of already-durable agent
-        // state, so Slack rejection must not stall journal progress.
-        try {
-          await callProjectSlackWebApi({
-            body,
-            connection,
-            method,
-            projectId: this.#name.projectId,
-          });
-        } catch (error) {
-          console.warn("[slack-agent] Slack presentation call failed", {
-            method,
-            path: this.#name.path,
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
+        // Only best-effort UX side effects (reactions, thread status) ride
+        // this dep — the agent's actual REPLY goes through
+        // itx.integrations.slack in its script, which fails loudly on its
+        // own. The facet birth certificate supplies the named connection;
+        // the stream path is deliberately unrelated to processor config.
+        // The processor owns outcome classification: idempotent Slack errors
+        // are quiet no-ops, while unexpected cosmetic failures are reported
+        // once without holding its durable checkpoint forever.
+        await callProjectSlackWebApi({
+          body,
+          connection,
+          method,
+          projectId: this.#name.projectId,
+        });
       },
       fetchSlackChannelName: async ({ channel, connection }) => {
         try {

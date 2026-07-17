@@ -120,7 +120,9 @@ function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null 
   const repoGet = vi.fn(() => ({ processor: { snapshot } }));
   const project = {
     agents: { get: agentGet },
-    projectId: "prj_1",
+    // Project is an RPC stub in userspace: property reads are thenables until
+    // awaited, even though the generated ergonomic interface exposes string.
+    projectId: Promise.resolve("prj_1"),
     repos: { get: repoGet },
   };
   // This fake implements the handler's three RPC calls; the generated Project
