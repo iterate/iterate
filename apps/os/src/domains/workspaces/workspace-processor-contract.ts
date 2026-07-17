@@ -64,8 +64,7 @@ export const WorkspaceConfigPatch = z.strictObject({
 export type WorkspaceConfigPatch = z.infer<typeof WorkspaceConfigPatch>;
 
 /** Birth certificate: the complete config the workspace is born with. */
-export const WorkspaceBirthCertificate = z.strictObject({ config: WorkspaceConfig });
-export type WorkspaceBirthCertificate = z.infer<typeof WorkspaceBirthCertificate>;
+const WorkspaceBirthCertificate = z.strictObject({ config: WorkspaceConfig });
 
 /**
  * Fold one configuration patch into a complete configuration: the platform's
