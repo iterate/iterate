@@ -1,7 +1,14 @@
+import { useState } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon, PlusIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@iterate-com/ui/components/empty";
 import {
   Table,
   TableBody,
@@ -11,6 +18,7 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { useLiveState } from "iterate/react";
+import { CreateSandboxSheet } from "~/components/create-sandbox-sheet.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SandboxStatusBadge } from "~/components/sandbox-status-badge.tsx";
 import { buildCloudflareContainersDashboardUrl } from "~/lib/cloudflare-containers-dashboard-url.ts";
@@ -40,7 +48,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
 
 function ProjectSandboxesIndexContent() {
   const params = Route.useParams();
+  const navigate = Route.useNavigate();
   const { project, routeConfig } = Route.useLoaderData();
+  const [createOpen, setCreateOpen] = useState(false);
   const projectState = useLiveState(
     (itx) => itx.liveState,
     (state) => state.reduced,
@@ -63,26 +73,32 @@ function ProjectSandboxesIndexContent() {
               Live container status, controls, and SSH instructions for each project sandbox.
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            nativeButton={dashboardUrl === null}
-            disabled={dashboardUrl === null}
-            title={dashboardUrl === null ? "Cloudflare account ID is not configured." : undefined}
-            render={
-              dashboardUrl === null ? undefined : (
-                <a
-                  href={dashboardUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="Open the Cloudflare Containers dashboard"
-                />
-              )
-            }
-          >
-            <ExternalLinkIcon data-icon="inline-start" />
-            Containers dashboard
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <PlusIcon data-icon="inline-start" />
+              Create sandbox
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={dashboardUrl === null}
+              disabled={dashboardUrl === null}
+              title={dashboardUrl === null ? "Cloudflare account ID is not configured." : undefined}
+              render={
+                dashboardUrl === null ? undefined : (
+                  <a
+                    href={dashboardUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Open the Cloudflare Containers dashboard"
+                  />
+                )
+              }
+            >
+              <ExternalLinkIcon data-icon="inline-start" />
+              Containers dashboard
+            </Button>
+          </div>
         </div>
 
         {sandboxes === undefined ? (
@@ -94,9 +110,15 @@ function ProjectSandboxesIndexContent() {
             <EmptyHeader>
               <EmptyTitle>No sandboxes</EmptyTitle>
               <EmptyDescription>
-                Sandboxes will appear here after they are created through the project API.
+                Create an isolated Linux container for this project.
               </EmptyDescription>
             </EmptyHeader>
+            <EmptyContent>
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <PlusIcon data-icon="inline-start" />
+                Create sandbox
+              </Button>
+            </EmptyContent>
           </Empty>
         ) : (
           <div className="rounded-lg border">
@@ -122,6 +144,21 @@ function ProjectSandboxesIndexContent() {
             </Table>
           </div>
         )}
+
+        <CreateSandboxSheet
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          onCreated={(path) => {
+            void navigate({
+              to: "/projects/$projectSlug/sandboxes/$sandboxId",
+              params: {
+                projectSlug: params.projectSlug,
+                sandboxId: path.slice(`${SANDBOXES_ROOT}/`.length),
+              },
+              search: {},
+            });
+          }}
+        />
       </div>
     </div>
   );
