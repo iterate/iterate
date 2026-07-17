@@ -490,7 +490,7 @@ function telegramWebhookAgentInput(
   if (placeholders.length > 0) {
     lines.push(
       "",
-      `Media in this message (file_id values are in the raw payload; use the system prompt's token-safe download recipe before claiming it cannot be viewed): ${placeholders.join(" ")}`,
+      `Media in this message (file_id is in the raw payload): ${placeholders.join(" ")}`,
     );
   }
   return lines.join("\n");

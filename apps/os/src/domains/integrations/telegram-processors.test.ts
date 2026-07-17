@@ -930,7 +930,7 @@ describe("TelegramAgentProcessor", () => {
     const content = (inputs[0]!.payload as { content: string }).content;
     expect(content).toContain("[photo]");
     expect(content).toContain("file_id: photo-1");
-    expect(content).toContain("token-safe download recipe");
+    expect(content).toContain("file_id is in the raw payload");
     expect(content).not.toContain("not directly viewable");
   });
 
@@ -1376,14 +1376,10 @@ describe("telegramAgentSystemPrompt", () => {
     expect(prompt).toContain("your judgement");
     // Arbitrary Bot API methods remain available as immediate calls.
     expect(prompt).toContain(`itx.integrations.telegram.get("${CONNECTION}")`);
-    // Telegram file metadata and the connection's write-only token compose
-    // into a token-safe download — the agent must not refuse before trying it.
+    // Hint at the available primitives without scripting the agent's work.
+    expect(prompt).toContain("the raw webhook retains file_id");
     expect(prompt).toContain(`itx.integrations.telegram.get("${CONNECTION}").getFile`);
-    expect(prompt).toContain("const filePath = file.result.file_path");
-    expect(prompt).toContain(
-      `new Request('https://api.telegram.org/file/botgetSecret({ path: "/secrets/integrations/telegram/${CONNECTION}/bot-token" })/' + filePath)`,
-    );
-    expect(prompt).toContain("itx.egress.fetch");
+    expect(prompt).toContain("project egress with the connection's write-only bot-token secret");
     expect(prompt).toContain("itx.agent.addFiles");
     expect(prompt).not.toContain("you cannot view them yet");
   });

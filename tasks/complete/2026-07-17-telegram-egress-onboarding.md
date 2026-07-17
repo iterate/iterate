@@ -80,3 +80,5 @@ was a prompt/product defect, not an absent platform capability.
 - 2026-07-17: Verification: focused Vitest 51/51; `pnpm format`; zero-warning
   `pnpm lint`; repository-wide `pnpm typecheck` and `pnpm test`; OS unit result
   1,829 passed, 1 skipped.
+- 2026-07-17: Review simplified the media guidance from an embedded recipe to
+  a short hint naming the available primitives.
