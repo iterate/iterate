@@ -42,19 +42,25 @@ describe("SandboxProcessor", () => {
     await expect(driver.snapshot()).resolves.toMatchObject({
       state: {
         birthCertificate: { config: { instanceType: "basic" } },
+        running: false,
         status: "created",
         lastBackupId: null,
       },
     });
 
+    await stream.append(event("events.iterate.com/sandbox/started"));
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      state: { running: true, status: "running" },
+    });
+
     await stream.append(
-      event("events.iterate.com/sandbox/started"),
       event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
       event("events.iterate.com/sandbox/stopped"),
     );
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { status: "stopped", lastBackupId: "bkp-1" },
+      state: { running: false, status: "stopped", lastBackupId: "bkp-1" },
     });
 
     await stream.append(
@@ -66,7 +72,7 @@ describe("SandboxProcessor", () => {
     );
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { status: "destroyed" },
+      state: { running: false, status: "destroyed" },
     });
   });
 
@@ -81,7 +87,7 @@ describe("SandboxProcessor", () => {
     );
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { status: "destroyed" },
+      state: { running: false, status: "destroyed" },
     });
   });
 
@@ -109,7 +115,7 @@ describe("SandboxProcessor", () => {
     await stream.append(event("events.iterate.com/agent/turn-started"));
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({
-      state: { birthCertificate: null, lastBackupId: null, status: null },
+      state: { birthCertificate: null, lastBackupId: null, running: false, status: null },
     });
   });
 });

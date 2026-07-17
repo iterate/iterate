@@ -7,16 +7,34 @@ import {
   parseSSEStream,
   Sandbox,
 } from "@cloudflare/sandbox";
-import type { Env } from "../../../env.ts";
+import { trustedInternalAuthContext } from "../../../auth.ts";
+import { workerVersion, type Env } from "../../../env.ts";
+import {
+  LiveStateRpcTarget,
+  StreamProcessorRpcTarget,
+  StreamRpcTarget,
+} from "../../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake.ts";
 import {
+  createStreamProcessorRegistry,
+  type RegisteredProcessorReads,
+  type StreamProcessorRegistry,
+} from "../../streams/stream-processor-registry.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../../streams/rpc-types.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../streams/utils.ts";
+import {
   SandboxProcessorContract,
   type SandboxLifecycleEventInput,
+  type SandboxProcessorState,
 } from "../sandbox-processor-contract.ts";
+import { SandboxProcessor } from "../sandbox-processor-implementation.ts";
 import { SANDBOX_INSTANCE_TYPE_BINDINGS, type SandboxInstanceType } from "../instance-types.ts";
 import {
   assertSandboxPath,
@@ -33,6 +51,7 @@ import {
  * `exec("ls")` lists it.
  */
 const SANDBOX_WORKSPACE_DIR = "/workspace";
+const SANDBOX_PROCESSOR_WAIT_TIMEOUT_MS = 15_000;
 
 /**
  * How long a sandbox's workspace backup survives without the sandbox waking
@@ -259,6 +278,11 @@ function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<
  */
 type SandboxIdentity = { path: string; projectId: string };
 
+type SandboxProcessorResources = {
+  reads: RegisteredProcessorReads<SandboxProcessorState>;
+  registry: StreamProcessorRegistry<SandboxProcessorState>;
+};
+
 const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
 
 /**
@@ -323,6 +347,52 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   // account. Static (app/component); per-sandbox identity already lives in the
   // Durable Object name and the lifecycle stream. See docs/cloudflare-sandboxes.md.
   override labels = { app: "iterate-os", component: "sandbox" };
+
+  // Container-backed Durable Objects do not reliably expose ctx.id.name in
+  // local development, so processor plumbing is initialized lazily after the
+  // collection has recorded the sandbox identity (see #ensureIdentity).
+  #processorResourcesValue: SandboxProcessorResources | undefined;
+
+  #processorResources(): SandboxProcessorResources {
+    if (this.#processorResourcesValue !== undefined) return this.#processorResourcesValue;
+    const { path, projectId } = this.#identity();
+    const stream = new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path,
+      projectId,
+    });
+    const registry = createStreamProcessorRegistry<SandboxProcessorState>(this.ctx, {
+      stream,
+      path,
+      projectId,
+      version: workerVersion(this.env),
+    });
+    // Pure fold: there is no consequential background work to recover after
+    // eviction, so this processor deliberately does not opt into recovery.
+    const processor = registry.register(new SandboxProcessor({ stream, path, projectId }));
+    const resources = { reads: registry.reads(processor), registry };
+    this.#processorResourcesValue = resources;
+    return resources;
+  }
+
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
+    return this.#processorResources().registry.wakeStreamSubscriber(args);
+  }
+
+  // Do not override alarm(): @cloudflare/containers owns this object's one
+  // alarm for container scheduling and idle expiry. The pure-fold processor
+  // above has recovery disabled and therefore never arms a registry alarm.
+
+  get processor() {
+    const { reads, registry } = this.#processorResources();
+    return new StreamProcessorRpcTarget(reads, {
+      catchUpBeforeSnapshot: () => registry.catchUp(SandboxProcessorContract.slug),
+    });
+  }
+
+  get liveState() {
+    return new LiveStateRpcTarget<SandboxProcessorState>(this.#processorResources().registry);
+  }
 
   /** Each subclass declares its instance type here — a STATIC field, not the
    * class name (a bundler may rename classes) and not an instance field
@@ -402,13 +472,18 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       instanceType: input.instanceType,
     };
     this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, record);
-    // The domain birth is the first fact on the sandbox's own stream. Unlike
-    // later lifecycle telemetry, creation awaits this append: callers must
-    // never observe a usable sandbox whose processor history has no birth.
-    await this.#appendLifecycleEvent({
-      type: "events.iterate.com/sandbox/created",
-      payload: { config: { instanceType: input.instanceType } },
-    });
+    // Birth and the processor subscription are one batch, and create returns
+    // only after the hosted reducer has durably folded through both facts.
+    // If the append or fold fails, remove the just-written record so the
+    // catalogue's already-durable claim can retry and heal creation. Both
+    // events are idempotency-keyed, so a retry after an ambiguous success is
+    // safe and still waits for the same reducer boundary.
+    try {
+      await this.#appendBirth(input.instanceType);
+    } catch (error) {
+      this.ctx.storage.kv.delete(SANDBOX_RECORD_STORAGE_KEY);
+      throw error;
+    }
     if (input.sleepAfter !== undefined) await this.setSleepAfter(input.sleepAfter);
     if (input.keepAlive !== undefined) await this.setKeepAlive(input.keepAlive);
     if (input.env !== undefined && Object.keys(input.env).length > 0) {
@@ -493,6 +568,13 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     await this.#ensureWorkspaceCurrent();
   }
 
+  /** Recreate the running container while preserving `/workspace`. */
+  async restart(): Promise<void> {
+    this.#assertUsable();
+    await this.sleep();
+    await this.start();
+  }
+
   /**
    * Put the sandbox to sleep NOW: snapshot `/workspace` to R2, then tear the
    * container down. "Sleep" is Cloudflare's own word for what the idle timer
@@ -564,13 +646,16 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // idle expiry reclaims.
     await super.destroy();
     this.#invalidateWorkspaceMemo();
+    // Fold the terminal fact before tombstoning. Stream delivery reaches this
+    // processor through the collection without requiring a usable sandbox,
+    // but returning only after the fold gives callers a coherent final state.
+    await this.#appendLifecycleEventAndWait({
+      type: "events.iterate.com/sandbox/destroyed",
+      payload: {},
+    });
     this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, {
       ...record,
       destroyedAt: new Date().toISOString(),
-    });
-    this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/destroyed",
-      payload: {},
     });
   }
 
@@ -705,10 +790,6 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   override async onStart(): Promise<void> {
     await super.onStart();
-    this.#emitLifecycleEvent({
-      type: "events.iterate.com/sandbox/started",
-      payload: {},
-    });
     // Each start is a fresh container process (empty disk), so a readiness
     // promise or provisioned flag from a previous container must not satisfy
     // this one. Provisioning itself is NOT kicked off here:
@@ -725,6 +806,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     //   guard's in-flight one.
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
+    // Invalidate before touching the stream: even if journaling fails and the
+    // hook rejects, no later call may reuse readiness from the old container.
+    await this.#appendLifecycleEventAndWait({
+      type: "events.iterate.com/sandbox/started",
+      payload: {},
+    });
   }
 
   override async onStop(): Promise<void> {
@@ -735,7 +822,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // This covers container crashes while the DO stays resident: without it
     // the memo would keep describing a container that no longer exists.
     this.#invalidateWorkspaceMemo();
-    this.#emitLifecycleEvent({
+    await this.#appendLifecycleEventAndWait({
       type: "events.iterate.com/sandbox/stopped",
       payload: {},
     });
@@ -1417,9 +1504,9 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * project is discoverable as a stream under `/sandboxes/`. The event
    * catalog is the sandbox processor contract
    * (sandbox-processor-contract.ts); building through it keeps emission and
-   * declaration from drifting. Best-effort by design: lifecycle telemetry
-   * must never block or fail container start/stop, so errors are logged and
-   * dropped.
+   * declaration from drifting. This fire-and-forget lane is reserved for
+   * ancillary audit events. Lifecycle completions that drive `running` use
+   * #appendLifecycleEventAndWait instead and are never silently dropped.
    */
   #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
     try {
@@ -1433,11 +1520,46 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     }
   }
 
-  async #appendLifecycleEvent(input: SandboxLifecycleEventInput): Promise<void> {
+  async #appendLifecycleEvent(input: SandboxLifecycleEventInput): Promise<number> {
     const event = SandboxProcessorContract.buildEvent(input);
-    const { projectId, path } = this.#identity();
-    const stream = this.env.STREAM.getByName(DurableObjectNameCodec.stringify({ projectId, path }));
-    await stream.append(event);
+    const [appended] = await this.#processorResources().registry.stream.append(event);
+    if (appended === undefined) {
+      throw new Error(`sandbox lifecycle append returned no event (${input.type})`);
+    }
+    return appended.offset;
+  }
+
+  async #appendBirth(instanceType: SandboxInstanceType): Promise<void> {
+    const identity = this.#identity();
+    const durableObjectName = DurableObjectNameCodec.stringify(identity);
+    const { registry } = this.#processorResources();
+    const [created, configured] = await registry.stream.append(
+      SandboxProcessorContract.buildEvent({
+        type: "events.iterate.com/sandbox/created",
+        idempotencyKey: `sandbox/created:${durableObjectName}`,
+        payload: { config: { instanceType } },
+      }),
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName,
+        idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SandboxProcessorContract.slug}`,
+        processor: ["sandboxes", ["processor", identity.path]],
+        processorSlug: SandboxProcessorContract.slug,
+      }),
+    );
+    if (created === undefined || configured === undefined) {
+      throw new Error(`sandbox "${identity.path}": birth append returned no event`);
+    }
+    await this.#waitUntilProcessed(Math.max(created.offset, configured.offset));
+  }
+
+  async #appendLifecycleEventAndWait(input: SandboxLifecycleEventInput): Promise<void> {
+    await this.#waitUntilProcessed(await this.#appendLifecycleEvent(input));
+  }
+
+  async #waitUntilProcessed(offset: number): Promise<void> {
+    const { reads, registry } = this.#processorResources();
+    await registry.catchUp(SandboxProcessorContract.slug);
+    await reads.waitUntilEvent({ offset, timeoutMs: SANDBOX_PROCESSOR_WAIT_TIMEOUT_MS });
   }
 }
 

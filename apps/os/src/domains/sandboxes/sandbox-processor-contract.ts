@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { SandboxInstanceType } from "./instance-types.ts";
 
 const SandboxBirthCertificate = z.object({
@@ -203,13 +203,15 @@ const SandboxStatus = z.enum(["created", "running", "stopped", "destroyed"]);
  */
 export const SandboxProcessorContract = defineProcessorContract({
   slug: "sandbox",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
     "Sandbox lifecycle: explicit create/start/sleep/destroy commands and their completions, workspace snapshot/restore persistence, and configuration changes.",
   stateSchema: z.object({
     birthCertificate: SandboxBirthCertificate.nullable().default(null),
     /** Null until the birth certificate is reduced. */
     status: SandboxStatus.nullable().default(null),
+    /** The simple operational projection consumed by lists and controls. */
+    running: z.boolean().default(false),
     /** The newest workspace snapshot — what the next container start restores. */
     lastBackupId: z.string().nullable().default(null),
     /** The sandbox's configured env-var map (key → getSecret placeholder /
@@ -227,6 +229,9 @@ export const SandboxProcessorContract = defineProcessorContract({
   ],
   emits: [],
 });
+
+/** The sandbox processor's reduced lifecycle projection. */
+export type SandboxProcessorState = ProcessorState<typeof SandboxProcessorContract>;
 
 /**
  * One lifecycle event as the sandbox Durable Object appends it: the event
