@@ -5427,3 +5427,62 @@ the cancellations and warnings require bounded explanations or fixes before
 shipping. The normal preview CI retry also remains pending because GitHub's REST
 API returned 503 before Depot could deploy; that control-plane failure is
 separate from this exact-version runtime proof.
+
+## 2026-07-17: Park Broad Rewrite; Preserve One Main-Sized Wake Optimization
+
+The broad Stream rewrite is parked. Draft PR #1902 semantically merged current
+main through `2ebcadd4a86ae7d0e2533530b9660e28f784682e`; merge head
+`c10852fc6b003b518cda6c13eb1cca4b649215cc` contains main as an ancestor.
+Production was not deployed, erased, or changed.
+
+The only direct-main candidate that remained both measured and small was
+resident wake coalescing. A clean detached worktree at exact main was changed
+only in `stream-subscribers.ts`: `wake()` reads one committed
+`CoreProcessorState`, publishes it to every resident connection, and each
+connection retains only the newest notified head while its pump is draining.
+Once a delivered cursor reaches that head, the pump returns without probing
+SQLite for an empty page. A nested append cannot be overwritten by an older
+outer wake because notifications reject non-increasing heads.
+
+The measured exact-main form is local branch
+`stream-shared-wake-main-20260717`, commit `f8a0dfb5d`. After main advanced,
+the same patch applied without conflict or source changes to `2ebcadd4a` as
+local branch `stream-shared-wake-main-20260717-v2`, commit `015ec527e`. It is 26
+additions and eight deletions in one file. It has no public API, schema,
+durable-state, alarm, or topology effect. On the latest base, the focused
+subscriber and teardown suites passed 43/43 and full OS typecheck passed.
+Those latest-base checks prove compatibility and correctness; the performance
+numbers below remain the archived campaign against `832baef84`.
+
+Two campaigns support the result. Every interval used the Node host around an
+awaited append and host-observed delivery, never a Worker-local clock:
+
+| Campaign                                    |  Fan-out p50 |   Fan-out p95 | Fan-out mean | Fan-out throughput |
+| ------------------------------------------- | -----------: | ------------: | -----------: | -----------------: |
+| Historical base `7f70432e0`, 5 paired x 300 | 7.48% faster | 11.96% faster | 7.51% faster |       8.08% higher |
+| Exact main `832baef84`, 6 paired x 200      | 5.05% faster |  5.46% faster | 6.70% faster |       5.34% higher |
+
+One-subscriber delivery did not establish a gain. Historical paired-median
+p50 was 0.17% faster; the noisier exact-main campaign was 6.16% slower at p50
+while p95 and mean were 5.84% and 2.64% faster. Treat singleton as neutral.
+
+The exact-main machine was under unrelated concurrent load. One candidate
+round coincided with multiple `tsgo` and Node processes and load above 8,
+producing 40-100 ms tails. The raw round is retained; pooled tails are not used
+for the claim. Six alternating back-to-back pairs with both warmed Workers
+stacks resident produced the robust fresh summary above. Five additional
+300-sample processes per arm are also retained for audit.
+
+No second drive-by optimization clears the bar. The measured internal
+append-response elision is about 100 lines and coupled to append result/API
+shape. Legacy KV, singular Worker RPC, generic flattening, storage redesigns,
+and the parallel kernels either lost, add material complexity, or require a
+new architecture. The next action, if desired, is a standalone shared-wake PR
+from main with ordinary preview and deployed Worker-to-Worker acceptance.
+
+Evidence is archived outside temporary storage at
+`/Users/jonastemplestein/stream-shared-wake-evidence-2026-07-17.tar.gz`,
+SHA-256
+`27ea419b3cfe2dbd814981e859950aef0865cc3302a31f7546c93e830b8b400b`.
+It contains the mail-formatted patch, dependency-free analyzer and output, 32
+fresh process logs, ten historical process logs, and final server logs.

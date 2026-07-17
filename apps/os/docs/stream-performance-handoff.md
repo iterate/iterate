@@ -1,7 +1,7 @@
 # Stream Performance Handoff
 
-Snapshot captured on 2026-07-15 and updated on 2026-07-16 after semantically
-integrating `origin/main` through `8a10191f4` into draft PR
+Snapshot captured on 2026-07-15 and updated on 2026-07-17 after semantically
+integrating `origin/main` through `2ebcadd4a` into draft PR
 [#1902](https://github.com/iterate/iterate/pull/1902). The integrated history
 includes the #2002 processor runner/registry redesign, #2038 explicit processor
 births, #2040 native trace roots for Stream retry alarms, and #2046's
@@ -13,6 +13,55 @@ cleanup, and `d0e92dc38` makes the deployed benchmark wait for repository
 readiness. Commit `0e1e94469` removes the recursive project-birth wait and makes
 the root capability-host subscription retry-idempotent. Production has not been
 deployed, erased, or otherwise changed.
+
+## 2026-07-17 Parked Landing Update
+
+The broad rewrite is now parked. Draft PR #1902 has merged exact current main
+`2ebcadd4a` through merge head `c10852fc6`, remains draft, and must not be
+merged. The branch is retained as a measured oracle and evidence archive, not
+as the recommended next shipping diff.
+
+There is one small optimization worth considering directly on main: publish
+one immutable core-state snapshot per wake to every resident connection and
+let each connection coalesce notifications while its delivery pump is active.
+On current main this is one file, 26 additions and eight deletions. It removes
+per-connection state reads, redundant async pump calls, and the caught-up
+SQLite probe after each delivered event. It changes no public API, schema,
+durable state, alarm, service, or network boundary. Rollback is a one-commit
+revert with no migration.
+
+| Isolated resident-wake result      | One subscriber |                           25 subscribers |
+| ---------------------------------- | -------------: | ---------------------------------------: |
+| Cleaner historical 5-pair campaign |    neutral p50 | 7.48% lower p50, 8.08% higher throughput |
+| Exact-main 6-pair campaign         |  noisy/neutral | 5.05% lower p50, 5.34% higher throughput |
+
+The exact-main arm compared `832baef84` with local candidate `f8a0dfb5d`. The
+focused subscriber and teardown suites passed 42/42, OS typecheck passed, and
+every benchmark process passed. Node host timers enclosed awaited append and
+host-observed callback completion, so the result does not depend on a Worker
+clock advancing without network I/O. The machine was heavily shared and one
+candidate round hit unrelated load above 8; that round is retained. Median
+paired deltas are therefore the fresh summary, and the defensible combined
+claim is roughly 5-8% better resident fan-out with no singleton claim.
+
+After main advanced, the same patch applied without conflict or source changes
+to `2ebcadd4a`. That latest-main form is local branch
+`stream-shared-wake-main-20260717-v2`, commit `015ec527e`; it remains 26
+additions and eight deletions, passes the now-43 focused subscriber/teardown
+tests, and passes OS typecheck. These are compatibility/correctness checks, not
+a claim that the full benchmark campaign was rerun against the newer base.
+
+Do not bundle a second optimization. Internal append-response elision is the
+next-smallest measured candidate, but it is roughly 100 lines, narrower, and
+entangled with append API decisions. None of the storage, transport, or kernel
+prototypes qualifies as a drive-by main patch. A direct shared-wake PR should
+receive ordinary preview and Worker-to-Worker acceptance, not reopen the broad
+rewrite campaign.
+
+The exact patch, analyzer, 32 fresh benchmark process logs, ten historical
+controls, and server logs are archived at
+`~/stream-shared-wake-evidence-2026-07-17.tar.gz` (408 KiB), SHA-256
+`27ea419b3cfe2dbd814981e859950aef0865cc3302a31f7546c93e830b8b400b`.
 
 ## 2026-07-16 Integration Update
 
