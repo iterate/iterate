@@ -91,6 +91,9 @@ const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
 const SANDBOX_RECORD_STORAGE_KEY = "iterate-sandbox-record";
 
 type SandboxRecord = {
+  /** Setup has not returned successfully yet. Kept durably so a retry can
+   * replay the idempotent birth batch after an ambiguous stream response. */
+  creationPending?: true;
   createdAt: string;
   destroyedAt?: string;
   instanceType: SandboxInstanceType;
@@ -348,6 +351,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   // Durable Object name and the lifecycle stream. See docs/cloudflare-sandboxes.md.
   override labels = { app: "iterate-os", component: "sandbox" };
 
+  // Preserve strict create semantics while one attempt is still executing in
+  // this incarnation. A durable pending record is resumable only after that
+  // attempt has failed (or the object restarted), not by a concurrent caller.
+  #creationInFlight = false;
+
   // Container-backed Durable Objects do not reliably expose ctx.id.name in
   // local development, so processor plumbing is initialized lazily after the
   // collection has recorded the sandbox identity (see #ensureIdentity).
@@ -438,11 +446,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * Create the sandbox: write the durable record that makes it exist. The
    * instance type is validated against THIS class (the collection routed here
    * by the type it journaled on `create-requested`) and fixed for life.
-   * Strict, not idempotent — a pet is born once; an existing or destroyed
-   * path is an error, so two callers can't silently share a sandbox they each
-   * think they created. (A retry of a create whose first attempt died between
-   * the journal append and this call finds no record and completes normally —
-   * the collection only routes here with the journaled type.)
+   * Strict once setup completes — a pet is born once; an existing or
+   * destroyed path is an error, so two callers can't silently share a sandbox
+   * they each think they created. The sole exception is a durable
+   * `creationPending` record: it means a previous attempt failed before setup
+   * returned, so replay the idempotent birth batch and finish that same
+   * catalogue claim instead of stranding half-created state.
    *
    * `sleepAfter` and `keepAlive` pass straight through to the SDK's own
    * durable setters (`setSleepAfter` / `setKeepAlive` — the SDK persists and
@@ -469,41 +478,67 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // (see assertValidSleepAfter).
     if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
     this.#ensureIdentity({ path: input.path, projectId: input.projectId });
+    if (this.#creationInFlight) {
+      throw new Error(`sandbox "${input.path}" creation is already in progress`);
+    }
     const existing = this.#record();
-    if (existing !== undefined) {
+    if (existing?.destroyedAt !== undefined) {
       throw new Error(
-        existing.destroyedAt !== undefined
-          ? `sandbox "${input.path}" was destroyed and its name cannot be reused — create one with a new name`
-          : `sandbox "${input.path}" already exists — itx.sandboxes.get("${input.path}") to use it`,
+        `sandbox "${input.path}" was destroyed and its name cannot be reused — create one with a new name`,
       );
     }
-    const record: SandboxRecord = {
-      createdAt: new Date().toISOString(),
-      instanceType: input.instanceType,
-    };
-    this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, record);
-    // Birth and the processor subscription are one batch, and create returns
-    // only after the hosted reducer has durably folded through both facts.
-    // If the append or fold fails, remove the just-written record so the
-    // catalogue's already-durable claim can retry and heal creation. Both
-    // events are idempotency-keyed, so a retry after an ambiguous success is
-    // safe and still waits for the same reducer boundary.
+    if (existing !== undefined && existing.creationPending !== true) {
+      throw new Error(
+        `sandbox "${input.path}" already exists — itx.sandboxes.get("${input.path}") to use it`,
+      );
+    }
+    if (existing?.instanceType !== undefined && existing.instanceType !== input.instanceType) {
+      throw new Error(
+        `sandbox instance-type mismatch while resuming creation: expected "${existing.instanceType}", got "${input.instanceType}"`,
+      );
+    }
+    const record: SandboxRecord =
+      existing ??
+      ({
+        creationPending: true,
+        createdAt: new Date().toISOString(),
+        instanceType: input.instanceType,
+      } satisfies SandboxRecord);
+    if (existing === undefined) {
+      this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, record);
+    }
+    this.#creationInFlight = true;
     try {
+      // Birth and the processor subscription are one batch, and create returns
+      // only after the hosted reducer has durably folded through both facts.
+      // Keep the pending record if append, fold, or configuration fails: stream
+      // RPC failures are ambiguous, and deleting it after a committed append
+      // would leave a stream-visible ghost with no command record. Both birth
+      // events are idempotency-keyed, so the next create retry safely heals the
+      // same catalogue claim and waits for the same reducer boundary.
       await this.#appendBirth(input.instanceType);
-    } catch (error) {
-      this.ctx.storage.kv.delete(SANDBOX_RECORD_STORAGE_KEY);
-      throw error;
+      if (input.sleepAfter !== undefined) await this.setSleepAfter(input.sleepAfter);
+      if (input.keepAlive !== undefined) await this.setKeepAlive(input.keepAlive);
+      if (input.env !== undefined && Object.keys(input.env).length > 0) {
+        await this.setEnvVars(input.env);
+      }
+      const current = this.#record();
+      if (current === undefined) {
+        throw new Error(`sandbox "${input.path}": creation record disappeared during setup`);
+      }
+      if (current.destroyedAt !== undefined) {
+        throw new Error(`sandbox "${input.path}" was destroyed while creation was finishing`);
+      }
+      const { creationPending: _creationPending, ...completedRecord } = current;
+      this.ctx.storage.kv.put(SANDBOX_RECORD_STORAGE_KEY, completedRecord);
+      return {
+        createdAt: record.createdAt,
+        instanceType: record.instanceType,
+        path: this.#identity().path,
+      };
+    } finally {
+      this.#creationInFlight = false;
     }
-    if (input.sleepAfter !== undefined) await this.setSleepAfter(input.sleepAfter);
-    if (input.keepAlive !== undefined) await this.setKeepAlive(input.keepAlive);
-    if (input.env !== undefined && Object.keys(input.env).length > 0) {
-      await this.setEnvVars(input.env);
-    }
-    return {
-      createdAt: record.createdAt,
-      instanceType: record.instanceType,
-      path: this.#identity().path,
-    };
   }
 
   /**
@@ -517,7 +552,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // storage behind (addressing never creates, not even at the storage
     // level). #ensureIdentity then only verifies-or-records for a sandbox
     // that provably exists.
-    this.#assertUsable();
+    if (this.#usableRecord().creationPending === true) {
+      throw new Error(
+        `sandbox "${identity.path}" creation did not finish — retry itx.sandboxes.create with the original input`,
+      );
+    }
     this.#ensureIdentity(identity);
   }
 
@@ -818,7 +857,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     this.#workspaceProvisioned = false;
     // Invalidate before touching the stream: even if journaling fails and the
     // hook rejects, no later call may reuse readiness from the old container.
-    await this.#appendLifecycleEventAndWait({
+    await this.#appendLifecycleEventAndCatchUpInBackground({
       type: "events.iterate.com/sandbox/started",
       payload: {},
     });
@@ -832,7 +871,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // This covers container crashes while the DO stays resident: without it
     // the memo would keep describing a container that no longer exists.
     this.#invalidateWorkspaceMemo();
-    await this.#appendLifecycleEventAndWait({
+    await this.#appendLifecycleEventAndCatchUpInBackground({
       type: "events.iterate.com/sandbox/stopped",
       payload: {},
     });
@@ -1515,8 +1554,9 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * catalog is the sandbox processor contract
    * (sandbox-processor-contract.ts); building through it keeps emission and
    * declaration from drifting. This fire-and-forget lane is reserved for
-   * ancillary audit events. Lifecycle completions that drive `running` use
-   * #appendLifecycleEventAndWait instead and are never silently dropped.
+   * ancillary audit events. Lifecycle completions that drive `running` await
+   * their durable append and either wait for the fold at an ordinary command
+   * boundary or schedule it outside the SDK lifecycle callback.
    */
   #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
     try {
@@ -1564,6 +1604,17 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   async #appendLifecycleEventAndWait(input: SandboxLifecycleEventInput): Promise<void> {
     await this.#waitUntilProcessed(await this.#appendLifecycleEvent(input));
+  }
+
+  /** SDK onStart/onStop run inside the container framework's
+   * blockConcurrencyWhile budget. Make the completion durable before the hook
+   * returns, then let push delivery/catch-up advance reduced state without
+   * spending that lifecycle budget waiting on another Durable Object. */
+  async #appendLifecycleEventAndCatchUpInBackground(
+    input: SandboxLifecycleEventInput,
+  ): Promise<void> {
+    const offset = await this.#appendLifecycleEvent(input);
+    this.ctx.waitUntil(this.#waitUntilProcessed(offset));
   }
 
   async #waitUntilProcessed(offset: number): Promise<void> {

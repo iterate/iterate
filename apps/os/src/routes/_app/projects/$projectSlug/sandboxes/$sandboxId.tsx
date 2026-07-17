@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   CircleStopIcon,
   CopyIcon,
@@ -35,6 +35,7 @@ import {
   buildCloudflareContainersDashboardUrl,
   inferOsDopplerConfigForWorkerName,
 } from "~/lib/cloudflare-containers-dashboard-url.ts";
+import { getCloudflareContainerDashboardTarget } from "~/lib/cloudflare-container-dashboard-target.ts";
 import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
   breadcrumbLoaderData,
@@ -290,19 +291,53 @@ function SandboxSshInstructions({
   const durableObjectName = DurableObjectNameCodec.stringify({ path: sandboxPath, projectId });
   const workerName = routeConfig.cloudflareWorkerName ?? "os";
   const dopplerConfig = inferOsDopplerConfigForWorkerName(workerName);
-  const dashboardUrl = buildCloudflareContainersDashboardUrl({
+  const dashboardTargetQuery = useQuery({
+    queryKey: ["cloudflare-container-dashboard-target", projectId, sandboxPath, instanceType],
+    queryFn: () =>
+      instanceType === undefined
+        ? null
+        : getCloudflareContainerDashboardTarget({
+            data: { instanceType, projectId, sandboxPath },
+          }),
+    enabled: instanceType !== undefined,
+    retry: 1,
+    staleTime: Infinity,
+  });
+  const dashboardTarget = dashboardTargetQuery.data;
+  const containersDashboardUrl = buildCloudflareContainersDashboardUrl({
     accountId: routeConfig.cloudflareAccountId,
   });
+  const exactDashboardUrl = dashboardTarget
+    ? buildCloudflareContainersDashboardUrl({
+        accountId: routeConfig.cloudflareAccountId,
+        ...dashboardTarget,
+      })
+    : null;
+  const dashboardUrl =
+    exactDashboardUrl ??
+    (instanceType === undefined || dashboardTarget === null ? containersDashboardUrl : null);
+  let dashboardTitle: string | undefined;
+  if (instanceType !== undefined && dashboardTargetQuery.isPending) {
+    dashboardTitle = "Resolving this sandbox's Cloudflare container page…";
+  } else if (dashboardTargetQuery.error instanceof Error) {
+    dashboardTitle = dashboardTargetQuery.error.message;
+  } else if (dashboardUrl === null) {
+    dashboardTitle = "Cloudflare container dashboard details are not configured.";
+  } else if (dashboardTarget === null) {
+    dashboardTitle = "This local environment has no deployed Cloudflare container application.";
+  }
   const commandPrefix = `doppler run --config ${dopplerConfig} --project os -- pnpm exec wrangler`;
+  const applicationId = dashboardTarget?.applicationId ?? "<APPLICATION_ID>";
+  const instanceId = dashboardTarget?.instanceId ?? "<INSTANCE_ID>";
   const findInstance = [
     "cd apps/os",
-    `${commandPrefix} containers list`,
-    `${commandPrefix} containers instances <APPLICATION_ID> --json | jq -r --arg name '${durableObjectName.replaceAll("'", `'\\''`)}' '.[] | select(.name == $name)'`,
+    ...(dashboardTarget ? [] : [`${commandPrefix} containers list`]),
+    `${commandPrefix} containers instances ${applicationId} --json | jq -r --arg name '${durableObjectName.replaceAll("'", `'\\''`)}' '.[] | select(.name == $name)'`,
   ].join("\n");
-  const wranglerSsh = ["cd apps/os", `${commandPrefix} containers ssh <INSTANCE_ID>`].join("\n");
+  const wranglerSsh = ["cd apps/os", `${commandPrefix} containers ssh ${instanceId}`].join("\n");
   const openSsh = [
     "cd apps/os",
-    `ssh -o ProxyCommand="${commandPrefix} containers ssh %h" cloudchamber@<INSTANCE_ID>`,
+    `ssh -o ProxyCommand="${commandPrefix} containers ssh %h" cloudchamber@${instanceId}`,
   ].join("\n");
 
   return (
@@ -323,35 +358,43 @@ function SandboxSshInstructions({
           size="sm"
           nativeButton={dashboardUrl === null}
           disabled={dashboardUrl === null}
-          title={dashboardUrl === null ? "Cloudflare account ID is not configured." : undefined}
+          title={dashboardTitle}
           render={
             dashboardUrl === null ? undefined : (
               <a
                 href={dashboardUrl}
                 target="_blank"
                 rel="noreferrer"
-                aria-label="Open the Cloudflare Containers dashboard"
+                aria-label="Open this sandbox's Cloudflare container page"
               />
             )
           }
         >
           <ExternalLinkIcon data-icon="inline-start" />
-          Dashboard
+          {dashboardTarget === null ? "Containers" : "Container page"}
         </Button>
       </div>
 
       <dl className="grid gap-2 text-xs">
         <MetadataLine label="Container class" value={containerClass} />
         <MetadataLine label="Instance row name" value={durableObjectName} />
+        <MetadataLine label="Application ID" value={applicationId} />
+        <MetadataLine label="Container instance ID" value={instanceId} />
         <MetadataLine label="Worker" value={workerName} />
         <MetadataLine label="Doppler config" value={dopplerConfig} />
       </dl>
 
       <p className="text-xs text-muted-foreground">
-        In the first command, choose the application for <code>{containerClass}</code>, then copy
-        the <code>id</code> from the row whose <code>name</code> matches this sandbox.
+        {dashboardTarget ? (
+          <>The Cloudflare application and container instance IDs above are resolved directly.</>
+        ) : (
+          <>
+            In the first command, choose the application for <code>{containerClass}</code>, then
+            copy the <code>id</code> from the row whose <code>name</code> matches this sandbox.
+          </>
+        )}
       </p>
-      <CommandBlock label="Find this running instance" value={findInstance} />
+      <CommandBlock label="Inspect this running instance" value={findInstance} />
       <CommandBlock label="Open a shell with Wrangler" value={wranglerSsh} />
       <CommandBlock label="Use OpenSSH or scp" value={openSsh} />
     </div>

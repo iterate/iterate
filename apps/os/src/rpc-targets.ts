@@ -1601,21 +1601,37 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     if (claim === undefined) {
       throw new Error(`sandbox "${path}": the catalogue append returned no event`);
     }
-    const claimedType = SandboxInstanceType.parse(
-      (claim.payload as { instanceType: string }).instanceType,
-    );
+    const parsedClaim = SandboxProcessorContract.parseEvent(claim);
+    if (parsedClaim.type !== "events.iterate.com/sandbox/create-requested") {
+      throw new Error(
+        `sandbox "${path}": catalogue claim has unexpected type "${parsedClaim.type}"`,
+      );
+    }
+    if (parsedClaim.payload.path !== path) {
+      throw new Error(`sandbox "${path}": catalogue claim points at "${parsedClaim.payload.path}"`);
+    }
+    const claimedType = parsedClaim.payload.instanceType;
     if (claimedType !== instanceType) {
       throw new Error(
         `sandbox "${path}" was already requested as instance type "${claimedType}" — names are unique per project; pick a new name`,
       );
     }
+    const claimedEnv =
+      parsedClaim.payload.env === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(parsedClaim.payload.env).map(([key, value]) => [
+              key,
+              value ?? undefined,
+            ]),
+          );
     return await this.#stub(path, instanceType).create({
-      env: input.env,
+      env: claimedEnv,
       instanceType,
-      keepAlive: input.keepAlive,
+      keepAlive: parsedClaim.payload.keepAlive,
       path,
       projectId: this.props.projectId,
-      sleepAfter: input.sleepAfter,
+      sleepAfter: parsedClaim.payload.sleepAfter,
     });
   }
 
