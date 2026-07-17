@@ -13,8 +13,12 @@
 // works. A header toggle flips to the raw event feed for debugging.
 //
 // A brand-new chat is just this screen pointed at a fresh /agents/mobile/<ts>
-// path: reading lazily initializes the stream and the first send creates the
-// agent (same lazy-seeding contract as the dashboard's new-chat page).
+// path: reading lazily initializes the underlying stream, but the platform
+// requires an explicit agent.create({}) before the first message lands
+// (stream processor births are explicit, not implicit-on-first-append) —
+// the send mutation calls it unconditionally, same as the dashboard's
+// new-chat page (routes/.../agents/new.tsx); it's idempotent so it's a
+// harmless no-op when reopening an already-created chat from the list.
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -92,6 +96,11 @@ export default function ChatScreen() {
       const itx = await getItxSession(baseUrl!);
       const project = await itx.projects.get(projectId);
       const agent = project.agents.get(path) as RpcStub<Agent>;
+      // create() is idempotent (its birth events carry deterministic
+      // idempotency keys), so this is safe whether `path` is a brand-new
+      // chat or an already-created one opened from the list — the platform
+      // requires an explicit create() before the first message either way.
+      await agent.create({});
       if (input.files.length === 0) {
         await agent.message(input.message);
         return;
