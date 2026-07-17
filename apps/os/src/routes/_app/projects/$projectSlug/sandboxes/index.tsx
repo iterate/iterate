@@ -1,31 +1,32 @@
-import { useMemo } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Copy, ExternalLink, SquareTerminal } from "lucide-react";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { ExternalLinkIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { useItx } from "iterate/react";
-import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTree } from "~/components/stream-tree.tsx";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import {
-  buildCloudflareContainersDashboardUrl,
-  inferOsDopplerConfigForWorkerName,
-} from "~/lib/cloudflare-containers-dashboard-url.ts";
-import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@iterate-com/ui/components/table";
+import { useLiveState } from "iterate/react";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { SandboxStatusBadge } from "~/components/sandbox-status-badge.tsx";
+import { buildCloudflareContainersDashboardUrl } from "~/lib/cloudflare-containers-dashboard-url.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
+import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
-import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 const SANDBOXES_ROOT = "/sandboxes";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
   staticData: streamPageStaticData(),
-  // Sandboxes ARE streams (a sandbox lives at /sandboxes/<name>):
-  // this page is the /sandboxes catalogue stream's view, with the live
-  // sandbox tree in the side panel.
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: async ({ context }) =>
@@ -39,36 +40,96 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
 
 function ProjectSandboxesIndexContent() {
   const params = Route.useParams();
-  const navigate = useNavigate();
   const { project, routeConfig } = Route.useLoaderData();
-  const itx = useItx();
-  const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
+  const projectState = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.reduced,
+    [],
+  ).value;
+  const sandboxes = projectState?.streams
+    .filter((stream) => /^\/sandboxes\/[^/]+$/.test(stream.path))
+    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const dashboardUrl = buildCloudflareContainersDashboardUrl({
+    accountId: routeConfig.cloudflareAccountId,
+  });
+
+  const panel = (
+    <div className="flex-1 overflow-y-auto p-4">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+        <div className="flex flex-col justify-between gap-3 rounded-lg border bg-card p-4 sm:flex-row sm:items-center">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-sm font-semibold">Sandboxes</h2>
+            <p className="text-xs text-muted-foreground">
+              Live container status, controls, and SSH instructions for each project sandbox.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            nativeButton={dashboardUrl === null}
+            disabled={dashboardUrl === null}
+            title={dashboardUrl === null ? "Cloudflare account ID is not configured." : undefined}
+            render={
+              dashboardUrl === null ? undefined : (
+                <a
+                  href={dashboardUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Open the Cloudflare Containers dashboard"
+                />
+              )
+            }
+          >
+            <ExternalLinkIcon data-icon="inline-start" />
+            Containers dashboard
+          </Button>
+        </div>
+
+        {sandboxes === undefined ? (
+          <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+            Loading sandboxes…
+          </div>
+        ) : sandboxes.length === 0 ? (
+          <Empty className="rounded-lg border">
+            <EmptyHeader>
+              <EmptyTitle>No sandboxes</EmptyTitle>
+              <EmptyDescription>
+                Sandboxes will appear here after they are created through the project API.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Sandbox</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Instance type</TableHead>
+                  <TableHead>Created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sandboxes.map((sandbox) => (
+                  <SandboxRow
+                    key={sandbox.path}
+                    createdAt={sandbox.createdAt}
+                    path={sandbox.path}
+                    projectSlug={params.projectSlug}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <ProjectStreamView
-      panel={
-        <>
-          <SandboxOperationsPanel routeConfig={routeConfig} />
-
-          <div className="space-y-3 rounded-lg border bg-card p-4">
-            <div className="space-y-1">
-              <h2 className="text-sm font-semibold">Sandbox streams</h2>
-              <p className="text-xs text-muted-foreground">
-                Sandboxes are created explicitly and addressed as{" "}
-                <code className="font-mono">/sandboxes/&lt;name&gt;</code>.
-              </p>
-            </div>
-            <StreamTree
-              source={source}
-              rootPath={SANDBOXES_ROOT}
-              scope={project.id}
-              onOpenPath={(streamPath) =>
-                void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
-              }
-            />
-          </div>
-        </>
-      }
+      layout="fullPanel"
+      panel={panel}
       projectId={project.id}
       streamPath={SANDBOXES_ROOT}
       emptyLabel="No events on the sandboxes catalogue stream yet."
@@ -76,118 +137,41 @@ function ProjectSandboxesIndexContent() {
   );
 }
 
-function SandboxOperationsPanel({ routeConfig }: { routeConfig: PublicRouteConfig }) {
-  const dashboardUrl = buildCloudflareContainersDashboardUrl({
-    accountId: routeConfig.cloudflareAccountId,
-  });
-  // Resolve the fallback ONCE so the displayed worker name and the copied
-  // commands can't disagree (a missing name shows `os` and infers `dev`).
-  const workerName = routeConfig.cloudflareWorkerName ?? "os";
-  const dopplerConfig = inferOsDopplerConfigForWorkerName(workerName);
-  const listInstancesCommand = [
-    "cd apps/os",
-    `doppler run --config ${dopplerConfig} --project os -- pnpm exec wrangler containers list`,
-    `doppler run --config ${dopplerConfig} --project os -- pnpm exec wrangler containers instances <APPLICATION_ID>`,
-  ].join("\n");
-  const wranglerSshCommand = [
-    "cd apps/os",
-    `doppler run --config ${dopplerConfig} --project os -- pnpm exec wrangler containers ssh <INSTANCE_ID>`,
-  ].join("\n");
-  const proxySshCommand = [
-    "cd apps/os",
-    `ssh -o ProxyCommand="doppler run --config ${dopplerConfig} --project os -- pnpm exec wrangler containers ssh %h" cloudchamber@<INSTANCE_ID>`,
-  ].join("\n");
-
-  return (
-    <div className="space-y-4 rounded-lg border bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <SquareTerminal className="size-4 text-muted-foreground" />
-            Sandbox operations
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            SSH is available for running instances whose container class has your public key.
-          </p>
-        </div>
-        {dashboardUrl ? (
-          <Button
-            variant="outline"
-            size="sm"
-            render={
-              <a
-                href={dashboardUrl}
-                target="_blank"
-                rel="noreferrer"
-                aria-label="Open Cloudflare Containers dashboard"
-              />
-            }
-          >
-            <ExternalLink data-icon="inline-start" />
-            Dashboard
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled
-            title="Cloudflare account ID is not configured."
-          >
-            <ExternalLink data-icon="inline-start" />
-            Dashboard
-          </Button>
-        )}
-      </div>
-
-      <dl className="grid gap-2 text-xs">
-        <MetadataLine label="Worker" value={workerName} />
-        <MetadataLine
-          label="Container classes"
-          value="Sandbox<Type>DurableObject (one per instance type)"
-        />
-        <MetadataLine label="Doppler config" value={dopplerConfig} />
-      </dl>
-
-      <CommandBlock label="Find a running instance" value={listInstancesCommand} />
-      <CommandBlock label="Open a shell with Wrangler" value={wranglerSshCommand} />
-      <CommandBlock label="Use OpenSSH or scp" value={proxySshCommand} />
-    </div>
+function SandboxRow({
+  createdAt,
+  path,
+  projectSlug,
+}: {
+  createdAt: string;
+  path: string;
+  projectSlug: string;
+}) {
+  const sandboxState = useLiveState(
+    (itx) => itx.sandboxes.liveState(path),
+    (state) => state,
+    [path],
   );
-}
+  const instanceType = sandboxState.value?.birthCertificate?.config.instanceType;
 
-function MetadataLine(input: { label: string; value: string }) {
   return (
-    <div className="grid gap-1 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
-      <dt className="text-muted-foreground">{input.label}</dt>
-      <dd className="min-w-0 break-all font-mono text-foreground">{input.value}</dd>
-    </div>
-  );
-}
-
-function CommandBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-xs font-medium text-muted-foreground">{label}</div>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-xs"
-          aria-label={`Copy ${label}`}
-          onClick={() => {
-            void navigator.clipboard.writeText(value).then(
-              () => toast.success("Copied"),
-              () => toast.error("Could not copy"),
-            );
-          }}
+    <TableRow>
+      <TableCell className="min-w-[16rem] py-3">
+        <Link
+          className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
+          to="/projects/$projectSlug/sandboxes/$sandboxId"
+          params={{ projectSlug, sandboxId: path.slice(`${SANDBOXES_ROOT}/`.length) }}
+          search={{}}
         >
-          <Copy />
-        </Button>
-      </div>
-      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted px-3 py-2 font-mono text-[11px] leading-5 text-foreground">
-        <code>{value}</code>
-      </pre>
-    </div>
+          {path}
+        </Link>
+      </TableCell>
+      <TableCell className="w-32">
+        <SandboxStatusBadge error={sandboxState.error} state={sandboxState.value} />
+      </TableCell>
+      <TableCell className="w-36 font-mono text-xs text-muted-foreground">
+        {instanceType ?? "—"}
+      </TableCell>
+      <TableCell className="w-40 text-muted-foreground">{formatTimeAgo(createdAt)}</TableCell>
+    </TableRow>
   );
 }

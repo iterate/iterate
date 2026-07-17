@@ -51,6 +51,7 @@ import { Route as AppProjectsProjectSlugReposIndexRouteImport } from './routes/_
 import { Route as AppProjectsProjectSlugAgentsIndexRouteImport } from './routes/_app/projects/$projectSlug/agents/index'
 import { Route as AppProjectsProjectSlugStreamsSplatRouteImport } from './routes/_app/projects/$projectSlug/streams/$'
 import { Route as AppProjectsProjectSlugSecretsSecretIdRouteImport } from './routes/_app/projects/$projectSlug/secrets/$secretId'
+import { Route as AppProjectsProjectSlugSandboxesSandboxIdRouteImport } from './routes/_app/projects/$projectSlug/sandboxes/$sandboxId'
 import { Route as AppProjectsProjectSlugReposSplatRouteImport } from './routes/_app/projects/$projectSlug/repos/$'
 import { Route as AppProjectsProjectSlugAgentsNewRouteImport } from './routes/_app/projects/$projectSlug/agents/new'
 import { Route as DocsStreamsProcessorsProcessorSlugEventsSplatRouteImport } from './routes/docs.streams.processors.$processorSlug.events.$'
@@ -286,6 +287,12 @@ const AppProjectsProjectSlugSecretsSecretIdRoute =
     path: '/secrets/$secretId',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
+const AppProjectsProjectSlugSandboxesSandboxIdRoute =
+  AppProjectsProjectSlugSandboxesSandboxIdRouteImport.update({
+    id: '/sandboxes/$sandboxId',
+    path: '/sandboxes/$sandboxId',
+    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
+  } as any)
 const AppProjectsProjectSlugReposSplatRoute =
   AppProjectsProjectSlugReposSplatRouteImport.update({
     id: '/repos/$',
@@ -347,6 +354,7 @@ export interface FileRoutesByFullPath {
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/repos/$': typeof AppProjectsProjectSlugReposSplatRoute
+  '/projects/$projectSlug/sandboxes/$sandboxId': typeof AppProjectsProjectSlugSandboxesSandboxIdRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/projects/$projectSlug/agents/': typeof AppProjectsProjectSlugAgentsIndexRoute
@@ -387,6 +395,7 @@ export interface FileRoutesByTo {
   '/docs/streams/processors': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/repos/$': typeof AppProjectsProjectSlugReposSplatRoute
+  '/projects/$projectSlug/sandboxes/$sandboxId': typeof AppProjectsProjectSlugSandboxesSandboxIdRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsIndexRoute
@@ -436,6 +445,7 @@ export interface FileRoutesById {
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/_app/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/_app/projects/$projectSlug/repos/$': typeof AppProjectsProjectSlugReposSplatRoute
+  '/_app/projects/$projectSlug/sandboxes/$sandboxId': typeof AppProjectsProjectSlugSandboxesSandboxIdRoute
   '/_app/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/_app/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/_app/projects/$projectSlug/agents/': typeof AppProjectsProjectSlugAgentsIndexRoute
@@ -485,6 +495,7 @@ export interface FileRouteTypes {
     | '/docs/streams/processors/'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/repos/$'
+    | '/projects/$projectSlug/sandboxes/$sandboxId'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
     | '/projects/$projectSlug/agents/'
@@ -525,6 +536,7 @@ export interface FileRouteTypes {
     | '/docs/streams/processors'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/repos/$'
+    | '/projects/$projectSlug/sandboxes/$sandboxId'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
     | '/projects/$projectSlug/agents'
@@ -573,6 +585,7 @@ export interface FileRouteTypes {
     | '/docs/streams/processors/'
     | '/_app/projects/$projectSlug/agents/new'
     | '/_app/projects/$projectSlug/repos/$'
+    | '/_app/projects/$projectSlug/sandboxes/$sandboxId'
     | '/_app/projects/$projectSlug/secrets/$secretId'
     | '/_app/projects/$projectSlug/streams/$'
     | '/_app/projects/$projectSlug/agents/'
@@ -896,6 +909,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugSecretsSecretIdRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
+    '/_app/projects/$projectSlug/sandboxes/$sandboxId': {
+      id: '/_app/projects/$projectSlug/sandboxes/$sandboxId'
+      path: '/sandboxes/$sandboxId'
+      fullPath: '/projects/$projectSlug/sandboxes/$sandboxId'
+      preLoaderRoute: typeof AppProjectsProjectSlugSandboxesSandboxIdRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRouteRoute
+    }
     '/_app/projects/$projectSlug/repos/$': {
       id: '/_app/projects/$projectSlug/repos/$'
       path: '/repos/$'
@@ -949,6 +969,7 @@ interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
   AppProjectsProjectSlugAgentsNewRoute: typeof AppProjectsProjectSlugAgentsNewRoute
   AppProjectsProjectSlugReposSplatRoute: typeof AppProjectsProjectSlugReposSplatRoute
+  AppProjectsProjectSlugSandboxesSandboxIdRoute: typeof AppProjectsProjectSlugSandboxesSandboxIdRoute
   AppProjectsProjectSlugSecretsSecretIdRoute: typeof AppProjectsProjectSlugSecretsSecretIdRoute
   AppProjectsProjectSlugStreamsSplatRoute: typeof AppProjectsProjectSlugStreamsSplatRoute
   AppProjectsProjectSlugAgentsIndexRoute: typeof AppProjectsProjectSlugAgentsIndexRoute
@@ -971,6 +992,8 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
     AppProjectsProjectSlugAgentsNewRoute: AppProjectsProjectSlugAgentsNewRoute,
     AppProjectsProjectSlugReposSplatRoute:
       AppProjectsProjectSlugReposSplatRoute,
+    AppProjectsProjectSlugSandboxesSandboxIdRoute:
+      AppProjectsProjectSlugSandboxesSandboxIdRoute,
     AppProjectsProjectSlugSecretsSecretIdRoute:
       AppProjectsProjectSlugSecretsSecretIdRoute,
     AppProjectsProjectSlugStreamsSplatRoute:
