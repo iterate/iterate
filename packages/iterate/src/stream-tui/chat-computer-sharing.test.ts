@@ -52,6 +52,24 @@ test("starts one provider and reports when the named computer is live", () => {
   });
 });
 
+test("ignores blank lines between provider events", () => {
+  const process = new FakeProviderProcess();
+  const sharing = createChatComputerSharing({
+    launch: () => process,
+    name: "joebloggsComputer",
+  });
+
+  sharing.start();
+  process.stdout.write(
+    `${JSON.stringify({ type: "status", loggedIn: true, project: "prj_test", name: "joebloggsComputer" })}\n\n`,
+  );
+
+  expect(sharing.snapshot()).toMatchObject({
+    status: "live",
+    notice: "itx.joebloggsComputer shared for this chat",
+  });
+});
+
 test("surfaces provider reconnection without launching another provider", () => {
   const process = new FakeProviderProcess();
   const sharing = createChatComputerSharing({
@@ -177,7 +195,7 @@ test("ignores provider output that arrives after chat releases the controller", 
   expect(sharing.snapshot()).toMatchObject({ status: "idle", notice: "" });
 });
 
-test("reports an unexpected provider exit and allows an explicit retry", () => {
+test("reports an unexpected provider exit and allows an explicit retry", async () => {
   const processes = [new FakeProviderProcess(), new FakeProviderProcess()];
   let launches = 0;
   const sharing = createChatComputerSharing({
@@ -187,6 +205,7 @@ test("reports an unexpected provider exit and allows an explicit retry", () => {
 
   sharing.start();
   processes[0]!.emit("exit", 7);
+  await endProviderStdout(processes[0]!);
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
     notice: "itx.joebloggsComputer stopped unexpectedly (exit 7)",
@@ -196,7 +215,7 @@ test("reports an unexpected provider exit and allows an explicit retry", () => {
   expect(launches).toBe(2);
 });
 
-test("reports a provider crash even when the last machine call failed", () => {
+test("reports a provider crash even when the last machine call failed", async () => {
   const process = new FakeProviderProcess();
   const sharing = createChatComputerSharing({
     launch: () => process,
@@ -208,6 +227,7 @@ test("reports a provider crash even when the last machine call failed", () => {
     `${JSON.stringify({ type: "call-done", id: 1, method: "runSwift", ok: false, error: "permission denied" })}\n`,
   );
   process.emit("exit", 9);
+  await endProviderStdout(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
@@ -247,6 +267,24 @@ test("reports when the provider cannot use the chat login", () => {
   });
 });
 
+test("reads a terminal provider status that drains after process exit", async () => {
+  const process = new FakeProviderProcess();
+  const sharing = createChatComputerSharing({
+    launch: () => process,
+    name: "joebloggsComputer",
+  });
+
+  sharing.start();
+  process.emit("exit", 1);
+  process.stdout.write(`${JSON.stringify({ type: "status", loggedIn: false })}\n`);
+  await endProviderStdout(process);
+
+  expect(sharing.snapshot()).toMatchObject({
+    status: "error",
+    notice: "itx.joebloggsComputer needs a fresh iterate login",
+  });
+});
+
 test("surfaces provider diagnostics written to stderr", () => {
   const process = new FakeProviderProcess();
   const sharing = createChatComputerSharing({
@@ -267,4 +305,11 @@ class FakeProviderProcess extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
   stdin = new PassThrough();
+}
+
+function endProviderStdout(process: FakeProviderProcess) {
+  return new Promise<void>((resolve) => {
+    process.stdout.once("end", resolve);
+    process.stdout.end();
+  });
 }

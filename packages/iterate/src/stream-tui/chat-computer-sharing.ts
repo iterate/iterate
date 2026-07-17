@@ -40,7 +40,10 @@ export function launchUseMyComputerProvider(
 }
 
 type ProviderProcess = {
-  stdout: { on(event: "data", listener: (chunk: unknown) => void): unknown };
+  stdout: {
+    on(event: "data", listener: (chunk: unknown) => void): unknown;
+    on(event: "end", listener: () => void): unknown;
+  };
   stderr: { on(event: "data", listener: (chunk: unknown) => void): unknown };
   stdin: { end(): unknown };
   on(event: "error", listener: (error: Error) => void): unknown;
@@ -90,6 +93,18 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       const launched = input.launch();
       process = launched;
       let exitIsExplained = false;
+      let hasExited = false;
+      let exitCode: number | null = null;
+      let stdoutEnded = false;
+      const finishExit = () => {
+        if (process !== launched || !hasExited || !stdoutEnded) return;
+        process = undefined;
+        if (exitIsExplained) return;
+        publish({
+          status: "error",
+          notice: `itx.${input.name} stopped unexpectedly (exit ${exitCode === null ? "unknown" : exitCode})`,
+        });
+      };
       launched.on("error", (error) => {
         if (process !== launched) return;
         process = undefined;
@@ -100,12 +115,9 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       });
       launched.on("exit", (code) => {
         if (process !== launched) return;
-        process = undefined;
-        if (exitIsExplained) return;
-        publish({
-          status: "error",
-          notice: `itx.${input.name} stopped unexpectedly (exit ${code === null ? "unknown" : code})`,
-        });
+        hasExited = true;
+        exitCode = code;
+        finishExit();
       });
       let stdoutBuffer = "";
       let stderrBuffer = "";
@@ -121,77 +133,88 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
           });
         }
       });
+      const processStdoutLine = (line: string) => {
+        if (line.trim() === "") return;
+        let event: ProviderEvent;
+        try {
+          const parsed: unknown = JSON.parse(line);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new Error("not an event object");
+          }
+          event = parsed as ProviderEvent;
+        } catch {
+          publish({
+            status: "error",
+            notice: `itx.${input.name} emitted invalid status output`,
+          });
+          return;
+        }
+        if (event.type === "call" && event.method) {
+          publish({
+            status: "live",
+            notice: `itx.${input.name}.${event.method}: ${event.summary || "using your computer"}`,
+          });
+          return;
+        }
+        if (event.type === "call-done" && event.method && event.ok === false) {
+          publish({
+            status: "error",
+            notice: `itx.${input.name}.${event.method} failed: ${event.error || "unknown error"}`,
+          });
+          return;
+        }
+        if (event.type === "call-done" && event.method && event.ok === true) {
+          publish({
+            status: "live",
+            notice: `itx.${input.name} shared for this chat`,
+          });
+          return;
+        }
+        if (event.type === "status" && event.loggedIn === false) {
+          exitIsExplained = true;
+          publish({
+            status: "error",
+            notice: `itx.${input.name} needs a fresh iterate login`,
+          });
+          return;
+        }
+        if (event.type === "status" && event.loggedIn === true) {
+          if (event.conflict === true) {
+            exitIsExplained = true;
+            publish({
+              status: "error",
+              notice: `another session took itx.${input.name}`,
+            });
+            return;
+          }
+          if (event.reconnecting === true) {
+            publish({
+              status: "reconnecting",
+              notice: `itx.${input.name} dropped — reconnecting`,
+            });
+            return;
+          }
+          publish({
+            status: "live",
+            notice: `itx.${input.name} shared for this chat`,
+          });
+        }
+      };
       launched.stdout.on("data", (chunk) => {
         if (process !== launched) return;
         stdoutBuffer += String(chunk);
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() || "";
         for (const line of lines) {
-          let event: ProviderEvent;
-          try {
-            const parsed: unknown = JSON.parse(line);
-            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-              throw new Error("not an event object");
-            }
-            event = parsed as ProviderEvent;
-          } catch {
-            publish({
-              status: "error",
-              notice: `itx.${input.name} emitted invalid status output`,
-            });
-            continue;
-          }
-          if (event.type === "call" && event.method) {
-            publish({
-              status: "live",
-              notice: `itx.${input.name}.${event.method}: ${event.summary || "using your computer"}`,
-            });
-            continue;
-          }
-          if (event.type === "call-done" && event.method && event.ok === false) {
-            publish({
-              status: "error",
-              notice: `itx.${input.name}.${event.method} failed: ${event.error || "unknown error"}`,
-            });
-            continue;
-          }
-          if (event.type === "call-done" && event.method && event.ok === true) {
-            publish({
-              status: "live",
-              notice: `itx.${input.name} shared for this chat`,
-            });
-            continue;
-          }
-          if (event.type === "status" && event.loggedIn === false) {
-            exitIsExplained = true;
-            publish({
-              status: "error",
-              notice: `itx.${input.name} needs a fresh iterate login`,
-            });
-            continue;
-          }
-          if (event.type === "status" && event.loggedIn === true) {
-            if (event.conflict === true) {
-              exitIsExplained = true;
-              publish({
-                status: "error",
-                notice: `another session took itx.${input.name}`,
-              });
-              continue;
-            }
-            if (event.reconnecting === true) {
-              publish({
-                status: "reconnecting",
-                notice: `itx.${input.name} dropped — reconnecting`,
-              });
-              continue;
-            }
-            publish({
-              status: "live",
-              notice: `itx.${input.name} shared for this chat`,
-            });
-          }
+          processStdoutLine(line);
         }
+      });
+      launched.stdout.on("end", () => {
+        if (process !== launched) return;
+        processStdoutLine(stdoutBuffer);
+        stdoutBuffer = "";
+        stdoutEnded = true;
+        finishExit();
       });
     },
   };

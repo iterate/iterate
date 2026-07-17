@@ -66,11 +66,13 @@ testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({
 testWithProject(
   "starts the existing computer provider from /use-my-computer",
   async ({ terminal }) => {
-    await expect(terminal.getByText("live", { strict: false })).toBeVisible();
+    await expect(terminal.getByText("live", { strict: false })).toBeVisible(visible);
 
     terminal.submit("/use-my-computer");
 
-    await expect(terminal.getByText("itx.", { strict: false })).toBeVisible();
+    await expect(terminal.getByText("shared for this chat", { strict: false })).toBeVisible(
+      visible,
+    );
     const view = terminal.serialize().view;
     expect(view).not.toContain("you › /use-my-computer");
   },
