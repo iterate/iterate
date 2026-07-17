@@ -21,8 +21,8 @@
 // persists the batch in one await-free turn.
 
 import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
-import type { StreamEvent } from "./schemas.ts";
-import { StreamEvent as StreamEventSchema } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
+import { StreamEvent as StreamEventSchema } from "iterate/processors";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();

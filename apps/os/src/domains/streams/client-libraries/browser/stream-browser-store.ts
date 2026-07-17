@@ -25,22 +25,22 @@
 // projection writes and its progress record in ONE SQLite transaction.
 
 import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { ProcessorRuntimeState, StreamEventBatch, SubscriptionKey } from "../../rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
-import type { Stream } from "../../../../itx-api.generated.ts";
+import type { ProcessorRuntimeState, StreamEventBatch, SubscriptionKey } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import {
   announceContract,
   hostRuntimeCapabilities,
   type AnyHostedProcessor,
-} from "../../processor-host-capabilities.ts";
-import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts";
-import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
+} from "iterate/processors";
+import { LatencyRing, type LatencyStats } from "iterate/processors";
+import type { SubscriberMetricsReport } from "iterate/processors";
 import {
   StreamProcessorRunner,
   type ProcessorProgressStore,
   type StreamProcessorDeliveryFrame,
-} from "../../stream-processor-runner.ts";
-import type { StreamProcessor } from "../../stream-processor.ts";
+} from "iterate/processors";
+import type { StreamProcessor } from "iterate/processors";
+import type { Stream } from "../../../../itx-api.generated.ts";
 import { isStreamUnavailableError } from "../../stream-unavailable.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import {

@@ -2,14 +2,12 @@ import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
 import {
   defineProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   type ConsumedInput,
   type ProcessorState,
-} from "../streams/processor-contracts.ts";
+} from "iterate/processors";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import {
-  CoreProcessorContract,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;

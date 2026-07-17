@@ -25,13 +25,10 @@
 
 import { z } from "zod";
 import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../schemas.ts";
-import type { AnyHostedProcessor } from "../../processor-host-capabilities.ts";
-import type {
-  StreamProcessorDeliveryFrame,
-  StreamProcessorRunner,
-} from "../../stream-processor-runner.ts";
-import type { ProcessorSnapshot } from "../../rpc-types.ts";
+import type { StreamEvent } from "iterate/processors";
+import type { AnyHostedProcessor } from "iterate/processors";
+import type { StreamProcessorDeliveryFrame, StreamProcessorRunner } from "iterate/processors";
+import type { ProcessorSnapshot } from "iterate/processors";
 
 /** One canonical mirror member: its stable slug, the hosted processor
  * instance (contract, metrics, runtime bag), and the runner that drives it. */
