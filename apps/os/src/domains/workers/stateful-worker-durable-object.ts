@@ -129,18 +129,35 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
 
     // A budgeted fetch-lane resolve can answer STALE (the loader's last-good
     // fallback while a newer commit builds). A stale class must never abort a
-    // running facet or move the version marker backward: the awaited resolve
-    // above is an interleave point, so a concurrent fresh load may already
-    // have swapped the facet to newer code — aborting it here would downgrade
-    // live state to the old build (and wedge the marker behind reality). If
-    // no facet is running we do start one on the stale class, and then the
-    // marker records that truth so the next fresh resolve swaps it out.
+    // running facet, and must never move the version marker to a build this
+    // DO didn't just mount: the awaited resolve above is an interleave point,
+    // so a concurrent fresh load may already have swapped the facet to newer
+    // code — aborting or marker-writing here would downgrade live state (and
+    // storage written by newer code) to the old build.
     if (resolved.serveInfo?.status === "stale") {
+      if (previous !== undefined && previous !== version) {
+        // The durable marker outranks the global last-good pointer: it names
+        // a build THIS DO actually ran — newer knowledge whenever the two
+        // disagree. Serve it through the stale-while-rebuild path (same
+        // artifact load, same interleave guard, background refresh that
+        // converges to fresh source) instead of persisting a regressed
+        // marker and mounting outranked code over its own storage.
+        const viaMarker = await this.#staleFacet(ref);
+        if (viaMarker !== null) return viaMarker;
+        // The marker's own artifact is gone (expired) — the pointer's class
+        // below is the only loadable history left. If the marker moved while
+        // we looked, another request is managing the facet; join it.
+        if (this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) !== previous) {
+          return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
+        }
+      }
       let started = false;
       const facet = this.ctx.facets.get(FACET_NAME, () => {
         started = true;
         return { class: klass };
       });
+      // Recording the mounted build is honest exactly when this call started
+      // the facet on it (first-ever code, or the only loadable history).
       if (started && previous !== version) this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
       return facet;
     }
