@@ -31,8 +31,10 @@ testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({
   // The live subscription round trip completes (capnweb websocket + subscribe).
   await expect(terminal.getByText("live", { strict: false })).toBeVisible();
 
-  // Empty feed hint renders from the reduced model, not raw events.
-  await expect(terminal.getByText("No messages yet", { strict: false })).toBeVisible();
+  // The feed renders from the reduced model, not raw events: a fresh agent
+  // stream's first fold produces the wake marker item (agent-ui-reducer's
+  // STREAM_WAKE_LABEL), not a raw event dump.
+  await expect(terminal.getByText("Stream durable object woke", { strict: false })).toBeVisible();
 
   // Send a message: it must come BACK through the server subscription and the
   // shared agent-ui reducer before it can render as a settled feed item.

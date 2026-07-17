@@ -1073,6 +1073,9 @@ importers:
       '@orpc/server':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@tanstack/react-query':
+        specifier: 5.91.0
+        version: 5.91.0(react@19.2.7)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.13
@@ -1085,6 +1088,9 @@ importers:
       octokit:
         specifier: ^5.0.5
         version: 5.0.5
+      react:
+        specifier: ^19.2.0
+        version: 19.2.7
       trpc-cli:
         specifier: 0.15.1
         version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
@@ -1098,9 +1104,6 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../ui
-      '@tanstack/react-query':
-        specifier: 5.91.0
-        version: 5.91.0(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1110,9 +1113,6 @@ importers:
       jsdom:
         specifier: 27.4.0
         version: 27.4.0(@noble/hashes@2.2.0)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
@@ -14101,7 +14101,7 @@ snapshots:
   '@babel/helper-member-expression-to-functions@7.28.5':
     dependencies:
       '@babel/traverse': 7.29.0
-      '@babel/types': 7.29.0
+      '@babel/types': 7.29.7
     transitivePeerDependencies:
       - supports-color
 
@@ -14137,7 +14137,7 @@ snapshots:
 
   '@babel/helper-optimise-call-expression@7.27.1':
     dependencies:
-      '@babel/types': 7.29.0
+      '@babel/types': 7.29.7
 
   '@babel/helper-optimise-call-expression@7.29.7':
     dependencies:
@@ -21575,7 +21575,7 @@ snapshots:
 
   babel-plugin-jest-hoist@29.6.3:
     dependencies:
-      '@babel/template': 7.28.6
+      '@babel/template': 7.29.7
       '@babel/types': 7.29.7
       '@types/babel__core': 7.20.5
       '@types/babel__traverse': 7.28.0

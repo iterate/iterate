@@ -5,15 +5,14 @@ export default defineConfig([
     entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
     // The CLI + TUI are STANDALONE PROCESS artifacts (bin/iterate spawns the
-    // TUI as its own bun process; nothing imports these files in-process), so
-    // this bundle is deliberately self-contained: react + react-query inline
-    // here (they are peers for the library entries, where the consumer's app
-    // must own the one copy), and the TUI carries its own private copy of the
-    // keeper — module-state sharing with the library entries is a non-goal
-    // across process boundaries.
-    deps: {
-      alwaysBundle: ["react", "@tanstack/react-query"],
-    },
+    // TUI as its own bun process; nothing imports these files in-process). The
+    // TUI carries its own private copy of the keeper — module-state sharing
+    // with the library entries is a non-goal across process boundaries — but
+    // react/react-query must stay EXTERNAL here: @opentui/react (the renderer,
+    // also external) owns the hook dispatcher, and an inlined react is a
+    // second copy → invalid-hook-call at first render (proven by the PTY
+    // spec). Their runtime presence comes from being real dependencies; the
+    // peer declaration is what makes a consuming app's copy win.
     dts: {
       resolver: "tsc",
     },
