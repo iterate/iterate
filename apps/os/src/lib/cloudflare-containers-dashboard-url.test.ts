@@ -64,7 +64,7 @@ describe("cloudflareContainerApplicationName", () => {
         className: "SandboxLiteDurableObject",
         workerName: "os-preview-3",
       }),
-    ).toBe("os-preview-3-sandboxlitedurableobject-preview-3");
+    ).toBe("os-preview-3-sandboxlitedurableobject-preview_3");
   });
 
   it("does not guess application names for unknown workers", () => {

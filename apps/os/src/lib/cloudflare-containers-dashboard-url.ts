@@ -30,9 +30,9 @@ export function buildCloudflareContainersDashboardUrl(input: {
 }
 
 /** Wrangler's default for an unnamed container application is
- * `worker-name-class-name[-env-name]`, lower-cased. OS's deployed worker names
- * encode their Wrangler environment, so reproduce that name for the API
- * lookup that resolves the dashboard's application UUID. */
+ * `worker-name-class-name[-env-name]`, lower-cased. OS's preview worker uses
+ * hyphens while its Wrangler environment uses an underscore (`preview_5`), so
+ * recover the actual environment spelling for the API lookup. */
 export function cloudflareContainerApplicationName(input: {
   className: string;
   workerName?: string;
@@ -47,8 +47,9 @@ export function cloudflareContainerApplicationName(input: {
   } else if (workerName === "os-prd") {
     environmentName = "prd";
   } else {
-    if (!/^os-preview-\d+$/.test(workerName)) return null;
-    environmentName = workerName.slice("os-".length);
+    const preview = /^os-preview-(\d+)$/.exec(workerName);
+    if (!preview) return null;
+    environmentName = `preview_${preview[1]}`;
   }
 
   return [workerName, className, environmentName].filter(Boolean).join("-").toLowerCase();
