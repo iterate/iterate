@@ -50,7 +50,16 @@ const createFakeSession = (input: {
         list: async (args?: unknown) => {
           input.onProjectList?.(args);
           if (input.listError) throw input.listError;
-          return input.projects ?? [];
+          const projects = input.projects ?? [];
+          if (
+            typeof args === "object" &&
+            args !== null &&
+            "projectId" in args &&
+            typeof args.projectId === "string"
+          ) {
+            return projects.filter((project) => project.id === args.projectId);
+          }
+          return projects;
         },
       },
       [Symbol.dispose]: disposeAuthenticated,
@@ -521,6 +530,39 @@ describe("resolveChatProject", () => {
       waitUntilReady: false,
     });
     expect(fake.disposeProject).toHaveBeenCalledOnce();
+  });
+
+  test("lists the full accessible catalog only to explain an unknown project id", async () => {
+    const onProjectList = vi.fn();
+    const fake = createFakeSession({
+      onProjectList,
+      projects: [
+        {
+          deploymentStatus: "ready",
+          id: "prj_other",
+          organizationId: null,
+          organizationName: null,
+          organizationSlug: null,
+          slug: "other",
+        },
+      ],
+    });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        explicitProject: "prj_unknown",
+        createSession: fake.createSession,
+      }),
+    ).rejects.toThrow(
+      /Project "prj_unknown" was not found among accessible projects.*other \(prj_other, ready\)/,
+    );
+
+    expect(onProjectList).toHaveBeenNthCalledWith(1, { projectId: "prj_unknown" });
+    expect(onProjectList).toHaveBeenNthCalledWith(2, undefined);
   });
 
   test("does not bypass project resolution when listing accessible projects fails", async () => {
