@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { Workspace } from "@cloudflare/shell";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
@@ -9,7 +10,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
-import { UnboundedWorkspace } from "../workspaces/workspace-core.ts";
+import { walkWorkspaceFiles, wipeWorkspace } from "../workspaces/workspace-core.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
@@ -401,36 +402,35 @@ export class RepoDurableObject extends DurableObject<Env> {
   // without re-cloning. Successor of the old per-project "root workspace"
   // cache, co-located with the head cursor so freshness is a local kv read
   // (the cross-DO re-entrant getHead dance is gone with it).
-  readonly #headTreeCache = new UnboundedWorkspace({
+  readonly #headTreeCache = new Workspace({
     sql: this.ctx.storage.sql,
     name: () => this.ctx.id.name,
     r2: this.env.FILES_BUCKET,
     r2Prefix: `repo-head-cache/${this.ctx.id.name!}`,
   });
-  // In-flight materialization, shared by every concurrent read that finds the
-  // cursor moved — reads never observe a half-written tree.
-  #headTreeRefresh: Promise<string> | undefined;
+  // ONE chain serializes every cache read AND materialization: a reader can
+  // never interleave a refresh's wipe-and-rewrite, so no read observes a
+  // half-written tree or mixed generations. Cache reads are cheap SQLite
+  // lookups; queuing them behind at most one refresh is the whole cost.
+  #headTreeChain: Promise<unknown> = Promise.resolve();
 
-  /** Serve-from-cache door: returns the cached tree's commit oid, refreshing
-   * first when the head cursor moved. */
-  async #ensureFreshHeadTree(): Promise<string> {
-    if (this.#headTreeRefresh !== undefined) return this.#headTreeRefresh;
-    const head = await this.getHead();
-    const cached = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
-    if (cached === head.commitOid) return cached;
-    this.#headTreeRefresh ??= this.#materializeHeadTree().finally(() => {
-      this.#headTreeRefresh = undefined;
-    });
-    return this.#headTreeRefresh;
+  #withHeadTree<T>(read: (commitOid: string) => Promise<T>): Promise<T> {
+    const run = async () => {
+      const head = await this.getHead();
+      const cached = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
+      const commitOid = cached === head.commitOid ? cached : await this.#materializeHeadTree();
+      return read(commitOid);
+    };
+    const result = this.#headTreeChain.then(run, run);
+    this.#headTreeChain = result.catch(() => {});
+    return result;
   }
 
   async #materializeHeadTree(): Promise<string> {
     // The key comes off BEFORE the wipe: if the write below dies, reads must
     // find "no cache" and re-materialize — never an empty tree labeled main.
     this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
-    for (const entry of await this.#headTreeCache.readDir("/")) {
-      await this.#headTreeCache.rm(entry.path, { force: true, recursive: true });
-    }
+    await wipeWorkspace(this.#headTreeCache);
     const { filesystem, head } = await this.#checkout({});
     for (const path of await walkCheckoutPaths(filesystem, REPO_DIR)) {
       const bytes = await readCheckoutFileBytes(filesystem, `${REPO_DIR}/${path}`);
@@ -444,16 +444,6 @@ export class RepoDurableObject extends DurableObject<Env> {
       this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, head.oid);
     }
     return head.oid;
-  }
-
-  /** All file paths of the cached tree (absolute within the cache fs). */
-  async #headTreeFilePaths(dir = "/"): Promise<string[]> {
-    const paths: string[] = [];
-    for (const entry of await this.#headTreeCache.readDir(dir)) {
-      if (entry.type === "directory") paths.push(...(await this.#headTreeFilePaths(entry.path)));
-      else if (entry.type === "file") paths.push(entry.path);
-    }
-    return paths;
   }
 
   #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
@@ -594,7 +584,19 @@ export class RepoDurableObject extends DurableObject<Env> {
    */
   #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
     if (result.noChanges) return;
-    if (result.branch === REPO_DEFAULT_BRANCH) this.#headFilesSnapshot.clear();
+    if (result.branch === REPO_DEFAULT_BRANCH) {
+      this.#headFilesSnapshot.clear();
+      // An EXTERNALLY pushed head invalidates the durable cursor too:
+      // getHead serves its cached record before consulting the pushed oid,
+      // so a lingering pre-push record would pin the head-tree cache (and
+      // worker builds) to the old commit forever. The write lanes that push
+      // through this object re-record the new head themselves.
+      const cached = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(result.branch));
+      if (isRepoHeadRecord(cached) && cached.commitOid !== result.commitOid) {
+        this.ctx.storage.kv.delete(repoHeadStorageKey(result.branch));
+        this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+      }
+    }
     this.ctx.storage.kv.put(repoPushedHeadStorageKey(result.branch), result.commitOid);
   }
 
@@ -624,16 +626,19 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
     if (input.commitOid === undefined) {
       // HEAD reads serve from the durable tree cache (no clone). The cache is
-      // a CACHE: any failure falls back to the authoritative clone lane, loudly.
+      // a CACHE: a failure invalidates it (one bounded rebuild on the next
+      // read) and falls back to the authoritative clone lane, loudly.
       try {
-        const commitOid = await this.#ensureFreshHeadTree();
-        if (input.encoding === "base64") {
-          const bytes = await this.#headTreeCache.readFileBytes(`/${path}`);
-          return bytes === null ? null : { commitOid, content: bytesToBase64(bytes), path };
-        }
-        const content = await this.#headTreeCache.readFile(`/${path}`);
-        return content === null ? null : { commitOid, content, path };
+        return await this.#withHeadTree(async (commitOid) => {
+          if (input.encoding === "base64") {
+            const bytes = await this.#headTreeCache.readFileBytes(`/${path}`);
+            return bytes === null ? null : { commitOid, content: bytesToBase64(bytes), path };
+          }
+          const content = await this.#headTreeCache.readFile(`/${path}`);
+          return content === null ? null : { commitOid, content, path };
+        });
       } catch (error) {
+        this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
         console.warn(
           `repo head read via the head-tree cache failed; falling back to a clone: ${String(error)}`,
         );
@@ -670,15 +675,23 @@ export class RepoDurableObject extends DurableObject<Env> {
    */
   async listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
     try {
-      const commitOid = await this.#ensureFreshHeadTree();
-      const paths = (await this.#headTreeFilePaths()).map((path) => path.slice(1)).sort();
-      const selected = filterWorkerSnapshotPaths(paths, { include: TASK_FILE_INCLUDE_PATTERNS });
-      const files: Record<string, string> = {};
-      for (const path of selected) {
-        files[path] = (await this.#headTreeCache.readFile(`/${path}`)) ?? "";
-      }
-      return { commitOid, files };
+      return await this.#withHeadTree(async (commitOid) => {
+        const paths = (await walkWorkspaceFiles(this.#headTreeCache))
+          .map((path) => path.slice(1))
+          .sort();
+        const selected = filterWorkerSnapshotPaths(paths, { include: TASK_FILE_INCLUDE_PATTERNS });
+        const files: Record<string, string> = {};
+        for (const path of selected) {
+          const content = await this.#headTreeCache.readFile(`/${path}`);
+          // A listed path with no content is cache corruption, never truth —
+          // fail to the clone lane instead of serving an empty task.
+          if (content === null) throw new Error(`head-tree cache is missing "${path}"`);
+          files[path] = content;
+        }
+        return { commitOid, files };
+      });
     } catch (error) {
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
       console.warn(
         `repo listTaskFiles via the head-tree cache failed; falling back to a clone: ${String(error)}`,
       );
@@ -689,10 +702,14 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** All committed file paths at HEAD (served from the durable head-tree cache). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     try {
-      const commitOid = await this.#ensureFreshHeadTree();
-      const paths = (await this.#headTreeFilePaths()).map((path) => path.slice(1)).sort();
-      return { commitOid, paths };
+      return await this.#withHeadTree(async (commitOid) => {
+        const paths = (await walkWorkspaceFiles(this.#headTreeCache))
+          .map((path) => path.slice(1))
+          .sort();
+        return { commitOid, paths };
+      });
     } catch (error) {
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
       console.warn(
         `repo listFiles via the head-tree cache failed; falling back to a clone: ${String(error)}`,
       );

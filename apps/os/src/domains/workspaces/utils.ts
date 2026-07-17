@@ -104,20 +104,15 @@ export function normalizeWorkspaceMountKeys<
  * Object's own first-touch auto-birth, so the two can race safely — the
  * certificate's idempotencyKey collapses duplicates.
  */
-export function workspaceBirthIdempotencyKey(input: { path: string; projectId: string }): string {
-  return `workspace-created:${input.projectId}:${input.path}`;
-}
-
-export function workspaceCreationEvents(input: {
-  mounts: Record<string, WorkspaceMount>;
-  path: string;
-  projectId: string;
-}) {
+export function workspaceCreationEvents(input: { path: string; projectId: string }) {
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
-      idempotencyKey: workspaceBirthIdempotencyKey(input),
-      payload: { config: { mounts: input.mounts } },
+      // The certificate body is ALWAYS the default table — identical on every
+      // append, so this key can never hit the stream's different-body
+      // idempotency rejection. Custom tables are `configured` patches.
+      idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
+      payload: { config: { mounts: defaultWorkspaceMounts() } },
     }),
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName: DurableObjectNameCodec.stringify({

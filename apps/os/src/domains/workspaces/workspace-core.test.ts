@@ -429,3 +429,66 @@ describe("thermo regressions", () => {
     await expect(core.exists("/config/nope")).resolves.toBe(false);
   });
 });
+
+describe("thermo round-two regressions", () => {
+  test("a failed delete preserves the LOCAL SHADOW bytes untouched", async () => {
+    const config = fakeRepo({ "worker.ts": "repo version" });
+    const { workspace } = fakeLocalLayer();
+    let failProbe = false;
+    const failing: MountRepoAccess = {
+      ...config.repo,
+      readFile: (input) => {
+        if (failProbe) throw new Error("injected repo outage");
+        return config.repo.readFile(input);
+      },
+    };
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
+      repo: () => failing,
+      workspace,
+    });
+    await core.writeFile("/config/worker.ts", "precious local edits");
+    failProbe = true;
+    await expect(core.deleteFile("/config/worker.ts")).rejects.toThrow(/injected repo outage/);
+    failProbe = false;
+    // The caller's uncommitted work survives the failed operation intact.
+    await expect(core.readFile("/config/worker.ts")).resolves.toBe("precious local edits");
+    const status = await core.gitStatus();
+    expect(status.mounts[0]!.changes).toEqual([{ change: "modified", path: "/config/worker.ts" }]);
+  });
+
+  test("writes cannot land ON a mount point (it is a virtual directory)", async () => {
+    const { core } = subject();
+    await expect(core.writeFile("/config", "not a file")).rejects.toThrow(/mount point/);
+    await expect(core.writeFileBytes("/iterate", new Uint8Array([1]))).rejects.toThrow(
+      /mount point/,
+    );
+    // The "/" mount point stays covered by the root guard.
+    await expect(core.writeFile("/", "nope")).rejects.toThrow(/not writable/);
+  });
+
+  test("STATUS heals a stale whiteout — no commit attempt required", async () => {
+    const config = fakeRepo({ "only.md": "x" });
+    const { workspace } = fakeLocalLayer();
+    const kv = fakeKv();
+    const core = new WorkspaceCore({
+      kv,
+      mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
+      repo: () => config.repo,
+      workspace,
+    });
+    await core.deleteFile("/config/only.md");
+    // "crash residue": the repo applied the deletion out-of-band; the
+    // whiteout remains without masking anything.
+    config.repo.listFiles = async () => ({ commitOid: "head-oid", paths: [] });
+    config.repo.readFile = async () => null;
+    const healed = await core.gitStatus();
+    expect(healed.mounts[0]!.changes).toEqual([]);
+    // The whiteout is gone durably: a repo re-add of the path is visible.
+    config.repo.listFiles = async () => ({ commitOid: "head-2", paths: ["only.md"] });
+    config.repo.readFile = async ({ path }) =>
+      path === "only.md" ? { commitOid: "head-2", content: "re-added", path } : null;
+    await expect(core.readFile("/config/only.md")).resolves.toBe("re-added");
+  });
+});

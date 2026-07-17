@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { Workspace } from "@cloudflare/shell";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { workerVersion, type Env } from "../../env.ts";
@@ -19,14 +20,11 @@ import {
   WorkspaceProcessorContract,
   type WorkspaceConfig,
   type WorkspaceConfigPatch,
+  type WorkspaceMount,
 } from "./workspace-processor-contract.ts";
 import { WorkspaceProcessor } from "./workspace-processor-implementation.ts";
-import { UnboundedWorkspace, WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
-import {
-  defaultWorkspaceMounts,
-  normalizeWorkspaceMountKeys,
-  workspaceCreationEvents,
-} from "./utils.ts";
+import { WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
+import { normalizeWorkspaceMountKeys, workspaceCreationEvents } from "./utils.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
 // Workspace folds are pure and normally complete during catchUp; if ingestion
@@ -88,7 +86,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   // serves goes through the runner's committed progress.
   readonly #reads = this.#registry.reads(this.#workspaceProcessor);
 
-  readonly #workspace = new UnboundedWorkspace({
+  readonly #workspace = new Workspace({
     sql: this.ctx.storage.sql,
     name: () => this.ctx.id.name,
     // Files past @cloudflare/shell's inline threshold (1.5MB — the DO SQLite
@@ -128,11 +126,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     if (this.#birth === undefined) {
       this.#birth = (async () => {
         const committed = await this.#stream.append(
-          ...workspaceCreationEvents({
-            mounts: defaultWorkspaceMounts(),
-            path: this.#name.path,
-            projectId: this.#name.projectId,
-          }),
+          ...workspaceCreationEvents({ path: this.#name.path, projectId: this.#name.projectId }),
         );
         const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
         await this.#registry.catchUp(PROCESSOR_SLUG);
@@ -143,6 +137,50 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       });
     }
     await this.#birth;
+  }
+
+  /**
+   * Ensure birth, then converge the mount table to `mounts` (when given) —
+   * the whole `itx.workspaces.create` lane under ONE serialized authority, so
+   * concurrent creators cannot interleave stale table diffs. The birth
+   * certificate is ALWAYS the default table (identical body, so the
+   * idempotency key can never hit the stream's different-body rejection);
+   * custom tables are ordinary `configured` patches on top.
+   */
+  async ensureCreatedWith(input: {
+    mounts?: Record<string, WorkspaceMount>;
+  }): Promise<WorkspaceConfig> {
+    await this.#ensureCreated();
+    const desired = input.mounts;
+    if (desired === undefined) return this.#currentConfig();
+    return this.#core.runExclusive(async () => {
+      await this.#registry.catchUp(PROCESSOR_SLUG);
+      const current = this.#currentConfig().mounts;
+      const sameTable =
+        Object.keys(current).length === Object.keys(desired).length &&
+        Object.entries(desired).every(
+          ([key, mount]) =>
+            current[key]?.policy === mount.policy && current[key]?.repoPath === mount.repoPath,
+        );
+      if (sameTable) return this.#currentConfig();
+      const removals = Object.fromEntries(
+        Object.keys(current)
+          .filter((key) => !(key in desired))
+          .map((key) => [key, null]),
+      );
+      const [event] = await this.#stream.append(
+        WorkspaceProcessorContract.buildEvent({
+          type: "events.iterate.com/workspace/configured",
+          payload: { config: { mounts: { ...removals, ...desired } } },
+        }),
+      );
+      await this.#registry.catchUp(PROCESSOR_SLUG);
+      await this.#reads.waitUntilEvent({
+        offset: event!.offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+      return this.#currentConfig();
+    });
   }
 
   whoami(): string {

@@ -107,13 +107,7 @@ import {
   type SandboxProcessorState,
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import {
-  defaultWorkspaceMounts,
-  normalizeWorkspaceMountKeys,
-  normalizeWorkspacePath,
-  workspaceBirthIdempotencyKey,
-  workspaceCreationEvents,
-} from "./domains/workspaces/utils.ts";
+import { normalizeWorkspaceMountKeys, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
@@ -1776,64 +1770,17 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     path: string;
   }): Promise<WorkspaceRpcTarget> {
     const path = normalizeWorkspacePath(input.path);
-    const mounts =
-      input.mounts === undefined
-        ? defaultWorkspaceMounts()
-        : normalizeWorkspaceMountKeys(input.mounts);
-    const stream = new StreamRpcTarget({
-      auth: this.props.auth,
-      path,
-      projectId: this.props.projectId,
-    });
-    // The certificate's idempotencyKey is shared with first-touch auto-birth,
-    // and the stream REJECTS a same-key append whose body differs — so an
-    // already-born workspace must be observed, not re-appended: read the
-    // certificate first, append only when unborn, and treat a lost race as
-    // "born by someone else" (the convergence below owns the table either way).
-    const birthKey = workspaceBirthIdempotencyKey({ path, projectId: this.props.projectId });
-    let birthOffset = (await stream.getEvent({ idempotencyKey: birthKey }))?.offset;
-    if (birthOffset === undefined) {
-      try {
-        const committed = await stream.append(
-          ...workspaceCreationEvents({ mounts, path, projectId: this.props.projectId }),
-        );
-        birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-      } catch (error) {
-        const raced = await stream.getEvent({ idempotencyKey: birthKey });
-        if (raced === undefined) throw error;
-        birthOffset = raced.offset;
-      }
-    }
-    if (birthOffset === 0) throw new Error("workspace create committed no events");
     const workspace = new WorkspaceRpcTarget({
       auth: this.props.auth,
       path,
       projectId: this.props.projectId,
     });
-    await workspace.processor.waitUntilProcessed({
-      offset: birthOffset,
-      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    // The whole lane runs inside the workspace Durable Object under its
+    // serialized authority (birth is idempotent; a custom table converges via
+    // one configured patch) — concurrent creators cannot interleave.
+    await workspace.durableObjectStub.ensureCreatedWith({
+      mounts: input.mounts === undefined ? undefined : normalizeWorkspaceMountKeys(input.mounts),
     });
-
-    // The certificate dedups on its idempotencyKey, so an already-born
-    // workspace keeps its old table — converge with one deep-merge patch
-    // (null unmounts anything the requested table lacks).
-    const config = await workspace.getConfig();
-    const sameTable =
-      Object.keys(config.mounts).length === Object.keys(mounts).length &&
-      Object.entries(mounts).every(
-        ([key, mount]) =>
-          config.mounts[key]?.policy === mount.policy &&
-          config.mounts[key]?.repoPath === mount.repoPath,
-      );
-    if (!sameTable) {
-      const removals = Object.fromEntries(
-        Object.keys(config.mounts)
-          .filter((key) => !(key in mounts))
-          .map((key) => [key, null]),
-      );
-      await workspace.configure({ config: { mounts: { ...removals, ...mounts } } });
-    }
     return workspace;
   }
 }
