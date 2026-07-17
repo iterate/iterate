@@ -128,6 +128,31 @@ test("clearStaged drops committed snapshots but keeps live edits", () => {
   expect(store.changes.get("untouched.ts")).toMatchObject({ working: { content: "keep" } });
 });
 
+test("clearCommitted keeps slots that changed while the commit was in flight", () => {
+  using fixture = storageFixture();
+  const store = fixture.store("oid-1");
+
+  store.setWorking("tasks/a.md", write("committed a"));
+  store.setWorking("tasks/b.md", write("committed b"));
+  store.stage("tasks/b.md");
+  store.setWorking("tasks/c.md", { type: "delete" });
+  const committed = new Map<string, FileEntry>([
+    ["tasks/a.md", write("committed a")],
+    ["tasks/b.md", write("committed b")],
+    ["tasks/c.md", { type: "delete" }],
+  ]);
+  // An edit landing between the commit RPC going out and its response must
+  // survive the cleanup — this is the autosave-while-typing case.
+  store.setWorking("tasks/a.md", write("edited during flight"));
+
+  store.clearCommitted(committed);
+  expect(store.changes.get("tasks/a.md")).toMatchObject({
+    working: { content: "edited during flight" },
+  });
+  expect(store.changes.has("tasks/b.md")).toBe(false);
+  expect(store.changes.has("tasks/c.md")).toBe(false);
+});
+
 test("git status derives from the effective entry, staged or live", () => {
   using fixture = storageFixture();
   const store = fixture.store("oid-1");

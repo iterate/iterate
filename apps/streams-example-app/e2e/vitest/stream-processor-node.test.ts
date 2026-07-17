@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import type { Stream } from "iterate/sdk";
 import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import { defineProcessorContract } from "~/domains/streams/processor-contracts.ts";
@@ -19,7 +20,6 @@ import {
   StreamProcessorRunner,
   type ProcessorProgress,
 } from "~/domains/streams/stream-processor-runner.ts";
-import type { Stream } from "~/itx-api.generated.ts";
 
 const EchoExampleContract = defineProcessorContract({
   slug: "echo-example",

@@ -9,6 +9,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Table, TableBody, TableCell, TableRow } from "@iterate-com/ui/components/table";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { useItxQuery } from "iterate/react";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { HtmlPreview } from "./html-preview.tsx";
 import { projectMarkdownPreview } from "./markdown-frontmatter.ts";
@@ -22,7 +23,6 @@ import {
   type FileChange,
   type FileEntry,
 } from "./staged-changes.ts";
-import { useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
  * The right-hand side of the repo IDE: one file, rendered by kind — an

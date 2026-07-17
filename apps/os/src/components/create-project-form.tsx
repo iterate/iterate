@@ -20,9 +20,9 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
+import { connectIterateSession, reconnectIterateSession } from "iterate/react";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
-import { connectIterateSession, reconnectIterateSession } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 

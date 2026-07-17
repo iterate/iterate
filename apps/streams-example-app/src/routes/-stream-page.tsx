@@ -1072,8 +1072,10 @@ function EventRowWindow({
               onClick={() => onToggleOffset(event.offset)}
             >
               <span>{event.offset}</span>
-              <span>{event.type}</span>
-              <time dateTime={event.created_at}>{event.created_at}</time>
+              <span className="truncate">{event.type}</span>
+              <time className="whitespace-nowrap" dateTime={event.created_at}>
+                {event.created_at}
+              </time>
             </button>
             {isExpanded ? (
               <pre

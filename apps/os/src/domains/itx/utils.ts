@@ -17,11 +17,6 @@ export type CfExecutionContext = {
   waitUntil: ExecutionContext["waitUntil"];
 };
 
-type DisposableLike = {
-  [Symbol.dispose]?(): void;
-  dup?(): DisposableLike;
-};
-
 type InvokeCapabilityTarget = {
   invokeCapability(call: { args: unknown[]; path: string[] }): unknown;
 };
@@ -53,6 +48,8 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
 
 export type ItxEntrypointScope = {
   path: string;
+  /** The host-minted lane determines whether this binding can reach delivery-only sinks. */
+  purpose: "stream-delivery" | "userspace";
   /**
    * `null` is the deployment-global scope: the trusted root a GLOBAL
    * (`projectId: null`) stream's delivery dial evaluates expressions against.
@@ -77,6 +74,7 @@ export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProp
   return {
     path: normalizePath(input.path),
     projectId: input.projectId,
+    purpose: input.purpose,
   };
 }
 
@@ -89,14 +87,18 @@ export function scopeFromItxEntrypointProps(
   props: ItxEntrypointProps | undefined,
 ): ItxEntrypointScope {
   if (props === undefined) {
-    throw new Error("env.ITX.get() requires itx binding props with projectId and path");
+    throw new Error("env.ITX.get() requires itx binding props with projectId, path, and purpose");
   }
   if (props.projectId !== null && props.projectId.trim() === "") {
     throw new Error("env.ITX.get() requires a non-empty projectId (or null for the global scope)");
   }
+  if (props.purpose !== "stream-delivery" && props.purpose !== "userspace") {
+    throw new Error("env.ITX.get() requires purpose to be userspace or stream-delivery");
+  }
   return {
     path: normalizePath(props.path),
     projectId: props.projectId,
+    purpose: props.purpose,
   };
 }
 
@@ -148,33 +150,6 @@ export function describeNode<Extras extends object>(
 }
 
 /**
- * Groups an authenticated child stub with the parent stubs that keep it alive.
- *
- * Cap'n Web callers often want `using project = connectItx({ projectId })`, but
- * that project stub is reached through a root session and authentication stub.
- * This proxy makes disposal and `dup()` preserve the whole ownership chain, so
- * disposing the child also tells the server it can release the parent stubs.
- */
-export function withOwnedRpcSession<T extends object>(stub: T, ...owned: DisposableLike[]): T {
-  let disposed = false;
-  return new Proxy(stub, {
-    get(target, key, receiver) {
-      if (key === Symbol.dispose) {
-        return () => {
-          if (disposed) return;
-          disposed = true;
-          disposeAll(target as DisposableLike, ...owned);
-        };
-      }
-      if (key === "dup") {
-        return () => withOwnedRpcSession(dup(target as DisposableLike), ...owned.map(dup));
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
-}
-
-/**
  * Guards `provideCapability` against shadowing the itx surface: a capability
  * path's root segment may not be a reserved RPC segment nor an existing member
  * name of the itx-facing surfaces (e.g. `streams`, `agents`). Runs in the
@@ -194,6 +169,9 @@ const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
     "integrations",
     new Set([
       ...BUILTIN_INTEGRATION_SLUGS,
+      // Fixed first-party receiver; unlike connection families it is absent
+      // from the public integration catalog.
+      "posthog",
       "list",
       "getConnection",
       "startOAuthFlow",
@@ -433,23 +411,4 @@ export function installPrototypeInvokeCapabilityFallback<
 
 function isReservedDynamicPathSegment(segment: string): boolean {
   return RESERVED_DYNAMIC_PATH_SEGMENTS.has(segment);
-}
-
-function dup(disposable: DisposableLike): DisposableLike {
-  if (disposable.dup === undefined) {
-    throw new Error("Cannot dup scoped RPC stub because an owned stub does not expose dup()");
-  }
-  return disposable.dup();
-}
-
-function disposeAll(...disposables: DisposableLike[]): void {
-  let firstError: unknown;
-  for (const disposable of disposables) {
-    try {
-      disposable[Symbol.dispose]?.();
-    } catch (error) {
-      firstError ??= error;
-    }
-  }
-  if (firstError !== undefined) throw firstError;
 }

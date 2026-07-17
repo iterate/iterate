@@ -5,8 +5,8 @@ import type {
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
-import { connectItx } from "../../apps/os/src/itx-client.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 
 type OsPlaywrightAuthConfig = {

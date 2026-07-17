@@ -5,13 +5,13 @@ import {
   WorkerEntrypoint,
 } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
+import type { Stream } from "iterate/sdk";
 import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
 import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
-import type { Stream } from "~/itx-api.generated.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 

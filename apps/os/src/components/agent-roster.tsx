@@ -21,7 +21,7 @@ import {
   SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { useLiveState } from "~/itx/itx-react.tsx";
+import { useLiveState } from "iterate/react";
 import { agentPathIcon, agentPathLabel } from "~/lib/agent-roster-labels.ts";
 import { agentBusyPhaseLabel } from "~/lib/feed-format.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
