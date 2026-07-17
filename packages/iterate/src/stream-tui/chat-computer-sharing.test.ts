@@ -160,6 +160,23 @@ test("closes the provider input when chat releases the sharing controller", () =
   expect(process.stdin.writableEnded).toBe(true);
 });
 
+test("ignores provider output that arrives after chat releases the controller", () => {
+  const process = new FakeProviderProcess();
+  const sharing = createChatComputerSharing({
+    launch: () => process,
+    name: "joebloggsComputer",
+  });
+
+  sharing.start();
+  sharing[Symbol.dispose]();
+  process.stdout.write(
+    `${JSON.stringify({ type: "status", loggedIn: true, project: "prj_test", name: "joebloggsComputer" })}\n`,
+  );
+  process.stderr.write("late provider error\n");
+
+  expect(sharing.snapshot()).toMatchObject({ status: "idle", notice: "" });
+});
+
 test("reports an unexpected provider exit and allows an explicit retry", () => {
   const processes = [new FakeProviderProcess(), new FakeProviderProcess()];
   let launches = 0;
@@ -177,6 +194,25 @@ test("reports an unexpected provider exit and allows an explicit retry", () => {
 
   sharing.start();
   expect(launches).toBe(2);
+});
+
+test("reports a provider crash even when the last machine call failed", () => {
+  const process = new FakeProviderProcess();
+  const sharing = createChatComputerSharing({
+    launch: () => process,
+    name: "joebloggsComputer",
+  });
+
+  sharing.start();
+  process.stdout.write(
+    `${JSON.stringify({ type: "call-done", id: 1, method: "runSwift", ok: false, error: "permission denied" })}\n`,
+  );
+  process.emit("exit", 9);
+
+  expect(sharing.snapshot()).toMatchObject({
+    status: "error",
+    notice: "itx.joebloggsComputer stopped unexpectedly (exit 9)",
+  });
 });
 
 test("classifies non-event provider output as a visible failure", () => {

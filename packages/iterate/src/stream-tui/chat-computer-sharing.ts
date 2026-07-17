@@ -89,6 +89,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       publish({ status: "starting", notice: `starting itx.${input.name}…` });
       const launched = input.launch();
       process = launched;
+      let exitIsExplained = false;
       launched.on("error", (error) => {
         if (process !== launched) return;
         process = undefined;
@@ -100,7 +101,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       launched.on("exit", (code) => {
         if (process !== launched) return;
         process = undefined;
-        if (current.status === "error") return;
+        if (exitIsExplained) return;
         publish({
           status: "error",
           notice: `itx.${input.name} stopped unexpectedly (exit ${code === null ? "unknown" : code})`,
@@ -109,6 +110,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       let stdoutBuffer = "";
       let stderrBuffer = "";
       launched.stderr.on("data", (chunk) => {
+        if (process !== launched) return;
         stderrBuffer += String(chunk);
         const lines = stderrBuffer.split("\n");
         stderrBuffer = lines.pop() || "";
@@ -120,6 +122,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
         }
       });
       launched.stdout.on("data", (chunk) => {
+        if (process !== launched) return;
         stdoutBuffer += String(chunk);
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() || "";
@@ -160,6 +163,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
             continue;
           }
           if (event.type === "status" && event.loggedIn === false) {
+            exitIsExplained = true;
             publish({
               status: "error",
               notice: `itx.${input.name} needs a fresh iterate login`,
@@ -168,6 +172,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
           }
           if (event.type === "status" && event.loggedIn === true) {
             if (event.conflict === true) {
+              exitIsExplained = true;
               publish({
                 status: "error",
                 notice: `another session took itx.${input.name}`,

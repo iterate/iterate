@@ -29,3 +29,4 @@ This adds no new callable machine primitive: the mounted capability remains the 
 
 - 2026-07-17: Replaced the superseded chat-specific machine implementation in PR #1709 with this narrower design, which launches and observes the maintained `use-my-computer --json` provider.
 - 2026-07-17: The live PTY proof created a disposable project, submitted `/use-my-computer`, waited for the existing provider's end-to-end mount ping, and confirmed the slash command was not journaled as a user message.
+- 2026-07-17: Review follow-up generation-guards stdout/stderr after teardown and distinguishes explained provider exits from recoverable call/diagnostic errors, with regression tests for both cases.
