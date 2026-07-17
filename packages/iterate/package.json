@@ -112,7 +112,7 @@
     "@tanstack/react-query": "^5.91.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
-    "capnweb": "https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz",
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "octokit": "^5.0.5",
     "react": "^19.2.0",
     "trpc-cli": "0.15.1",

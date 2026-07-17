@@ -1,6 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { z } from "zod";
-import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
+import {
+  buildFailureMessageFromError,
+  KvWorkerBuildArtifactStore,
+  WorkerBuildFailedError,
+  type WorkerBuildArtifact,
+} from "./artifact-store.ts";
 import { materializeWorkerBuild } from "./materialize.ts";
 import { WorkerBuildOptions } from "./schemas.ts";
 
@@ -60,7 +65,20 @@ export class BuilderEntrypoint extends WorkerEntrypoint<BuilderEnv> {
       // Best-effort duplicate suppression for budgeted callers (see
       // isBuildInFlight); the artifact write below always supersedes it.
       await store.markBuildInFlight(buildKey).catch(() => {});
-      const built = await materializeWorkerBuild({ files, options });
+      // The named wrap is the caller's classification signal: only a genuine
+      // bundler failure may be RECORDED as a build failure (and served as
+      // one); anything else that rejects this RPC — deploy rollover,
+      // cancellation when a caller's waitUntil ends — must stay retryable.
+      // The marker is cleared under the same wrap: this build is no longer
+      // running, and a marker that outlived the shorter-TTL failure record
+      // would hold budgeted callers in a "building" state whose background
+      // rebuild refuses to dispatch (Bugbot, #2071).
+      const built = await materializeWorkerBuild({ files, options }).catch(
+        async (error: unknown) => {
+          await store.clearBuildInFlight(buildKey).catch(() => {});
+          throw new WorkerBuildFailedError(buildFailureMessageFromError(error), { cause: error });
+        },
+      );
       for (const warning of built.warnings) {
         console.warn(`[builder] ${buildKey.slice(0, 12)}: ${warning}`);
       }

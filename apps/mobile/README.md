@@ -24,6 +24,33 @@ Before bumping `expo`, check what the store actually ships
 if it's still 54.x, a bump means abandoning Expo Go for dev builds (EAS or
 local Xcode).
 
+## Run and screenshot it in a browser
+
+Expo Web renders the same Expo Router screens through React Native Web, so UI
+work does not need a phone, Xcode, an iOS simulator, or a new native build:
+
+```sh
+pnpm --dir apps/mobile start:web
+```
+
+For a repeatable 390×844 Chromium pass, run:
+
+```sh
+pnpm --dir apps/mobile test:screenshots
+```
+
+Playwright starts and stops its own Expo Web server, checks the signed-out
+server-picker interaction, and compares the result with the PNGs in
+`e2e/playwright/screenshots/`. After an intentional UI change, review the new
+rendering and refresh those files with
+`pnpm --dir apps/mobile test:screenshots --update-snapshots`.
+
+This is a fast visual-development and PR-screenshot lane, not an iOS emulator:
+platform-native behavior such as the in-app OAuth handoff, Keychain, Face ID,
+and push notifications still needs Expo Go or a native build. Authenticated
+project/chat screenshot fixtures are follow-up work; this first lane stays
+deterministic and credential-free at the signed-out entry point.
+
 ## Pointing it at a deployment
 
 The sign-in screen has an editable server field with one-tap presets:
@@ -86,9 +113,10 @@ testable from the phone alone. See `tasks/mobile-examples-runner.md`.
 | Lane                                                          | What it proves                                                                                                                                                                                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                                             |
+| `pnpm --dir apps/mobile test:screenshots`                     | Real Expo Router + React Native Web rendering at a phone-sized viewport, one visible interaction, and reviewed Playwright screenshot baselines; no Xcode/native build                                                           |
 | `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip from Node through the app's own dial: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
 | `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                                           |
-| Expo Go on a phone                                            | The only lane that proves the in-app browser OAuth hop and the rendered UI                                                                                                                                                      |
+| Expo Go on a phone                                            | Native integration: the in-app browser OAuth hop, Keychain/Face ID, and device-specific behavior                                                                                                                                |
 
 ## Layout
 

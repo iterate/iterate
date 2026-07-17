@@ -2,8 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { takeWorkerFetchDispatch, workerBuildingResponse } from "./worker-fetch-dispatch.ts";
-import { isWorkerBuildInProgressError } from "./worker-loader.ts";
+import { takeWorkerFetchDispatch, workerBuildStatusResponse } from "./worker-fetch-dispatch.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
@@ -58,11 +57,12 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     try {
       facet = await this.#facet(taken.dispatch.ref, taken.dispatch.buildBudgetMs);
     } catch (error) {
-      // Answer the building case HERE rather than relying on the error name
-      // surviving the Durable Object fetch hop back to the dispatching
-      // entrypoint — same retryable building page every fetch-lane hop serves.
-      if (!isWorkerBuildInProgressError(error)) throw error;
-      return workerBuildingResponse();
+      // Answer the building/failed cases HERE rather than relying on the
+      // error name surviving the Durable Object fetch hop back to the
+      // dispatching entrypoint — same pages every fetch-lane hop serves.
+      const buildStatus = workerBuildStatusResponse(error);
+      if (buildStatus !== null) return buildStatus;
+      throw error;
     }
     return await (facet as Fetcher).fetch(taken.request);
   }
@@ -126,6 +126,42 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // awaited storage calls here keeps the facet version check/update in one DO
     // turn and matches Cloudflare's current guidance for SQLite-backed DOs.
     const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
+
+    // A budgeted fetch-lane resolve can answer STALE (the loader's last-good
+    // fallback while a newer commit builds). A stale class must never abort a
+    // running facet, and must never move the version marker to a build this
+    // DO didn't just mount: the awaited resolve above is an interleave point,
+    // so a concurrent fresh load may already have swapped the facet to newer
+    // code — aborting or marker-writing here would downgrade live state (and
+    // storage written by newer code) to the old build.
+    if (resolved.serveInfo?.status === "stale") {
+      if (previous !== undefined && previous !== version) {
+        // The durable marker outranks the global last-good pointer: it names
+        // a build THIS DO actually ran — newer knowledge whenever the two
+        // disagree. Serve it through the stale-while-rebuild path (same
+        // artifact load, same interleave guard, background refresh that
+        // converges to fresh source) instead of persisting a regressed
+        // marker and mounting outranked code over its own storage.
+        const viaMarker = await this.#staleFacet(ref);
+        if (viaMarker !== null) return viaMarker;
+        // The marker's own artifact is gone (expired) — the pointer's class
+        // below is the only loadable history left. If the marker moved while
+        // we looked, another request is managing the facet; join it.
+        if (this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) !== previous) {
+          return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
+        }
+      }
+      let started = false;
+      const facet = this.ctx.facets.get(FACET_NAME, () => {
+        started = true;
+        return { class: klass };
+      });
+      // Recording the mounted build is honest exactly when this call started
+      // the facet on it (first-ever code, or the only loadable history).
+      if (started && previous !== version) this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
+      return facet;
+    }
+
     if (previous && previous !== version) {
       this.ctx.facets.abort(FACET_NAME, `stateful worker source changed for ${this.ctx.id.name}`);
     }
