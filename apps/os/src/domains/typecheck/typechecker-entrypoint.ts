@@ -61,6 +61,15 @@ export class TypecheckerEntrypoint extends WorkerEntrypoint {
     return Response.json({ worker: "os-typechecker" }, { status: 404 });
   }
 
+  /** Instantiate and retain the compiler without compiling user input. */
+  async warm(): Promise<void> {
+    return tracing.enterSpan("typechecker.warm", async (span) => {
+      span.setAttribute("iterate.typecheck.compiler", "typescript-go-wasm");
+      await compilerCache.get();
+      span.setAttribute("iterate.typecheck.warm", true);
+    });
+  }
+
   async check(input: {
     files: Record<string, string>;
     entrypoint?: string;

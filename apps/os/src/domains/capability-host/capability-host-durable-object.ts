@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -24,10 +24,12 @@ import {
 } from "./capability-host-processor-contract.ts";
 import type { ScriptExecutionHandoff, ScriptExecutionIntent } from "./script-execution-driver.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
+import { warmCapabilityHostDependencies } from "./capability-host-warmup.ts";
 
 const SCRIPT_DEADLINE_ALARM_SLICE_PREFIX = "script-execution-deadline:";
 
 type CapabilityHostAncestorEntrypoint = {
+  warmCapabilityHostFromDescendant(visitedScopePaths: string[]): Promise<void>;
   invokeCapabilityFromDescendant(input: {
     args?: unknown[];
     path: string[];
@@ -94,6 +96,24 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   readonly #processorRpc = new StreamProcessorRpcTarget(this.#reads, {
     catchUpBeforeSnapshot: () => this.#registry.catchUp(CapabilityHostProcessorContract.slug),
   });
+  readonly #bootWarmup: Promise<void>;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.#bootWarmup = this.#warmCapabilityHost([], "boot").catch((error: unknown) => {
+      console.error("[capability-host] boot warmup failed", {
+        error,
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      });
+      throw error;
+    });
+    // Begin warming in the constructor, before the first RPC method runs, and
+    // keep the incarnation alive until the explicit ancestor graph and the
+    // typechecker compiler are ready. User-facing methods await the same
+    // promise, so the first script cannot race this work.
+    this.ctx.waitUntil(this.#bootWarmup);
+  }
 
   /** The processor's runner-backed fold reads — lazy closures because #reads
    * is built from the registered processor above; the explicit return type
@@ -106,9 +126,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   #capabilityHostAncestor(ancestorPath: string): CapabilityHostAncestor {
-    const ancestor = this.env.CAPABILITY_HOST.getByName(
-      DurableObjectNameCodec.stringify({ path: ancestorPath, projectId: this.#name.projectId }),
-    ) as unknown as CapabilityHostAncestorEntrypoint;
+    const ancestor = this.#capabilityHostAncestorEntrypoint(ancestorPath);
     // Forward only the two internal read methods. Handing the full stub over as
     // a typed dependency makes TypeScript instantiate the DO's self-referential
     // stub type (TS2589); this thin forwarder also keeps the traversal proof out
@@ -119,6 +137,46 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       describeCapabilities: (visitedScopePaths = []) =>
         ancestor.describeCapabilitiesFromDescendant(visitedScopePaths),
     };
+  }
+
+  #capabilityHostAncestorEntrypoint(ancestorPath: string): CapabilityHostAncestorEntrypoint {
+    return this.env.CAPABILITY_HOST.getByName(
+      DurableObjectNameCodec.stringify({ path: ancestorPath, projectId: this.#name.projectId }),
+    ) as unknown as CapabilityHostAncestorEntrypoint;
+  }
+
+  async #warmCapabilityHost(
+    visitedScopePaths: string[],
+    reason: "boot" | "descendant",
+  ): Promise<void> {
+    await tracing.enterSpan(`capability_host.${reason}_warmup`, async (span) => {
+      span.setAttribute("iterate.capability_host.path", this.#name.path);
+      span.setAttribute("iterate.capability_host.project_id", this.#name.projectId);
+      span.setAttribute("iterate.capability_host.warmup_reason", reason);
+      await warmCapabilityHostDependencies({
+        ancestorPath: () => this.#capabilityHostProcessor.ancestorPath(),
+        catchUp: () => this.#catchUp(),
+        path: this.#name.path,
+        visitedScopePaths,
+        warmAncestor: (ancestorPath, nextVisitedScopePaths) =>
+          tracing.enterSpan("capability_host.ancestor_warmup", async (ancestorSpan) => {
+            ancestorSpan.setAttribute("iterate.capability_host.path", this.#name.path);
+            ancestorSpan.setAttribute("iterate.capability_host.ancestor_path", ancestorPath);
+            await this.#capabilityHostAncestorEntrypoint(
+              ancestorPath,
+            ).warmCapabilityHostFromDescendant(nextVisitedScopePaths);
+          }),
+        warmTypechecker: () =>
+          tracing.enterSpan("capability_host.typechecker_warmup", async (typecheckerSpan) => {
+            typecheckerSpan.setAttribute("iterate.capability_host.path", this.#name.path);
+            await this.env.TYPECHECKER.warm();
+          }),
+      });
+    });
+  }
+
+  async #ready(): Promise<void> {
+    await this.#bootWarmup;
   }
 
   /**
@@ -136,6 +194,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     path: string[];
     visitedScopePaths: string[];
   }): Promise<unknown> {
+    await this.#ready();
     await this.#catchUp();
     return await this.#capabilityHostProcessor.invokeCapability(
       { args: input.args, path: input.path },
@@ -146,6 +205,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   async describeCapabilitiesFromDescendant(
     visitedScopePaths: string[],
   ): Promise<CapabilityDescription[]> {
+    await this.#ready();
     await this.#catchUp();
     return await this.#capabilityHostProcessor.describeCapabilities(visitedScopePaths);
   }
@@ -155,11 +215,22 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   /**
+   * Internal boot traversal. This deliberately does not await #bootWarmup:
+   * carrying the descendant's visited-path proof through the live traversal
+   * is what turns a corrupt cycle into an explicit error instead of two cold
+   * Durable Objects waiting on each other's cached boot promises.
+   */
+  async warmCapabilityHostFromDescendant(visitedScopePaths: string[]): Promise<void> {
+    await this.#warmCapabilityHost(visitedScopePaths, "descendant");
+  }
+
+  /**
    * The registry's shared DO alarm. Processor keepalives and the earliest
    * script deadline occupy named slices; a deadline fire performs an
    * eventless at-head reconciliation so no open attempt can remain forever.
    */
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#ready();
     const failures: unknown[] = [];
     try {
       await this.#registry.handleAlarm(alarmInfo);
@@ -188,8 +259,9 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
-    return serveProcessorRead({
+  async readStreamProcessor(request: ProcessorReadRequest): Promise<unknown> {
+    await this.#ready();
+    return await serveProcessorRead({
       expectedProcessorSlug: CapabilityHostProcessorContract.slug,
       processor: this.#processorRpc,
       request,
@@ -199,6 +271,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`
   // doesn't deep-instantiate the processor's inferred signatures (TS2589).
   async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    await this.#ready();
     await this.#catchUp();
     return await this.#capabilityHostProcessor.invokeCapability(input);
   }
@@ -206,16 +279,19 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   async provideCapability(
     input: ProvideCapabilityInput,
   ): Promise<{ path: string[]; providedAtOffset: number }> {
+    await this.#ready();
     await this.#catchUp();
     return await this.#capabilityHostProcessor.provideCapability(input);
   }
 
   async revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
+    await this.#ready();
     await this.#catchUp();
     await this.#capabilityHostProcessor.revokeCapability(input);
   }
 
   async requestScript(input: ScriptExecutionIntent): Promise<ScriptExecutionHandoff> {
+    await this.#ready();
     await this.#catchUp();
     return await this.#capabilityHostProcessor.requestScript(input);
   }
@@ -225,6 +301,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     executionId: string;
     settlement: ScriptExecutionSettlement;
   }): Promise<StreamEvent> {
+    await this.#ready();
     await this.#catchUp();
     return await this.#capabilityHostProcessor.settleScriptExecution(
       input.executionId,
@@ -233,11 +310,13 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   async describeCapabilities(): Promise<CapabilityDescription[]> {
+    await this.#ready();
     await this.#catchUp();
     return await this.#capabilityHostProcessor.describeCapabilities();
   }
 
   async capabilityHostAncestorPath(): Promise<string | null> {
+    await this.#ready();
     await this.#catchUp();
     return this.#capabilityHostProcessor.ancestorPath();
   }
@@ -248,7 +327,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
    * this method creates a fresh scoped root in the authority-owning DO, so no
    * RpcStub is ever forwarded through an intermediate RPC session.
    */
-  getItxForScript(): object {
+  async getItxForScript(): Promise<object> {
+    await this.#ready();
     return this.#itx;
   }
 
