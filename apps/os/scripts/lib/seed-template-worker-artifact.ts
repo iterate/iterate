@@ -76,13 +76,19 @@ export async function seedTemplateWorkerArtifact(input: {
 
   const store = new KvWorkerBuildArtifactStore(
     restKvNamespace(input) as unknown as KVNamespace,
-    // Refreshed on every deploy, so the seeded artifact can be shorter-lived
-    // than runtime artifacts; generous enough that a quiet env (no deploys
-    // for days) keeps its fast creates.
+    // Every deploy REWRITES the artifact (KV TTLs are fixed at write time —
+    // a read never extends them), so the seed can be shorter-lived than
+    // runtime artifacts; generous enough that a quiet env (no deploys for
+    // days) keeps its fast creates.
     { expirationTtlSeconds: 14 * 24 * 60 * 60 },
   );
-  if ((await store.get(buildKey)) !== null) {
-    log(`template worker artifact already seeded (${buildKey.slice(0, 12)}…)`);
+  const existing = await store.get(buildKey);
+  if (existing !== null) {
+    // Same bytes, fresh write-time TTL — skips the build without letting a
+    // stable key's artifact quietly expire between deploys (which would
+    // silently regress fresh-project birth to per-project container builds).
+    await store.put(existing);
+    log(`template worker artifact already seeded (${buildKey.slice(0, 12)}…) — TTL refreshed`);
     return { buildKey, seeded: false };
   }
 
