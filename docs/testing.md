@@ -68,7 +68,7 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 | ------------------- | ------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Unit                | `pnpm test`                                       | `apps/os/src/**/*.test.ts` (colocated)  | Depot **Test** workflow, every PR — full suite                                                                              | In-process logic; no deployment needed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | OS e2e              | `pnpm e2e`                                        | `apps/os/e2e/` (`e2e/vitest.config.ts`) | Preview CI when OS is selected — full `node` project (`browser` project covered by the REPL specs instead)                  | One config, one project (`node`) against a live deployment through the itx surface: engine e2e (`e2e/vitest/` — streams, security, ingress, agents, admin, preview smoke) plus the itx catalogue matrix (`e2e/examples/` — every example across the four server-side runtimes: node, cli, run-script, project-worker). Browser coverage for the catalogue is `specs/repl-examples.spec.ts`, through the real REPL.                                                                                                                                                                 |
-| TUI                 | `pnpm exec tsx e2e/tui-test/run.ts`               | `apps/os/e2e/tui-test/`                 | **Manual by design** — a real PTY needs an attended terminal; nothing in CI invokes it                                      | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| TUI                 | `pnpm exec tsx e2e/tui-test/run.ts`               | `apps/os/e2e/tui-test/`                 | Preview CI when OS is selected — builds the published artifact, then runs the workflow spec through a real PTY              | The installed-user path for `iterate chat`: built package, OpenTUI renderer, shared itx/TanStack data layer, live feed, and send flow against a disposable project.                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Playwright specs    | `pnpm spec` (repo root)                           | `specs/` (`playwright.config.ts`)       | Preview CI when OS is selected — full suite                                                                                 | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Semaphore e2e       | `pnpm test:e2e` (from `apps/semaphore`)           | `apps/semaphore/e2e/`                   | Preview CI when semaphore is selected — full suite (both files); fails fast without `SEMAPHORE_BASE_URL`                    | The lease API's full contract against a live worker: auth rejection, CRUD, blocking `waitMs` acquire, holder + force acquire/release, least-recently-released handout order, the typed contract client.                                                                                                                                                                                                                                                                                                                                                                            |
 | Auth e2e            | `pnpm test:e2e` (from `apps/auth`)                | `apps/auth/e2e/`                        | Preview CI whenever auth deploys (selected directly, or as the os/semaphore dependency); fails fast without `AUTH_BASE_URL` | The OAuth2/OIDC provider's own contract against a live worker: discovery endpoints match the deployed origin, dynamic registration → authorize (PKCE) → consent → code → token exchange, JWKS-verified access-token claims, the RFC 8707 resource allowlist (the streams.iterate.com incident resource accepted, unknown origins' exact rejection), and redirect_uri pinning at both authorize and exchange. Needs the auth Doppler config (service token + fixed test OTP), so it targets dev/preview, never prd — the lane the PR #1862 stale-registration incident was missing. |
@@ -84,11 +84,14 @@ dummy-petshop first, then passes that same leased preview's recorded
 `PETSHOP_BASE_URL` into the OS e2e lane. The OS Petshop integration specs fail
 CI if that URL is absent; they cannot silently skip back out of preview CI.
 
-The TUI lane is the one deliberate manual lane, and the table says so — any
-other suite a CI lane does not run in full is a wiring bug, not a convention.
-A test that genuinely cannot run against a deployed target carries an
-explicit in-code skip with a named guard and a comment saying why, so
-exclusion is always visible where the test lives.
+The TUI's colour snapshot remains a manual aesthetic-review test because its
+stream path and timestamps are dynamic; the stable workflow spec runs in
+preview CI. That workflow installs the exact Bun release in `.bun-version`
+before deploying, so the OpenTUI lane never relies on an ambient runner
+runtime. Any suite a CI lane does not run in full is a wiring bug unless the
+table names it as manual. A test that genuinely cannot run against a deployed
+target carries an explicit in-code skip with a named guard and a comment saying
+why, so exclusion is always visible where the test lives.
 
 Smoke-testing a deployment (what the deploy pipeline probes automatically,
 plus manual/agent recipes for production): [Smoke testing](smoke-testing.md).
@@ -249,7 +252,7 @@ the Playwright-conventional `CI` and `VIDEO_MODE`).
 | `APP_CONFIG_ADMIN_API_SECRET`    | Doppler                                                 | Admin credential for the itx surface (project seeding, admin lanes)                                                     | None — lanes that need it throw     |
 | `APP_CONFIG_INTEGRATIONS__SLACK` | Doppler                                                 | Gates the slack-agent e2e suite (provides the Slack signing secret)                                                     | Unset → suite skips                 |
 | `SLACK_CI_BOT_TOKEN`             | Doppler (`os/*`, `_shared/prd`)                         | **Inbound message actor** for real Slack smokes (Niterate). Not the product bot — see [Slack testing](slack-testing.md) | Unset → scripted smokes cannot post |
-| `E2E_RETRY_TELEMETRY_FILE`       | The preview lane (`scripts/preview/preview.ts`), or you | Where the vitest `RetryTelemetryReporter` writes its JSON (see [Retries and timeouts](#retries-and-timeouts))           | Unset → log line only, no file      |
+| `E2E_RETRY_TELEMETRY_FILE`       | The preview lane (`scripts/preview/preview.ts`), or you | Where the Vitest or TUI runner writes retry JSON (see [Retries and timeouts](#retries-and-timeouts))                    | Unset → log line only, no file      |
 | `OS_E2E_TUI_PROJECT_ID`          | `e2e/tui-test/run.ts` (internal; passed to the spec)    | The disposable project the TUI spec chats against                                                                       | Unset → TUI spec skips              |
 | `OS_E2E_TUI_SNAPSHOT`            | You                                                     | `"1"` opts into the manual aesthetic TUI snapshot test                                                                  | Skipped                             |
 | `GITHUB_SHA`                     | GitHub Actions (ambient)                                | Labels the preview-smoke seed project slug in CI                                                                        | `"manual"`                          |
@@ -264,8 +267,12 @@ the Playwright-conventional `CI` and `VIDEO_MODE`).
 - **Playwright** writes `test-results/` at the repo root: traces, videos, and
   screenshots under `test-results/playwright-output`, plus HTML and JSON
   reports.
+- **Microsoft TUI Test** writes full PTY traces under
+  `apps/os/e2e/tui-test/tui-traces`; the preview wrapper also captures the
+  runner log at `/tmp/os-preview-tui.log`.
 - **Preview CI** collects all of the above (`test-results`,
-  `apps/os/test-results`, `/tmp/os-e2e-*`) into the repo-level
+  `apps/os/test-results`, `apps/os/e2e/tui-test/tui-traces`,
+  `/tmp/os-e2e-*`, and `/tmp/os-preview-*.log`) into the repo-level
   `test-results/` directory, then uploads that one workspace-relative directory
   as a CI artifact. The collection paths live in
   `scripts/preview/collect-test-artifacts.sh`.
@@ -359,7 +366,7 @@ only on genuine infra wedges).
    locally, everywhere: retrying anything larger re-runs minutes of healthy
    work to re-roll one six-second dice.
 2. **Everything above a test is a watchdog: it fails, it never retries.**
-   The preview vitest lane gets a hard `timeout`; a whole run gets a
+   The preview TUI and vitest lanes get hard `timeout`s; a whole run gets a
    kill-tree watchdog; the Depot job has `timeout-minutes`. Re-running a
    killed run is the outer edge's job (the Depot re-run button, the next
    push) — never automatic.
@@ -382,17 +389,19 @@ only on genuine infra wedges).
 
 ### The ladder
 
-| What it bounds             | Knob                                  | Where                                                                                                       | Value                                             | On expiry                                                   |
-| -------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
-| One UI action              | `actionTimeout` + spinner-waiter      | `playwright.config.ts` ← `SPEC_ACTION_TIMEOUT_MS`                                                           | 750ms (→ ~30s with spinner)                       | fail the attempt                                            |
-| One assertion              | `expect.timeout`                      | `playwright.config.ts` ← `SPEC_EXPECT_TIMEOUT_MS`                                                           | 15s                                               | fail the attempt                                            |
-| One Playwright spec        | `timeout`                             | `playwright.config.ts` ← `SPEC_TEST_TIMEOUT_MS`                                                             | 90s                                               | retry once (CI)                                             |
-| One vitest e2e test/hook   | `testTimeout` / `hookTimeout`         | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`                                                      | 120s                                              | retry once (CI)                                             |
-| A container-cold-boot test | per-test `{ timeout }`                | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`                                                     | ≤ 240s                                            | retry once (CI)                                             |
-| The onboarding smoke gate  | attempt loop + `timeout N <command>`  | `apps/os/e2e/vitest/onboarding-smoke.ts`; `scripts/preview/preview.ts` ← `OS_ONBOARDING_SMOKE_TIMEOUT_SECS` | 90s greeting wait per attempt; 240s gate watchdog | one more attempt, then fail; watchdog expiry fails the lane |
-| Each preview sub-lane      | `timeout N <lane command>`            | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`                                               | 480s                                              | **fail — never retry**                                      |
-| One whole preview run      | `RUN_TIMEOUT_SECS` kill-tree watchdog | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`                                          | 600s                                              | **kill — never retry**                                      |
-| The Depot CI job           | `timeout-minutes`                     | `.depot/workflows/*.yml`                                                                                    | 10–45 (mainline/preview) / 300 (marathon)         | outer edge: re-run button                                   |
+| What it bounds              | Knob                                  | Where                                                                                                       | Value                                             | On expiry                                                   |
+| --------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
+| One UI action               | `actionTimeout` + spinner-waiter      | `playwright.config.ts` ← `SPEC_ACTION_TIMEOUT_MS`                                                           | 750ms (→ ~30s with spinner)                       | fail the attempt                                            |
+| One assertion               | `expect.timeout`                      | `playwright.config.ts` ← `SPEC_EXPECT_TIMEOUT_MS`                                                           | 15s                                               | fail the attempt                                            |
+| One TUI workflow spec       | `timeout`                             | `apps/os/e2e/tui-test/tui-test.config.ts` ← `TUI_TEST_TIMEOUT_MS`                                           | 45s                                               | retry once (CI)                                             |
+| One Playwright spec         | `timeout`                             | `playwright.config.ts` ← `SPEC_TEST_TIMEOUT_MS`                                                             | 90s                                               | retry once (CI)                                             |
+| One vitest e2e test/hook    | `testTimeout` / `hookTimeout`         | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`                                                      | 120s                                              | retry once (CI)                                             |
+| The built-package TUI lane  | `timeout N <lane command>`            | `scripts/preview/preview.ts` ← `OS_TUI_LANE_TIMEOUT_SECS`                                                   | 180s                                              | **fail — never retry**                                      |
+| A container-cold-boot test  | per-test `{ timeout }`                | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`                                                     | ≤ 240s                                            | retry once (CI)                                             |
+| The onboarding smoke gate   | attempt loop + `timeout N <command>`  | `apps/os/e2e/vitest/onboarding-smoke.ts`; `scripts/preview/preview.ts` ← `OS_ONBOARDING_SMOKE_TIMEOUT_SECS` | 90s greeting wait per attempt; 240s gate watchdog | one more attempt, then fail; watchdog expiry fails the lane |
+| Each Vitest/Playwright lane | `timeout N <lane command>`            | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`                                               | 480s                                              | **fail — never retry**                                      |
+| One whole preview run       | `RUN_TIMEOUT_SECS` kill-tree watchdog | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`                                          | 600s                                              | **kill — never retry**                                      |
+| The Depot CI job            | `timeout-minutes`                     | `.depot/workflows/*.yml`                                                                                    | 10–45 (mainline/preview) / 300 (marathon)         | outer edge: re-run button                                   |
 
 The ladder is strictly ordered and the guard test asserts it stays that way.
 Note the deliberate rule-3 consequence: the 480s lane watchdog does _not_
@@ -404,14 +413,14 @@ watchdog does not budget for the lane doing that twice.
 A retried test is a real failure that a re-roll absorbed — it must stay
 visible:
 
-- **Run log**: vitest lanes print `[retry-telemetry] N test(s) needed
-retries: ...` (the `RetryTelemetryReporter` in
+- **Run log**: Vitest and TUI lanes print `[retry-telemetry] N test(s) needed
+retries: ...` (the Vitest `RetryTelemetryReporter` lives in
   `packages/shared/src/test-support/e2e-policy/`); the onboarding smoke
   prints the same marker when it needed attempt 2. Grep any run log for
   `retry-telemetry`.
-- **Preview CI**: the os lane writes the vitest telemetry JSON (via
-  `E2E_RETRY_TELEMETRY_FILE`) and Playwright's `playwright-results.json`;
-  `scripts/preview/preview.ts` folds both into a `retries` column in the
+- **Preview CI**: the OS lane writes TUI and Vitest telemetry JSON (via
+  `E2E_RETRY_TELEMETRY_FILE`) plus Playwright's `playwright-results.json`;
+  `scripts/preview/preview.ts` folds all three into a `retries` column in the
   PR-body table and a `::notice::` annotation (escalating to `::warning::`
   when ≥4 tests retried in one run — that smells slot-wide, not
   probabilistic).
