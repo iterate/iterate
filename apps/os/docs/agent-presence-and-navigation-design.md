@@ -734,7 +734,9 @@ Slack:
 - on the accepted zero snapshot, always calls `assistant.threads.setStatus` with an empty status;
 - does not keep status alive for `waitingFor`;
 - appends durable typed channel enrichment rather than stamping `icon`, `title`, or `note`;
-- refold/recovery repaints current state idempotently and never replays stale UI effects.
+- treats channel-name lookup, title/status paint, and reactions as presentation-only enrichment: a Slack API rejection is logged once and cannot hold the agent processor checkpoint;
+- keeps actual agent-requested Slack messages on the ordinary capability-execution path, where failures remain visible to the agent;
+- refold/recovery derives current state idempotently and never replays stale UI effects or turns a best-effort presentation failure into an unbounded retry loop.
 
 Telegram:
 
@@ -963,6 +965,8 @@ No slice lands a compatibility bridge.
 - Slack status uses current activity only while runtime is non-zero.
 - Slack clears after accepted zero even when `waitingFor` remains set.
 - Slack recovery/refold cannot repaint a stale status.
+- Slack presentation/enrichment rejection cannot block journal progress or create a retry storm.
+- Agent-requested Slack messages remain failure-visible capability executions.
 
 ### Hierarchy and pinning
 

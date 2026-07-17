@@ -6,11 +6,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
-import {
-  callProjectSlackWebApi,
-  isSlackChannelNameUnavailableError,
-  storeSlackFilesForAgent,
-} from "../integrations/slack-api.ts";
+import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
 import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
@@ -106,11 +102,12 @@ export class AgentDurableObject extends DurableObject<Env> {
 
   // Registered on every agent host; it only wakes on routed Slack agent
   // streams (`/agents/slack/**`) where the project processor configured its
-  // subscription. Slack presentation calls are blocking and replayable: the
-  // processor checkpoint must not advance until Slack accepted the effect (or
-  // the processor explicitly classified Slack's response as already
-  // satisfied). Registered WITH recovery because the held cursor alone only
-  // helps while something still
+  // subscription. The processor sequences Slack presentation attempts after
+  // the durable work they acknowledge, but a rejected cosmetic/enrichment
+  // call is explicitly best-effort: it is logged once and never holds the
+  // checkpoint. Actual agent-authored Slack messages use the ordinary itx
+  // capability path instead and remain failure-visible. Registered WITH
+  // recovery because the held cursor alone only helps while something still
   // dials — a SIMULTANEOUS Agent+Stream DO death mid-blocker (a deploy evicts
   // both) leaves nothing armed to redeliver. The alarm's
   // `stream/processor-revived` append cold-boots the stream; the unacknowledged
@@ -122,14 +119,23 @@ export class AgentDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
       callSlackApi: async ({ body, connection, method }) => {
         // The facet birth certificate supplies the named connection; the
-        // stream path is deliberately unrelated to processor config. Errors
-        // escape so the runner holds its checkpoint and replays the frame.
-        await callProjectSlackWebApi({
-          body,
-          connection,
-          method,
-          projectId: this.#name.projectId,
-        });
+        // stream path is deliberately unrelated to processor config. These
+        // methods only paint Slack's presentation of already-durable agent
+        // state, so Slack rejection must not stall journal progress.
+        try {
+          await callProjectSlackWebApi({
+            body,
+            connection,
+            method,
+            projectId: this.#name.projectId,
+          });
+        } catch (error) {
+          console.warn("[slack-agent] Slack presentation call failed", {
+            method,
+            path: this.#name.path,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
       },
       fetchSlackChannelName: async ({ channel, connection }) => {
         try {
@@ -142,8 +148,15 @@ export class AgentDurableObject extends DurableObject<Env> {
           const name = result.channel?.name;
           return typeof name === "string" && name.length > 0 ? name : null;
         } catch (error) {
-          if (isSlackChannelNameUnavailableError(error)) return null;
-          throw error;
+          // The channel id is the binding identity; its human-readable name
+          // is optional enrichment. Record the binding without a name when
+          // Slack cannot provide it instead of wedging the route forever.
+          console.warn("[slack-agent] Slack channel-name enrichment failed", {
+            method: "conversations.info",
+            path: this.#name.path,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          return null;
         }
       },
       storeSlackFiles: (input) => {

@@ -1,13 +1,12 @@
 // Implements the "slack-agent" processor on itx.
 //
 // Side-effect policy:
-// - Slack Web API calls (status updates, reactions) run inside
-//   `blockProcessorWhile` so the checkpoint only advances once they finished;
-//   sequences like "commit agent context, then add the eyes reaction" keep their
-//   ordering by sharing one blocking closure.
-// - Replay runs the same idempotency-keyed side effects as live delivery. The
-//   processor checkpoint is the guardrail; failed batches replay from the last
-//   fully processed offset.
+// - Slack Web API presentation calls (status updates, titles, reactions) run
+//   after the durable work they acknowledge inside the same
+//   `blockProcessorWhile` closure, preserving that ordering.
+// - The production host classifies Slack rejection of those presentation
+//   attempts as bounded best-effort, so it cannot hold the stream checkpoint.
+//   An unexpected dependency failure still rejects the processor batch.
 // - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
@@ -44,9 +43,10 @@ export class SlackAgentProcessor extends StreamProcessor<
       connection: string;
       method: string;
     }): Promise<void>;
-    /** Resolves a channel id to its display name (conversations.info) for the
-     * typed binding; null only when the channel is definitively unavailable.
-     * Operational failures reject so the processor retries the route fact. */
+    /** Resolves a channel id to its optional display name for the typed
+     * binding. The production host returns null for every failed Slack lookup
+     * so enrichment cannot block the binding; injected dependency failures
+     * still reject the processor batch. */
     fetchSlackChannelName?(input: { channel: string; connection: string }): Promise<string | null>;
     /** Injectable clock for the acknowledgement freshness gates. */
     now?: () => number;
@@ -159,9 +159,9 @@ export class SlackAgentProcessor extends StreamProcessor<
     // AT-HEAD repaint: `delivery.caughtUp` means `args.state` is the whole
     // observed fold. It rides the last consumed event or the runner's
     // eventless pass. ONE blocking closure — the runner awaits it as this head
-    // event's own work before the frame's deferred commit, so a failed paint
-    // fails the frame and the transport replays it (the memo re-accumulates on
-    // redelivery).
+    // event's own work before the frame's deferred commit. The production
+    // dependency completes after one Slack presentation attempt; an
+    // unexpected rejected dependency still fails the frame and replays it.
     if (args.delivery.caughtUp) {
       args.blockProcessorWhileCaughtUp(() => this.#reconcilePresence(args));
     }
@@ -379,9 +379,9 @@ export class SlackAgentProcessor extends StreamProcessor<
    * when the current title is absent: Slack clears a thread title by receiving
    * the same setTitle call with an empty title. */
   #unpaintedTitleReconcile = false;
-  /** Exact transient status this incarnation painted. Written only after a
-   * successful Slack call so failed frames retry, and used to dedupe runtime
-   * count transitions that leave the human-readable activity unchanged. */
+  /** Exact transient status this incarnation attempted to paint. Written only
+   * after the dependency settles, and used to dedupe runtime count transitions
+   * that leave the human-readable activity unchanged. */
   #paintedActivityText: string | undefined;
   /** The title this incarnation painted, so repeated repaints of an unchanged
    * title cost no Slack calls. */
@@ -412,8 +412,9 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     // A title is durable current-state paint, unlike Slack's transient status.
     // Reconcile once from the complete at-head fold, including explicit clear
-    // patches and revival. The painted-title record is written only AFTER the
-    // call succeeds: a rejected call fails the frame, and redelivery retries.
+    // patches and revival. The painted-title record is written only after the
+    // dependency settles; the production dependency absorbs a Slack rejection
+    // after logging that one best-effort attempt.
     const title = metadata.title;
     const slackTitle = title ?? "";
     if (
