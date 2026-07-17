@@ -100,7 +100,7 @@ export default function ChatScreen() {
       // idempotency keys), so this is safe whether `path` is a brand-new
       // chat or an already-created one opened from the list — the platform
       // requires an explicit create() before the first message either way.
-      await agent.create({});
+      await agent.create();
       if (input.files.length === 0) {
         await agent.message(input.message);
         return;
