@@ -1,11 +1,11 @@
 ---
-status: implementation and PR evidence complete, review pending
+status: complete
 size: medium
 ---
 
 # Mobile browser screenshots
 
-**Status summary:** about 95% complete. Expo Web, a phone-sized Playwright visual spec, reviewed baselines, accessibility semantics, docs, web export, local verification, and both inline screenshots on PR #2064 are done. Remaining: complete the PR's CI/review pass. Authenticated fixture screens and video are scoped follow-ups.
+**Status summary:** complete. Expo Web, a phone-sized Playwright visual spec, reviewed baselines, accessibility semantics, docs, web export, local verification, both inline screenshots on PR #2064, and the full green CI pass are done. Authenticated fixture screens and video are scoped follow-ups.
 
 Make the merged `apps/mobile` app renderable and screenshot-able on an ordinary development machine, without Xcode, an iOS simulator, a native rebuild, or an Apple account. Preserve Expo Go as the on-phone runtime; Expo Web is a second development/test target, not a replacement.
 
@@ -29,3 +29,4 @@ Make the merged `apps/mobile` app renderable and screenshot-able on an ordinary 
 - 2026-07-17: researched the current Expo SDK 54 guidance. Expo Router supports web, Expo documents `expo start --web` for development and `expo export --platform web` for production bundles, and the required packages are `react-dom`, `react-native-web`, and `@expo/metro-runtime`. The app already has the Metro runtime but not the first two.
 - 2026-07-17: TDD tracer bullet failed first because there was no `start:web` interface, then reached the rendered UI and exposed missing button semantics on React Native Web. Added `accessibilityRole="button"` to the server presets/sign-in action instead of weakening the semantic Playwright locators.
 - 2026-07-17: visual verification passed twice: the Playwright snapshot lane (production default + preview 3 selected) and an independent isolated headed-browser pass. `expo export --platform web`, mobile typecheck, all 30 mobile unit tests, and root lint are green. Root format check also reports a pre-existing unrelated issue in `tasks/os-custom-domain-provisioning-saga.md`; every file changed here passes targeted `oxfmt --check`.
+- 2026-07-17: PR #2064 is green across preview/e2e, lint/typecheck, test, autofix, LOC reporting, and package publishing; the review-thread audit found zero unresolved threads.
