@@ -211,10 +211,15 @@ describe("useItxSubscription liveness", () => {
    * different copy — instant invalid-hook-call).
    */
   async function mountSubscription(
-    makeHandle: () => {
-      ping: () => boolean | Promise<boolean>;
-      unsubscribe: () => void;
-    },
+    makeHandle: () =>
+      | {
+          ping: () => boolean | Promise<boolean>;
+          unsubscribe: () => void;
+        }
+      | Promise<{
+          ping: () => boolean | Promise<boolean>;
+          unsubscribe: () => void;
+        }>,
   ) {
     const [{ useItxSubscription }, React, { createRoot }] = await Promise.all([
       import("./itx-react.tsx"),
@@ -265,6 +270,46 @@ describe("useItxSubscription liveness", () => {
     await harness.advance(INTERVAL * 3);
     expect(pings).toBe(3);
     expect(harness.subscribe).toHaveBeenCalledTimes(1); // never re-subscribed
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("a socket close after subscribing re-dials and re-subscribes", async () => {
+    const harness = await mountSubscription(() => ({
+      ping: () => true,
+      unsubscribe: vi.fn(),
+    }));
+    const firstSocket = FakeWebSocket.instances.at(-1)!;
+
+    expect(harness.status()).toBe("live");
+    await act(harness, () => firstSocket.fire("close"));
+    const secondSocket = FakeWebSocket.instances.at(-1)!;
+    expect(secondSocket).not.toBe(firstSocket);
+
+    await act(harness, () => secondSocket.fire("open"));
+    await harness.advance(0);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2);
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("a subscribe call that never settles evicts its exact socket and retries", async () => {
+    let attempts = 0;
+    const harness = await mountSubscription(() => {
+      attempts += 1;
+      if (attempts === 1) return new Promise(() => {});
+      return { ping: () => true, unsubscribe: vi.fn() };
+    });
+    const firstSocket = FakeWebSocket.instances.at(-1)!;
+
+    expect(harness.status()).toBe("connecting");
+    await harness.advance(15_000);
+    const secondSocket = FakeWebSocket.instances.at(-1)!;
+    expect(secondSocket).not.toBe(firstSocket);
+
+    await act(harness, () => secondSocket.fire("open"));
+    await harness.advance(0);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2);
     expect(harness.status()).toBe("live");
     await harness.unmount();
   });

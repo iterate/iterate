@@ -60,6 +60,9 @@ const INVALID_PATH_SEGMENTS = new Set([
 /** ~4k tokens: how much of a mount's types `__describe` shows before
  * deferring to docs.get's budgeted reader. */
 const MAX_DESCRIBED_TYPES_CHARS = 16_000;
+// provide/revoke are read-your-write boundaries. A broken delivery path must
+// reject the command rather than retain an RPC forever.
+const INGEST_WAIT_TIMEOUT_MS = 15_000;
 
 function truncatedTypes(types: string, mountPoint: string): string {
   if (types.length <= MAX_DESCRIBED_TYPES_CHARS) return types;
@@ -304,16 +307,18 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   /**
    * The at-head reconcile (was `onCaughtUp`): `processEvent` invokes it under
    * `delivery.caughtUp`, so this processor has no per-event side effects — all
-   * of its work is the obligation reconciliation. It runs ONLY for the last
-   * consumed event of a batch that reached head (the at-head gate the legacy
-   * `processEventBatch` override carried lives in the runner now), so a
-   * mid-catch-up fold never re-runs a settled script.
+   * of its work is the obligation reconciliation. It runs after the scan
+   * reaches head, on either the last consumed event or the runner's eventless
+   * pass, so a mid-catch-up fold never re-runs a settled script.
    */
   protected override processEvent(
     args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
   ): undefined {
     if (args.state.birthCertificate === null) return;
-    if (args.event.type === "events.iterate.com/capability-host/script-run-settled") {
+    if (
+      args.event !== null &&
+      args.event.type === "events.iterate.com/capability-host/script-run-settled"
+    ) {
       this.#pendingSettlements.delete(args.event.payload.executionId);
     }
     // ONE outer blocking closure per at-head pass — the settle appends inside
@@ -480,7 +485,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     previousLive?.dispose();
 
-    await this.#reads.waitUntilEvent({ offset: committedOffset });
+    await this.#reads.waitUntilEvent({
+      offset: committedOffset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
     return { path, providedAtOffset: committedOffset };
   }
 
@@ -552,7 +560,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     });
     this.#liveCapabilities.delete(key);
     previousLive?.dispose();
-    await this.#reads.waitUntilEvent({ offset: committed.offset });
+    await this.#reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {

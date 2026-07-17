@@ -476,7 +476,10 @@ function localDevBindings() {
     accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     ...authBinding,
   });
-  const localAuthJwks = localDevAuthJwks();
+  const localAuthJwks = localDevAuthJwks({
+    forgePrivateJwk: process.env.AUTH_FORGE_PRIVATE_JWK,
+    deployedEnv: process.env.CLOUDFLARE_ENV,
+  });
   return {
     ...bindings,
     vars: {
@@ -498,8 +501,18 @@ function localDevBindings() {
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
 
-function localDevAuthJwks() {
-  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+export function localDevAuthJwks(input: {
+  forgePrivateJwk: string | undefined;
+  deployedEnv: string | undefined;
+}) {
+  // The forge key is inherited from _shared in deployed Doppler configs, but
+  // this derived public JWKS is only a local-dev binding. Emitting it at the
+  // top level during a CLOUDFLARE_ENV build makes Wrangler correctly warn
+  // that the selected env does not inherit it; deployed workers receive the
+  // freshly baked JWKS atomically via --secrets-file in deploy.ts instead.
+  if (input.deployedEnv) return undefined;
+
+  const forgePrivateJwk = input.forgePrivateJwk?.trim();
   if (!forgePrivateJwk) return undefined;
 
   const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<

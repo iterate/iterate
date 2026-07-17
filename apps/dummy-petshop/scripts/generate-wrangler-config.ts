@@ -40,42 +40,48 @@ function envBlock(env: DummyPetshopEnv) {
   };
 }
 
-const config = {
-  $schema: "node_modules/wrangler/config-schema.json",
-  // Env-less service name: wrangler tags every `--env` deploy with
-  // `cf:service=<top-level name>` in observability queries.
-  name: "dummy-petshop",
-  main: "./src/worker.ts",
-  compatibility_date: "2026-06-17",
-  // Declarative DO lifecycle — the server reconciles this against live
-  // namespaces per deploy, no tag history (see apps/os DO_EXPORTS).
-  exports: { PetshopStateDurableObject: { type: "durable-object", storage: "sqlite" } },
-  // Local dev seals with a fixed key ("dummy-petshop-local-dev-seal-key"):
-  // the shop holds only fake data, and a stable key beats per-run Doppler
-  // plumbing. Deployed envs get a real secret via --secrets-file instead.
-  vars: { PETSHOP_SEAL_KEY: "ZHVtbXktcGV0c2hvcC1sb2NhbC1kZXYtc2VhbC1rZXk=" },
-  ...workerBindings(),
-  env: Object.fromEntries(
-    Object.entries(dummyPetshopEnvs).map(([name, env]) => [name, envBlock(env)]),
-  ),
-};
+export function createWranglerConfig(options: { forDeployment?: boolean } = {}) {
+  return {
+    $schema: "node_modules/wrangler/config-schema.json",
+    // Env-less service name: wrangler tags every `--env` deploy with
+    // `cf:service=<top-level name>` in observability queries.
+    name: "dummy-petshop",
+    main: "./src/worker.ts",
+    compatibility_date: "2026-06-17",
+    // Declarative DO lifecycle — the server reconciles this against live
+    // namespaces per deploy, no tag history (see apps/os DO_EXPORTS).
+    exports: { PetshopStateDurableObject: { type: "durable-object", storage: "sqlite" } },
+    // Local dev seals with a fixed key ("dummy-petshop-local-dev-seal-key"):
+    // the shop holds only fake data, and a stable key beats per-run Doppler
+    // plumbing. Deployed envs get a real secret via --secrets-file instead,
+    // so deployment configs omit the local var rather than triggering
+    // Wrangler's correct non-inheritance warning.
+    ...(options.forDeployment
+      ? {}
+      : { vars: { PETSHOP_SEAL_KEY: "ZHVtbXktcGV0c2hvcC1sb2NhbC1kZXYtc2VhbC1rZXk=" } }),
+    ...workerBindings(),
+    env: Object.fromEntries(
+      Object.entries(dummyPetshopEnvs).map(([name, env]) => [name, envBlock(env)]),
+    ),
+  };
+}
+
+export const config = createWranglerConfig();
 
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
-export const writeWranglerConfig = () =>
+export const writeWranglerConfig = (options: { forDeployment?: boolean } = {}) =>
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
     appLabel: "apps/dummy-petshop",
-    config,
+    config: createWranglerConfig(options),
   });
 
 /**
  * Regenerate apps/dummy-petshop/wrangler.jsonc from the root envs.ts.
  *
  * The output always contains every env block (env selection happens at deploy
- * time via CLOUDFLARE_ENV, same as streams-example-app). The optional `--env`
- * is a convenience the deploy/CI flow passes through: it changes nothing about
- * the file, but validating it here turns a mistyped env name into an early,
- * legible error instead of a confusing wrangler failure downstream.
+ * time via Wrangler's `--env`). Passing `--env` validates the name and emits a
+ * deployment config without the top-level local-only seal-key var.
  */
 export default function generateWranglerConfig(options: { env?: string } = {}) {
   if (options.env && !(options.env in dummyPetshopEnvs)) {
@@ -83,7 +89,7 @@ export default function generateWranglerConfig(options: { env?: string } = {}) {
       `Unknown env ${JSON.stringify(options.env)}; known envs: ${Object.keys(dummyPetshopEnvs).join(", ")}`,
     );
   }
-  console.log(`Wrote ${writeWranglerConfig()}`);
+  console.log(`Wrote ${writeWranglerConfig({ forDeployment: Boolean(options.env) })}`);
 }
 
 // The CLI runs only when invoked directly — deploy.ts imports from this

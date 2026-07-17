@@ -102,7 +102,9 @@ test("the boundary, pinned: a socket-carrying Response dies crossing the worker 
 
 test.fails(
   "DESIRED: a live-capability fetch handler serves WebSockets at an app host",
-  { timeout: 150_000 },
+  // Vitest retries the deliberately failing body before it inverts the result
+  // for `fails`; retrying cannot heal this documented mesh limitation.
+  { retry: 0, timeout: 150_000 },
   async () => {
     const marker = crypto.randomUUID().slice(0, 8);
     const slug = `live-ws-${marker}`;

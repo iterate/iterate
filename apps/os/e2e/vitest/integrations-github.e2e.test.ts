@@ -92,7 +92,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     // Force a real 401 (epoch bump invalidates the installation token) and call
     // again: the strategy must re-mint (sign a fresh JWT) and retry to a 200.
-    await petshopExpireTokens();
+    await petshopExpireTokens(appId);
     const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
     expect(afterExpiry).toMatchObject({ status: 200, body: { installationId, appId } });
 
