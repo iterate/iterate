@@ -36,12 +36,31 @@ test("project auth is a body-safe partial fetch in the embedded worker runtime",
     },
     get: vi.fn(() => remoteAuth),
   };
-  const describe = vi.fn(async function () {
+  const describeImplementation = vi.fn(async function () {
     return { projectId: "prj_demo" };
+  });
+  const describe = new Proxy(describeImplementation, {
+    get(target, property, receiver) {
+      if (property === "bind") {
+        throw new Error('The RPC receiver does not implement the method "bind".');
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const snapshot = vi.fn(async () => ({ offset: 42 }));
+  const processor = new Proxy(() => undefined, {
+    get(_target, property) {
+      if (property === "snapshot") return snapshot;
+      if (property === "bind") {
+        throw new Error('The RPC receiver does not implement the method "bind".');
+      }
+      return undefined;
+    },
   });
   const remoteItx = {
     __describe: describe,
     auth: remoteAuth,
+    processor,
     [Symbol.dispose]: dispose,
   };
   const rawBinding = {
@@ -54,6 +73,7 @@ test("project auth is a body-safe partial fetch in the embedded worker runtime",
         get(): Promise<{
           __describe(): Promise<{ projectId: string }>;
           auth: TestProjectAuth;
+          processor: { snapshot(): Promise<{ offset: number }> };
           [Symbol.dispose](): void;
         }>;
       };
@@ -89,7 +109,9 @@ test("project auth is a body-safe partial fetch in the embedded worker runtime",
   expect(callback.bodyUsed).toBe(true);
 
   await expect(itx.__describe()).resolves.toEqual({ projectId: "prj_demo" });
-  expect(describe.mock.instances[0]).toBe(remoteItx);
+  expect(describeImplementation).toHaveBeenCalledOnce();
+  await expect(itx.processor.snapshot()).resolves.toEqual({ offset: 42 });
+  expect(snapshot).toHaveBeenCalledOnce();
 
   itx[Symbol.dispose]();
   expect(dispose).toHaveBeenCalledOnce();

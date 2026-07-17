@@ -90,8 +90,11 @@ function wrapProject(itx: Project & Disposable): Project & Disposable {
         const dispose = Reflect.get(target, property, target) as (() => void) | undefined;
         return dispose === undefined ? undefined : () => Reflect.apply(dispose, target, []);
       }
-      const value = Reflect.get(target, property, target) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
+      // Cap'n Web uses the same callable proxy shape for methods, nested
+      // capabilities, and property promises. Preserve that proxy verbatim;
+      // wrapping callable values would erase paths such as
+      // `itx.processor.snapshot()`.
+      return Reflect.get(target, property, target) as unknown;
     },
   });
 }
