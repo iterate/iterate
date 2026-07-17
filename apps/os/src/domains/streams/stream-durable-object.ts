@@ -27,7 +27,10 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
-import { STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX } from "./stream-unavailable.ts";
+import {
+  isDurableObjectLifecycleError,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
+} from "./stream-unavailable.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -38,6 +41,26 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+
+/**
+ * Observe fire-and-forget stream-core work without handing a rejected promise
+ * to `waitUntil`. A deployment replaces the current Durable Object
+ * incarnation and rejects its in-flight stub calls; that is a lifecycle
+ * interruption, while an application rejection remains an error.
+ */
+export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch (error) {
+    if (isDurableObjectLifecycleError(error)) {
+      console.info("stream core background work interrupted by durable object lifecycle", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    console.error("stream core background work failed", error);
+  }
+}
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -893,17 +916,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #runInBackground(work: () => Promise<unknown>): void {
-    let promise: Promise<unknown>;
-    try {
-      promise = work();
-    } catch (error) {
-      console.error("stream core background work failed", error);
-      return;
-    }
-    this.ctx.waitUntil(promise);
-    void promise.catch((error: unknown) => {
-      console.error("stream core background work failed", error);
-    });
+    this.ctx.waitUntil(settleStreamCoreBackgroundWork(work));
   }
 
   // ===========================================================================
