@@ -8,11 +8,9 @@
 // obligation left to journal.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
-import {
-  CoreProcessorContract,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+import { defineProcessorContract } from "iterate/processors";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract, AgentStatusRecord } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";

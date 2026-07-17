@@ -1,10 +1,10 @@
 import http from "node:http";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import { defineProcessorContract } from "iterate/processors";
+import { isStreamOffsetConflictError } from "iterate/processors";
+import { StreamProcessor } from "iterate/processors";
 import type { Stream, StreamEvent, StreamEventInput } from "../../src/itx-api.generated.ts";
-import { defineProcessorContract } from "../../src/domains/streams/processor-contracts.ts";
-import { isStreamOffsetConflictError } from "../../src/domains/streams/rpc-types.ts";
-import { StreamProcessor } from "../../src/domains/streams/stream-processor.ts";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 
 export const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";

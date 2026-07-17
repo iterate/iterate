@@ -1,4 +1,6 @@
 import type { WorkerBuildOptions } from "./schemas.ts";
+import { ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE } from "./iterate-processors-cloudflare-virtual-module.generated.ts";
+import { ITERATE_PROCESSORS_VIRTUAL_MODULE } from "./iterate-processors-virtual-module.generated.ts";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 
 /**
@@ -28,7 +30,12 @@ import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generat
 export function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
   return {
     ...options,
-    virtualModules: { "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE, ...options.virtualModules },
+    virtualModules: {
+      "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE,
+      "iterate/processors": ITERATE_PROCESSORS_VIRTUAL_MODULE,
+      "iterate/processors/cloudflare": ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE,
+      ...options.virtualModules,
+    },
   };
 }
 

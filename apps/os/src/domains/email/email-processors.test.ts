@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEventInput } from "../streams/schemas.ts";
+import type { StreamEventInput } from "iterate/processors";
+import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
 import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
@@ -98,6 +98,8 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/agent/created",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/email-agent/created",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/stream/subscription-configured",
@@ -106,7 +108,14 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
     ]);
-    expect(routed[9]!.payload).toEqual(receivedPayload({}));
+    expect(routed[4]).toMatchObject({
+      payload: {
+        content: EMAIL_AGENT_SYSTEM_PROMPT,
+        key: "agent/system-prompt",
+        role: "system",
+      },
+    });
+    expect(routed[11]!.payload).toEqual(receivedPayload({}));
     expect(driver.state.threads).toEqual({ "2": "/agents/email/t2" });
     expect(driver.state.threadByMessageId).toEqual({ "msg-1@mail.example": "2" });
   });
@@ -335,6 +344,8 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/agent/created",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/email-agent/created",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/stream/subscription-configured",

@@ -29,6 +29,9 @@
     "./client": "./src/client.ts",
     "./live-state": "./src/live-state.ts",
     "./node": "./src/node.ts",
+    "./processors": "./src/processors/index.ts",
+    "./processors/cloudflare": "./src/processors/cloudflare.ts",
+    "./processors/testing": "./src/processors/testing.ts",
     "./react": "./src/react.ts",
     "./sdk": "./src/sdk.ts",
     "./worker": "./src/worker.ts"
@@ -55,6 +58,21 @@
         "types": "./dist/node.d.ts",
         "import": "./dist/node.mjs",
         "default": "./dist/node.mjs"
+      },
+      "./processors": {
+        "types": "./dist/processors/index.d.ts",
+        "import": "./dist/processors.mjs",
+        "default": "./dist/processors.mjs"
+      },
+      "./processors/cloudflare": {
+        "types": "./dist/processors/cloudflare.d.ts",
+        "import": "./dist/processors-cloudflare.mjs",
+        "default": "./dist/processors-cloudflare.mjs"
+      },
+      "./processors/testing": {
+        "types": "./dist/processors/testing.d.ts",
+        "import": "./dist/processors-testing.mjs",
+        "default": "./dist/processors-testing.mjs"
       },
       "./react": {
         "types": "./dist/react.d.ts",
@@ -99,7 +117,7 @@
     "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
-    "zod": "4.1.12"
+    "zod": "4.3.6"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",

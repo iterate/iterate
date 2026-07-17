@@ -10,6 +10,7 @@ import type { DB } from "./db/index.ts";
 import { parseProjectMetadata, parseTimestampMs } from "./db/helpers.ts";
 import {
   getOrganizationBySlug,
+  getProjectAccessForUser,
   getProjectById,
   getProjectBySlug as getProjectBySlugQuery,
   getProjectWithOrganizationBySlug,
@@ -20,6 +21,7 @@ import {
 } from "./db/queries/index.ts";
 import type { insertProjectReturning as InsertProjectReturningQuery } from "./db/queries/index.ts";
 import { generateId } from "./id.ts";
+import { isPlatformAdminUser } from "./platform-admin.ts";
 
 // Auth owns the project directory and is the only authority that mints prj_
 // ids. Both the public oRPC router and the private Workers RPC entrypoint call
@@ -146,6 +148,23 @@ export async function listProjectsForUser(
     slug: project.slug,
     organizationId: project.organizationId,
   }));
+}
+
+export async function userCanAccessProject(
+  rawInput: { projectId: string; userId: string },
+  client: DB,
+): Promise<boolean> {
+  const input = z
+    .object({
+      projectId: z.string().trim().min(1),
+      userId: z.string().trim().min(1),
+    })
+    .parse(rawInput);
+  const access = await getProjectAccessForUser(client, input);
+  return (
+    access !== null &&
+    (isPlatformAdminUser({ role: access.userRole }) || access.hasMembership === 1)
+  );
 }
 
 export function toProjectRecord(project: {

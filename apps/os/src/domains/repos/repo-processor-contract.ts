@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import {
-  CoreProcessorContract,
+  defineProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+  type ProcessorState,
+} from "iterate/processors";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 /**
  * The GitHub repository one repo mirrors to: a named GitHub connection (the

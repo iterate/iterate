@@ -248,24 +248,25 @@ export function generateItxApi(): string {
   const { classByPublicName, relayContracts, renameMap } = collectClasses(rpcTargetsFile);
 
   /**
-   * Every exported named type (alias or interface) in the app, by name, keyed
-   * to all its declarations. Discovered across the project's files because itx
-   * data shapes live in their own domain modules now, not one central file.
-   * The walker is demand-driven — only names actually reached from the
-   * entrypoint are emitted — and a reached name with more than one declaration
-   * is a hard error (see `resolveNamedDecl`), so cross-module name clashes can
-   * never silently pick the wrong shape.
+   * Every named type (alias or interface) in the app, by name, keyed to all its
+   * declarations. Public derived aliases can structurally retain private helper
+   * names, so the demand-driven walker must be able to close over those helpers
+   * without forcing them to become source-module exports merely for generation.
+   * A reached name with more than one declaration is a hard error (see
+   * `resolveNamedDecl`), so cross-module name clashes can never silently pick
+   * the wrong shape.
    */
   const namedDecls = new Map<string, (TypeAliasDeclaration | InterfaceDeclaration)[]>();
+  const exportedNamedDecls = new Set<string>();
   const collectNamedDecls = (sourceFile: SourceFile) => {
     for (const statement of sourceFile.statements) {
-      if (
-        (isTypeAliasDeclaration(statement) || isInterfaceDeclaration(statement)) &&
-        statement.modifierFlags & ModifierFlags.Export
-      ) {
+      if (isTypeAliasDeclaration(statement) || isInterfaceDeclaration(statement)) {
         const list = namedDecls.get(statement.name.text) ?? [];
         list.push(statement);
         namedDecls.set(statement.name.text, list);
+        if (statement.modifierFlags & ModifierFlags.Export) {
+          exportedNamedDecls.add(statement.name.text);
+        }
       }
     }
   };
@@ -280,13 +281,19 @@ export function generateItxApi(): string {
   }
   // Contract wire types that live in the published package rather than the
   // apps/os root file set (the live-state protocol moved into `iterate/client`
-  // so the browser store and the server engine share one definition). They are
-  // reached through package imports, which the root-file walk above skips —
-  // chase them explicitly, and fail loudly if the program does not carry them
-  // under their real path (a resolution change would otherwise silently drop
-  // types from the contract).
+  // so the browser store and the server engine share one definition, and the
+  // stream event/processor wire shapes moved into `iterate/processors` with
+  // the processor machinery). They are reached through package imports, which
+  // the root-file walk above skips — chase them explicitly, and fail loudly
+  // if the program does not carry them under their real path (a resolution
+  // change would otherwise silently drop types from the contract).
   for (const fileName of [
     path.resolve(projectDir, "../../packages/iterate/src/itx/live-state/protocol.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/schemas.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/processor-contracts.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/rpc-types.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/stream-runtime-metrics.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/subscriber-metrics.ts"),
   ]) {
     const sourceFile = project.program.getSourceFile(fileName);
     if (!sourceFile) {
@@ -300,7 +307,7 @@ export function generateItxApi(): string {
   // Every relay must forward to a contract that actually exists as a hand-authored
   // named type — otherwise a typo'd or renamed contract would emit a dangling name.
   for (const contract of relayContracts) {
-    if (!namedDecls.has(contract)) {
+    if (!exportedNamedDecls.has(contract)) {
       throw new Error(
         `a class extends ${RELAY_ROOT}<"${contract}">, but no module exports a type of that name`,
       );
@@ -313,14 +320,16 @@ export function generateItxApi(): string {
   ): TypeAliasDeclaration | InterfaceDeclaration | undefined => {
     const list = namedDecls.get(name);
     if (!list || list.length === 0) return undefined;
-    if (list.length > 1) {
-      const files = list.map((d) => path.relative(projectDir, d.getSourceFile().fileName));
+    const exported = list.filter((decl) => decl.modifierFlags & ModifierFlags.Export);
+    const candidates = exported.length > 0 ? exported : list;
+    if (candidates.length > 1) {
+      const files = candidates.map((d) => path.relative(projectDir, d.getSourceFile().fileName));
       throw new Error(
         `itx api generation reached ambiguous type "${name}" — declared in ${files.length} ` +
           `modules (${files.join(", ")}). Give the itx-facing one a unique name.`,
       );
     }
-    return list[0];
+    return candidates[0];
   };
 
   /**
@@ -353,8 +362,12 @@ export function generateItxApi(): string {
     for (const [className, publicName] of renameMap) {
       out = out.replaceAll(new RegExp(`\\b${className}\\b`, "g"), publicName);
     }
-    // zod's JSON helper prints its internal alias; the public name is JsonValue.
-    out = out.replaceAll(/\bz\.core\.util\.JSONType\b/g, "JsonValue");
+    // zod's JSON helper prints its internal alias, sometimes qualified and
+    // sometimes bare when it is nested inside another expanded generic. The
+    // public standalone name is JsonValue.
+    out = out
+      .replaceAll(/\bz(?:\.core)?\.util\.(?:JSONType|JsonValue)\b/g, "JsonValue")
+      .replaceAll(/\bJSONType\b/g, "JsonValue");
     // Scan code only — docstring prose is full of capitalized words.
     // Inline type imports are already self-resolving package references in a
     // standalone declaration (`import("octokit").Octokit`). Do not mistake
@@ -508,9 +521,10 @@ export function generateItxApi(): string {
       const type = symbol && checker.getDeclaredTypeOfSymbol(symbol);
       if (!type) throw new Error(`could not resolve the declared type of ${name} (${from})`);
       const expanded = checker.typeToString(type, decl, typeFlags | IN_TYPE_ALIAS);
+      const exportPrefix = decl.modifierFlags & ModifierFlags.Export ? "export " : "";
       aliasChunks.push(
         rewriteAndCollect(
-          `${doc ? `${doc}\n` : ""}export type ${name} = ${expanded};`,
+          `${doc ? `${doc}\n` : ""}${exportPrefix}type ${name} = ${expanded};`,
           `derived alias ${name} (${from})`,
         ),
       );
@@ -593,9 +607,10 @@ export function generateItxApi(): string {
 
 /**
  * The Itx Type Graph: parse the FORMATTED flat file back into one record per
- * exported declaration (see ItxApiDeclaration). Deriving the graph from the
- * emitted text — rather than collecting records during emission — guarantees
- * each record's `sourceText` is exactly the declaration's text in
+ * declaration (see ItxApiDeclaration). Private helper declarations are part of
+ * the graph because exported shapes may reference them. Deriving the graph
+ * from the emitted text — rather than collecting records during emission —
+ * guarantees each record's `sourceText` is exactly the declaration's text in
  * itx-api.generated.ts (oxfmt formatting included), so "the flat file is the
  * join of the graph" holds by construction.
  */
@@ -691,7 +706,7 @@ export function generateItxApiGraphSource(flatFileSource: string): string {
     "// Regenerate with: pnpm generate:itx-api",
     "// Freshness is enforced by itx-api.generated.test.ts.",
     "//",
-    "// The Itx Type Graph: every exported declaration of itx-api.generated.ts as",
+    "// The Itx Type Graph: every declaration of itx-api.generated.ts as",
     "// one record, in file order — same generator run, same content, kept",
     "// per-declaration so runtime consumers (itx.docs, __describe) can assemble",
     "// bounded slices instead of shipping the whole flat file.",

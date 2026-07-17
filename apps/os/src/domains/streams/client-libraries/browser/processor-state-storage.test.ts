@@ -15,10 +15,10 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "../../schemas.ts";
+import type { StreamEvent } from "iterate/processors";
+import type { StreamProcessor } from "iterate/processors";
+import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
 import type { Stream } from "../../../../itx-api.generated.ts";
-import type { StreamProcessor } from "../../stream-processor.ts";
-import { StreamProcessorRunner, type ProcessorProgress } from "../../stream-processor-runner.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BROWSER_RAW_EVENTS_TABLES,

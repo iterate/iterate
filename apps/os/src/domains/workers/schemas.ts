@@ -1,7 +1,7 @@
 import { z } from "zod";
+import type { StreamPushEventBatch } from "iterate/processors";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
