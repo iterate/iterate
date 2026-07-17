@@ -283,3 +283,149 @@ describe("nested mounts", () => {
     expect(root.changes).toEqual([]);
   });
 });
+
+describe("thermo regressions", () => {
+  test("a repeated delete does not resurrect the mount file", async () => {
+    const { core } = subject();
+    await expect(core.deleteFile("/config/worker.ts")).resolves.toBe(true);
+    // Second delete: nothing visible remains; the whiteout must survive.
+    await expect(core.deleteFile("/config/worker.ts")).resolves.toBe(false);
+    await expect(core.readFile("/config/worker.ts")).resolves.toBeNull();
+    await expect(core.exists("/config/worker.ts")).resolves.toBe(false);
+  });
+
+  test("a failed mount probe during delete leaves no whiteout behind", async () => {
+    const config = fakeRepo({ "worker.ts": "export default {}" });
+    const { workspace } = fakeLocalLayer();
+    let failProbe = false;
+    const failing: MountRepoAccess = {
+      ...config.repo,
+      readFile: (input) => {
+        if (failProbe) throw new Error("injected repo outage");
+        return config.repo.readFile(input);
+      },
+    };
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
+      repo: () => failing,
+      workspace,
+    });
+    failProbe = true;
+    await expect(core.deleteFile("/config/worker.ts")).rejects.toThrow(/injected repo outage/);
+    failProbe = false;
+    // The failed delete changed nothing durable: the file still reads.
+    await expect(core.readFile("/config/worker.ts")).resolves.toBe("export default {}");
+  });
+
+  test('committing "/" preserves a deeper mount\'s pending deletion', async () => {
+    const nested: Record<string, WorkspaceMount> = {
+      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
+    };
+    const config = fakeRepo({ "worker.ts": "export default {}" });
+    const iterate = fakeRepo({ "note.md": "side truth" });
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => nested,
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
+      workspace,
+    });
+    await core.deleteFile("/side/note.md");
+    await core.writeFile("/root-change.md", "x");
+    const committed = await core.gitCommit({ message: "root only", scope: "/" });
+    expect(committed).toMatchObject({ changedPaths: ["/root-change.md"], mount: "/" });
+    // The deeper mount's deletion is still pending, not silently consumed.
+    await expect(core.readFile("/side/note.md")).resolves.toBeNull();
+    const status = await core.gitStatus();
+    expect(status.mounts.find((mount) => mount.path === "/side")?.changes).toEqual([
+      { change: "deleted", path: "/side/note.md" },
+    ]);
+  });
+
+  test("a scoped commit lists ONLY the scoped mount's repo", async () => {
+    const config = fakeRepo({ "worker.ts": "export default {}" });
+    const iterate = fakeRepo({ "README.md": "# iterate" });
+    let iterateListings = 0;
+    const countingIterate: MountRepoAccess = {
+      ...iterate.repo,
+      listFiles: () => {
+        iterateListings += 1;
+        return iterate.repo.listFiles();
+      },
+    };
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({
+        "/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/iterate": { policy: "read-only", repoPath: "/repos/iterate" },
+      }),
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : countingIterate),
+      workspace,
+    });
+    await core.writeFile("/config/a.md", "a");
+    await core.gitCommit({ message: "scoped", scope: "/config" });
+    expect(iterateListings).toBe(0);
+  });
+
+  test("commit heals a stale whiteout (crash residue) instead of wedging on it", async () => {
+    const { core } = subject();
+    // Simulate the crash residue: delete a mount file, then the "repo write
+    // landed but cleanup died" state — the repo no longer has the file while
+    // the whiteout remains.
+    const config = fakeRepo({ "only.md": "x" });
+    const { workspace } = fakeLocalLayer();
+    const kv = fakeKv();
+    const crashCore = new WorkspaceCore({
+      kv,
+      mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
+      repo: () => config.repo,
+      workspace,
+    });
+    await crashCore.deleteFile("/config/only.md");
+    // "crash": the repo applies the deletion out-of-band; the whiteout stays.
+    delete (config as { tree?: unknown }).tree;
+    config.repo.listFiles = async () => ({ commitOid: "head-oid", paths: [] });
+    config.repo.readFile = async () => null;
+    // A retry commit finds nothing real to commit — and says so cleanly
+    // (the stale whiteout is healed rather than nominating changes forever).
+    await expect(crashCore.gitCommit({ message: "retry" })).rejects.toThrow(/Nothing to commit/);
+    const status = await crashCore.gitStatus();
+    expect(status.mounts[0]!.changes).toEqual([]);
+    void core;
+  });
+
+  test("`.gitignore` rules do not cross mount boundaries", async () => {
+    const config = fakeRepo({ "worker.ts": "export default {}" });
+    const iterate = fakeRepo({ "README.md": "# iterate" });
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({
+        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
+      }),
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
+      workspace,
+    });
+    // A ROOT-mount .gitignore suppressing *.log must not hide the side
+    // mount's local log file from ITS commit.
+    await core.writeFile("/.gitignore", "*.log\n");
+    await core.writeFile("/root.log", "suppressed");
+    await core.writeFile("/side/kept.log", "kept");
+    const status = await core.gitStatus();
+    const root = status.mounts.find((mount) => mount.path === "/")!;
+    const side = status.mounts.find((mount) => mount.path === "/side")!;
+    expect(root.changes.map((change) => change.path)).not.toContain("/root.log");
+    expect(side.changes.map((change) => change.path)).toContain("/side/kept.log");
+  });
+
+  test("exists() answers for mounted directories and mount points", async () => {
+    const { core } = subject();
+    await expect(core.exists("/config")).resolves.toBe(true);
+    await expect(core.exists("/config/tasks")).resolves.toBe(true);
+    await expect(core.exists("/config/nope")).resolves.toBe(false);
+  });
+});

@@ -111,6 +111,7 @@ import {
   defaultWorkspaceMounts,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
+  workspaceBirthIdempotencyKey,
   workspaceCreationEvents,
 } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
@@ -1781,18 +1782,33 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
       path,
       projectId: this.props.projectId,
     });
-    const committed = await stream.append(
-      ...workspaceCreationEvents({ mounts, path, projectId: this.props.projectId }),
-    );
-    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-    if (offset === 0) throw new Error("workspace create committed no events");
+    // The certificate's idempotencyKey is shared with first-touch auto-birth,
+    // and the stream REJECTS a same-key append whose body differs — so an
+    // already-born workspace must be observed, not re-appended: read the
+    // certificate first, append only when unborn, and treat a lost race as
+    // "born by someone else" (the convergence below owns the table either way).
+    const birthKey = workspaceBirthIdempotencyKey({ path, projectId: this.props.projectId });
+    let birthOffset = (await stream.getEvent({ idempotencyKey: birthKey }))?.offset;
+    if (birthOffset === undefined) {
+      try {
+        const committed = await stream.append(
+          ...workspaceCreationEvents({ mounts, path, projectId: this.props.projectId }),
+        );
+        birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+      } catch (error) {
+        const raced = await stream.getEvent({ idempotencyKey: birthKey });
+        if (raced === undefined) throw error;
+        birthOffset = raced.offset;
+      }
+    }
+    if (birthOffset === 0) throw new Error("workspace create committed no events");
     const workspace = new WorkspaceRpcTarget({
       auth: this.props.auth,
       path,
       projectId: this.props.projectId,
     });
     await workspace.processor.waitUntilProcessed({
-      offset,
+      offset: birthOffset,
       timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
     });
 

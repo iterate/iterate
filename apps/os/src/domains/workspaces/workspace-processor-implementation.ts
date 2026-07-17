@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/processors";
 import { foldWorkspaceConfig, WorkspaceProcessorContract } from "./workspace-processor-contract.ts";
 
 /**

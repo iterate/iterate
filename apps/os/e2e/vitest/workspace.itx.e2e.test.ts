@@ -205,9 +205,22 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   // A brand-new workspace already sees the earlier commit through the
   // fall-through (workspace commits are shared state on main, not branches)
   // — and an empty one has nothing to commit.
-  using other = project.workspaces.get(`/workspaces/agents/e2e-${crypto.randomUUID()}`);
+  const otherPath = `/workspaces/agents/e2e-${crypto.randomUUID()}`;
+  using other = project.workspaces.get(otherPath);
   expect(await other.readFile("/notes/e2e.md")).toBe("workspace hello world");
   await expect(other.git.commit({ message: "premature" })).rejects.toThrow(/Nothing to commit/);
+
+  // create() on an ALREADY-BORN workspace with a DIFFERENT table observes the
+  // birth certificate (a blind re-append would hit the stream's different-body
+  // idempotency rejection) and converges via one configured patch.
+  using otherRecreated = await project.workspaces.create({
+    path: otherPath,
+    mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
+  });
+  expect(await otherRecreated.getConfig()).toMatchObject({
+    mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
+  });
+  expect(await otherRecreated.readFile("/cfg/package.json")).not.toBeNull();
 
   // -- explicit create with a custom table is idempotent and converges ------
 

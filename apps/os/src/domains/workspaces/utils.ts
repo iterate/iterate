@@ -1,6 +1,7 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { resolveAbsolutePath } from "./paths.ts";
 import { WorkspaceProcessorContract, type WorkspaceMount } from "./workspace-processor-contract.ts";
 
 // A placeholder projectId used only to round-trip the PATH through the codec.
@@ -103,6 +104,10 @@ export function normalizeWorkspaceMountKeys<
  * Object's own first-touch auto-birth, so the two can race safely — the
  * certificate's idempotencyKey collapses duplicates.
  */
+export function workspaceBirthIdempotencyKey(input: { path: string; projectId: string }): string {
+  return `workspace-created:${input.projectId}:${input.path}`;
+}
+
 export function workspaceCreationEvents(input: {
   mounts: Record<string, WorkspaceMount>;
   path: string;
@@ -111,7 +116,7 @@ export function workspaceCreationEvents(input: {
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
-      idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
+      idempotencyKey: workspaceBirthIdempotencyKey(input),
       payload: { config: { mounts: input.mounts } },
     }),
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
@@ -123,21 +128,6 @@ export function workspaceCreationEvents(input: {
       processorSlug: WorkspaceProcessorContract.slug,
     }),
   ];
-}
-
-/**
- * Resolve `.`/`..` segments the way the shell's own path normalization does
- * (pop-based, cannot escape the root), so the `.git` write guard, whiteout
- * keys, and mount-point keys cannot be dodged with `/foo/../.git/config`.
- */
-export function resolveAbsolutePath(path: string): string {
-  const resolved: string[] = [];
-  for (const segment of path.split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") resolved.pop();
-    else resolved.push(segment);
-  }
-  return `/${resolved.join("/")}`;
 }
 
 /**

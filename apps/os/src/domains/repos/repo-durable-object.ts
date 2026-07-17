@@ -9,6 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
+import { UnboundedWorkspace } from "../workspaces/workspace-core.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
@@ -80,6 +81,12 @@ const TASK_FILE_INCLUDE_PATTERNS = [
 // on the repo stream are the record of TRUTH for inspection; this key is
 // written in the same methods that append them, so the two cannot drift.
 const GITHUB_LINK_KV_KEY = "github-link:v1";
+
+// The durable HEAD-tree cache's materialized commit oid (default branch only).
+// Presence doubles as the "materialized once" sentinel; every HEAD read
+// compares it against the durable head cursor and re-materializes only when
+// main actually moved.
+const REPO_HEAD_TREE_KEY = "repo-head-tree:v1";
 
 type RepoHead = {
   branch: string;
@@ -385,6 +392,70 @@ export class RepoDurableObject extends DurableObject<Env> {
     files: Record<string, string>;
   }>();
 
+  // The durable HEAD-tree cache: main's checkout materialized into THIS
+  // object's own SQLite (files past the inline threshold spill to R2),
+  // refreshed only when the durable head cursor moves. HEAD reads
+  // (readFile / listFiles / listTaskFiles) serve from it with no clone and no
+  // Artifacts round trip in steady state — and unlike the in-memory snapshot
+  // above, it survives eviction, so a cold incarnation answers its first read
+  // without re-cloning. Successor of the old per-project "root workspace"
+  // cache, co-located with the head cursor so freshness is a local kv read
+  // (the cross-DO re-entrant getHead dance is gone with it).
+  readonly #headTreeCache = new UnboundedWorkspace({
+    sql: this.ctx.storage.sql,
+    name: () => this.ctx.id.name,
+    r2: this.env.FILES_BUCKET,
+    r2Prefix: `repo-head-cache/${this.ctx.id.name!}`,
+  });
+  // In-flight materialization, shared by every concurrent read that finds the
+  // cursor moved — reads never observe a half-written tree.
+  #headTreeRefresh: Promise<string> | undefined;
+
+  /** Serve-from-cache door: returns the cached tree's commit oid, refreshing
+   * first when the head cursor moved. */
+  async #ensureFreshHeadTree(): Promise<string> {
+    if (this.#headTreeRefresh !== undefined) return this.#headTreeRefresh;
+    const head = await this.getHead();
+    const cached = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
+    if (cached === head.commitOid) return cached;
+    this.#headTreeRefresh ??= this.#materializeHeadTree().finally(() => {
+      this.#headTreeRefresh = undefined;
+    });
+    return this.#headTreeRefresh;
+  }
+
+  async #materializeHeadTree(): Promise<string> {
+    // The key comes off BEFORE the wipe: if the write below dies, reads must
+    // find "no cache" and re-materialize — never an empty tree labeled main.
+    this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+    for (const entry of await this.#headTreeCache.readDir("/")) {
+      await this.#headTreeCache.rm(entry.path, { force: true, recursive: true });
+    }
+    const { filesystem, head } = await this.#checkout({});
+    for (const path of await walkCheckoutPaths(filesystem, REPO_DIR)) {
+      const bytes = await readCheckoutFileBytes(filesystem, `${REPO_DIR}/${path}`);
+      await this.#headTreeCache.writeFileBytes(`/${path}`, bytes);
+    }
+    // Never RECORD a tree that trails the last observed push (the bounded
+    // clone retries can exhaust): serve it once, and let the next read's
+    // cursor comparison drive another materialization toward the pushed head.
+    const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(REPO_DEFAULT_BRANCH));
+    if (typeof pushed !== "string" || pushed === head.oid) {
+      this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, head.oid);
+    }
+    return head.oid;
+  }
+
+  /** All file paths of the cached tree (absolute within the cache fs). */
+  async #headTreeFilePaths(dir = "/"): Promise<string[]> {
+    const paths: string[] = [];
+    for (const entry of await this.#headTreeCache.readDir(dir)) {
+      if (entry.type === "directory") paths.push(...(await this.#headTreeFilePaths(entry.path)));
+      else if (entry.type === "file") paths.push(entry.path);
+    }
+    return paths;
+  }
+
   #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
     const result = this.#writeChain.then(write, write);
     this.#writeChain = result.catch(() => {});
@@ -528,7 +599,10 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   #invalidateArtifactState(branch: string) {
-    if (branch === REPO_DEFAULT_BRANCH) this.#headFilesSnapshot.clear();
+    if (branch === REPO_DEFAULT_BRANCH) {
+      this.#headFilesSnapshot.clear();
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+    }
     this.#artifactTokenPromise = undefined;
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
@@ -548,6 +622,23 @@ export class RepoDurableObject extends DurableObject<Env> {
   }): Promise<{ commitOid: string; content: string; path: string } | null> {
     const path = normalizeRepoFilePath(input.path);
     if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
+    if (input.commitOid === undefined) {
+      // HEAD reads serve from the durable tree cache (no clone). The cache is
+      // a CACHE: any failure falls back to the authoritative clone lane, loudly.
+      try {
+        const commitOid = await this.#ensureFreshHeadTree();
+        if (input.encoding === "base64") {
+          const bytes = await this.#headTreeCache.readFileBytes(`/${path}`);
+          return bytes === null ? null : { commitOid, content: bytesToBase64(bytes), path };
+        }
+        const content = await this.#headTreeCache.readFile(`/${path}`);
+        return content === null ? null : { commitOid, content, path };
+      } catch (error) {
+        console.warn(
+          `repo head read via the head-tree cache failed; falling back to a clone: ${String(error)}`,
+        );
+      }
+    }
     if (input.encoding === "base64") {
       const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });
       const absolutePath = `${REPO_DIR}/${path}`;
@@ -578,11 +669,34 @@ export class RepoDurableObject extends DurableObject<Env> {
    * number of tasks, not the size of the repo.
    */
   async listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
+    try {
+      const commitOid = await this.#ensureFreshHeadTree();
+      const paths = (await this.#headTreeFilePaths()).map((path) => path.slice(1)).sort();
+      const selected = filterWorkerSnapshotPaths(paths, { include: TASK_FILE_INCLUDE_PATTERNS });
+      const files: Record<string, string> = {};
+      for (const path of selected) {
+        files[path] = (await this.#headTreeCache.readFile(`/${path}`)) ?? "";
+      }
+      return { commitOid, files };
+    } catch (error) {
+      console.warn(
+        `repo listTaskFiles via the head-tree cache failed; falling back to a clone: ${String(error)}`,
+      );
+    }
     return this.getFilesSnapshot({ include: TASK_FILE_INCLUDE_PATTERNS });
   }
 
-  /** All committed file paths at HEAD (served from the clone lane's shared head snapshot). */
+  /** All committed file paths at HEAD (served from the durable head-tree cache). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
+    try {
+      const commitOid = await this.#ensureFreshHeadTree();
+      const paths = (await this.#headTreeFilePaths()).map((path) => path.slice(1)).sort();
+      return { commitOid, paths };
+    } catch (error) {
+      console.warn(
+        `repo listFiles via the head-tree cache failed; falling back to a clone: ${String(error)}`,
+      );
+    }
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
   }

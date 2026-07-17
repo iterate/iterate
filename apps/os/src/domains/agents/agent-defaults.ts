@@ -24,10 +24,10 @@ const TYPESCRIPT_FENCE_INSTRUCTION =
  * matching revision whenever the shipped event payload changes; the logical
  * context key still owns supersession inside the Agent projection.
  */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "1";
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "2";
 const AGENT_MODEL_POLICY_REVISION = "1";
-const AGENT_WORKSPACE_POLICY_REVISION = "1";
-const AGENT_BOOT_CONTEXT_REVISION = "1";
+const AGENT_WORKSPACE_POLICY_REVISION = "2";
+const AGENT_BOOT_CONTEXT_REVISION = "2";
 
 export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "1";
 export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "1";

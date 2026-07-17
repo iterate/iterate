@@ -1,13 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
@@ -179,19 +176,35 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       input.config.mounts === undefined
         ? input.config
         : { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) };
-    foldWorkspaceConfig(this.#currentConfig(), config);
-    const [event] = await this.#stream.append(
-      WorkspaceProcessorContract.buildEvent({
-        type: "events.iterate.com/workspace/configured",
-        payload: { config },
-      }),
-    );
-    await this.#registry.catchUp(PROCESSOR_SLUG);
-    await this.#reads.waitUntilEvent({
-      offset: event!.offset,
-      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    // Serialized with the core's mutations and commits: an unmount or repo
+    // swap must never interleave a commit that already classified against the
+    // old table.
+    return this.#core.runExclusive(async () => {
+      // The fold is deliberately TOLERANT (a committed event must never wedge
+      // the reducer), so the door supplies the loudness: every non-null patch
+      // entry must survive into a complete mount, or the caller made a
+      // mistake (usually a new mount missing repoPath).
+      const folded = foldWorkspaceConfig(this.#currentConfig(), config);
+      for (const [key, value] of Object.entries(config.mounts ?? {})) {
+        if (value !== null && !(key in folded.mounts)) {
+          throw new Error(
+            `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
+          );
+        }
+      }
+      const [event] = await this.#stream.append(
+        WorkspaceProcessorContract.buildEvent({
+          type: "events.iterate.com/workspace/configured",
+          payload: { config },
+        }),
+      );
+      await this.#registry.catchUp(PROCESSOR_SLUG);
+      await this.#reads.waitUntilEvent({
+        offset: event!.offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+      return this.#currentConfig();
     });
-    return this.#currentConfig();
   }
 
   // -- filesystem ----------------------------------------------------------------

@@ -14,7 +14,8 @@ import type {
   WorkspaceStatus,
 } from "./types.ts";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
-import { encodeRepoContent, resolveAbsolutePath } from "./utils.ts";
+import { encodeRepoContent } from "./utils.ts";
+import { resolveAbsolutePath } from "./paths.ts";
 import { filterPublishablePaths } from "./overlay-ignore.ts";
 
 // Overlay whiteouts: mount paths hidden by a local delete, kept as ONE kv
@@ -181,6 +182,16 @@ export class WorkspaceCore {
     return result;
   }
 
+  /**
+   * Run work serialized with every overlay mutation and commit — the door the
+   * hosting Durable Object uses to make CONFIGURATION changes atomic with
+   * respect to in-flight filesystem work: an unmount or repo swap must never
+   * interleave a commit that already classified against the old table.
+   */
+  runExclusive<T>(work: () => Promise<T>): Promise<T> {
+    return this.#serializeWrite(work);
+  }
+
   // `.git` is reserved anywhere in the tree: mounts are repo checkouts in
   // spirit, and a local `.git` segment could shadow platform-managed plumbing
   // for some future git consumer.
@@ -222,7 +233,18 @@ export class WorkspaceCore {
 
   async exists(path: string): Promise<boolean> {
     if (await this.#workspace.exists(path)) return true;
-    return (await this.readFile(path)) !== null;
+    if (this.#isMaskedFromMount(path)) return false;
+    const resolved = await this.#mountFor(path);
+    if (resolved === null) return false;
+    // A mount point is a virtual directory; anything else may be a mount FILE
+    // or a mount DIRECTORY (a prefix of mount files) — one listing answers both.
+    if (resolved.repoRelativePath === "") return true;
+    const target = resolveAbsolutePath(path);
+    const mountFiles = await this.#mountFilePaths(resolved.mountPath, resolved.mount);
+    return mountFiles.some(
+      (file) =>
+        (file === target || file.startsWith(`${target}/`)) && !this.#isMaskedFromMount(file),
+    );
   }
 
   async writeFile(path: string, content: string): Promise<void> {
@@ -275,20 +297,33 @@ export class WorkspaceCore {
   async deleteFile(path: string): Promise<boolean> {
     this.#assertWritablePath(path);
     return this.#serializeWrite(async () => {
+      // An already-masked path has nothing mount-side left to hide: deleting
+      // it again must NOT touch the existing whiteout (retracting it would
+      // resurrect the mount file). Only a local copy — visible above an
+      // ancestor whiteout because the local layer wins — can remain to delete.
+      if (this.#isMaskedFromMount(path)) {
+        return this.#workspace.deleteFile(path);
+      }
       // Whiteout FIRST (synchronous), so an unserialized read arriving after
       // the local delete below can never fall through and resurrect the mount
-      // copy mid-delete. Retracted at the end if nothing was hidden.
-      const wasMasked = this.#isMaskedFromMount(path);
+      // copy mid-delete. Retracted at the end if nothing was hidden — and on
+      // failure, since the guard above proves THIS call added it.
       this.#addWhiteout(path);
-      const localDeleted = await this.#workspace.deleteFile(path);
-      const resolved = await this.#mountFor(path);
-      const mountHas =
-        !wasMasked &&
-        resolved !== null &&
-        resolved.repoRelativePath !== "" &&
-        (await this.#repo(resolved.mount.repoPath).readFile({
-          path: resolved.repoRelativePath,
-        })) !== null;
+      let localDeleted = false;
+      let mountHas = false;
+      try {
+        localDeleted = await this.#workspace.deleteFile(path);
+        const resolved = await this.#mountFor(path);
+        mountHas =
+          resolved !== null &&
+          resolved.repoRelativePath !== "" &&
+          (await this.#repo(resolved.mount.repoPath).readFile({
+            path: resolved.repoRelativePath,
+          })) !== null;
+      } catch (error) {
+        this.#clearWhiteout(path);
+        throw error;
+      }
       if (!mountHas) this.#clearWhiteout(path);
       return localDeleted || mountHas;
     });
@@ -371,22 +406,104 @@ export class WorkspaceCore {
 
   // -- git ------------------------------------------------------------------------
 
+  /** The mount table as one normalized-key snapshot: routing, grouping, and
+   * scope resolution within an operation all speak the same spelling, taken
+   * ONCE — a config re-read mid-operation cannot split its view. */
+  async #mountSnapshot(): Promise<MountSnapshot> {
+    const mounts = Object.fromEntries(
+      Object.entries(await this.#mounts()).map(([key, value]) => [resolveAbsolutePath(key), value]),
+    );
+    return { mountPaths: Object.keys(mounts).sort(), mounts };
+  }
+
+  /**
+   * Route every local file and whiteout key to its owning mount — pure
+   * bookkeeping with NO repo listings, so dirty-mount inference and scope
+   * errors stay cheap even when an unrelated mount is a big repository.
+   */
+  #groupLocalAndWhiteouts(snapshot: MountSnapshot, localFiles: string[]): GroupedOverlay {
+    const localByMount = new Map<string, string[]>();
+    const whiteoutsByMount = new Map<string, string[]>();
+    for (const mountPath of snapshot.mountPaths) {
+      localByMount.set(mountPath, []);
+      whiteoutsByMount.set(mountPath, []);
+    }
+    const unmounted: WorkspaceChange[] = [];
+    for (const path of localFiles) {
+      const resolved = routeMount(snapshot.mounts, path);
+      if (resolved === null) unmounted.push({ change: "added", path });
+      else localByMount.get(resolved.mountPath)!.push(path);
+    }
+    for (const key of Object.keys(this.#whiteouts())) {
+      const resolved = routeMount(snapshot.mounts, key);
+      if (resolved !== null) whiteoutsByMount.get(resolved.mountPath)!.push(key);
+    }
+    unmounted.sort((a, b) => a.path.localeCompare(b.path));
+    return { localByMount, unmounted, whiteoutsByMount };
+  }
+
+  /**
+   * One mount's changes, from one repo listing: publishable local files
+   * (evaluated against that mount's OWN `.gitignore`s on repo-relative paths
+   * — ignore rules never cross a mount boundary), whiteout deletions (only
+   * for paths this mount actually owns — a deeper mount's files are
+   * unreachable here and are never its deletions), plus STALE whiteouts that
+   * mask nothing at HEAD (residue of a commit interrupted between the repo
+   * write and cleanup) for the serialized commit path to heal.
+   */
+  async #classifyMount(
+    snapshot: MountSnapshot,
+    grouped: GroupedOverlay,
+    mountPath: string,
+  ): Promise<{ changes: WorkspaceChange[]; localPaths: string[]; staleWhiteouts: string[] }> {
+    const fromRel = (rel: string) => (mountPath === "/" ? rel : `${mountPath}${rel}`);
+    const owned = grouped.localByMount.get(mountPath)!;
+    const ownedSet = new Set(owned);
+    const publishableRel = await filterPublishablePaths({
+      paths: owned.map((path) => (mountPath === "/" ? path : path.slice(mountPath.length))),
+      readFile: (rel) => this.#workspace.readFile(fromRel(rel)),
+    });
+    const localPaths = publishableRel.map(fromRel);
+    const mountFiles = await this.#mountFilePaths(mountPath, snapshot.mounts[mountPath]!);
+    const mountSet = new Set(mountFiles);
+
+    const changes: WorkspaceChange[] = localPaths.map((path) => ({
+      change: mountSet.has(path) && !this.#isMaskedFromMount(path) ? "modified" : "added",
+      path,
+    }));
+    for (const path of mountFiles) {
+      if (!this.#isMaskedFromMount(path) || ownedSet.has(path)) continue;
+      if (routeMount(snapshot.mounts, path)?.mountPath !== mountPath) continue;
+      changes.push({ change: "deleted", path });
+    }
+    changes.sort((a, b) => a.path.localeCompare(b.path));
+
+    const staleWhiteouts = grouped.whiteoutsByMount
+      .get(mountPath)!
+      .filter(
+        (key) => !mountSet.has(key) && !mountFiles.some((file) => file.startsWith(`${key}/`)),
+      );
+    return { changes, localPaths, staleWhiteouts };
+  }
+
   /**
    * Changes per mount (local files shadowing/adding over that mount's HEAD,
    * whiteouted mount files as deletions), plus the unmounted local scratch
    * (never committable). "modified" means shadowed, not content-diffed.
+   * Mounts classify concurrently — each needs only its own repo's listing.
    */
   async gitStatus(): Promise<WorkspaceStatus> {
-    const { changesByMount, mountPaths, mounts, unmounted } = await this.#classifyChanges();
-    return {
-      mounts: mountPaths.map((mountPath) => ({
-        changes: changesByMount.get(mountPath)!.changes,
+    const snapshot = await this.#mountSnapshot();
+    const grouped = this.#groupLocalAndWhiteouts(snapshot, await this.#localFilePaths());
+    const classified = await Promise.all(
+      snapshot.mountPaths.map(async (mountPath) => ({
+        changes: (await this.#classifyMount(snapshot, grouped, mountPath)).changes,
         path: mountPath,
-        policy: mounts[mountPath]!.policy,
-        repoPath: mounts[mountPath]!.repoPath,
+        policy: snapshot.mounts[mountPath]!.policy,
+        repoPath: snapshot.mounts[mountPath]!.repoPath,
       })),
-      unmounted,
-    };
+    );
+    return { mounts: classified, unmounted: grouped.unmounted };
   }
 
   /**
@@ -394,23 +511,30 @@ export class WorkspaceCore {
    * its own `commitFiles` lane — the same lane as that repo's direct
    * `commitFiles`, so head cursors, worker rebuilds, and GitHub mirrors fire
    * exactly as for a direct commit. `scope` names the mount; it may be omitted
-   * when exactly one mount is dirty. Commits never span mounts.
-   *
-   * On success only that mount's subtree is cleared (local copies and
-   * whiteouts) — the workspace's other uncommitted work survives.
+   * when exactly one mount is dirty. Commits never span mounts, never list an
+   * unrelated mount's repository, and on success clear ONLY the committed
+   * mount's local copies and whiteouts — every other mount's uncommitted work
+   * (including pending deletions under a deeper mount's subtree) survives.
    */
   async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
     if (typeof input.message !== "string" || input.message.trim() === "") {
       throw new Error("commit message must be a non-empty string.");
     }
     return this.#serializeWrite(async () => {
-      const { changesByMount, mountPaths, mounts } = await this.#classifyChanges();
-      const dirty = mountPaths.filter(
-        (mountPath) => changesByMount.get(mountPath)!.changes.length > 0,
-      );
+      const snapshot = await this.#mountSnapshot();
+      const grouped = this.#groupLocalAndWhiteouts(snapshot, await this.#localFilePaths());
 
       let mountPath: string;
       if (input.scope === undefined) {
+        // Inferred WITHOUT repo listings: any mount holding a local file or a
+        // whiteout may have changes. (A stale whiteout can nominate a mount
+        // that classification then proves clean — that fails loudly below
+        // instead of silently guessing another mount.)
+        const dirty = snapshot.mountPaths.filter(
+          (path) =>
+            grouped.localByMount.get(path)!.length > 0 ||
+            grouped.whiteoutsByMount.get(path)!.length > 0,
+        );
         if (dirty.length === 0) {
           throw new Error("Nothing to commit — no mount has changes.");
         }
@@ -423,20 +547,33 @@ export class WorkspaceCore {
         mountPath = dirty[0]!;
       } else {
         const scope = resolveAbsolutePath(input.scope);
-        if (!(scope in mounts)) {
+        if (!(scope in snapshot.mounts)) {
           throw new Error(
-            `No mount at "${scope}" (mounts: ${mountPaths.map((path) => `"${path}"`).join(", ")}).`,
+            `No mount at "${scope}" (mounts: ${snapshot.mountPaths.map((path) => `"${path}"`).join(", ")}).`,
           );
         }
         mountPath = scope;
       }
-      const mount = mounts[mountPath]!;
+      const mount = snapshot.mounts[mountPath]!;
       if (mount.policy === "read-only") {
         throw new Error(
           `The mount at "${mountPath}" (${mount.repoPath}) is read-only — its changes cannot be committed.`,
         );
       }
-      const { changes, localPaths } = changesByMount.get(mountPath)!;
+
+      const { changes, localPaths, staleWhiteouts } = await this.#classifyMount(
+        snapshot,
+        grouped,
+        mountPath,
+      );
+      // Heal crash residue FIRST: a whiteout masking nothing at HEAD (a prior
+      // commit died between the repo write and cleanup) would otherwise mark
+      // this mount dirty forever and hide a future re-add of the file.
+      if (staleWhiteouts.length > 0) {
+        const whiteouts = this.#whiteouts();
+        for (const key of staleWhiteouts) delete whiteouts[key];
+        this.#kv.put(WHITEOUTS_KEY, whiteouts);
+      }
       if (changes.length === 0) {
         throw new Error(`Nothing to commit — no changes under the mount at "${mountPath}".`);
       }
@@ -461,16 +598,15 @@ export class WorkspaceCore {
         message: input.message,
       });
 
-      // The changes are on that repo's main; clear ONLY this mount's subtree
-      // so the workspace mirrors the new main there while everything else
-      // (other mounts' work, unmounted scratch) survives.
+      // The changes are on that repo's main; clear ONLY what this mount owns.
+      // Ownership is ROUTED against the snapshot, never subtree containment:
+      // a "/" commit must not consume a deeper mount's pending deletions.
       const whiteouts = this.#whiteouts();
       let whiteoutsChanged = false;
       for (const key of Object.keys(whiteouts)) {
-        if (mountPath === "/" || key === mountPath || key.startsWith(`${mountPath}/`)) {
-          delete whiteouts[key];
-          whiteoutsChanged = true;
-        }
+        if (routeMount(snapshot.mounts, key)?.mountPath !== mountPath) continue;
+        delete whiteouts[key];
+        whiteoutsChanged = true;
       }
       if (whiteoutsChanged) this.#kv.put(WHITEOUTS_KEY, whiteouts);
       for (const path of localPaths) {
@@ -491,28 +627,27 @@ export class WorkspaceCore {
 
   /** One mounted repo's main-branch history, newest first. */
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
-    const mounts = Object.fromEntries(
-      Object.entries(await this.#mounts()).map(([key, value]) => [resolveAbsolutePath(key), value]),
-    );
-    const mountPaths = Object.keys(mounts).sort();
+    const snapshot = await this.#mountSnapshot();
     let mountPath: string;
     if (input.scope === undefined) {
-      if (mountPaths.length !== 1) {
+      if (snapshot.mountPaths.length !== 1) {
         throw new Error(
-          `log needs { scope } when the workspace has ${mountPaths.length} mounts ` +
-            `(${mountPaths.map((path) => `"${path}"`).join(", ")}).`,
+          `log needs { scope } when the workspace has ${snapshot.mountPaths.length} mounts ` +
+            `(${snapshot.mountPaths.map((path) => `"${path}"`).join(", ")}).`,
         );
       }
-      mountPath = mountPaths[0]!;
+      mountPath = snapshot.mountPaths[0]!;
     } else {
       mountPath = resolveAbsolutePath(input.scope);
-      if (!(mountPath in mounts)) {
+      if (!(mountPath in snapshot.mounts)) {
         throw new Error(
-          `No mount at "${mountPath}" (mounts: ${mountPaths.map((path) => `"${path}"`).join(", ")}).`,
+          `No mount at "${mountPath}" (mounts: ${snapshot.mountPaths.map((path) => `"${path}"`).join(", ")}).`,
         );
       }
     }
-    const result = await this.#repo(mounts[mountPath]!.repoPath).log({ limit: input.limit });
+    const result = await this.#repo(snapshot.mounts[mountPath]!.repoPath).log({
+      limit: input.limit,
+    });
     return result.commits.map((commit) => ({
       author: commit.author,
       message: commit.message,
@@ -520,74 +655,17 @@ export class WorkspaceCore {
       timestamp: commit.timestamp,
     }));
   }
-
-  /**
-   * The shared classification behind status and commit: publishable local
-   * files and whiteout deletions, grouped by owning mount. One repo listing
-   * per mount per call. Routes every path against ONE mount-table snapshot.
-   */
-  async #classifyChanges(): Promise<{
-    changesByMount: Map<string, { changes: WorkspaceChange[]; localPaths: string[] }>;
-    mountPaths: string[];
-    mounts: Record<string, WorkspaceMount>;
-    unmounted: WorkspaceChange[];
-  }> {
-    const rawMounts = await this.#mounts();
-    // Normalized-key snapshot: routing, grouping, and scope resolution all
-    // speak the same spelling.
-    const mounts = Object.fromEntries(
-      Object.entries(rawMounts).map(([key, value]) => [resolveAbsolutePath(key), value]),
-    );
-    const mountPaths = Object.keys(mounts).sort();
-    const localPaths = await filterPublishablePaths({
-      paths: await this.#localFilePaths(),
-      readFile: (path) => this.#workspace.readFile(path),
-    });
-    const localSet = new Set(localPaths);
-
-    const changesByMount = new Map<string, { changes: WorkspaceChange[]; localPaths: string[] }>();
-    for (const mountPath of mountPaths) {
-      changesByMount.set(mountPath, { changes: [], localPaths: [] });
-    }
-    const unmounted: WorkspaceChange[] = [];
-
-    for (const path of localPaths) {
-      const resolved = routeMount(mounts, path);
-      if (resolved === null) {
-        unmounted.push({ change: "added", path });
-        continue;
-      }
-      changesByMount.get(resolved.mountPath)!.localPaths.push(path);
-    }
-
-    for (const mountPath of mountPaths) {
-      const entry = changesByMount.get(mountPath)!;
-      const mountFiles = await this.#mountFilePaths(mountPath, mounts[mountPath]!);
-      const mountSet = new Set(mountFiles);
-      for (const path of entry.localPaths) {
-        entry.changes.push({
-          change: mountSet.has(path) && !this.#isMaskedFromMount(path) ? "modified" : "added",
-          path,
-        });
-      }
-      for (const path of mountFiles) {
-        if (!this.#isMaskedFromMount(path) || localSet.has(path)) continue;
-        // A deeper mount shadows this one's files under its point — those
-        // paths are unreachable here, so they are not this mount's deletions.
-        if (routeMount(mounts, path)?.mountPath !== mountPath) continue;
-        entry.changes.push({ change: "deleted", path });
-      }
-      entry.changes.sort((a, b) => a.path.localeCompare(b.path));
-    }
-
-    return {
-      changesByMount,
-      mountPaths,
-      mounts,
-      unmounted: unmounted.sort((a, b) => a.path.localeCompare(b.path)),
-    };
-  }
 }
+
+/** One consistent view of the mount table for one operation. */
+type MountSnapshot = { mountPaths: string[]; mounts: Record<string, WorkspaceMount> };
+
+/** Local files and whiteout keys, routed to their owning mounts (no repo calls). */
+type GroupedOverlay = {
+  localByMount: Map<string, string[]>;
+  unmounted: WorkspaceChange[];
+  whiteoutsByMount: Map<string, string[]>;
+};
 
 /**
  * The mount owning a path: longest prefix wins, `"/"` mounts everything not

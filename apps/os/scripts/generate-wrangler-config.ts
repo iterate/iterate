@@ -215,6 +215,11 @@ const DO_EXPORTS = {
       { type: "durable-object", storage: "sqlite" },
     ]),
   ),
+  // The retired single-parent-overlay workspace. Its overlays were disposable
+  // by contract (committed state lives on main); the tombstone destroys the
+  // namespace on the next deploy of each env. Remove once every deployed env
+  // reports "Safe to remove from `exports`".
+  WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**

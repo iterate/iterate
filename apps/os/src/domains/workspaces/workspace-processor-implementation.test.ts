@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
+import type { StreamEvent } from "iterate/processors";
+import { StreamProcessorRunner } from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { WorkspaceProcessorContract } from "./workspace-processor-contract.ts";
 import { WorkspaceProcessor } from "./workspace-processor-implementation.ts";
@@ -170,5 +170,65 @@ describe("registry + runner drive (the workspace DO's wiring)", () => {
       state: { config: { mounts: { "/": configMount, "/iterate": iterateMount } } },
     });
     await expect(reads.waitUntilEvent({ offset: 2, timeoutMs: 1_000 })).resolves.toBeUndefined();
+  });
+});
+
+describe("fold safety (thermo regressions)", () => {
+  test("a patch adding an INCOMPLETE mount folds without wedging — the entry is dropped", async () => {
+    const driver = subject();
+    await driver.deliver({
+      events: [
+        event(1, "events.iterate.com/workspace/created", {
+          config: { mounts: { "/": configMount } },
+        }),
+        // Schema-valid (partial values are legal patch entries) but there is
+        // no existing "/new" mount to merge into — a raw append can commit
+        // this, and the fold must skip the entry, not throw.
+        event(2, "events.iterate.com/workspace/configured", {
+          config: { mounts: { "/new": { policy: "read-only" } } },
+        }),
+        // The fold keeps advancing past it.
+        event(3, "events.iterate.com/workspace/configured", {
+          config: { mounts: { "/docs": { policy: "read-only", repoPath: "/repos/docs" } } },
+        }),
+      ],
+      streamMaxOffset: 3,
+    });
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      offset: 3,
+      state: {
+        config: {
+          mounts: {
+            "/": configMount,
+            "/docs": { policy: "read-only", repoPath: "/repos/docs" },
+          },
+        },
+      },
+    });
+  });
+
+  test("a NON-CANONICAL raw event fails the contract parse and is skipped, not folded", async () => {
+    const driver = subject();
+    await driver.deliver({
+      events: [
+        event(1, "events.iterate.com/workspace/created", {
+          config: { mounts: { "/": configMount } },
+        }),
+        // Aliasing spelling ("/docs/" vs "/docs") and a codec-unsafe repoPath:
+        // both fail the payload schema, so the runner records a parse failure
+        // and the fold never sees the event.
+        event(2, "events.iterate.com/workspace/configured", {
+          config: { mounts: { "/docs/": { policy: "read-only", repoPath: "/repos/docs" } } },
+        }),
+        event(3, "events.iterate.com/workspace/configured", {
+          config: { mounts: { "/evil": { policy: "read-only", repoPath: "/repos/b?alias=1" } } },
+        }),
+      ],
+      streamMaxOffset: 3,
+    });
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      offset: 3,
+      state: { config: { mounts: { "/": configMount } } },
+    });
   });
 });

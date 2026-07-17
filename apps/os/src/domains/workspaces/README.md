@@ -47,13 +47,13 @@ namespace is simply dropped; only the class/binding names carry the scar.
 
 ## Deliberately lightweight (the follow-ups)
 
-- **Fall-through reads use the repo's existing read surface** — served from
-  the Repo DO's shared head snapshot (one clone per head movement per
-  incarnation). The planned successor is lazy per-object reads against
-  Cloudflare Artifacts' REST endpoints (`/blob/:hash`, `/tree/:hash`,
-  `/file?ref=&path=`) with oid-keyed tree/blob caches — no whole-tree
-  materialization anywhere, which also lifts the isolate memory ceiling on
-  repo size. Probe REST access first.
+- **Fall-through reads are clone-free** — every repo's Durable Object keeps a
+  DURABLE head-tree cache (main materialized into its own SQLite, R2 spill,
+  invalidated by the local head cursor), so mounted reads cost one RPC + one
+  SQLite lookup in steady state, with the clone lane as loud fallback. For
+  repos too large to materialize at all, the successor is lazy per-object
+  reads against Cloudflare Artifacts' REST endpoints (`/blob/:hash`,
+  `/tree/:hash`, `/file?ref=&path=`) with oid-keyed caches.
 - **No branch mode.** `policy: "branch"` (workspace branch + auto-draft-PR on
   GitHub-linked repos, commit synthesis via GitHub's Git Database API) is the
   next policy value; today big external repos mount `read-only`.
