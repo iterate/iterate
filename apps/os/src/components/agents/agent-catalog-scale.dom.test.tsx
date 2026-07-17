@@ -145,3 +145,58 @@ test("a 5,000-agent catalog mounts bounded rows and patches one visible row", as
 
   await act(async () => root.unmount());
 });
+
+test("search reveals matching descendants without changing the collapsed tree", async () => {
+  const parent = { ...record(0), path: "/agents/research" };
+  const child = {
+    ...record(1),
+    path: "/agents/research/bath",
+    metadata: {
+      pinned: false,
+      title: "Bath cattle survey",
+      activity: "Comparing nearby farms",
+    },
+  };
+  const agents = { [parent.path]: parent, [child.path]: child };
+  const container = document.createElement("div");
+  Object.assign(container.style, { height: "800px", width: "1000px" });
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () =>
+    root.render(
+      <AgentCatalog
+        agents={agents}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        projectSlug="search"
+      />,
+    ),
+  );
+
+  expect(container.textContent).not.toContain("Bath cattle survey");
+  expect(container.querySelector('button[aria-label="Expand child agents"]')).not.toBeNull();
+
+  const input = container.querySelector('input[aria-label="Search agents"]');
+  if (!(input instanceof HTMLInputElement)) throw new Error("missing agent search input");
+  const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setInputValue === undefined) throw new Error("missing native input value setter");
+
+  await act(async () => {
+    setInputValue.call(input, "cattle");
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: "cattle" }));
+  });
+
+  expect(container.textContent).toContain("Bath cattle survey");
+  expect(container.querySelector('button[aria-label="Collapse child agents"]')).toBeNull();
+
+  await act(async () => {
+    setInputValue.call(input, "");
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: null }));
+  });
+
+  expect(container.textContent).not.toContain("Bath cattle survey");
+  expect(container.querySelector('button[aria-label="Expand child agents"]')).not.toBeNull();
+
+  await act(async () => root.unmount());
+});

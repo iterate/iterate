@@ -26,6 +26,7 @@ export function AgentCatalog({
 }) {
   const [query, setQuery] = useState("");
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(() => new Set());
+  const searching = query.trim() !== "";
   const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -117,7 +118,7 @@ export function AgentCatalog({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
         <div ref={contentRef} className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-          {pinned.length > 0 && query.trim() === "" ? (
+          {pinned.length > 0 && !searching ? (
             <section aria-labelledby="pinned-agents-heading" className="space-y-2">
               <div className="flex items-baseline justify-between gap-2">
                 <h2 id="pinned-agents-heading" className="text-sm font-semibold">
@@ -153,7 +154,7 @@ export function AgentCatalog({
           <section ref={listRef} aria-labelledby="all-agents-heading" className="space-y-2">
             <div className="flex items-baseline justify-between gap-2">
               <h2 id="all-agents-heading" className="text-sm font-semibold">
-                {query.trim() === "" ? "All agents" : "Matches"}
+                {searching ? "Matches" : "All agents"}
               </h2>
               <span className="text-xs text-muted-foreground">{rows.length}</span>
             </div>
@@ -176,7 +177,7 @@ export function AgentCatalog({
                   const row = rows[virtualRow.index];
                   if (row === undefined) return null;
                   const node = row.node;
-                  const expanded = query.trim() !== "" || expandedPaths.has(node.agent.path);
+                  const expanded = searching || expandedPaths.has(node.agent.path);
                   return (
                     <li
                       key={node.agent.path}
@@ -196,7 +197,9 @@ export function AgentCatalog({
                         actions={{
                           onOpen: () => onOpen(node.agent.path),
                           onTogglePinned: () => onTogglePinned(node.agent),
-                          onToggleChildren: () => toggleExpanded(node.agent.path),
+                          ...(searching
+                            ? {}
+                            : { onToggleChildren: () => toggleExpanded(node.agent.path) }),
                         }}
                       />
                     </li>
