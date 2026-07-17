@@ -4999,6 +4999,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * project into the user's claims); the admin lane only needs an id. Admin
    * callers may bring their own id (test fixtures); we never mint prj_ ids
    * locally when the directory is configured.
+   *
+   * EVERY user principal takes the user lane, including platform-admin users
+   * creating from the dashboard. Admin-ness must not reroute a human create
+   * into the fixture lane: that lane mints a bare id with no org-owned
+   * directory row, so the project would never enter the creator's claims
+   * (project list, slug routes) and org members could never find it. The
+   * mint-only lane is for principal-less admin credentials (admin API secret,
+   * trusted-internal) whose fixtures live outside any customer organization.
    */
   async #registerProject(args: {
     organizationSlug?: string;
@@ -5007,7 +5015,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   }): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
     const userPrincipal = userPrincipalOf(this.props.auth);
 
-    if (userPrincipal && !this.props.auth.isAdmin()) {
+    if (userPrincipal) {
       const organizationSlug = resolveOrganizationSlugForCreate(
         userPrincipal,
         args.organizationSlug,
