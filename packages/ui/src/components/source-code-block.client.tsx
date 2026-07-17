@@ -53,6 +53,7 @@ function CodeMirror({
   const selectAllSignalRef = useRef(selectAllSignal);
   const latestSelectAllSignalRef = useRef(selectAllSignal);
   const valueRef = useRef(value);
+  const syncingValueRef = useRef(false);
   valueRef.current = value;
   latestSelectAllSignalRef.current = selectAllSignal;
 
@@ -98,7 +99,7 @@ function CodeMirror({
         extensions,
         EditorView.editable.of(editable),
         EditorView.updateListener.of((update) => {
-          if (!update.docChanged) {
+          if (!update.docChanged || syncingValueRef.current) {
             return;
           }
 
@@ -167,13 +168,18 @@ function CodeMirror({
       return;
     }
 
-    view.dispatch({
-      changes: {
-        from: 0,
-        to: currentValue.length,
-        insert: value,
-      },
-    });
+    syncingValueRef.current = true;
+    try {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: currentValue.length,
+          insert: value,
+        },
+      });
+    } finally {
+      syncingValueRef.current = false;
+    }
   }, [value]);
 
   useEffect(() => {
