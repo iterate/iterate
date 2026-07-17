@@ -6,11 +6,9 @@
 // a disposable cache of `reduce` over the journal — delete it and replay
 // rebuilds it, and every consequential outcome is an event you can read back.
 //
-// The doctrine this follows (birth certificates, monolithic reducer,
-// refold-safe side effects) is the platform's stream-processor convention;
-// GuestbookApp in worker.ts shows the hosting half: a Durable Object
-// registry over an itx-dialed stream handle, woken by the durable wake
-// subscription the creation batch below configures.
+// GuestbookApp in worker.ts is the hosting half: a Durable Object registry
+// over an itx-dialed stream handle, woken by the durable wake subscription
+// the creation batch below configures.
 import { z } from "zod";
 import {
   defineProcessorContract,
@@ -19,16 +17,12 @@ import {
 } from "iterate/processors";
 import type { DynamicWorkerRef } from "iterate/sdk";
 
-export const GUESTBOOK_STREAM_PATH = "/guestbook";
-
-/** Stable idempotency key for the one birth append — every signer offers the
- * same birth batch and the stream dedupes it to a single created event. */
-export const GUESTBOOK_CREATED_IDEMPOTENCY_KEY = "guestbook/created";
+export const guestbookStreamPath = "/guestbook";
 
 // One declarative ref for the guestbook host, shared by the HTTP route
-// (fetchDynamicWorker), the wake subscription below, and anything else that
-// needs to name the same Durable Object (addressed by its durableWorkerKey).
-export const GUESTBOOK_APP_REF = {
+// (fetchDynamicWorker) and the wake subscription below — the same Durable
+// Object either way, addressed by its durableWorkerKey.
+export const guestbookAppRef = {
   type: "stateful",
   path: "/",
   className: "GuestbookApp",
@@ -38,9 +32,6 @@ export const GUESTBOOK_APP_REF = {
     options: { entryPoint: "worker.ts" },
   },
 } satisfies DynamicWorkerRef;
-
-/** The wake subscription's stable identity on the stream's roster. */
-export const GUESTBOOK_SUBSCRIPTION_KEY = "app-guestbook#guestbook";
 
 /**
  * The guestbook's creation batch: the birth certificate plus the durable
@@ -59,15 +50,15 @@ export function guestbookCreationEvents(): StreamEventInput[] {
     {
       type: "events.iterate.com/guestbook/created",
       payload: { config: { title: "Guestbook" } },
-      idempotencyKey: GUESTBOOK_CREATED_IDEMPOTENCY_KEY,
+      idempotencyKey: "guestbook/created",
     },
     {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
-        subscriptionKey: GUESTBOOK_SUBSCRIPTION_KEY,
+        subscriptionKey: "app-guestbook#guestbook",
         delivery: {
           mode: "wake",
-          expression: ["workers", ["get", GUESTBOOK_APP_REF], "processor", "wakeStreamSubscriber"],
+          expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
           processorSlug: "guestbook",
         },
       },
@@ -76,61 +67,58 @@ export function guestbookCreationEvents(): StreamEventInput[] {
   ];
 }
 
-const GuestbookBirthCertificate = z.object({
-  config: z.object({ title: z.string() }),
-});
-
-const GUESTBOOK_EVENTS = {
-  "events.iterate.com/guestbook/created": {
-    description:
-      "The guestbook exists: its birth certificate, the first event in its domain history. Appended (idempotency-keyed) by whoever signs first.",
-    payloadSchema: GuestbookBirthCertificate,
-    examples: [
-      {
-        description: "A guestbook born with its display title.",
-        payload: { config: { title: "Guestbook" } },
-      },
-    ],
-  },
-  "events.iterate.com/guestbook/entry-signed": {
-    description: "Someone signed the guestbook: their name and message.",
-    payloadSchema: z.object({
-      name: z.string().trim().min(1),
-      message: z.string().trim().min(1),
-    }),
-    examples: [
-      {
-        description: "A visitor left a note.",
-        payload: { name: "Ada", message: "Lovely worker you have here." },
-      },
-    ],
-  },
-  "events.iterate.com/guestbook/milestone-reached": {
-    description:
-      "The entry count crossed a multiple of five. Emitted by the guestbook processor from its at-head reconcile, idempotency-keyed by the milestone count so refolds and redeliveries collapse to one fact.",
-    payloadSchema: z.object({ count: z.number().int().positive() }),
-    examples: [
-      {
-        description: "The fifth signature landed.",
-        payload: { count: 5 },
-      },
-    ],
-  },
-};
-
 export const GuestbookProcessorContract = defineProcessorContract({
   slug: "guestbook",
   version: "0.1.0",
   description:
     "Folds guestbook signatures on /guestbook and emits a milestone fact every five entries.",
   stateSchema: z.object({
-    birthCertificate: GuestbookBirthCertificate.nullable().default(null),
+    birthCertificate: z
+      .object({ config: z.object({ title: z.string() }) })
+      .nullable()
+      .default(null),
     entries: z
       .array(z.object({ name: z.string(), message: z.string(), signedAt: z.string() }))
       .default([]),
     lastMilestone: z.number().int().nonnegative().default(0),
   }),
-  events: GUESTBOOK_EVENTS,
+  events: {
+    "events.iterate.com/guestbook/created": {
+      description:
+        "The guestbook exists: its birth certificate, the first event in its domain history. Appended (idempotency-keyed) by whoever signs first.",
+      payloadSchema: z.object({ config: z.object({ title: z.string() }) }),
+      examples: [
+        {
+          description: "A guestbook born with its display title.",
+          payload: { config: { title: "Guestbook" } },
+        },
+      ],
+    },
+    "events.iterate.com/guestbook/entry-signed": {
+      description: "Someone signed the guestbook: their name and message.",
+      payloadSchema: z.object({
+        name: z.string().trim().min(1),
+        message: z.string().trim().min(1),
+      }),
+      examples: [
+        {
+          description: "A visitor left a note.",
+          payload: { name: "Ada", message: "Lovely worker you have here." },
+        },
+      ],
+    },
+    "events.iterate.com/guestbook/milestone-reached": {
+      description:
+        "The entry count crossed a multiple of five. Emitted by the guestbook processor from its at-head reconcile, idempotency-keyed by the milestone count so refolds and redeliveries collapse to one fact.",
+      payloadSchema: z.object({ count: z.number().int().positive() }),
+      examples: [
+        {
+          description: "The fifth signature landed.",
+          payload: { count: 5 },
+        },
+      ],
+    },
+  },
   consumes: [
     "events.iterate.com/guestbook/created",
     "events.iterate.com/guestbook/entry-signed",
@@ -139,17 +127,13 @@ export const GuestbookProcessorContract = defineProcessorContract({
   emits: ["events.iterate.com/guestbook/milestone-reached"],
 });
 
-type GuestbookReduceArgs = Parameters<
-  StreamProcessor<typeof GuestbookProcessorContract>["reduce"]
->[0];
-type GuestbookProcessEventArgs = Parameters<
-  StreamProcessor<typeof GuestbookProcessorContract>["processEvent"]
->[0];
-
 export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {
   readonly contract = GuestbookProcessorContract;
 
-  protected override reduce({ event, state }: GuestbookReduceArgs): GuestbookReduceArgs["state"] {
+  protected override reduce({
+    event,
+    state,
+  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/guestbook/created":
         if (state.birthCertificate !== null) {
@@ -176,7 +160,7 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
     blockProcessorWhileCaughtUp,
     delivery,
     state,
-  }: GuestbookProcessEventArgs): undefined {
+  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>["processEvent"]>[0]): undefined {
     // At-head reconcile: derive milestones from the WHOLE fold, never from
     // event-time state — a refold replays every historical event, and only
     // the at-head state has absorbed the milestones already journaled. The

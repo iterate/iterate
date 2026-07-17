@@ -14,10 +14,10 @@ import {
 } from "iterate/processors/cloudflare";
 import { processGithubReviewEvent } from "./github-reviews.ts";
 import {
-  GUESTBOOK_APP_REF,
-  GUESTBOOK_STREAM_PATH,
+  guestbookAppRef,
   guestbookCreationEvents,
   GuestbookProcessor,
+  guestbookStreamPath,
 } from "./guestbook.ts";
 
 // Pull-request reviews are project userspace, not platform policy. Keep this
@@ -83,7 +83,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       });
     }
     if (app === "guestbook") {
-      return this.fetchDynamicWorker(req, GUESTBOOK_APP_REF);
+      return this.fetchDynamicWorker(req, guestbookAppRef);
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
@@ -265,9 +265,9 @@ export class GuestbookApp extends IterateDurableObject {
     registry: StreamProcessorRegistry;
   } {
     if (this.#host === undefined) {
-      const stream = itxProjectStream(this.env, GUESTBOOK_STREAM_PATH);
+      const stream = itxProjectStream(this.env, guestbookStreamPath);
       const registry = createStreamProcessorRegistry(this.ctx, {
-        path: GUESTBOOK_STREAM_PATH,
+        path: guestbookStreamPath,
         projectId,
         stream,
         version: "0",
@@ -284,7 +284,7 @@ export class GuestbookApp extends IterateDurableObject {
         // until facet alarms ship; then this becomes
         // `registry.register(processor, { recovery: true })` plus an
         // `alarm()` method routing to `registry.handleAlarm`.
-        new GuestbookProcessor({ path: GUESTBOOK_STREAM_PATH, projectId, stream }),
+        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),
       );
       this.#host = { guestbook, registry };
     }
@@ -327,7 +327,7 @@ export class GuestbookApp extends IterateDurableObject {
           // wake subscription — every signer offers them; the stream dedupes
           // to one of each) plus this entry. Raw appends — the app is the
           // CREATOR here; the processor only ever emits milestone facts.
-          await project.streams.get(GUESTBOOK_STREAM_PATH).append(...guestbookCreationEvents(), {
+          await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), {
             type: "events.iterate.com/guestbook/entry-signed",
             payload: { message, name },
             idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,

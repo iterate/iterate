@@ -5,12 +5,9 @@
 import { expect, test } from "vitest";
 import { driveProcessor, eventsOfType, MemoryStream } from "iterate/processors/testing";
 import {
-  GUESTBOOK_CREATED_IDEMPOTENCY_KEY,
-  GUESTBOOK_STREAM_PATH,
   GuestbookProcessor,
+  guestbookStreamPath,
 } from "../../../config-repo-template/guestbook.ts";
-
-const MILESTONE_TYPE = "events.iterate.com/guestbook/milestone-reached";
 
 function guestbookDriver(stream: MemoryStream) {
   return driveProcessor(
@@ -24,7 +21,7 @@ async function sign(stream: MemoryStream, n: number) {
     {
       type: "events.iterate.com/guestbook/created",
       payload: { config: { title: "Guestbook" } },
-      idempotencyKey: GUESTBOOK_CREATED_IDEMPOTENCY_KEY,
+      idempotencyKey: "guestbook/created",
     },
     {
       type: "events.iterate.com/guestbook/entry-signed",
@@ -35,7 +32,7 @@ async function sign(stream: MemoryStream, n: number) {
 }
 
 test("folds signatures and emits each milestone exactly once", async () => {
-  const stream = new MemoryStream(GUESTBOOK_STREAM_PATH);
+  const stream = new MemoryStream(guestbookStreamPath);
   const driver = guestbookDriver(stream);
 
   for (let n = 1; n <= 6; n++) await sign(stream, n);
@@ -48,18 +45,20 @@ test("folds signatures and emits each milestone exactly once", async () => {
   expect(driver.state.birthCertificate).toEqual({ config: { title: "Guestbook" } });
   expect(driver.state.entries).toHaveLength(6);
   expect(driver.state.lastMilestone).toBe(5);
-  expect(eventsOfType(stream, MILESTONE_TYPE).map((event) => event.payload)).toEqual([
-    { count: 5 },
-  ]);
+  expect(
+    eventsOfType(stream, "events.iterate.com/guestbook/milestone-reached").map(
+      (event) => event.payload,
+    ),
+  ).toEqual([{ count: 5 }]);
 
   // Redelivery of the same journal (the at-least-once contract) re-runs the
   // reconcile; the stable milestone key collapses it to the one fact.
   await driver.deliver();
-  expect(eventsOfType(stream, MILESTONE_TYPE)).toHaveLength(1);
+  expect(eventsOfType(stream, "events.iterate.com/guestbook/milestone-reached")).toHaveLength(1);
 });
 
 test("refold: a fresh processor over the same journal appends nothing and converges", async () => {
-  const stream = new MemoryStream(GUESTBOOK_STREAM_PATH);
+  const stream = new MemoryStream(guestbookStreamPath);
   const live = guestbookDriver(stream);
   for (let n = 1; n <= 5; n++) await sign(stream, n);
   await live.deliver();
@@ -74,7 +73,7 @@ test("refold: a fresh processor over the same journal appends nothing and conver
 });
 
 test("a second, differently-keyed birth is a corrupt journal and throws", async () => {
-  const stream = new MemoryStream(GUESTBOOK_STREAM_PATH);
+  const stream = new MemoryStream(guestbookStreamPath);
   const driver = guestbookDriver(stream);
   await sign(stream, 1);
   await stream.append({

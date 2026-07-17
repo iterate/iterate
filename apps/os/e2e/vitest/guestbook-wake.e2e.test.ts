@@ -1,12 +1,9 @@
 import { expect, test } from "vitest";
 import {
-  GUESTBOOK_STREAM_PATH,
-  GUESTBOOK_SUBSCRIPTION_KEY,
   guestbookCreationEvents,
+  guestbookStreamPath,
 } from "../../config-repo-template/guestbook.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
-
-const MILESTONE_TYPE = "events.iterate.com/guestbook/milestone-reached";
 
 // The proof that a USERSPACE Durable Object is a first-class stream-spine
 // subscriber: the seeded template's guestbook configures a durable WAKE
@@ -33,7 +30,7 @@ test(
     // The exact batch shape the seeded app's /sign handler appends: the
     // idempotency-keyed creation events (birth + wake subscription), then
     // five signatures — enough to cross the processor's first milestone.
-    const stream = project.streams.get(GUESTBOOK_STREAM_PATH);
+    const stream = project.streams.get(guestbookStreamPath);
     await stream.append(
       ...guestbookCreationEvents(),
       ...[1, 2, 3, 4, 5].map((n) => ({
@@ -47,7 +44,7 @@ test(
     // to head inside GuestbookApp — delivered there by the wake subscription.
     // Generous timeout: the first dial may cold-build the seeded worker.
     const milestone = await stream.waitForEvent({
-      eventTypes: [MILESTONE_TYPE],
+      eventTypes: ["events.iterate.com/guestbook/milestone-reached"],
       timeoutMs: 210_000,
     });
     // Payload plus provenance: stamped by the userspace processor's own
@@ -57,7 +54,7 @@ test(
       source: {
         processor: {
           slug: "guestbook",
-          stream: { path: GUESTBOOK_STREAM_PATH, projectId },
+          stream: { path: guestbookStreamPath, projectId },
         },
       },
     });
@@ -70,7 +67,7 @@ test(
       eventTypes: ["events.iterate.com/stream/subscriber-connected"],
     });
     const guestbookConnects = connects.filter(
-      (event) => event.payload?.subscriptionKey === GUESTBOOK_SUBSCRIPTION_KEY,
+      (event) => event.payload?.subscriptionKey === "app-guestbook#guestbook",
     );
     expect(guestbookConnects.length).toBeGreaterThan(0);
     const announcement = (
@@ -79,13 +76,13 @@ test(
         | undefined
     )?.processor?.announcement;
     expect(announcement?.slug).toBe("guestbook");
-    expect(announcement?.emits).toContain(MILESTONE_TYPE);
+    expect(announcement?.emits).toContain("events.iterate.com/guestbook/milestone-reached");
 
     // First-class citizenship, round two: ask the STREAM for the processor's
     // runtime state — it forwards the read through the retained wake
     // connection into the userspace registry and answers with the fold.
     const runtime = await stream.getProcessorRuntimeState({
-      subscriptionKey: GUESTBOOK_SUBSCRIPTION_KEY,
+      subscriptionKey: "app-guestbook#guestbook",
     });
     const folded = runtime?.snapshot?.state as
       | { entries?: unknown[]; lastMilestone?: number }
