@@ -56,7 +56,7 @@ import type {
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
 import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
-import { LiveState, type LiveStateSubscription } from "iterate/live-state";
+import { disposeIgnoredRpcResult, LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -72,6 +72,7 @@ import {
   primeProjectDirectory,
   readProjectById,
   resolveProjectIdBySlug,
+  type ProjectIdentity,
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
@@ -176,6 +177,7 @@ import type {
   DynamicWorkerDispatchOptions,
   DynamicWorkerRef,
   ProjectWorker,
+  StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
@@ -461,6 +463,25 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
 
+function detachPlainRpcResult<T>(result: T[]): T[];
+function detachPlainRpcResult<T extends object>(result: T): T;
+function detachPlainRpcResult(result: object): object {
+  try {
+    const detached = Array.isArray(result) ? [...result] : { ...result };
+    Reflect.deleteProperty(detached, Symbol.dispose);
+    return detached;
+  } finally {
+    try {
+      disposeIgnoredRpcResult(result);
+    } catch (error) {
+      // The remote method has already succeeded and its plain data is safely
+      // detached. Cleanup failure must stay observable without rewriting that
+      // authoritative outcome into a product failure.
+      console.warn("stream plain-data RPC result dispose failed", { error });
+    }
+  }
+}
+
 /**
  * Durable event stream capability.
  *
@@ -523,10 +544,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // had to treat it as fatal (the stream-browser double-kill e2e's old CI
   // fixme). Stub-returning methods (readEvents, subscribe) stay bare — a
   // `.catch` would collapse the returned stub — and their data legs already
-  // ride the tagged methods.
+  // ride the tagged methods. Native Workers RPC also makes every object-valued
+  // result disposable: detach its plain data, then release the invocation here
+  // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -541,10 +565,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** One event by offset or idempotencyKey; undefined when it does not exist.
    * Point reads return ephemeral rows too — but those rows are evictable, so
    * an offset that once resolved may later read as undefined. */
-  getEvent(
+  async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    if (result === undefined) return undefined;
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -554,8 +580,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * `afterOffset: events.at(-1).offset`; reading a long stream without paging
    * shows you the beginning, not the head.
    */
-  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+  async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -583,7 +610,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // Preserve the DO's validation error for invalid timeouts instead of
     // manufacturing a deadline from NaN/Infinity/a non-positive duration.
     if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
-      return await this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+      const result = await this.durableObjectStub
+        .waitForEvent(args)
+        .catch(rethrowStreamUnavailable);
+      return detachPlainRpcResult(result);
     }
 
     const deadline = Date.now() + args.timeoutMs;
@@ -632,7 +662,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
             afterOffset: replayAfterOffset,
             timeoutMs: remoteTimeoutMs,
           }),
-        );
+        ).then((result) => detachPlainRpcResult(result));
       } catch (error) {
         rethrowStreamUnavailable(error);
       }
@@ -671,10 +701,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
-  getProcessorRuntimeState(args: {
+  async getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub
+      .getProcessorRuntimeState(args)
+      .catch(rethrowStreamUnavailable);
+    return result === null ? null : detachPlainRpcResult(result);
   }
 
   /**
@@ -688,7 +721,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * throttled mutual-ping round over the live connections (observer-driven
    * sampling), so a polling debug UI sees RTTs populate.
    */
-  runtimeState(): Promise<{
+  async runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, ConnectionRuntimeState>;
@@ -698,7 +731,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -4653,8 +4687,8 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
  *
  * The returned object is a path proxy: unknown properties become path segments
  * and eventually call `invokeCapability`. Dynamic workers reserve a tiny
- * platform lifecycle surface (`invokeCapability`, `kill`, disposal); everything
- * else belongs to the loaded worker.
+ * platform lifecycle surface (`invokeCapability`, `kill`, `setAlarm`,
+ * `getAlarm`, disposal); everything else belongs to the loaded worker.
  */
 class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
@@ -4724,6 +4758,9 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       children: {
         invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
         kill: "Restart the stateful worker's server-side object; stateless worker refs reject.",
+        setAlarm:
+          "Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm; the fire calls the worker class's alarm(). Stateless worker refs reject.",
+        getAlarm: "The stateful worker's armed alarm time (ms) or null.",
       },
       parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
       ref: {
@@ -4766,10 +4803,30 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
 
   /** Restart the stateful worker's server-side object; stateless worker refs reject. */
   async kill(): Promise<void> {
-    if (this.#ref.type !== "stateful") {
-      throw new Error("Dynamic worker kill() only applies to stateful worker refs.");
+    await this.#runner.kill(this.#statefulRef("kill"));
+  }
+
+  /** Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm —
+   * see {@link DynamicWorkerCapability.setAlarm} for the full contract. */
+  async setAlarm(atMs: number | null): Promise<void> {
+    if (atMs !== null && !Number.isFinite(atMs)) {
+      throw new Error("Dynamic worker setAlarm() requires a finite ms timestamp or null.");
     }
-    await this.#runner.kill(this.#ref);
+    await this.#runner.setAlarm(this.#statefulRef("setAlarm"), atMs);
+  }
+
+  /** The stateful worker's armed alarm time (ms since epoch), or null. */
+  async getAlarm(): Promise<number | null> {
+    return await this.#runner.getAlarm(this.#statefulRef("getAlarm"));
+  }
+
+  /** The lifecycle verbs above are durable-identity concepts: they exist for
+   * stateful refs only, and reject the rest with the verb's name. */
+  #statefulRef(verb: string): StatefulDynamicWorkerRef {
+    if (this.#ref.type !== "stateful") {
+      throw new Error(`Dynamic worker ${verb}() only applies to stateful worker refs.`);
+    }
+    return this.#ref;
   }
 }
 
@@ -4828,15 +4885,18 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
 
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — convenient for scripts
-   * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve once the `project/created` birth
-   * certificate has been processed
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
-   * lands). The dashboard uses the fast path to redirect into the project
-   * instantly and play creation progress from pushes.
+   * bootstrap saga has committed `project/ready` — the right shape for
+   * scripts and pipelined chains that use the project immediately.
+   *
+   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
+   * registered, directory primed, birth events appended. The saga keeps
+   * running behind the returned handle — create still drives processor birth
+   * via a post-response nudge, so no caller has to. Progress is ordinary
+   * live state (`state.reduced.ready` flips when bootstrap lands), and
+   * `waitUntilReady()` on the handle is the composable wait. Pipeline
+   * `identity()` through the create call to learn the canonical slug (auth
+   * may normalize it) in the same round trip — the dashboard does exactly
+   * that, then plays the checklist from live pushes.
    */
   async create(args: {
     organizationSlug?: string;
@@ -4907,31 +4967,31 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       path: "/",
       projectId: args.projectId,
     });
-    await timedStep("create-timing", timing, "wait-project-birth", () =>
-      project.processor.waitUntilProcessed({
-        offset: Math.max(created.offset, subscription.offset),
-        // A create must never leave its caller parked behind a wedged
-        // processor indefinitely. One project birth frame has a shared 60s
-        // sibling-barrier deadline; 75s leaves 15s for durable-delivery
-        // backoff and transport redial.
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-      }),
-    );
-    // The project now EXISTS and its birth has been processed. Whether to
-    // also wait for bootstrap readiness is the caller's choice.
-    if (args.waitUntilReady !== false) {
-      await timedStep("create-timing", timing, "wait-project-ready", () =>
-        stream.waitForEvent({
-          afterOffset: created.offset,
-          eventTypes: ["events.iterate.com/project/ready"],
-          // Tight on purpose: the saga should complete in seconds (see
-          // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-          // be fixed, not waited out). Preview CI warms slots before the suites.
-          timeoutMs: 60_000,
+    // Both lanes drive processor birth through the same wait; they differ
+    // only in who pays for it. A create must never leave its caller parked
+    // behind a wedged processor indefinitely: one project birth frame has a
+    // shared 60s sibling-barrier deadline; 75s leaves 15s for
+    // durable-delivery backoff and transport redial.
+    const driveBirth = (step: string) =>
+      timedStep("create-timing", timing, step, () =>
+        project.processor.waitUntilProcessed({
+          offset: Math.max(created.offset, subscription.offset),
+          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
         }),
       );
+    // Fast path: identity + directory + birth events are enough for callers
+    // that watch the saga as live state. Nobody is left waiting, so create
+    // itself must stay the guaranteed birth driver: nudge the processor
+    // after this response instead of parking the caller behind it. A failed
+    // nudge is telemetry, not a create failure — durable delivery retries
+    // and the checklist's stall detector cover the rest.
+    if (args.waitUntilReady === false) {
+      this.props.ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
+      return project;
     }
 
+    await driveBirth("wait-project-birth");
+    await timedStep("create-timing", timing, "wait-project-ready", () => project.waitUntilReady());
     return project;
   }
 
@@ -4943,6 +5003,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * project into the user's claims); the admin lane only needs an id. Admin
    * callers may bring their own id (test fixtures); we never mint prj_ ids
    * locally when the directory is configured.
+   *
+   * EVERY user principal takes the user lane, including platform-admin users
+   * creating from the dashboard. Admin-ness must not reroute a human create
+   * into the fixture lane: that lane mints a bare id with no org-owned
+   * directory row, so the project would never enter the creator's claims
+   * (project list, slug routes) and org members could never find it. The
+   * mint-only lane is for principal-less admin credentials (admin API secret,
+   * trusted-internal) whose fixtures live outside any customer organization.
    */
   async #registerProject(args: {
     organizationSlug?: string;
@@ -4951,7 +5019,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   }): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
     const userPrincipal = userPrincipalOf(this.props.auth);
 
-    if (userPrincipal && !this.props.auth.isAdmin()) {
+    if (userPrincipal) {
       const organizationSlug = resolveOrganizationSlugForCreate(
         userPrincipal,
         args.organizationSlug,
@@ -5409,6 +5477,58 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** The project this itx is scoped into. */
   get projectId(): string {
     return this.#props.projectId;
+  }
+
+  /**
+   * Canonical identity from the project directory: id, slug (the auth
+   * worker's normalized form — what URLs and ingress hostnames use),
+   * organization, and display name. A directory read only — no project DO
+   * dial — so it is safe pre-birth and cheap to pipeline through
+   * `projects.create()`.
+   */
+  async identity(): Promise<ProjectIdentity> {
+    // readProjectById folds transient KV read errors into null; one retry
+    // keeps a blip from reporting a just-created project as missing.
+    const record =
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId)) ??
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId));
+    if (record == null) {
+      throw new Error(`Project ${this.#props.projectId} is missing from the project directory.`);
+    }
+    return {
+      projectId: record.id,
+      slug: record.slug,
+      organizationId: record.organizationId,
+      name: record.name,
+    };
+  }
+
+  /**
+   * Resolve once the bootstrap saga has committed `project/ready`. Replays
+   * stream history first, so an already-ready project resolves immediately,
+   * and dialing the processor here heals a lost birth wake rather than just
+   * observing. The composable partner of
+   * `projects.create({ waitUntilReady: false })`.
+   */
+  async waitUntilReady(args?: { timeoutMs?: number }): Promise<void> {
+    // snapshot() pulls the journal through the registry's catch-up, so this
+    // wait drives a stalled saga instead of just watching it. Post-response
+    // work (waitUntil), never awaited: a wedged DO dial must not burn the
+    // caller's timeout budget before the timed waiter below even opens.
+    this.#props.ctx.waitUntil(
+      this.processor.snapshot().then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    await rootStream({ auth: this.#props.auth, projectId: this.#props.projectId }).waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/project/ready"],
+      // Tight on purpose: the saga should complete in seconds (see
+      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+      // be fixed, not waited out). Preview CI warms slots before the suites.
+      timeoutMs: args?.timeoutMs ?? 60_000,
+    });
   }
 
   /** @internal */
@@ -5916,11 +6036,10 @@ export function itxForScope(props: {
 
 /**
  * The deployment-global trusted root: what a GLOBAL (`projectId: null`)
- * stream's delivery dial evaluates expressions against (`ItxEntrypoint.get()`
- * with `projectId: null` props). Session-shaped on purpose — deployment-wide
- * repos/streams live on the session — so a global repo stream's wake
- * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
- * walks the same shape a project stream's does.
+ * stream's delivery dial evaluates expressions against. Session-shaped on
+ * purpose — deployment-wide repos/streams live on the session — so a global
+ * repo stream's wake expression (`["repos", ["get", path], "processor",
+ * "wakeStreamSubscriber"]`) walks the same shape a project stream's does.
  */
 export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
   return new SessionRpcTarget(props);

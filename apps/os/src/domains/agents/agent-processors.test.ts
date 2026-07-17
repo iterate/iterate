@@ -1818,6 +1818,9 @@ describe("provider-neutral context projection", () => {
       events: stream.events,
       llmRequestOffset: requested.offset,
     });
+    expect(body.messages[0]?.content).toContain(
+      'itx.streams.get("/stream/path").getEvent({ offset: 123 })',
+    );
     for (const index of externalActors.keys()) {
       expect(
         body.messages.find((message) => message.content.endsWith(`external-${index}`)),

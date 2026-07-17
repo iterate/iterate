@@ -81,6 +81,22 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
+   * Canonical identity from the project directory: id, slug (the auth
+   * worker's normalized form — what URLs and ingress hostnames use),
+   * organization, and display name. A directory read only — no project DO
+   * dial — so it is safe pre-birth and cheap to pipeline through
+   * `projects.create()`.
+   */
+  identity(): Promise<ProjectIdentity>;
+  /**
+   * Resolve once the bootstrap saga has committed `project/ready`. Replays
+   * stream history first, so an already-ready project resolves immediately,
+   * and dialing the processor here heals a lost birth wake rather than just
+   * observing. The composable partner of
+   * `projects.create({ waitUntilReady: false })`.
+   */
+  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
+  /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
    * capability (built-ins + dynamic mounts), the children map, and the
    * `Project` declaration in `types` (the full surface is one
@@ -213,15 +229,18 @@ export interface ProjectCollection {
   get(idOrSlug: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — convenient for scripts
-   * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve once the `project/created` birth
-   * certificate has been processed
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
-   * lands). The dashboard uses the fast path to redirect into the project
-   * instantly and play creation progress from pushes.
+   * bootstrap saga has committed `project/ready` — the right shape for
+   * scripts and pipelined chains that use the project immediately.
+   *
+   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
+   * registered, directory primed, birth events appended. The saga keeps
+   * running behind the returned handle — create still drives processor birth
+   * via a post-response nudge, so no caller has to. Progress is ordinary
+   * live state (`state.reduced.ready` flips when bootstrap lands), and
+   * `waitUntilReady()` on the handle is the composable wait. Pipeline
+   * `identity()` through the create call to learn the canonical slug (auth
+   * may normalize it) in the same round trip — the dashboard does exactly
+   * that, then plays the checklist from live pushes.
    */
   create(args: {
     organizationSlug?: string;
@@ -1741,6 +1760,18 @@ export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
 
+/**
+ * What `itx.identity()` returns: the directory's canonical project record,
+ * with the itx surface's `projectId` field name (the surface always says
+ * `projectId`; `id` is the directory/list convention).
+ */
+export type ProjectIdentity = {
+  projectId: string;
+  slug: string;
+  organizationId: string | null;
+  name: string;
+};
+
 /** What a project itx's `__describe()` returns: the Description convention plus identity and the capability inventory. */
 export type ProjectDescription = Description & {
   capabilities: CapabilityDescription[];
@@ -1942,11 +1973,28 @@ export type StreamPushEventBatch = {
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 
-/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
+/**
+ * Dynamic worker RPC stub plus platform-owned lifecycle operations. The
+ * lifecycle names are platform verbs: a worker method with the same name is
+ * shadowed on this stub (still reachable via
+ * `invokeCapability({ path: [...] })`).
+ */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
   Disposable & {
     /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
     kill(): Promise<void>;
+    /**
+     * Arm (ms timestamp) — or with null, disarm — the stateful worker's
+     * durable alarm; the fire calls the worker class's own `alarm(alarmInfo)`
+     * method, retried by the platform if it throws. Facets have no native
+     * alarms in workerd, so the hosting Durable Object keeps the real one on
+     * the worker's behalf. Stateless worker refs reject. Inside the worker,
+     * prefer `withStatefulWorkerAlarms` from `iterate/sdk`, which presents
+     * this as the ordinary `ctx.storage` alarm API.
+     */
+    setAlarm(atMs: number | null): Promise<void>;
+    /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */
+    getAlarm(): Promise<number | null>;
   };
 
 /** One entry of a session's project catalog (`session.projects.list()`). */
