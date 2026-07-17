@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
+import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
+import {
+  mirrorLockVersionVector,
+  streamMirrorWriterLockName,
+} from "~/domains/streams/client-libraries/browser/stream-leader.ts";
 
 // Local reproduction of CI conditions (slow runner + real network to a deployed worker).
 // Example: E2E_CPU_THROTTLE=6 E2E_NET_LATENCY_MS=100 WORKER_URL=https://... pnpm playwright.
@@ -1218,25 +1223,21 @@ async function holdLegacyWriterLock(page: Page, streamPath: string) {
 }
 
 async function holdCurrentWriterLock(page: Page, streamPath: string) {
-  await page.evaluate(async (path) => {
-    // Must match the lock a live mirror runtime requests, or the fresh tab below
-    // would elect itself leader and this "empty follower" test would be vacuous.
-    // Source of truth: streamMirrorWriterLockName + mirrorLockVersionVector in
-    // apps/os/.../browser/stream-leader.ts. Format:
-    //   stream-writer:<projectId>:<path>:browser-stream-mirror:<versionVector>
-    // versionVector = the canonical members' `<slug>@<schemaVersion>` sorted and
-    // joined by "|" (browser-feed@4, browser-raw-events@7). Bump here whenever a
-    // member's schemaVersion changes — that bump is exactly what this lock guards.
+  const lockName = streamMirrorWriterLockName({
+    projectId: "default",
+    streamPath,
+    versionVector: mirrorLockVersionVector(CANONICAL_MIRROR_PROCESSORS),
+  });
+  await page.evaluate(async (name) => {
+    // Derive this from the same canonical processor set as the live mirror. A
+    // stale lock name makes the test vacuous because the page elects itself.
     await new Promise<void>((resolve) => {
-      void navigator.locks.request(
-        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@4|browser-raw-events@7`,
-        async () => {
-          resolve();
-          await new Promise(() => {});
-        },
-      );
+      void navigator.locks.request(name, async () => {
+        resolve();
+        await new Promise(() => {});
+      });
     });
-  }, streamPath);
+  }, lockName);
 }
 
 function sqliteScalar(dbPath: string, sql: string) {
