@@ -59,17 +59,4 @@ describe("githubWebhookAssociations", () => {
       mentionedUsers: ["iterate", "alice"],
     });
   });
-
-  it("keeps push repository identity without inventing a PR association", () => {
-    expect(
-      githubWebhookAssociations({
-        id: "delivery-1",
-        name: "push",
-        payload: { ref: "refs/heads/main", repository },
-      }),
-    ).toEqual({
-      mentionedUsers: [],
-      repository: { id: 101, owner: "acme", repo: "widgets" },
-    });
-  });
 });

@@ -1,10 +1,10 @@
 import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
+  type AgentCreateInput,
   type GithubRepoLink,
   type Project,
   type StreamEvent,
-  type StreamEventInput,
 } from "iterate/sdk";
 
 // This is ordinary project policy. The linked GitHub repository for repoPath
@@ -52,17 +52,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
       case "events.iterate.com/github/webhook-received": {
-        const associations = event.payload?.associations;
-        if (
-          event.source?.crossPostedFrom !== undefined ||
-          typeof associations !== "object" ||
-          associations === null ||
-          !("pullRequest" in associations)
-        ) {
-          break;
+        if (event.source?.crossPostedFrom === undefined) {
+          using itx = await this.env.ITX.get();
+          await handleGithubPullRequestWebhook(itx, event);
         }
-        using itx = await this.env.ITX.get();
-        await handleGithubPullRequestWebhook(itx, event);
         break;
       }
       default:
@@ -158,9 +151,9 @@ function githubMentionTask(input: { login: string; number: number; route: Github
  */
 export async function handleGithubPullRequestWebhook(itx: Project, event: StreamEvent) {
   if (
-    event.type !== "events.iterate.com/github/webhook-received" ||
-    event.source?.crossPostedFrom !== undefined ||
-    event.payload === undefined
+    event.payload === undefined ||
+    typeof event.payload.associations !== "object" ||
+    event.payload.associations === null
   ) {
     return;
   }
@@ -198,13 +191,14 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
   const action = webhook.body.action;
   const agentPath = `/agents${githubPullRequests.repoPath}/pr/${number}`;
   const agent = itx.agents.get(agentPath);
-  if (webhook.delivery.name === "pull_request" && action === "opened") {
-    await agent.create({ systemPrompt: pullRequestAgentSystemPrompt });
-  } else if (
-    (await agent.stream.getEvent({
-      idempotencyKey: `agent/created:${itx.projectId}:${agentPath}`,
-    })) === undefined
-  ) {
+  const exists =
+    (
+      await agent.stream.getEvents({
+        eventTypes: ["events.iterate.com/agent/created"],
+        limit: 1,
+      })
+    ).length > 0;
+  if (!exists && !(webhook.delivery.name === "pull_request" && action === "opened")) {
     return;
   }
 
@@ -215,16 +209,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
     streamPath: event.path,
     type: "event",
   };
-  const agentEvents: StreamEventInput[] = [
-    {
-      type: "events.iterate.com/agent/status-changed",
-      idempotencyKey: "github-pr/status",
-      payload: {
-        icon: "github",
-        note: `${repository.owner}/${repository.repo}#${number}`,
-        title: `PR #${number}`,
-      },
-    },
+  const agentEvents: NonNullable<AgentCreateInput["initialEvents"]> = [
     {
       type: event.type,
       payload: event.payload,
@@ -263,7 +248,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
     const marker = `<!-- iterate-ai-lint:${repository.id}:policy:${githubPullRequests.policyVersion}:head:${headSha} -->`;
     agentEvents.push({
       type: "events.iterate.com/agents/context-added",
-      idempotencyKey: `github-pr/review:${repository.id}:${githubPullRequests.policyVersion}:${headSha}`,
+      idempotencyKey: `github-pr/review:${route.connection}:${repository.id}:${repository.owner}/${repository.repo}:${appSlug}:${githubPullRequests.policyVersion}:${headSha}`,
       payload: {
         content: githubReviewTask({
           appSlug,
@@ -305,7 +290,21 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
     });
   }
 
-  await agent.stream.append(...agentEvents);
+  if (exists) {
+    await agent.stream.append(...agentEvents);
+  } else {
+    await agent.create({
+      systemPrompt: pullRequestAgentSystemPrompt,
+      initialEvents: [
+        {
+          type: "events.iterate.com/agent/status-changed",
+          idempotencyKey: "github-pr/status",
+          payload: { icon: "github", title: `PR #${number}` },
+        },
+        ...agentEvents,
+      ],
+    });
+  }
 }
 
 type GithubWebhookPayload = {

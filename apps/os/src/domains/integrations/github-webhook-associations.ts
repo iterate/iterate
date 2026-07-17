@@ -9,8 +9,7 @@ type RelevantGithubWebhookName =
   | "pull_request"
   | "pull_request_review"
   | "pull_request_review_comment"
-  | "pull_request_review_thread"
-  | "push";
+  | "pull_request_review_thread";
 
 type MentionableGithubContent =
   | EmitterWebhookEvent<"issue_comment">["payload"]["comment"]
@@ -33,7 +32,6 @@ export function githubWebhookAssociations(input: {
     case "pull_request_review":
     case "pull_request_review_comment":
     case "pull_request_review_thread":
-    case "push":
       break;
     default:
       return {};
@@ -81,8 +79,6 @@ export function githubWebhookAssociations(input: {
     case "pull_request_review_comment":
       pullRequestNumber = event.payload.pull_request.number;
       content = event.payload.comment;
-      break;
-    case "push":
       break;
   }
 

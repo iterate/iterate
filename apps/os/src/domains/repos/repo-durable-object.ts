@@ -741,9 +741,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const stored = this.ctx.storage.kv.get<unknown>(GITHUB_LINK_KV_KEY);
     if (stored === undefined) return null;
     if (isGithubLinkRecord(stored)) return stored;
-    throw new Error(
-      "Stored GitHub link is invalid or predates stable repository IDs; recreate or relink this project before using GitHub-backed repo operations.",
-    );
+    throw new Error("Stored GitHub link does not satisfy GithubRepoLink.");
   }
 
   // In both link verbs the journal append comes FIRST and the KV write last:

@@ -98,11 +98,12 @@ Provider payloads remain decoded JSON data, never trusted instructions.
 GitHub appends exactly one `events.iterate.com/github/webhook-received` fact per
 delivery to the connection stream. Its payload contains the complete decoded
 GitHub JSON body, delivery identity, installation ID, and a small
-runtime-checked `associations` projection (repository, pull requests, actor,
-content author, and mentions). Userspace consumers can segment the journal by
-those associations while retaining the original provider shape for replay and
-debugging; the integration does not also invent normalized pull-request event
-types or decide which agents should exist.
+`associations` projection (repository, optional subject pull request, content
+author, and mentions). Octokit's generated webhook payload types define that
+projection. Userspace consumers can segment the journal by those associations
+while retaining the original provider shape for replay and debugging; the
+integration does not also invent normalized pull-request event types or decide
+which agents should exist.
 
 Other integrations may emit a narrower typed event when that is their public
 contract. Event types are explicit codebase contracts, not values generated
@@ -205,9 +206,10 @@ Third-party vendor adapters choose one of two explicit contracts:
 
 GitHub uses the second contract. Every accepted delivery is
 `events.iterate.com/github/webhook-received`; `payload.delivery.name` retains
-names such as `pull_request` or `push`, and `payload.delivery.action` retains
-actions such as `opened`. Consumers can therefore interpret new GitHub webhook
-variants without the integration inventing a parallel event-type hierarchy.
+names such as `pull_request` or `push`, while actions such as `opened` remain in
+the complete native `payload.body.action`. Consumers can therefore interpret
+new GitHub webhook variants without the integration inventing a parallel
+event-type hierarchy.
 Slack and other adapters may emit narrower domain facts when that is their
 documented contract. Do not mix both representations for the same delivery.
 

@@ -17,7 +17,6 @@ function webhook(input?: {
   appSlug?: string;
   authorAssociation?: string;
   authorType?: string;
-  crossPosted?: boolean;
   draft?: boolean;
   headSha?: string;
   installationId?: string;
@@ -38,22 +37,6 @@ function webhook(input?: {
     createdAt: "2026-07-17T12:00:00.000Z",
     offset,
     path: input?.path ?? "/integrations/github/install-789",
-    ...(input?.crossPosted
-      ? {
-          source: {
-            crossPostedFrom: [
-              {
-                subscriptionKey: "github-repo:/repos/config",
-                createdAt: "2026-07-17T11:59:59.000Z",
-                offset: 10,
-                path: "/integrations/github/install-789",
-                projectId: "prj_1",
-                type: "events.iterate.com/github/webhook-received",
-              },
-            ],
-          },
-        }
-      : {}),
     payload: {
       appSlug: input?.appSlug ?? "iterate",
       associations: {
@@ -98,27 +81,37 @@ function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null 
       payload: { config: {} },
     });
   }
-  const create = vi.fn(async (path: string, request: { systemPrompt?: string }) => {
-    births.set(path, {
-      type: "events.iterate.com/agent/created",
-      createdAt: "2026-07-17T12:00:01.000Z",
-      idempotencyKey: `agent/created:prj_1:${path}`,
-      offset: 1,
-      path,
-      payload: { config: { systemPrompt: request.systemPrompt } },
-    });
-  });
   const appendBatches: Array<{ events: StreamEventInput[]; path: string }> = [];
   const append = vi.fn(async (path: string, ...events: StreamEventInput[]) => {
     appendBatches.push({ events, path });
     return [];
   });
-  const getEvent = vi.fn(async (path: string) => births.get(path));
+  const create = vi.fn(
+    async (
+      path: string,
+      request: { initialEvents?: StreamEventInput[]; systemPrompt?: string },
+    ) => {
+      births.set(path, {
+        type: "events.iterate.com/agent/created",
+        createdAt: "2026-07-17T12:00:01.000Z",
+        idempotencyKey: `agent/created:prj_1:${path}`,
+        offset: 1,
+        path,
+        payload: { config: { systemPrompt: request.systemPrompt } },
+      });
+      await append(path, ...(request.initialEvents ?? []));
+    },
+  );
+  const getEvents = vi.fn(async (path: string) => {
+    const birth = births.get(path);
+    return birth === undefined ? [] : [birth];
+  });
   const agentGet = vi.fn((path: string) => ({
-    create: (request: { systemPrompt?: string }) => create(path, request),
+    create: (request: { initialEvents?: StreamEventInput[]; systemPrompt?: string }) =>
+      create(path, request),
     stream: {
       append: (...events: StreamEventInput[]) => append(path, ...events),
-      getEvent: () => getEvent(path),
+      getEvents: () => getEvents(path),
     },
   }));
   const snapshot = vi.fn(async () => ({
@@ -134,7 +127,7 @@ function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null 
   // This fake implements the handler's three RPC calls; the generated Project
   // interface is intentionally much larger, so a structural cast is unavoidable.
   const itx = project as unknown as Project;
-  return { agentGet, append, appendBatches, create, getEvent, itx, repoGet };
+  return { agentGet, append, appendBatches, create, getEvents, itx, repoGet };
 }
 
 describe("userspace GitHub pull-request routing", () => {
@@ -166,7 +159,7 @@ describe("userspace GitHub pull-request routing", () => {
       },
     });
     expect(test.appendBatches[0]?.events[2]).toMatchObject({
-      idempotencyKey: "github-pr/review:101:1:head-abc",
+      idempotencyKey: "github-pr/review:install-789:101:acme/widgets:iterate:1:head-abc",
       payload: {
         key: "github/review-task",
         llmRequestPolicy: { behaviour: "interrupt-current-request" },
@@ -194,6 +187,21 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.append).not.toHaveBeenCalled();
   });
 
+  it("does not recreate the agent when an opened delivery is redelivered", async () => {
+    const test = harness();
+    const event = webhook();
+
+    await handleGithubPullRequestWebhook(test.itx, event);
+    await handleGithubPullRequestWebhook(test.itx, event);
+
+    expect(test.create).toHaveBeenCalledOnce();
+    expect(test.appendBatches).toHaveLength(2);
+    expect(test.appendBatches[1]?.events.map((item) => item.idempotencyKey)).toEqual([
+      "github-pr/webhook:/integrations/github/install-789:12",
+      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-abc",
+    ]);
+  });
+
   it("reuses one agent, interrupts on a new head, and deduplicates an unchanged head", async () => {
     const test = harness({ agentExists: true });
 
@@ -211,11 +219,11 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).not.toHaveBeenCalled();
-    const reviews = test.appendBatches.map((batch) => batch.events[2]);
+    const reviews = test.appendBatches.map((batch) => batch.events[1]);
     expect(reviews.map((review) => review?.idempotencyKey)).toEqual([
-      "github-pr/review:101:1:head-one",
-      "github-pr/review:101:1:head-two",
-      "github-pr/review:101:1:head-two",
+      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-one",
+      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-two",
+      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-two",
     ]);
     expect(reviews[1]).toMatchObject({
       payload: { llmRequestPolicy: { behaviour: "interrupt-current-request" } },
@@ -223,7 +231,6 @@ describe("userspace GitHub pull-request routing", () => {
   });
 
   it.each([
-    ["cross-posted", webhook({ crossPosted: true })],
     ["wrong connection", webhook({ path: "/integrations/github/other" })],
     ["wrong installation", webhook({ installationId: "999" })],
     ["wrong repository", webhook({ repositoryId: 202 })],
@@ -242,14 +249,16 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ owner: "renamed", repo: "widgets-next" }),
     );
 
-    expect(test.appendBatches[0]?.events[0]).toMatchObject({
-      payload: { note: "renamed/widgets-next#7" },
+    expect(test.appendBatches[0]?.events[0]).toEqual({
+      type: "events.iterate.com/agent/status-changed",
+      idempotencyKey: "github-pr/status",
+      payload: { icon: "github", title: "PR #7" },
     });
     expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
       "renamed/widgets-next pull request #7",
     );
     expect(test.appendBatches[0]?.events[2]?.idempotencyKey).toBe(
-      "github-pr/review:101:1:head-abc",
+      "github-pr/review:install-789:101:renamed/widgets-next:iterate:1:head-abc",
     );
   });
 
@@ -260,14 +269,14 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
         llmRequestPolicy: { behaviour: "after-current-request" },
       },
     });
-    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain("checkCollaborator");
+    expect(JSON.stringify(test.appendBatches[0]?.events[1])).toContain("checkCollaborator");
 
     const ignored = harness({ agentExists: true });
     await handleGithubPullRequestWebhook(
@@ -279,7 +288,7 @@ describe("userspace GitHub pull-request routing", () => {
         name: "issue_comment",
       }),
     );
-    expect(ignored.appendBatches[0]?.events).toHaveLength(2);
+    expect(ignored.appendBatches[0]?.events).toHaveLength(1);
   });
 
   it("creates draft history without waking a review", async () => {
@@ -295,8 +304,8 @@ describe("userspace GitHub pull-request routing", () => {
       test.itx,
       webhook({ action: "resolved", name: "pull_request_review_thread" }),
     );
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(1);
+    expect(test.appendBatches[0]?.events[0]).toMatchObject({
       payload: { body: { action: "resolved" }, delivery: { name: "pull_request_review_thread" } },
       type: "events.iterate.com/github/webhook-received",
     });

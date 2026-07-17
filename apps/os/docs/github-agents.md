@@ -74,17 +74,10 @@ proof of concept:
 protected override async processEvent(event: StreamEvent): Promise<void> {
   switch (event.type) {
     case "events.iterate.com/github/webhook-received": {
-      const associations = event.payload?.associations;
-      if (
-        event.source?.crossPostedFrom !== undefined ||
-        typeof associations !== "object" ||
-        associations === null ||
-        !("pullRequest" in associations)
-      ) {
-        break;
+      if (event.source?.crossPostedFrom === undefined) {
+        using itx = await this.env.ITX.get();
+        await handleGithubPullRequestWebhook(itx, event);
       }
-      using itx = await this.env.ITX.get();
-      await handleGithubPullRequestWebhook(itx, event);
       break;
     }
     default:
@@ -102,11 +95,13 @@ the project-controlled repo path:
 /repos/team/service -> /agents/repos/team/service/pr/42
 ```
 
-Only `pull_request:opened` calls the idempotent `agent.create`. Later events
-require the canonical agent birth event, so they cannot create an agent by
-accident. A valid delivery appends three kinds of facts to the PR stream:
+Only `pull_request:opened` calls the idempotent `agent.create`. The status,
+webhook copy, and first review task are passed as its atomic `initialEvents`.
+Later events require the canonical agent birth event, so they cannot create an
+agent by accident. A valid delivery can append three kinds of facts to the PR
+stream:
 
-- a stable title/icon status;
+- a stable title/icon status at birth;
 - the complete webhook with explicit cross-post provenance; and
 - when appropriate, one developer task that wakes or interrupts the agent.
 
@@ -145,11 +140,13 @@ Suppressions are source comments:
 // iterate-lint-disable-next-line typescript/explain-type-cast -- checked above
 ```
 
-The task idempotency key is semantic: repository ID, policy version, and head
-SHA. Repeated webhooks for the same policy/head cannot restart a clean review.
-A different head or an explicit policy-version bump can. A hidden marker on
-reviews provides a second publication guard if an already-running task is
-retried:
+The task idempotency key is semantic: connection, stable repository ID,
+current owner/name coordinates, App slug, policy version, and head SHA.
+Repeated webhooks for the same route and policy/head cannot restart a clean
+review. A different head, route or App change, or explicit policy-version bump
+can. Including every call coordinate keeps an idempotency key from ever naming
+two different task payloads. A hidden marker on reviews provides a second
+publication guard if an already-running task is retried:
 
 ```html
 <!-- iterate-ai-lint:<repository-id>:policy:<version>:head:<sha> -->

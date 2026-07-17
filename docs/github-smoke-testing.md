@@ -112,9 +112,7 @@ doppler run --config prd -- pnpm cli itx run \
       connectionPath,
       originalDeliveries: connectionEvents
         .filter((event) =>
-          event.payload?.associations?.pullRequests?.some(
-            (pullRequest) => pullRequest.number === vars.pullRequest,
-          ),
+          event.payload?.associations?.pullRequest?.number === vars.pullRequest,
         )
         .map((event) => ({
           offset: event.offset,
@@ -122,8 +120,8 @@ doppler run --config prd -- pnpm cli itx run \
           delivery: event.payload?.delivery,
           associations: event.payload?.associations,
         })),
-      agentAssociation: agentEvents.find(
-        (event) => event.type === "events.iterate.com/github/pull-request-associated",
+      agentCreated: agentEvents.find(
+        (event) => event.type === "events.iterate.com/agent/created",
       ),
       copiedDeliveries: agentEvents.filter(
         (event) => event.type === "events.iterate.com/github/webhook-received",
@@ -136,13 +134,14 @@ doppler run --config prd -- pnpm cli itx run \
 ```
 
 Webhook delivery is asynchronous; retry the read for up to a minute. Require one
-original `opened` delivery whose repository ID and installation match the
-link, the same complete delivery copied to the agent stream, and one
-`pull-request-associated` fact for `/repos/config`, the repository ID, and the
-recorded PR. The processor subscriptions must contain `agent` and must not
-contain the removed `github-agent`. This proves the global directory assigned
-the webhook to the right connection and the current userspace config worker
-routed it without historical platform state.
+original `pull_request:opened` delivery whose singular pull-request association,
+repository ID, and installation match the link; the canonical `agent/created`
+fact at `/agents/repos/config/pr/<number>`; and the same complete delivery copied
+to that stream. The processor subscriptions must contain the ordinary `agent`
+and `capability-host` processors and must not contain the removed
+`github-agent`. This proves the installation directory selected the right
+connection and the current userspace config worker created and routed the PR
+agent without a platform GitHub-agent processor.
 
 Close the PR and delete its branch after recording evidence:
 
