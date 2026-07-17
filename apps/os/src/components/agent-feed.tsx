@@ -13,10 +13,10 @@ import {
   RefreshCwIcon,
 } from "lucide-react";
 import {
+  formatAgentUiActivitySummary,
   isAgentUiActivityWorking,
   summarizeAgentUiActivity,
   type AgentUiActivity,
-  type AgentUiActivitySummary,
   type AgentUiFileAttachment,
   type AgentUiItem,
   type AgentUiMessageItem,
@@ -304,7 +304,10 @@ function AgentActivityRow({
         ) : (
           <CodeIcon data-icon="inline-start" className="text-muted-foreground/60" />
         )}
-        {activitySummary(activity, summary)}
+        {formatAgentUiActivitySummary(activity, {
+          summary,
+          interruptedPartialHint: "click to see partial response",
+        })}
         <ChevronRightIcon
           data-icon="inline-end"
           className={cn("text-muted-foreground/50 transition-transform", expanded && "rotate-90")}
@@ -479,29 +482,6 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
       <span className="shrink-0 font-mono">{formatFileSize(file.size)}</span>
     </a>
   );
-}
-
-function activitySummary(activity: AgentUiActivity, summary: AgentUiActivitySummary): string {
-  const parts: string[] = [];
-  if (summary.codeCount > 0) parts.push(`Ran code ${summary.codeCount}×`);
-  parts.push(`${summary.requestCount} request${summary.requestCount === 1 ? "" : "s"}`);
-  if (summary.retryCount > 0) {
-    parts.push(`${summary.retryCount} ${summary.retryCount === 1 ? "retry" : "retries"}`);
-  }
-  if (summary.outcome === "interrupted") {
-    parts.push(
-      summary.interruptedWithPartialResponse
-        ? "interrupted (click to see partial response)"
-        : "interrupted",
-    );
-  }
-  if (summary.outcome === "recovered") parts.push("recovered");
-  if (summary.outcome === "restart-failed") parts.push("restart failed");
-  if (summary.outcome === "failed") parts.push("failed");
-  const totalMs =
-    activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
-  if (totalMs != null && totalMs > 0) parts.push(formatSeconds(totalMs));
-  return parts.join(" · ");
 }
 
 // ---------------------------------------------------------------------------
@@ -696,7 +676,12 @@ export function AgentLiveActivity({
           ) : (
             <span className="shrink-0 text-[11px] leading-none text-muted-foreground/60">✦</span>
           )}
-          <span>{activitySummary(live, doneSummary)}</span>
+          <span>
+            {formatAgentUiActivitySummary(live, {
+              summary: doneSummary,
+              interruptedPartialHint: "click to see partial response",
+            })}
+          </span>
           <ChevronRightIcon
             className={cn(
               "size-2.5 text-muted-foreground/50 transition-transform",

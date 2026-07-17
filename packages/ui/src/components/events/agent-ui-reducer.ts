@@ -142,6 +142,44 @@ export function summarizeAgentUiActivity(
   };
 }
 
+/** Shared collapsed copy, parameterized only by a surface-specific interaction hint. */
+export function formatAgentUiActivitySummary(
+  activity: AgentUiActivity,
+  options: {
+    summary?: AgentUiActivitySummary;
+    interruptedPartialHint?: string;
+  } = {},
+): string {
+  const summary = options.summary ?? summarizeAgentUiActivity(activity);
+  const parts: string[] = [];
+  if (summary.codeCount > 0) parts.push(`Ran code ${summary.codeCount}×`);
+  parts.push(`${summary.requestCount} request${summary.requestCount === 1 ? "" : "s"}`);
+  if (summary.retryCount > 0) {
+    parts.push(`${summary.retryCount} ${summary.retryCount === 1 ? "retry" : "retries"}`);
+  }
+  if (summary.outcome === "interrupted") {
+    parts.push(
+      summary.interruptedWithPartialResponse && options.interruptedPartialHint != null
+        ? `interrupted (${options.interruptedPartialHint})`
+        : "interrupted",
+    );
+  }
+  if (summary.outcome === "recovered") parts.push("recovered");
+  if (summary.outcome === "restart-failed") parts.push("restart failed");
+  if (summary.outcome === "failed") parts.push("failed");
+  const totalMs =
+    activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
+  if (totalMs != null && totalMs > 0) parts.push(formatAgentUiDuration(totalMs));
+  return parts.join(" · ");
+}
+
+function formatAgentUiDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  const seconds = durationMs / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+
 export function isAgentUiActivityWorking(activity: AgentUiActivity | null): boolean {
   return (
     activity != null &&

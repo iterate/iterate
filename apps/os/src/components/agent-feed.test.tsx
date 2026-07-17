@@ -29,6 +29,17 @@ function llmStep(
   };
 }
 
+function activity(overrides: Partial<AgentUiActivity>): AgentUiActivity {
+  return {
+    kind: "activity",
+    id: "activity:test",
+    status: "done",
+    startedAtMs: 0,
+    steps: [],
+    ...overrides,
+  };
+}
+
 function renderActivity(activity: AgentUiActivity, expanded = true): HTMLDivElement {
   const container = document.createElement("div");
   container.innerHTML = renderToStaticMarkup(
@@ -36,7 +47,17 @@ function renderActivity(activity: AgentUiActivity, expanded = true): HTMLDivElem
       item={activity}
       toggledIds={expanded ? new Set([activity.id]) : new Set()}
       onToggle={() => {}}
+      onInspectLlmRequest={() => {}}
+      onInspectScriptExecution={() => {}}
     />,
+  );
+  return container;
+}
+
+function renderLiveActivity(live: AgentUiActivity): HTMLDivElement {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
   );
   return container;
 }
@@ -45,9 +66,7 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
   vi.setSystemTime(now);
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:1",
+  const live = activity({
     status: "running",
     startedAtMs: now - 8_000,
     phase: "llm",
@@ -85,12 +104,9 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
         startedAtMs: now - 3_400,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
-  );
+  const container = renderLiveActivity(live);
   const summary = container.querySelector('[data-testid="agent-live-summary"]');
   const status = container.querySelector('[data-testid="agent-live-status"]');
 
@@ -103,9 +119,7 @@ test("the accumulated line does not claim that the active operation already fini
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
   vi.setSystemTime(now);
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:first-script",
+  const live = activity({
     status: "running",
     startedAtMs: now - 500,
     phase: "script",
@@ -121,12 +135,9 @@ test("the accumulated line does not claim that the active operation already fini
         expiresAtMs: now + 60_000,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
-  );
+  const container = renderLiveActivity(live);
 
   expect(container.querySelector('[data-testid="agent-live-summary"]')).toBeNull();
   expect(container.querySelector('[data-testid="agent-live-status"]')?.textContent).toContain(
@@ -137,10 +148,7 @@ test("the accumulated line does not claim that the active operation already fini
 
 test("a recovered restart is calm, excludes the dead attempt, and explains the retry", () => {
   const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
-  const activity: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:recovered",
-    status: "done",
+  const recovered = activity({
     startedAtMs,
     endedAtMs: startedAtMs + 31_000,
     steps: [
@@ -154,8 +162,8 @@ test("a recovered restart is calm, excludes the dead attempt, and explains the r
       llmStep(2, startedAtMs + 6_000),
       llmStep(3, startedAtMs + 20_000),
     ],
-  };
-  const container = renderActivity(activity);
+  });
+  const container = renderActivity(recovered);
   const summary = container.querySelector('button[title^="Agent activity"]');
 
   expect(summary?.textContent).toBe("2 requests · 1 retry · recovered · 31 s");
@@ -168,34 +176,32 @@ test("a recovered restart is calm, excludes the dead attempt, and explains the r
 
 test("known and unknown cancellations stay visibly distinct from restart failure", () => {
   const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
-  const interrupted = renderActivity({
-    kind: "activity",
-    id: "activity:interrupted",
-    status: "done",
-    startedAtMs,
-    endedAtMs: startedAtMs + 5_000,
-    steps: [
-      llmStep(1, startedAtMs, {
-        outcome: "cancelled",
-        cancelReason: "interrupted-by-user-input",
-        responseText: "partial",
-      }),
-      llmStep(3, startedAtMs + 1, { outcome: "cancelled" }),
-    ],
-  });
-  const restartFailed = renderActivity({
-    kind: "activity",
-    id: "activity:restart-failed",
-    status: "done",
-    startedAtMs,
-    endedAtMs: startedAtMs + 5_000,
-    steps: [
-      llmStep(2, startedAtMs, {
-        outcome: "cancelled",
-        cancelReason: "durable-object-crashed",
-      }),
-    ],
-  });
+  const interrupted = renderActivity(
+    activity({
+      startedAtMs,
+      endedAtMs: startedAtMs + 5_000,
+      steps: [
+        llmStep(1, startedAtMs, {
+          outcome: "cancelled",
+          cancelReason: "interrupted-by-user-input",
+          responseText: "partial",
+        }),
+        llmStep(3, startedAtMs + 1, { outcome: "cancelled" }),
+      ],
+    }),
+  );
+  const restartFailed = renderActivity(
+    activity({
+      startedAtMs,
+      endedAtMs: startedAtMs + 5_000,
+      steps: [
+        llmStep(2, startedAtMs, {
+          outcome: "cancelled",
+          cancelReason: "durable-object-crashed",
+        }),
+      ],
+    }),
+  );
 
   expect(interrupted.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
     "2 requests · failed · 5 s",
@@ -212,9 +218,7 @@ test("a crash-cancel remains visibly busy while its replacement is pending", () 
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 16, 14, 41, 28);
   vi.setSystemTime(now);
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:recovering",
+  const live = activity({
     status: "running",
     startedAtMs: now - 5_000,
     steps: [
@@ -224,11 +228,8 @@ test("a crash-cancel remains visibly busy while its replacement is pending", () 
         durationMs: 5_000,
       }),
     ],
-  };
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
-  );
+  });
+  const container = renderLiveActivity(live);
 
   expect(container.querySelector('[data-testid="agent-live-summary"]')?.textContent).toContain(
     "0 requests · 1 retry",
@@ -241,9 +242,7 @@ test("a crash-cancel remains visibly busy while its replacement is pending", () 
 
 test("a resumed recovery phase shows its own status without linking to the crashed operation", () => {
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:between-operations",
+  const live = activity({
     status: "running",
     startedAtMs: now - 8_000,
     phase: "llm",
@@ -262,18 +261,9 @@ test("a resumed recovery phase shows its own status without linking to the crash
         durationMs: 2_000,
       },
     ],
-  };
+  });
 
-  const inspect = vi.fn();
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity
-      live={live}
-      toggledIds={new Set()}
-      onToggle={() => {}}
-      onInspectLlmRequest={inspect}
-    />,
-  );
+  const container = renderLiveActivity(live);
 
   const status = container.querySelector<HTMLButtonElement>('[data-testid="agent-live-status"]');
   expect(status?.disabled).toBe(true);
@@ -286,9 +276,7 @@ test("a running code row stops counting and fails visibly at its absolute deadli
   const now = Date.UTC(2026, 6, 15, 22, 0, 20);
   vi.setSystemTime(now);
   const startedAtMs = now - 10_000;
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:expired-code",
+  const live = activity({
     status: "running",
     startedAtMs,
     phase: "script",
@@ -304,12 +292,9 @@ test("a running code row stops counting and fails visibly at its absolute deadli
         expiresAtMs: startedAtMs + 5_000,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
-  );
+  const container = renderLiveActivity(live);
   const status = container.querySelector('[data-testid="agent-live-status"]');
 
   expect(status?.textContent).toContain("Code deadline exceeded 5.0s");
@@ -319,10 +304,7 @@ test("a running code row stops counting and fails visibly at its absolute deadli
 
 test("expanded activity rows are themselves inspector buttons without inline trace details", () => {
   const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
-  const activity: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:inspectors",
-    status: "done",
+  const inspected = activity({
     startedAtMs,
     endedAtMs: startedAtMs + 5_000,
     steps: [
@@ -352,18 +334,9 @@ test("expanded activity rows are themselves inspector buttons without inline tra
         expiresAtMs: startedAtMs + 60_000,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentFeedItemRow
-      item={activity}
-      toggledIds={new Set([activity.id])}
-      onToggle={() => {}}
-      onInspectLlmRequest={() => {}}
-      onInspectScriptExecution={() => {}}
-    />,
-  );
+  const container = renderActivity(inspected);
 
   const llmRow = container.querySelector('[data-testid="agent-feed-inspect-llm-request"]');
   const scriptRow = container.querySelector('[data-testid="agent-feed-inspect-script-execution"]');
@@ -378,10 +351,7 @@ test("expanded activity rows are themselves inspector buttons without inline tra
 
 test("failed script outcomes are explicit in both collapsed and expanded activity rows", () => {
   const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
-  const activity: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:failed",
-    status: "done",
+  const failed = activity({
     startedAtMs,
     endedAtMs: startedAtMs + 5_000,
     steps: [
@@ -398,16 +368,8 @@ test("failed script outcomes are explicit in both collapsed and expanded activit
         expiresAtMs: startedAtMs + 60_000,
       },
     ],
-  };
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentFeedItemRow
-      item={activity}
-      toggledIds={new Set([activity.id])}
-      onToggle={() => {}}
-      onInspectScriptExecution={() => {}}
-    />,
-  );
+  });
+  const container = renderActivity(failed);
 
   expect(container.textContent).toContain("Ran code 1× · 0 requests · failed · 5 s");
   expect(
