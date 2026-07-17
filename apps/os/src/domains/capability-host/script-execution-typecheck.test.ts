@@ -464,9 +464,10 @@ describe("script execution typecheck gate", () => {
     ).toMatchObject({ "iterate.capability_host.request_offset": 2 });
   });
 
-  it("returns the same immutable completion when a lost acknowledgement retries after fold", async () => {
+  it("returns the authoritative completion when a late settlement retries after fold", async () => {
     const stream = capabilityHostStream();
     const harness = makeProcessor({ stream });
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
     await harness.runner.catchUp();
     const request = await harness.processor.requestScript(executionIntent("async () => 42"));
     const settlement = { status: "succeeded" as const, result: 42 };
@@ -478,15 +479,90 @@ describe("script execution typecheck gate", () => {
     );
     await harness.runner.catchUp();
 
-    await expect(
-      harness.processor.settleScriptExecution(request.executionId, settlement),
-    ).resolves.toEqual(committed);
-    await expect(
-      harness.processor.settleScriptExecution(request.executionId, {
-        status: "succeeded",
-        result: 43,
-      }),
-    ).rejects.toThrow("already settled with a different immutable outcome");
+    try {
+      await expect(
+        harness.processor.settleScriptExecution(request.executionId, settlement),
+      ).resolves.toEqual(committed);
+      await expect(
+        harness.processor.settleScriptExecution(request.executionId, {
+          status: "succeeded",
+          result: 43,
+        }),
+      ).resolves.toEqual(committed);
+      expect(consoleInfo).toHaveBeenCalledWith(
+        "[capability-host] late script settlement superseded by durable outcome",
+        {
+          attemptedFailureKind: undefined,
+          attemptedStatus: "succeeded",
+          durableFailureKind: undefined,
+          durableStatus: "succeeded",
+          executionId: request.executionId,
+        },
+      );
+    } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it("reads back the authoritative completion when an unfolded late append loses the race", async () => {
+    const stream = capabilityHostStream();
+    const harness = makeProcessor({ stream });
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    await harness.runner.catchUp();
+    const request = await harness.processor.requestScript(executionIntent("async () => 42"));
+    await harness.runner.catchUp();
+
+    const [authoritative] = await stream.append({
+      type: T.completed,
+      idempotencyKey: request.completionIdempotencyKey,
+      payload: {
+        executionId: request.executionId,
+        settlement: { status: "succeeded", result: 41 },
+      },
+    });
+    expect(authoritative).toBeDefined();
+
+    // Model production's strict idempotency contract while deliberately
+    // leaving the runner one offset behind the already durable completion.
+    const append = stream.append.bind(stream);
+    stream.append = async (...inputs) => {
+      for (const input of inputs) {
+        const existing =
+          input.idempotencyKey === undefined
+            ? undefined
+            : stream.events.find((event) => event.idempotencyKey === input.idempotencyKey);
+        if (
+          existing !== undefined &&
+          JSON.stringify(existing.payload) !== JSON.stringify(input.payload)
+        ) {
+          throw new Error(
+            `idempotency key "${input.idempotencyKey}" already names a different event`,
+          );
+        }
+      }
+      return await append(...inputs);
+    };
+
+    try {
+      await expect(
+        harness.processor.settleScriptExecution(request.executionId, {
+          status: "succeeded",
+          result: 42,
+        }),
+      ).resolves.toEqual(authoritative);
+      expect(consoleInfo).toHaveBeenCalledWith(
+        "[capability-host] late script settlement superseded by durable outcome",
+        {
+          attemptedFailureKind: undefined,
+          attemptedStatus: "succeeded",
+          durableFailureKind: undefined,
+          durableStatus: "succeeded",
+          executionId: request.executionId,
+        },
+      );
+    } finally {
+      consoleInfo.mockRestore();
+    }
   });
 
   it("does not put a foreground launch behind the request-fold chain", async () => {

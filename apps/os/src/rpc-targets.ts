@@ -251,6 +251,10 @@ import {
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import {
+  settleByDeadline,
+  type DeadlineOutcome,
+} from "./domains/capability-host/execution-deadline.ts";
 import { SecretProcessorContract } from "./domains/secrets/secret-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
@@ -6573,6 +6577,8 @@ type ProcessorHostStub = ProcessorReadHost & {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
 };
 
+const PROCESSOR_WAIT_REACQUIRE_MS = 10_000;
+
 /**
  * Isolate-side relay for a Durable-Object-hosted processor.
  *
@@ -6602,26 +6608,58 @@ export class ProcessorRelayRpcTarget<State>
     this.#processorSlug = args.processorSlug;
   }
 
-  async #callProcessor<Result>(
+  async #callProcessorOutcome<Result>(
     call: (host: ProcessorHostStub) => Promise<Result>,
-  ): Promise<Result> {
+    expiresAt?: number,
+  ): Promise<DeadlineOutcome<Result>> {
+    const settle = (operation: Promise<Result>): Promise<DeadlineOutcome<Result>> =>
+      expiresAt === undefined
+        ? operation.then<DeadlineOutcome<Result>, DeadlineOutcome<Result>>(
+            (value) => ({ status: "fulfilled", value }),
+            (error: unknown) => ({ status: "rejected", error }),
+          )
+        : settleByDeadline(operation, expiresAt, Date.now);
+
     for (let attempt = 1; attempt <= 2; attempt += 1) {
+      let operation: Promise<Result>;
       try {
-        return await call(this.#host());
+        operation = Promise.resolve(call(this.#host()));
       } catch (error) {
         if (attempt === 1 && isDurableObjectLifecycleError(error)) {
-          // Deploys and evictions may reset a processor-hosting DO while its
-          // data-only method call is in flight. A fresh host dial reaches the
-          // replacement incarnation; retry exactly once so this expected
-          // lifecycle transition does not strand a durable frame. App errors
-          // are never retried, and a second lifecycle failure propagates.
           console.info("processor relay retrying after Durable Object lifecycle reset");
           continue;
         }
-        throw error;
+        return { status: "rejected", error };
       }
+      const outcome = await settle(operation);
+      if (
+        outcome.status === "rejected" &&
+        attempt === 1 &&
+        isDurableObjectLifecycleError(outcome.error)
+      ) {
+        // Deploys and evictions may reset a processor-hosting DO while its
+        // data-only method call is in flight. A fresh host dial reaches the
+        // replacement incarnation; retry exactly once so this expected
+        // lifecycle transition does not strand a durable frame. App errors
+        // are never retried, and a second lifecycle failure propagates.
+        console.info("processor relay retrying after Durable Object lifecycle reset");
+        continue;
+      }
+      return outcome;
     }
-    throw new Error("processor relay exhausted its bounded lifecycle retry");
+    return {
+      status: "rejected",
+      error: new Error("processor relay exhausted its bounded lifecycle retry"),
+    };
+  }
+
+  async #callProcessor<Result>(
+    call: (host: ProcessorHostStub) => Promise<Result>,
+  ): Promise<Result> {
+    const outcome = await this.#callProcessorOutcome(call);
+    if (outcome.status === "fulfilled") return outcome.value;
+    if (outcome.status === "rejected") throw outcome.error;
+    throw new Error("processor relay reached an impossible unbounded deadline");
   }
 
   async snapshot(): Promise<ProcessorSnapshot<State>> {
@@ -6637,19 +6675,40 @@ export class ProcessorRelayRpcTarget<State>
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
-    const deadline = input.timeoutMs === undefined ? undefined : Date.now() + input.timeoutMs;
-    await this.#callProcessor((host) => {
-      if (deadline === undefined) {
-        return waitUntilProcessorOffset(host, this.#processorSlug, input);
-      }
-      const timeoutMs = deadline - Date.now();
-      if (timeoutMs <= 0) {
-        throw new Error(
-          `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
-        );
-      }
-      return waitUntilProcessorOffset(host, this.#processorSlug, { ...input, timeoutMs });
-    });
+    if (input.timeoutMs === undefined) {
+      await this.#callProcessor((host) =>
+        waitUntilProcessorOffset(host, this.#processorSlug, input),
+      );
+      return;
+    }
+
+    const deadline = Date.now() + input.timeoutMs;
+    const timeoutError = () =>
+      new Error(
+        `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
+      );
+    while (Date.now() < deadline) {
+      // A hosting DO can be replaced without workerd rejecting an already
+      // orphaned caller-side promise. Bound each local data-only call, then
+      // redial and re-check the durable processor offset under one public
+      // deadline. settleByDeadline retains the superseded promise's rejection
+      // observer, so a late RPC failure cannot become unhandled telemetry.
+      const attemptDeadline = Math.min(deadline, Date.now() + PROCESSOR_WAIT_REACQUIRE_MS);
+      const outcome = await this.#callProcessorOutcome((host) => {
+        const timeoutMs = deadline - Date.now();
+        return timeoutMs <= 0
+          ? Promise.reject(timeoutError())
+          : waitUntilProcessorOffset(host, this.#processorSlug, { ...input, timeoutMs });
+      }, attemptDeadline);
+      if (outcome.status === "fulfilled") return;
+      if (outcome.status === "rejected") throw outcome.error;
+      if (attemptDeadline >= deadline) break;
+      console.info("processor relay re-acquiring after bounded wait slice", {
+        offset: input.offset,
+        remainingMs: deadline - Date.now(),
+      });
+    }
+    throw timeoutError();
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */

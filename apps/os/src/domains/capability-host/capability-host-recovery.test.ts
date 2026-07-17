@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Project } from "../../itx-api.generated.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import {
@@ -236,17 +236,38 @@ describe("script execution ownership recovery", () => {
 
   it("settles an expired request without running it", async () => {
     const h = makeHarness();
-    await h.stream.append({
-      type: T.requested,
-      payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now - 1 },
-    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      await h.stream.append({
+        type: T.requested,
+        payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now - 1 },
+      });
 
-    await h.deliverPending();
+      await h.deliverPending();
 
-    expect(h.stream.events.find((event) => event.type === T.completed)?.payload).toMatchObject({
-      executionId: "exec-1",
-      settlement: { failureKind: "expired", executionMayHaveOccurred: false },
-    });
+      expect(h.stream.events.find((event) => event.type === T.completed)?.payload).toMatchObject({
+        executionId: "exec-1",
+        settlement: { failureKind: "expired", executionMayHaveOccurred: false },
+      });
+      expect(consoleInfo).toHaveBeenCalledWith(
+        "[capability-host] recovering undriven script execution",
+        {
+          cancellation: "not-applicable",
+          executionId: "exec-1",
+          failureKind: "expired",
+          phase: "before-execution",
+          status: "failed",
+        },
+      );
+      expect(consoleError).not.toHaveBeenCalledWith(
+        "[capability-host] settling undriven script execution",
+        expect.anything(),
+      );
+    } finally {
+      consoleError.mockRestore();
+      consoleInfo.mockRestore();
+    }
   });
 
   it("settles a started obligation only after its absolute deadline", async () => {

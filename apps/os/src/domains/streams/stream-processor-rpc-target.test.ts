@@ -147,4 +147,77 @@ describe("ProcessorRelayRpcTarget", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it("re-acquires when a data-only processor wait is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<void>();
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    let waits = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth,
+      host: () => ({
+        readStreamProcessor: async (request) => {
+          if (request.operation !== "waitUntilProcessed") {
+            throw new Error("unexpected operation");
+          }
+          waits += 1;
+          return waits === 1 ? firstWait.promise : undefined;
+        },
+        wakeStreamSubscriber,
+      }),
+      processorSlug: "project",
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(waits).toBe(2);
+      await expect(waiting).resolves.toBeUndefined();
+      expect(consoleInfo).toHaveBeenCalledWith(
+        "processor relay re-acquiring after bounded wait slice",
+        { offset: 3, remainingMs: 20_000 },
+      );
+    } finally {
+      firstWait.reject(new Error("late rejection from superseded processor wait"));
+      await waiting.catch(() => undefined);
+      consoleInfo.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps one public timeout across orphaned data-only processor waits", async () => {
+    vi.useFakeTimers();
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const remoteTimeouts: number[] = [];
+    const relay = new ProcessorRelayRpcTarget({
+      auth,
+      host: () => ({
+        readStreamProcessor: (request) => {
+          if (request.operation !== "waitUntilProcessed") {
+            throw new Error("unexpected operation");
+          }
+          remoteTimeouts.push(request.input.timeoutMs!);
+          return new Promise<void>(() => undefined);
+        },
+        wakeStreamSubscriber,
+      }),
+      processorSlug: "project",
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    const rejected = expect(waiting).rejects.toThrow(
+      "waitUntilProcessed timed out after 30000ms waiting for offset 3",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(remoteTimeouts).toEqual([30_000, 20_000, 10_000]);
+      expect(consoleInfo).toHaveBeenCalledTimes(2);
+    } finally {
+      await waiting.catch(() => undefined);
+      consoleInfo.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
