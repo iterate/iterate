@@ -20,6 +20,16 @@ FROM project
 WHERE id = :id
 LIMIT 1;
 
+/** @name getProjectAccessForUser */
+SELECT u.role AS userRole,
+  CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS hasMembership
+FROM project p
+JOIN user u ON u.id = :userId
+LEFT JOIN member m ON m.organizationId = p.organization_id
+  AND m.userId = u.id
+WHERE p.id = :projectId
+LIMIT 1;
+
 /** @name getProjectWithOrganizationBySlug */
 SELECT p.id,
   p.organization_id AS organizationId,

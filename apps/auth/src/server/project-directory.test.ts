@@ -6,6 +6,7 @@ import {
   getProjectBySlug,
   listProjectsForUser,
   mintProjectId,
+  userCanAccessProject,
 } from "./project-directory.ts";
 
 type Query = { name: string; args: unknown[] };
@@ -242,6 +243,33 @@ describe("private auth project directory", () => {
     );
 
     assert.deepEqual(projects, [{ id: "prj_alpha", slug: "alpha", organizationId: "org_one" }]);
+  });
+
+  it("lets platform admins access an existing project without organization membership", async () => {
+    const canAccess = await userCanAccessProject(
+      { projectId: "prj_banana", userId: "usr_jonas" },
+      fakeDb((query) => {
+        assert.equal(query.name, "getProjectAccessForUser");
+        assert.deepEqual(query.args, ["usr_jonas", "prj_banana"]);
+        return [{ userRole: "admin", hasMembership: 0 }];
+      }),
+    );
+
+    assert.equal(canAccess, true);
+  });
+
+  it("requires organization membership for non-admin users", async () => {
+    for (const [rows, expected] of [
+      [[{ userRole: "user", hasMembership: 1 }], true],
+      [[{ userRole: "user", hasMembership: 0 }], false],
+      [[], false],
+    ] as const) {
+      const canAccess = await userCanAccessProject(
+        { projectId: "prj_banana", userId: "usr_regular" },
+        fakeDb(() => [...rows]),
+      );
+      assert.equal(canAccess, expected);
+    }
   });
 
   it("rejects an empty user id before querying", async () => {
