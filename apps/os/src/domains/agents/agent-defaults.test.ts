@@ -65,12 +65,7 @@ describe("agentCreationForPath", () => {
     for (const path of paths) {
       const defaults = defaultsFor(path);
       expect(defaults.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
-      expect(createdEvent(path)?.payload).toEqual({
-        config: {
-          llm: { model: "openai/gpt-5.6-sol" },
-          systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
-        },
-      });
+      expect(createdEvent(path)?.payload).toEqual({});
       expect(
         defaults.events.some((event) =>
           String(event.idempotencyKey).startsWith("project-onboarding-start:"),
@@ -79,16 +74,70 @@ describe("agentCreationForPath", () => {
     }
   });
 
-  test("always puts the platform prompt and model in the generic birth", () => {
+  test("keeps birth empty and installs model and prompt as ordinary setup events", () => {
     const defaults = defaultsFor("/agents/demo");
     expect(defaults.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
     expect(
       defaults.events.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
+    ).toEqual({});
+    expect(
+      defaults.events.find((event) => event.type === "events.iterate.com/agent/configured")
+        ?.payload,
+    ).toEqual({ config: { llm: { model: "openai/gpt-5.6-sol" } } });
+    expect(
+      defaults.events.find(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          event.payload.key === "agent/system-prompt",
+      )?.payload,
     ).toEqual({
-      config: {
-        llm: { model: "openai/gpt-5.6-sol" },
-        systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+      role: "system",
+      key: "agent/system-prompt",
+      content: DEFAULT_AGENT_SYSTEM_PROMPT,
+    });
+  });
+
+  test("lets a platform router choose one initial prompt without changing birth", () => {
+    const creation = agentCreationForPath({
+      agentPath: "/agents/slack/test",
+      projectId: PROJECT_ID,
+      platformSystemPrompt: {
+        content: "Slack execution contract",
+        id: "slack",
+        revision: "7",
       },
+    });
+    const prompts = creation.events.filter(
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        event.payload.key === "agent/system-prompt",
+    );
+
+    expect(creation.birthCertificate.payload).toEqual({});
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({
+      idempotencyKey: `agent/system-prompt:slack:v7:${PROJECT_ID}:/agents/slack/test`,
+      payload: { content: "Slack execution contract" },
+    });
+  });
+
+  test("gives each shipped prompt revision its own exact occurrence", () => {
+    const promptEvent = (revision: string, content: string) =>
+      agentCreationForPath({
+        agentPath: "/agents/routed/test",
+        projectId: PROJECT_ID,
+        platformSystemPrompt: { content, id: "routed", revision },
+      }).events.find(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          event.payload.key === "agent/system-prompt",
+      );
+
+    const first = promptEvent("1", "first policy");
+    expect(promptEvent("1", "first policy")).toEqual(first);
+    expect(promptEvent("2", "changed policy")).toMatchObject({
+      idempotencyKey: `agent/system-prompt:routed:v2:${PROJECT_ID}:/agents/routed/test`,
+      payload: { content: "changed policy", key: "agent/system-prompt" },
     });
   });
 
@@ -119,22 +168,23 @@ describe("agentCreationForPath", () => {
 });
 
 describe("agentSystemPromptContextEvent", () => {
-  test("dedupes one prompt revision and versions changed policy under the same context key", () => {
+  test("keeps logical context identity separate from durable policy revision", () => {
     const first = agentSystemPromptContextEvent({
       content: "first policy",
-      idempotencyKey: "agent/test-system-prompt",
+      idempotencyKey: "agent/test-system-prompt:v1",
     });
     const retry = agentSystemPromptContextEvent({
       content: "first policy",
-      idempotencyKey: "agent/test-system-prompt",
+      idempotencyKey: "agent/test-system-prompt:v1",
     });
     const changed = agentSystemPromptContextEvent({
       content: "changed policy",
-      idempotencyKey: "agent/test-system-prompt",
+      idempotencyKey: "agent/test-system-prompt:v2",
     });
 
     expect(retry).toEqual(first);
-    expect(changed.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(first.idempotencyKey).toBe("agent/test-system-prompt:v1");
+    expect(changed.idempotencyKey).toBe("agent/test-system-prompt:v2");
     expect(changed.payload).toMatchObject({ key: "agent/system-prompt", role: "system" });
   });
 });

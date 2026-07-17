@@ -14,7 +14,7 @@
 //
 // A brand-new chat is just this screen pointed at a fresh /agents/mobile/<ts>
 // path: reading lazily initializes the underlying stream, but the platform
-// requires an explicit agent.create({}) before the first message lands
+// requires an explicit agent.create() before the first message lands
 // (stream processor births are explicit, not implicit-on-first-append) —
 // the send mutation calls it unconditionally, same as the dashboard's
 // new-chat page (routes/.../agents/new.tsx); it's idempotent so it's a

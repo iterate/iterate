@@ -3,8 +3,8 @@
 
 import {
   agentCreationForPath,
-  agentSystemPromptContextEvent,
   PR_AGENT_SYSTEM_PROMPT,
+  PR_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import { GithubAgentProcessorContract } from "./github-agent-processor-contract.ts";
@@ -23,6 +23,11 @@ export function githubAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    platformSystemPrompt: {
+      content: PR_AGENT_SYSTEM_PROMPT,
+      id: "github-pr",
+      revision: PR_AGENT_SYSTEM_PROMPT_REVISION,
+    },
     sibling: {
       birthCertificate: GithubAgentProcessorContract.buildEvent({
         type: "events.iterate.com/github-agent/created",
@@ -41,11 +46,5 @@ export function githubAgentCreationEvents(input: {
       processorSlug: GithubAgentProcessorContract.slug,
     },
   });
-  return [
-    ...creation.events,
-    agentSystemPromptContextEvent({
-      content: PR_AGENT_SYSTEM_PROMPT,
-      idempotencyKey: `agent/github-system-prompt:${input.projectId}:${input.path}`,
-    }),
-  ] satisfies EmittedInput<RepoProcessorContract>[];
+  return creation.events satisfies EmittedInput<RepoProcessorContract>[];
 }

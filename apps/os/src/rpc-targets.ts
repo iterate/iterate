@@ -233,9 +233,11 @@ import type {
   SearchQueryResult,
   SearchResultChunk,
 } from "./domains/search/search-corpus.ts";
-import type {
-  AgentFileAttachment,
-  AgentProcessorState,
+import {
+  AgentProcessorContract,
+  type AgentEventInput,
+  type AgentFileAttachment,
+  type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
@@ -4208,6 +4210,21 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
+  /**
+   * Append durable events the Agent processor consumes. The input union and
+   * runtime parser both derive from `AgentProcessorContract.consumes`, so the
+   * domain door cannot drift from the processor. This validates shape and
+   * vocabulary, not state-machine order: possession of this handle is the
+   * append authority, and `create()` remains the normal birth path. Use
+   * `stream.append` for an event outside that vocabulary or for an
+   * intentionally ephemeral event.
+   */
+  async append(...events: AgentEventInput[]): Promise<StreamEvent[]> {
+    await this.#assertCreated();
+    const parsed = events.map((event) => AgentProcessorContract.parseConsumedInput(event));
+    return await this.stream.append(...parsed);
+  }
+
   /** The agent's web-chat door (what the user sees). */
   get chat(): AgentChatRpcTarget {
     return new AgentChatRpcTarget({
@@ -4220,14 +4237,25 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   /**
    * Create the generic agent machinery on this stream and wait until both
    * processors have consumed the birth batch. Configuration, context, and
-   * tasks are separate events: append them through `agent.stream` or use a
-   * typed helper such as `message()` after creation.
+   * tasks are separate events: append processor-consumed events through
+   * `agent.append()` or use a typed helper such as `message()` after creation.
    */
-  async create(...unexpected: []): Promise<void> {
-    if (unexpected.length > 0) {
+  async create(): Promise<void> {
+    if (arguments.length !== 0) {
       throw new Error(
-        "agent.create() takes no arguments; append configuration and context through agent.stream after creation",
+        "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
       );
+    }
+    const snapshot = await this.processor.snapshot();
+    if (snapshot.state.birthCertificate !== null) {
+      // Creation is one atomic stream append. The agent snapshot proves its
+      // processor has folded that append; wait the paired capability host
+      // through the same observed head before returning from this barrier.
+      await this.capabilityHost.processor.waitUntilProcessed({
+        offset: snapshot.offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      });
+      return;
     }
     const creation = agentCreationForPath({
       agentPath: this.#path,
@@ -4453,6 +4481,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
+        append:
+          "Append durable Agent-consumed events; the accepted union comes directly from the Agent processor contract.",
         ask: "Send a message and wait for the agent's next chat reply.",
         capabilityHost:
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",

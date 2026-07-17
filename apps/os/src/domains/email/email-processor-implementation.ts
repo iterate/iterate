@@ -6,8 +6,8 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import {
   agentCreationForPath,
-  agentSystemPromptContextEvent,
   EMAIL_AGENT_SYSTEM_PROMPT,
+  EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
@@ -209,6 +209,11 @@ function emailAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    platformSystemPrompt: {
+      content: EMAIL_AGENT_SYSTEM_PROMPT,
+      id: "email",
+      revision: EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
+    },
     sibling: {
       birthCertificate: EmailAgentProcessorContract.buildEvent({
         type: "events.iterate.com/email-agent/created",
@@ -224,11 +229,5 @@ function emailAgentCreationEvents(input: {
       processorSlug: EmailAgentProcessorContract.slug,
     },
   });
-  return [
-    ...creation.events,
-    agentSystemPromptContextEvent({
-      content: EMAIL_AGENT_SYSTEM_PROMPT,
-      idempotencyKey: `agent/email-system-prompt:${input.projectId}:${input.path}`,
-    }),
-  ] satisfies EmittedInput<typeof EmailProcessorContract>[];
+  return creation.events satisfies EmittedInput<typeof EmailProcessorContract>[];
 }

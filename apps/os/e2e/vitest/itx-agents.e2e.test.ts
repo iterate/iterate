@@ -29,14 +29,49 @@ test("agent create installs only generic machinery; later events configure it", 
       }
     ).create({ systemPrompt: "caller must not replace the platform prompt" }),
   ).rejects.toThrow(
-    "agent.create() takes no arguments; append configuration and context through agent.stream after creation",
+    "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
   );
   expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
 
   await agent.create();
   await expect(agent.create()).resolves.toBeUndefined();
 
-  const [configured] = await agent.stream.append({
+  await expect(
+    (
+      agent as unknown as {
+        append(event: { type: string; payload: Record<string, unknown> }): Promise<unknown>;
+      }
+    ).append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {},
+    }),
+  ).rejects.toThrow(
+    'Processor "agent" does not consume event "events.iterate.com/stream/subscription-configured".',
+  );
+
+  const ephemeralIdempotencyKey = `agent-append-ephemeral-${crypto.randomUUID()}`;
+  await expect(
+    (
+      agent as unknown as {
+        append(event: {
+          type: string;
+          payload: Record<string, unknown>;
+          idempotencyKey: string;
+          ephemeral: true;
+        }): Promise<unknown>;
+      }
+    ).append({
+      type: AGENT_CONTEXT_ADDED_TYPE,
+      idempotencyKey: ephemeralIdempotencyKey,
+      ephemeral: true,
+      payload: { role: "user", content: "wake processors cannot consume this" },
+    }),
+  ).rejects.toThrow(
+    `Processor "agent" cannot consume ephemeral event "${AGENT_CONTEXT_ADDED_TYPE}".`,
+  );
+  expect(await agent.stream.getEvent({ idempotencyKey: ephemeralIdempotencyKey })).toBeUndefined();
+
+  const [configured] = await agent.append({
     type: AGENT_CONTEXT_ADDED_TYPE,
     idempotencyKey: `agent-config-after-create-${crypto.randomUUID()}`,
     payload: {
@@ -220,7 +255,11 @@ test("Late agent subscriptions replay history after an earlier birth certificate
   // the supported late-subscription case: history may precede the
   // subscription, but it never precedes the birth certificate.
   const creation = agentCreationForPath({ agentPath, projectId });
-  const bootContextKey = `agent/boot-system-context:${projectId}:${agentPath}`;
+  const bootContextKey = creation.events.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload.key === "agent/boot-context",
+  )?.idempotencyKey;
+  if (bootContextKey === undefined) throw new Error("creation batch has no boot context");
   await agent.stream.append(
     ...creation.events.filter(
       (event) =>
@@ -568,6 +607,16 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     eventTypes: ["events.iterate.com/capability-host/capability-provided"],
     timeoutMs: 60_000,
   });
+  const configured = agentStream.waitForEvent({
+    eventTypes: ["events.iterate.com/agent/configured"],
+    timeoutMs: 60_000,
+  });
+  const basePrompt = agentStream.waitForEvent({
+    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
+    predicate: (event) =>
+      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
+    timeoutMs: 60_000,
+  });
   await project.agents.get(agentPath).create();
 
   expect(await project.agents.list()).toEqual(
@@ -575,10 +624,15 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   );
 
   const birthEvent = await birth;
-  expect(
-    (birthEvent.payload as { config?: { systemPrompt?: string } } | undefined)?.config
-      ?.systemPrompt,
-  ).toContain("async (itx)");
+  expect(birthEvent).toMatchObject({ payload: {} });
+  expect((await configured).payload).toMatchObject({
+    config: { llm: { model: expect.any(String) } },
+  });
+  expect((await basePrompt).payload).toMatchObject({
+    role: "system",
+    key: "agent/system-prompt",
+    content: expect.stringContaining("async (itx)"),
+  });
   expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
 
   // Birth mechanics: project-worker (every project stream) + agent processor +

@@ -210,7 +210,7 @@ export async function processGithubReviewEvent(input: {
       }),
     }),
   ]);
-  await reviewAgent.stream.append(
+  await reviewAgent.append(
     {
       // Roster identity for the sidebar, so review children do not fall back
       // to a truncated repos/g~… path label.

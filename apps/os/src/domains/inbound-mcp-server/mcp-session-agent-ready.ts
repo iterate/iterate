@@ -1,7 +1,10 @@
 import {
   agentSystemPromptContextEvent,
   MCP_AGENT_SYSTEM_PROMPT,
+  MCP_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
+import type { AgentEventInput } from "../agents/agent-processor-contract.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 
 /** Explicitly birth the session agent before ask() starts its reply timeout. */
 export async function ensureMcpSessionAgentReady(input: {
@@ -10,25 +13,17 @@ export async function ensureMcpSessionAgentReady(input: {
     agents: {
       get(path: string): {
         create(): Promise<void>;
-        processor: {
-          snapshot(): Promise<{ state: { birthCertificate: unknown | null } }>;
-        };
-        stream: {
-          append(...events: unknown[]): Promise<unknown>;
-        };
+        append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
       };
     };
   };
 }): Promise<void> {
   const agent = input.projectItx.agents.get(input.agentPath);
-  const snapshot = await agent.processor.snapshot();
-  if (snapshot.state.birthCertificate === null) {
-    await agent.create();
-  }
-  await agent.stream.append(
+  await agent.create();
+  await agent.append(
     agentSystemPromptContextEvent({
       content: MCP_AGENT_SYSTEM_PROMPT,
-      idempotencyKey: "agent/mcp-system-prompt",
+      idempotencyKey: `agent/mcp-system-prompt:v${MCP_AGENT_SYSTEM_PROMPT_REVISION}`,
     }),
   );
 }

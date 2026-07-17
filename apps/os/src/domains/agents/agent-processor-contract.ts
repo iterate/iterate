@@ -1,6 +1,10 @@
 import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import {
+  defineProcessorContract,
+  type ConsumedInput,
+  type ProcessorState,
+} from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
   CoreProcessorContract,
@@ -14,16 +18,14 @@ export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
 export const AGENT_SYSTEM_PROMPT_CONTEXT_KEY = "agent/system-prompt";
 
 export const AgentConfig = z.strictObject({
-  systemPrompt: z.string(),
   llm: z.strictObject({ model: z.string().min(1) }),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
 const AgentConfigPatch = z.strictObject({
-  systemPrompt: z.string().optional(),
   llm: z.strictObject({ model: z.string().min(1).optional() }).optional(),
 });
-const AgentBirthCertificate = z.strictObject({ config: AgentConfig });
+const AgentBirthCertificate = z.strictObject({});
 
 /**
  * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
@@ -120,7 +122,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Platform context for this agent\" carries your project id, agent path, and pointers for this scope.",
   "",
   'THE CONFIG REPO — the code that governs this project, at "/repos/config":',
-  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. Configure one by appending events to agent.stream after creation. AGENTS.md is durable notes: read it early and write stable project knowledge back. package.json dependencies install at build time; multi-file TypeScript works.",
+  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. Configure one with agent.append(...) after creation. AGENTS.md is durable notes: read it early and write stable project knowledge back. package.json dependencies install at build time; multi-file TypeScript works.",
   "- Every commit lands on MAIN and the project worker/website redeploys automatically — no branches, no push, nothing else to do.",
   "- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` for one small file; your private workspace (`itx.workspace`, a live overlay of latest main — readFile/writeFile/edit/glob) to read and change several files, shipped as ONE commit with `await itx.workspace.git.commit({ message })`. ALWAYS read a file before editing it.",
   '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route a named-export class; HelloApp and CounterApp show both shapes. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so an npm SDK can become a plugin.',
@@ -576,7 +578,7 @@ export function deriveAgentBusy(
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "1.1.0",
+  version: "2.0.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z
@@ -744,17 +746,13 @@ export const AgentProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/agent/created": {
-      description: "Creates an agent processor on this stream.",
+      description:
+        "Records that an agent exists on this stream. Runtime policy is supplied by separate configuration and context events.",
       payloadSchema: AgentBirthCertificate,
       examples: [
         {
-          description: "A general-purpose agent is born with its initial prompt and model.",
-          payload: {
-            config: {
-              systemPrompt: "You are a release manager for this project.",
-              llm: { model: DEFAULT_AGENT_MODEL },
-            },
-          },
+          description: "An agent existence fact has no caller-selected configuration.",
+          payload: {},
         },
       ],
     },
@@ -764,7 +762,7 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.strictObject({ config: AgentConfigPatch }),
       examples: [
         {
-          description: "Only the nested model changes; the existing system prompt is retained.",
+          description: "Select the model used for subsequent requests.",
           payload: { config: { llm: { model: "openai/gpt-5.6-sol" } } },
         },
       ],
@@ -1126,6 +1124,9 @@ export const AgentProcessorContract = defineProcessorContract({
  * `ConsumedEvent<AgentProcessorContract>`.
  */
 export type AgentProcessorContract = typeof AgentProcessorContract;
+
+/** Append input accepted by the Agent processor, derived from its `consumes` contract. */
+export type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 /**
  * The agent processor's reduced state, inferred from the contract's

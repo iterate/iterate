@@ -1,7 +1,7 @@
-// The platform's generic agent creation policy: the immutable birth
-// certificate plus the ordinary setup events every agent receives. Transport
-// processors choose their own prompts explicitly; the path never decides
-// what kind of processor exists on a stream.
+// The platform's generic agent creation policy: an existence-only birth plus
+// the ordinary setup events every agent receives. Transport processors choose
+// their own system-context policy explicitly; the path never decides what
+// kind of processor exists on a stream.
 
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
@@ -18,6 +18,31 @@ import {
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
+
+/**
+ * These revisions identify exact, retryable setup occurrences. Change the
+ * matching revision whenever the shipped event payload changes; the logical
+ * context key still owns supersession inside the Agent projection.
+ */
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "1";
+const AGENT_MODEL_POLICY_REVISION = "1";
+const AGENT_WORKSPACE_POLICY_REVISION = "1";
+const AGENT_BOOT_CONTEXT_REVISION = "1";
+
+export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const PR_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const MCP_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = "1";
+
+type AgentSystemPromptPolicy = {
+  content: string;
+  /** Stable policy identity, distinct from the context slot it updates. */
+  id: string;
+  /** Exact shipped payload revision; bump it when `content` changes. */
+  revision: string;
+};
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -170,36 +195,21 @@ export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
 ].join("\n");
 
 /**
- * A complete replacement for the agent runtime prompt, represented as the
- * ordinary keyed system-context update it really is. Platform-owned channel
- * facets use this after generic creation. Ordinary caller instructions should
- * use their own context key so they compose with, rather than replace, the
- * platform execution contract.
+ * One exact, retryable occurrence updating the agent runtime's keyed
+ * system-context slot. `idempotencyKey` identifies this payload occurrence;
+ * the context key identifies the logical slot and makes a later revision
+ * supersede it. Never reuse an idempotency key after changing `content`.
  */
 export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
   return AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agents/context-added",
-    // The event identity includes the policy revision while the context key
-    // stays stable. Retries of one revision dedupe; changing platform policy
-    // appends an explicit same-key update instead of conflicting forever with
-    // the old idempotency record.
-    idempotencyKey: `${input.idempotencyKey}:${promptRevision(input.content)}`,
+    idempotencyKey: input.idempotencyKey,
     payload: {
       role: "system",
       key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
       content: input.content,
     },
   });
-}
-
-/** Deterministic 64-bit FNV-1a revision for synchronous event construction. */
-function promptRevision(content: string): string {
-  let hash = 0xcbf29ce484222325n;
-  for (let index = 0; index < content.length; index++) {
-    hash ^= BigInt(content.charCodeAt(index));
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
-  }
-  return hash.toString(16).padStart(16, "0");
 }
 
 /**
@@ -221,6 +231,8 @@ export function agentCreationForPath<
    * have no directory at hand — the id-only line still works.
    */
   project?: { name: string; slug: string; workerUrl?: string };
+  /** Platform-owned execution policy; public `agent.create()` never exposes this. */
+  platformSystemPrompt?: AgentSystemPromptPolicy;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     processorSlug: string;
@@ -228,12 +240,17 @@ export function agentCreationForPath<
 }) {
   const { agentPath, projectId, project } = input;
   const model = DEFAULT_AGENT_MODEL;
-  const systemPrompt = DEFAULT_AGENT_SYSTEM_PROMPT;
+  const systemPromptPolicy: AgentSystemPromptPolicy = input.platformSystemPrompt ?? {
+    content: DEFAULT_AGENT_SYSTEM_PROMPT,
+    id: "default",
+    revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
+  };
+  const systemPrompt = systemPromptPolicy.content;
 
   const birthCertificate = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/created",
     idempotencyKey: `agent/created:${projectId}:${agentPath}`,
-    payload: { config: { systemPrompt, llm: { model } } },
+    payload: {},
   });
   const capabilityHostBirthCertificate = CapabilityHostProcessorContract.buildEvent({
     type: "events.iterate.com/capability-host/created",
@@ -246,7 +263,7 @@ export function agentCreationForPath<
     // sandbox mount: sandboxes are pets, created explicitly via
     // itx.sandboxes.create.)
     type: "events.iterate.com/capability-host/capability-provided",
-    idempotencyKey: `capability-host/workspace-provided:${projectId}:${agentPath}`,
+    idempotencyKey: `capability-host/workspace-provided:v${AGENT_WORKSPACE_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: {
       path: ["workspace"],
       type: "itx-expression",
@@ -257,6 +274,15 @@ export function agentCreationForPath<
         "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
     },
   });
+  const configured = AgentProcessorContract.buildEvent({
+    type: "events.iterate.com/agent/configured",
+    idempotencyKey: `agent/model-configured:v${AGENT_MODEL_POLICY_REVISION}:${projectId}:${agentPath}`,
+    payload: { config: { llm: { model } } },
+  });
+  const systemPromptContext = agentSystemPromptContextEvent({
+    content: systemPrompt,
+    idempotencyKey: `agent/system-prompt:${systemPromptPolicy.id}:v${systemPromptPolicy.revision}:${projectId}:${agentPath}`,
+  });
   const bootContext = AgentProcessorContract.buildEvent({
     // Per-agent boot context as a second durable system item: ids and paths
     // differ per agent but must survive history compaction. Facts and pointers
@@ -265,7 +291,7 @@ export function agentCreationForPath<
     // prompt budget test holds the line). System context never wakes the LLM
     // by itself.
     type: "events.iterate.com/agents/context-added",
-    idempotencyKey: `agent/boot-system-context:${projectId}:${agentPath}`,
+    idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}`,
     payload: {
       role: "system",
       key: "agent/boot-context",
@@ -322,6 +348,8 @@ export function agentCreationForPath<
       birthCertificate,
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
+      configured,
+      systemPromptContext,
       workspaceProvided,
       bootContext,
       agentSubscription,

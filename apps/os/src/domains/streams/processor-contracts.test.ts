@@ -1,5 +1,11 @@
-import { describe, expect, test } from "vitest";
-import { mergeProcessorConfig } from "./processor-contracts.ts";
+import { z } from "zod";
+import { describe, expect, expectTypeOf, test } from "vitest";
+import type { StreamEventInput } from "./schemas.ts";
+import {
+  defineProcessorContract,
+  mergeProcessorConfig,
+  type ConsumedInput,
+} from "./processor-contracts.ts";
 
 describe("mergeProcessorConfig", () => {
   test("recurses through plain objects and retains omitted keys", () => {
@@ -24,5 +30,73 @@ describe("mergeProcessorConfig", () => {
         { array: [3], nullable: null, scalar: "after" },
       ),
     ).toEqual({ array: [3], nullable: null, scalar: "after" });
+  });
+});
+
+const AppendDoorContract = defineProcessorContract({
+  slug: "append-door-test",
+  version: "1.0.0",
+  description: "Exercises the processor-derived domain append boundary.",
+  stateSchema: z.object({}),
+  events: {
+    "events.iterate.com/test/appendable-input": {
+      payloadSchema: z.object({ value: z.string().transform(Number) }),
+    },
+    "events.iterate.com/test/resolved-but-unconsumed": {
+      payloadSchema: z.object({ value: z.string() }),
+    },
+  },
+  consumes: ["events.iterate.com/test/appendable-input"],
+  emits: [],
+});
+
+describe("processor-derived append inputs", () => {
+  test("derive required durable inputs from consumes and parse their payload output", () => {
+    type Input = ConsumedInput<typeof AppendDoorContract>;
+
+    expectTypeOf<Input>().toMatchTypeOf<{
+      type: "events.iterate.com/test/appendable-input";
+      payload: { value: string };
+      ephemeral?: never;
+    }>();
+    expectTypeOf<{
+      type: "events.iterate.com/test/appendable-input";
+    }>().not.toMatchTypeOf<Input>();
+    expectTypeOf<{
+      type: "events.iterate.com/test/appendable-input";
+      payload: { value: string };
+      ephemeral: true;
+    }>().not.toMatchTypeOf<Input>();
+
+    const parsed = AppendDoorContract.parseConsumedInput({
+      type: "events.iterate.com/test/appendable-input",
+      payload: { value: "42" },
+    });
+    expectTypeOf(parsed.payload.value).toEqualTypeOf<number>();
+    expect(parsed.payload.value).toBe(42);
+  });
+
+  test("rejects resolved-but-unconsumed and ephemeral events at runtime", () => {
+    const parseRemoteInput = AppendDoorContract.parseConsumedInput as (
+      event: StreamEventInput,
+    ) => unknown;
+
+    expect(() =>
+      parseRemoteInput({
+        type: "events.iterate.com/test/resolved-but-unconsumed",
+        payload: { value: "no" },
+      }),
+    ).toThrow(
+      'Processor "append-door-test" does not consume event "events.iterate.com/test/resolved-but-unconsumed".',
+    );
+    expect(() =>
+      parseRemoteInput({
+        type: "events.iterate.com/test/appendable-input",
+        payload: { value: "no" },
+        ephemeral: true,
+      }),
+    ).toThrow(
+      'Processor "append-door-test" cannot consume ephemeral event "events.iterate.com/test/appendable-input".',
+    );
   });
 });

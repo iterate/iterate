@@ -67,7 +67,7 @@ test(
 );
 
 test(
-  "agent answers after explicit creation selects its model",
+  "agent answers after explicit creation applies its model configuration event",
   // See above — heavy-test ceiling.
   { timeout: 240_000 },
   async ({ expect }) => {
@@ -75,7 +75,8 @@ test(
     using agent = handle.agent("/agents/e2e-model");
     await agent.create();
     const state = (await agent.processor.snapshot()).state;
-    expect(state.birthCertificate?.config.llm.model).toBeTruthy();
+    expect(state).toMatchObject({ birthCertificate: {} });
+    expect(state.config?.llm.model).toBeTruthy();
 
     const response = await agent.ask({
       message: "Reply with a short greeting.",

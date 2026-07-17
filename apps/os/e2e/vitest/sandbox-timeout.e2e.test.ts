@@ -141,7 +141,7 @@ test.skipIf(deployedBaseUrl() === null)(
         },
         { pidFile, requestedTimeoutMs: 20 * 60 * 1_000, sandboxPath },
       );
-      await agent.stream.append({
+      await agent.append({
         type: "events.iterate.com/capability-host/script-run-requested",
         payload: { code, executionId, expiresAt },
       });

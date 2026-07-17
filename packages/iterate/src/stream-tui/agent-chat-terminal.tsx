@@ -25,8 +25,8 @@ import {
   type Itx,
 } from "../itx/itx-react.ts";
 import {
+  ensureOnboardingAgentReady,
   ONBOARDING_AGENT_PATH,
-  onboardingAgentStartupEvents,
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
 import { resolveItxAuth } from "./itx-auth.ts";
@@ -74,12 +74,11 @@ async function subscribeAgentFeed(itx: Itx) {
   // undisposed stub per recovery cycle would grow the import table forever.
   const agent = itx.agents.get(args.agentPath);
   try {
-    const snapshot = await agent.processor.snapshot();
-    if (snapshot.state.birthCertificate === null) {
-      await agent.create();
-    }
     if (args.agentPath === ONBOARDING_AGENT_PATH) {
-      await agent.stream.append(...onboardingAgentStartupEvents(args.projectId));
+      await ensureOnboardingAgentReady({ agent });
+    } else {
+      const snapshot = await agent.processor.snapshot();
+      if (snapshot.state.birthCertificate === null) await agent.create();
     }
     return await agent.stream.subscribe({
       processEventBatch: (batch) => {

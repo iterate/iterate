@@ -112,11 +112,11 @@ function harness(input?: {
     state: { birthCertificate: input?.agentBirthCertificate ?? null },
   });
   const getAgent = vi.fn(() => ({
+    append,
     capabilityHost: { kill: killCapabilityHost },
     create: createAgent,
     kill: killAgent,
     processor: { snapshot: snapshotAgent },
-    stream: { append },
   }));
   const readFile = vi.fn().mockResolvedValue({
     commitOid: "rules-commit",

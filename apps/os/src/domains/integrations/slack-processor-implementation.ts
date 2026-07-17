@@ -8,8 +8,8 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import {
   agentCreationForPath,
-  agentSystemPromptContextEvent,
   slackAgentSystemPrompt,
+  SLACK_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
 import { SlackAgentProcessorContract } from "./slack-agent-processor-contract.ts";
 import { readRecord, readString, slackThreadStreamPath, webhookAckIsFresh } from "./utils.ts";
@@ -172,6 +172,11 @@ function slackAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    platformSystemPrompt: {
+      content: slackAgentSystemPrompt(input.connection),
+      id: "slack",
+      revision: SLACK_AGENT_SYSTEM_PROMPT_REVISION,
+    },
     sibling: {
       birthCertificate: SlackAgentProcessorContract.buildEvent({
         type: "events.iterate.com/slack-agent/created",
@@ -187,13 +192,7 @@ function slackAgentCreationEvents(input: {
       processorSlug: SlackAgentProcessorContract.slug,
     },
   });
-  return [
-    ...creation.events,
-    agentSystemPromptContextEvent({
-      content: slackAgentSystemPrompt(input.connection),
-      idempotencyKey: `agent/slack-system-prompt:${input.projectId}:${input.path}`,
-    }),
-  ] satisfies EmittedInput<SlackProcessorContract>[];
+  return creation.events satisfies EmittedInput<SlackProcessorContract>[];
 }
 
 type SlackRoute = {

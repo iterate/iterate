@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItx } from "iterate/react";
-import { ONBOARDING_AGENT_PATH, onboardingAgentStartupEvents } from "~/lib/onboarding-agent.ts";
+import { ONBOARDING_AGENT_PATH, ensureOnboardingAgentReady } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -58,11 +58,7 @@ function ProjectAgentDetailContent() {
         try {
           const itx = await connectItx(project.id);
           const agent = itx.agents.get(ONBOARDING_AGENT_PATH);
-          const snapshot = await agent.processor.snapshot();
-          if (snapshot.state.birthCertificate === null) {
-            await agent.create();
-          }
-          await agent.stream.append(...onboardingAgentStartupEvents(project.id));
+          await ensureOnboardingAgentReady({ agent });
           return;
         } catch (error) {
           lastError = error;

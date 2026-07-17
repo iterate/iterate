@@ -158,12 +158,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       "events.iterate.com/agent/created",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/github-agent/created",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/agents/context-added",
       "events.iterate.com/github/webhook-received",
     ]);
     expect(routed[2]!.payload).toEqual({
@@ -173,7 +174,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         repoPath: "/repos/config",
       },
     });
-    expect(routed.slice(5, 8).map((event) => event.payload)).toEqual(
+    expect(routed.slice(7, 10).map((event) => event.payload)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           delivery: expect.objectContaining({ processorSlug: "agent" }),
@@ -186,14 +187,14 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         }),
       ]),
     );
-    expect(routed[8]).toMatchObject({
+    expect(routed[4]).toMatchObject({
       payload: {
         content: PR_AGENT_SYSTEM_PROMPT,
         key: "agent/system-prompt",
         role: "system",
       },
     });
-    expect(routed[9]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
+    expect(routed[10]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
   });
 
   it("routes each PR to its own stream and dedupes the route fact per PR", async () => {
@@ -222,12 +223,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       "events.iterate.com/agent/created",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/github-agent/created",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/agents/context-added",
       "events.iterate.com/github/webhook-received",
       "events.iterate.com/github/webhook-received",
     ]);
@@ -235,12 +237,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       "events.iterate.com/agent/created",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/github-agent/created",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/agents/context-added",
       "events.iterate.com/github/webhook-received",
     ]);
   });
@@ -324,12 +327,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         "events.iterate.com/agent/created",
         "events.iterate.com/capability-host/created",
         "events.iterate.com/github-agent/created",
+        "events.iterate.com/agent/configured",
+        "events.iterate.com/agents/context-added",
         "events.iterate.com/capability-host/capability-provided",
         "events.iterate.com/agents/context-added",
         "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/stream/subscription-configured",
-        "events.iterate.com/agents/context-added",
         "events.iterate.com/github/webhook-received",
       ]);
     }
