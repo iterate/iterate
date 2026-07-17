@@ -32,7 +32,8 @@ and full repository verification are green; no production state was changed.
 - [x] Add focused tests for first approval, additions, unchanged access, and
       Telegram send failures. _Five cases live in `telegram-access.test.ts`._
 - [x] Run the focused OS test lanes and update this task with the verification
-      evidence. _51 focused tests and the full 1,829-test repository lane pass._
+      evidence. _51 focused tests and the 1,829-test OS lane pass; the full
+      repository command is green._
 
 ## Assumptions
 
@@ -77,4 +78,5 @@ was a prompt/product defect, not an absent platform capability.
   success, regenerated the public itx declarations, and documented Telegram
   media behaviour.
 - 2026-07-17: Verification: focused Vitest 51/51; `pnpm format`; zero-warning
-  `pnpm lint`; OS `pnpm typecheck`; full `pnpm test` 1,829 passed, 1 skipped.
+  `pnpm lint`; repository-wide `pnpm typecheck` and `pnpm test`; OS unit result
+  1,829 passed, 1 skipped.
