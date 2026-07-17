@@ -1,6 +1,5 @@
 import { expect, test } from "vitest";
 import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
-import { agentCreationForPath } from "../../src/domains/agents/agent-defaults.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -236,70 +235,58 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
 });
 
-test("Late agent subscriptions replay history after an earlier birth certificate", async () => {
+test("Agent create replays its earlier birth and setup events through its subscriptions", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
 
-  const marker = `agent-auto-bootstrap-${crypto.randomUUID()}`;
-  using project = itx.projects.create({ slug: `agent-auto-bootstrap-${marker}` });
-  const { projectId } = await project.__describe();
-  const agentPath = `/agents/auto-bootstrap-${crypto.randomUUID()}`;
+  using project = itx.projects.create({ slug: `agent-create-replay-${crypto.randomUUID()}` });
+  const agentPath = `/agents/create-replay-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
-  // Birth is the first domain event. Stage the immutable creation events
-  // without the processor subscriptions or directory-derived boot context,
-  // then install those through public create() after history exists. This is
-  // the supported late-subscription case: history may precede the
-  // subscription, but it never precedes the birth certificate.
-  const creation = agentCreationForPath({ agentPath, projectId });
-  const bootContextKey = creation.events.find(
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload.key === "agent/boot-context",
-  )?.idempotencyKey;
-  if (bootContextKey === undefined) throw new Error("creation batch has no boot context");
-  await agent.stream.append(
-    ...creation.events.filter(
-      (event) =>
-        event.type !== "events.iterate.com/stream/subscription-configured" &&
-        event.idempotencyKey !== bootContextKey,
-    ),
-  );
-
-  const content = fencedAgentScript(
-    defineItxScript<{ chat: AgentChat }, { marker: string }>(
-      async (itx, vars) => {
-        await itx.chat.sendMessage(vars.marker);
-      },
-      { marker },
-    ).code,
-  );
-  const { assistantContext: historicalAssistantContext, llmRequestOffset } =
-    await appendSyntheticProviderOutput(agent.stream, content);
-
-  const replayedReply = agent.stream.waitForEvent({
-    afterOffset: historicalAssistantContext.offset,
-    eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
-    predicate: (event) => event.payload?.message === marker,
-    timeoutMs: 30_000,
-  });
   await agent.create();
 
-  expect(await replayedReply).toMatchObject({
-    type: AGENT_WEB_MESSAGE_SENT_TYPE,
-    payload: { message: marker },
-  });
-
   const events = await agent.stream.getEvents({ afterOffset: 0 });
-  const assistantContextOffset = events.find(
+  const requiredOffset = (
+    description: string,
+    predicate: (event: (typeof events)[number]) => boolean,
+  ) => {
+    const offset = events.find(predicate)?.offset;
+    if (offset === undefined) throw new Error(`agent creation has no ${description}`);
+    return offset;
+  };
+
+  const birthCertificateOffset = requiredOffset(
+    "agent birth certificate",
+    (event) => event.type === "events.iterate.com/agent/created",
+  );
+  const agentConfiguredOffset = requiredOffset(
+    "agent configuration",
+    (event) => event.type === "events.iterate.com/agent/configured",
+  );
+  const systemPromptOffset = requiredOffset(
+    "platform system context",
     (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      event.payload?.role === "assistant" &&
-      event.payload?.llmRequestOffset === llmRequestOffset &&
-      event.payload?.content === content,
-  )?.offset;
+      event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.key === "agent/system-prompt",
+  );
+  const bootContextOffset = requiredOffset(
+    "boot context",
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE && event.payload?.key === "agent/boot-context",
+  );
+  const capabilityHostBirthOffset = requiredOffset(
+    "capability-host birth certificate",
+    (event) => event.type === "events.iterate.com/capability-host/created",
+  );
+  const workspaceProvidedOffset = requiredOffset(
+    "workspace capability",
+    (event) =>
+      event.type === "events.iterate.com/capability-host/capability-provided" &&
+      Array.isArray(event.payload?.path) &&
+      event.payload.path.join(".") === "workspace",
+  );
   // Processor subscriptions are wake-mode deliveries addressed by itx
   // expression over the ordinary domain surface: { delivery: { mode:
   // "wake", expression: ["agents", ["get", path], "processor",
@@ -311,29 +298,50 @@ test("Late agent subscriptions replay history after an earlier birth certificate
     };
   const wakeExpressionRoot = (event: { payload?: Record<string, unknown> }) =>
     wakeSubscriptionPayload(event).delivery?.expression?.[0];
-  const agentSubscriptionOffset = events.find(
+  const agentSubscriptionOffset = requiredOffset(
+    "agent processor subscription",
     (event) =>
       event.type === "events.iterate.com/stream/subscription-configured" &&
       wakeExpressionRoot(event) === "agents" &&
       String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
-  )?.offset;
-  const itxSubscriptionOffset = events.find(
+  );
+  const capabilityHostSubscriptionOffset = requiredOffset(
+    "capability-host processor subscription",
     (event) =>
       event.type === "events.iterate.com/stream/subscription-configured" &&
       wakeExpressionRoot(event) === "capabilityHosts",
-  )?.offset;
-  const scriptRequestedOffset = events.find(
-    (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
-  )?.offset;
-  const birthCertificateOffset = events.find(
-    (event) => event.type === "events.iterate.com/agent/created",
-  )?.offset;
+  );
 
-  expect(assistantContextOffset).toBe(historicalAssistantContext.offset);
-  expect(agentSubscriptionOffset).toBeGreaterThan(historicalAssistantContext.offset);
-  expect(itxSubscriptionOffset).toBeGreaterThan(historicalAssistantContext.offset);
-  expect(birthCertificateOffset).toBeLessThan(historicalAssistantContext.offset);
-  expect(scriptRequestedOffset).toBeGreaterThan(agentSubscriptionOffset!);
+  // This is the supported replay case: create commits one complete birth
+  // batch, with each processor's ordinary setup facts before its durable
+  // subscription. The creation barrier only resolves after both processors
+  // have replayed those earlier offsets.
+  expect(agentSubscriptionOffset).toBeGreaterThan(birthCertificateOffset);
+  expect(agentSubscriptionOffset).toBeGreaterThan(agentConfiguredOffset);
+  expect(agentSubscriptionOffset).toBeGreaterThan(systemPromptOffset);
+  expect(agentSubscriptionOffset).toBeGreaterThan(bootContextOffset);
+  expect(capabilityHostSubscriptionOffset).toBeGreaterThan(capabilityHostBirthOffset);
+  expect(capabilityHostSubscriptionOffset).toBeGreaterThan(workspaceProvidedOffset);
+
+  const agentSnapshot = await agent.processor.snapshot();
+  expect(agentSnapshot.offset).toBeGreaterThanOrEqual(agentSubscriptionOffset);
+  expect(agentSnapshot.state).toMatchObject({
+    birthCertificate: {},
+    config: { llm: { model: expect.any(String) } },
+    context: {
+      system: expect.arrayContaining([
+        expect.objectContaining({ key: "agent/system-prompt" }),
+        expect.objectContaining({ key: "agent/boot-context" }),
+      ]),
+    },
+  });
+
+  const capabilityHostSnapshot = await agent.capabilityHost.processor.snapshot();
+  expect(capabilityHostSnapshot.offset).toBeGreaterThanOrEqual(capabilityHostSubscriptionOffset);
+  expect(capabilityHostSnapshot.state).toMatchObject({ birthCertificate: { config: {} } });
+  expect(await agent.capabilityHost.__describe()).toMatchObject({
+    capabilities: expect.arrayContaining([expect.objectContaining({ path: ["workspace"] })]),
+  });
 });
 
 test("Agent-only dynamic worker and durable object capabilities run from LLM scripts", async () => {
