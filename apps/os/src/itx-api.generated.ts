@@ -99,6 +99,8 @@ export interface Project {
   liveDemo: LiveDemo;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
+  /** Browser auth for project-host web apps. */
+  auth: ProjectAuth;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
   browser: CfBrowserCapability;
   /** This scope's agent control handle, when its address is under `/agents/`. */
@@ -296,6 +298,18 @@ export interface Ai {
     documents: CfMarkdownDocument[],
     options?: CfMarkdownConversionOptions,
   ): Promise<CfMarkdownConversionResult[]>;
+}
+
+/** A partial fetch: return its response, or continue the app when it returns null. */
+export interface ProjectAuth {
+  /** Bind a project-member gate to this itx's project. */
+  get(policy: ProjectAuthPolicy): ProjectAuth;
+  /**
+   * Own login, callback, logout, and the host-only cookie. Returns null only
+   * when this request belongs to a current project member. Like any partial
+   * fetch, a null result leaves the request body untouched for the app.
+   */
+  fetch(request: Request): Promise<Response | null>;
 }
 
 /** Cloudflare Browser Run binding exposed through itx. */
@@ -2133,6 +2147,9 @@ export type CfMarkdownConversionResult = {
   data?: string;
   error?: string;
 };
+
+/** A declarative access rule for a project-host web app. */
+export type ProjectAuthPolicy = { policy: "project-member" };
 
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,
