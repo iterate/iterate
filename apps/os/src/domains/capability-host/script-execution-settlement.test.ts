@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
+  scriptSettlementFromEvent,
   scriptCompletionInput,
   settlementAppendDeadline,
   settlementForUndrivenScript,
@@ -105,5 +106,29 @@ describe("script execution settlement policy", () => {
         settlement: { status: "succeeded", result: { ok: true } },
       }).payload.settlement,
     ).toEqual({ status: "succeeded", result: { ok: true } });
+  });
+
+  it("matches only the valid settlement for the requested execution", () => {
+    const completed = {
+      type: "events.iterate.com/capability-host/script-run-settled",
+      createdAt: "2026-07-17T00:00:00.000Z",
+      offset: 3,
+      path: "/",
+      payload: {
+        executionId: "exec-1",
+        settlement: { status: "succeeded", result: { ok: true } },
+      },
+    };
+    expect(scriptSettlementFromEvent(completed, "exec-1")).toEqual({
+      status: "succeeded",
+      result: { ok: true },
+    });
+    expect(scriptSettlementFromEvent(completed, "exec-other")).toBeUndefined();
+    expect(
+      scriptSettlementFromEvent(
+        { ...completed, payload: { executionId: "exec-1", settlement: { status: "wat" } } },
+        "exec-1",
+      ),
+    ).toBeUndefined();
   });
 });

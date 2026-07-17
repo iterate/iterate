@@ -19,7 +19,9 @@ import {
   CapabilityHostProcessor,
   type CapabilityHostAncestor,
   type CapabilityHostProcessorReads,
+  type ScriptRunRequest,
 } from "./capability-host-processor-implementation.ts";
+import { scriptSettlementFromEvent } from "./script-execution-settlement.ts";
 
 const T = {
   created: "events.iterate.com/capability-host/created",
@@ -91,8 +93,7 @@ function makeProcessor(options: {
     reads: {
       snapshot: () => runner.snapshot(),
       waitUntilEvent: (input) => {
-        const fallback = () =>
-          "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input);
+        const fallback = () => runner.waitUntilEvent(input);
         return options.waitUntilEvent?.(input, fallback) ?? fallback();
       },
     },
@@ -121,6 +122,41 @@ async function requestScript(stream: MemoryStream, harness: Harness) {
 
 function completion(stream: MemoryStream) {
   return stream.events.find((event) => event.type === T.completed);
+}
+
+async function runScript(stream: MemoryStream, harness: Harness, code: string) {
+  const request = await harness.processor.requestScript(code);
+  return await scriptResult(stream, request);
+}
+
+async function scriptResult(stream: MemoryStream, request: ScriptRunRequest) {
+  let completed = stream.events.find(
+    (event) =>
+      event.type === T.completed &&
+      event.payload !== null &&
+      typeof event.payload === "object" &&
+      !Array.isArray(event.payload) &&
+      event.payload.executionId === request.executionId,
+  );
+  await vi.waitFor(() => {
+    completed = stream.events.find(
+      (event) =>
+        event.type === T.completed &&
+        event.payload !== null &&
+        typeof event.payload === "object" &&
+        !Array.isArray(event.payload) &&
+        event.payload.executionId === request.executionId,
+    );
+    expect(completed).toBeDefined();
+  });
+  const settlement = scriptSettlementFromEvent(completed!, request.executionId);
+  if (settlement === undefined) throw new Error("completion carried no valid settlement");
+  if (settlement.status === "failed") throw new Error(settlement.error);
+  return {
+    completedEvent: completed!,
+    executionId: request.executionId,
+    result: settlement.result ?? null,
+  };
 }
 
 beforeEach(() => resetRecordedSpans());
@@ -383,7 +419,7 @@ describe("script execution typecheck gate", () => {
     });
     await harness.runner.catchUp();
 
-    const result = harness.processor.runScript("async () => null");
+    const result = runScript(stream, harness, "async () => null");
 
     // MemoryStream never wakes processors. Reaching completion proves
     // runScript launched directly from its durable request append without the
@@ -419,7 +455,7 @@ describe("script execution typecheck gate", () => {
     });
     await harness.runner.catchUp();
 
-    await expect(harness.processor.runScript("async () => null")).resolves.toMatchObject({
+    await expect(runScript(stream, harness, "async () => null")).resolves.toMatchObject({
       result: "ok",
     });
     expect(run).toHaveBeenCalledTimes(1);
@@ -441,7 +477,7 @@ describe("script execution typecheck gate", () => {
     await harness.runner.catchUp();
 
     const results = await Promise.all(
-      Array.from({ length: 20 }, (_, index) => harness.processor.runScript(`async () => ${index}`)),
+      Array.from({ length: 20 }, (_, index) => runScript(stream, harness, `async () => ${index}`)),
     );
     await Promise.all(backgroundWork);
 
@@ -468,7 +504,7 @@ describe("script execution typecheck gate", () => {
     // This fact wins the next offset but is deliberately not delivered yet.
     await stream.append({ type: "events.iterate.com/agents/user-message-sent", payload: {} });
 
-    const result = harness.processor.runScript("async () => null");
+    const result = runScript(stream, harness, "async () => null");
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(run).toHaveBeenCalledTimes(1);
     expect((await harness.runner.snapshot()).offset).toBeGreaterThanOrEqual(3);
@@ -506,7 +542,7 @@ describe("script execution typecheck gate", () => {
     });
     await harness.runner.catchUp();
 
-    const result = harness.processor.runScript("async () => null");
+    const result = runScript(stream, harness, "async () => null");
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(run).toHaveBeenCalledTimes(1);
 

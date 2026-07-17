@@ -112,7 +112,7 @@ describe("explicit capability-host ancestors", () => {
     await expect(processor.describeCapabilities()).rejects.toThrow(
       "capability host at /agents/web/unconfigured-conversation has not been created",
     );
-    await expect(processor.runScript("async () => null")).rejects.toThrow(
+    await expect(processor.requestScript("async () => null")).rejects.toThrow(
       "capability host at /agents/web/unconfigured-conversation has not been created",
     );
     expect(resolveAncestor).not.toHaveBeenCalled();

@@ -16,7 +16,7 @@ import {
   CapabilityHostProcessor,
   type CapabilityHostAncestor,
   type CapabilityHostProcessorReads,
-  type RunScriptResult,
+  type ScriptRunRequest,
 } from "./capability-host-processor-implementation.ts";
 import {
   CapabilityHostProcessorContract,
@@ -244,9 +244,9 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     await this.#capabilityHostProcessor.revokeCapability(input);
   }
 
-  async runScript(code: string): Promise<RunScriptResult> {
+  async requestScript(code: string): Promise<ScriptRunRequest> {
     await this.#catchUp();
-    return await this.#capabilityHostProcessor.runScript(code);
+    return await this.#capabilityHostProcessor.requestScript(code);
   }
 
   async describeCapabilities(): Promise<CapabilityDescription[]> {

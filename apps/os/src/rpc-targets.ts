@@ -63,6 +63,11 @@ import {
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { capabilityHostBirthEvents } from "./domains/capability-host/capability-host-birth.ts";
+import {
+  SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
+  scriptSettlementFromEvent,
+  type ScriptExecutionSettlement,
+} from "./domains/capability-host/script-execution-settlement.ts";
 import type {
   StreamRecoveryExportPage,
   StreamRecoveryExportSink,
@@ -5082,7 +5087,37 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     executionId: string;
     result: unknown;
   }> {
-    return await this.#durableObject.runScript(code);
+    const request = await this.#durableObject.requestScript(code);
+    let settlement: ScriptExecutionSettlement | undefined;
+    let completedEvent: StreamEvent;
+    try {
+      completedEvent = await this.#stream.waitForEvent({
+        afterOffset: request.requestedOffset,
+        eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+        predicate: (event) => {
+          settlement = scriptSettlementFromEvent(event, request.executionId);
+          return settlement !== undefined;
+        },
+        timeoutMs: Math.max(
+          1,
+          request.expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - Date.now(),
+        ),
+      });
+    } catch (error) {
+      throw new Error(
+        `Script execution "${request.executionId}" did not settle before its absolute deadline.`,
+        { cause: error },
+      );
+    }
+    if (settlement === undefined) {
+      throw new Error(`script execution "${request.executionId}" completed without a settlement`);
+    }
+    if (settlement.status === "failed") throw new Error(settlement.error);
+    return {
+      completedEvent,
+      executionId: request.executionId,
+      result: settlement.result ?? null,
+    };
   }
 
   /** Restart this scope's server-side object; the next request boots it fresh. */

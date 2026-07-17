@@ -3,10 +3,13 @@
  * saturation.
  *
  * Each runScript call below becomes a distinct inline Dynamic Worker source.
- * On deployed Workers, twenty concurrent long-lived scripts from one
- * capability-host scope must all complete instead of sharing one Durable Object
- * as the dynamic-loader owner and tripping "Too many concurrent dynamic
- * workers".
+ * Each call gets its own ITX session so this test isolates loader ownership
+ * from Cloudflare's fixed per-request Worker-invocation budget: one Cap'n Web
+ * frame containing all twenty calls can spend that budget before the
+ * executions reach the loader. On deployed Workers, twenty concurrent
+ * long-lived scripts from one capability-host scope must all complete instead
+ * of sharing one Durable Object as the dynamic-loader owner and tripping "Too
+ * many concurrent dynamic workers".
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
@@ -21,19 +24,22 @@ test(
   { timeout: 90_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "script-concurrency" });
-    using itx = handle.itx();
 
     const marker = crypto.randomUUID();
     const startedAt = Date.now();
     const executions = await Promise.allSettled(
-      Array.from({ length: SCRIPT_COUNT }, (_, index) =>
-        itxScript(itx.capabilityHost)
+      Array.from({ length: SCRIPT_COUNT }, async (_, index) => {
+        // A fresh WebSocket gives every execution an independent Cloudflare
+        // request lineage while all twenty still converge on the exact same
+        // capability-host Durable Object and script-executor service.
+        using itx = handle.itx();
+        return await itxScript(itx.capabilityHost)
           .vars({ holdMs: SCRIPT_HOLD_MS, index, marker })
           .execute(async (_itx, vars) => {
             await new Promise((resolve) => setTimeout(resolve, vars.holdMs));
             return { index: vars.index, marker: vars.marker };
-          }),
-      ),
+          });
+      }),
     );
     const elapsedMs = Date.now() - startedAt;
 

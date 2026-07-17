@@ -6,8 +6,7 @@ import {
 import type { ProcessorState } from "../streams/processor-contracts.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
-import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
+import type { Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type {
   CapabilityProvidedPayload,
@@ -24,7 +23,6 @@ import { settleByDeadline } from "./execution-deadline.ts";
 import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
-  ScriptExecutionSettlement,
   scriptCompletionInput,
   settlementAppendDeadline,
   settlementForUndrivenScript,
@@ -37,7 +35,11 @@ import {
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
 
-export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
+export type ScriptRunRequest = {
+  executionId: string;
+  expiresAt: number;
+  requestedOffset: number;
+};
 
 type ScriptExecutionEntrypoint = {
   run(code: string, options: { emittedJs?: string; expiresAt: number }): Promise<unknown>;
@@ -137,29 +139,25 @@ type CapabilityHostBirthCertificate = NonNullable<
  * RUNNER-backed reads of the committed fold. Under registry drive the runner
  * owns both cursors and the processor instance's internal checkpoint never
  * advances, so every fold read this processor makes OUTSIDE a hook's own args
- * — capability resolution, the revoke guard, the provide/revoke
- * read-your-writes barriers, the script-completion wait — must go through the
- * runner's committed progress. The hosting DO wires this to
+ * — capability resolution, the revoke guard, and the provide/revoke
+ * read-your-writes barriers — must go through the runner's committed
+ * progress. The hosting DO wires this to
  * `registry.reads(processor)` (lazily — `reads()` needs the registered
  * processor); test harnesses wire it to the driving StreamProcessorRunner.
- * `waitUntilEvent` takes BOTH forms as one union parameter (the registry's
- * read surface accepts it; the predicate form is in-process-only — a function
- * cannot cross the RPC facade).
+ * Capability-host reads use only exact durable offsets. Long predicate waits
+ * belong to the stateless Worker RPC target, which can reopen bounded Stream
+ * DO leases across incarnation changes.
  */
 export type CapabilityHostProcessorReads = {
   snapshot(): Promise<{
     offset: number;
     state: ProcessorState<CapabilityHostProcessorContract>;
   }>;
-  waitUntilEvent(
-    input:
-      | { offset: number; timeoutMs?: number; signal?: AbortSignal }
-      | {
-          predicate: (event: StreamEvent) => boolean;
-          timeoutMs?: number;
-          signal?: AbortSignal;
-        },
-  ): Promise<void>;
+  waitUntilEvent(input: {
+    offset: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<void>;
 };
 
 export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
@@ -457,7 +455,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   /**
    * Turn one durable `requested` fact into an incarnation-local attempt.
-   * Recovery reconciliation acquires an unowned claim; `runScript` reserves
+   * Recovery reconciliation acquires an unowned claim; `requestScript` reserves
    * its own owner before journaling and calls #startOwnedScript directly.
    */
   #driveRequestedScript(input: {
@@ -841,7 +839,13 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return birthCertificate;
   }
 
-  async runScript(code: string): Promise<RunScriptResult> {
+  /**
+   * Journal and launch one script obligation, then return its durable replay
+   * cursor. Completion observation deliberately does not live in this
+   * incarnation: the Worker RPC target waits on bounded Stream DO leases and
+   * can therefore survive either object's hibernation or restart.
+   */
+  async requestScript(code: string): Promise<ScriptRunRequest> {
     const { state } = await this.#reads.snapshot();
     this.#pruneExecutionOwners(state);
     this.#requireBirthCertificate(state.birthCertificate);
@@ -853,37 +857,27 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // that reconcile could acquire the same obligation and launch it from an
     // unrelated delivery lineage.
     this.#executionOwners.set(executionId, "foreground-reserved");
-    const completionAbort = new AbortController();
-    // Register before the request append so a very fast completion cannot
-    // pass the waiter. Observe the rejection immediately: if the request
-    // append itself fails, the bounded waiter may still time out later and
-    // must not become an unhandled rejection.
-    const completed = this.#waitForScriptCompletion(
-      executionId,
-      Math.max(1, expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - now()),
-      completionAbort.signal,
-    );
-    const observedCompletion = completed.then(
-      (event) => ({ status: "fulfilled" as const, event }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
     try {
-      await tracing.enterSpan("capability_host.script_request_append", async (span) => {
-        const events = await this.#awaitJournalAppend(
-          this.append({
-            type: "events.iterate.com/capability-host/script-run-requested",
-            payload: { code, executionId, expiresAt },
-          }),
-          expiresAt,
-          `record the request for script execution "${executionId}"`,
-        );
-        const requested = events[0];
-        if (requested === undefined) {
-          throw new Error(`script execution "${executionId}" request append returned no event`);
-        }
-        span.setAttribute("iterate.capability_host.request_offset", requested.offset);
-        return requested;
-      });
+      const requested = await tracing.enterSpan(
+        "capability_host.script_request_append",
+        async (span) => {
+          span.setAttribute("iterate.capability_host.execution_id", executionId);
+          const events = await this.#awaitJournalAppend(
+            this.append({
+              type: "events.iterate.com/capability-host/script-run-requested",
+              payload: { code, executionId, expiresAt },
+            }),
+            expiresAt,
+            `record the request for script execution "${executionId}"`,
+          );
+          const requestedEvent = events[0];
+          if (requestedEvent === undefined) {
+            throw new Error(`script execution "${executionId}" request append returned no event`);
+          }
+          span.setAttribute("iterate.capability_host.request_offset", requestedEvent.offset);
+          return requestedEvent;
+        },
+      );
 
       // The append is the durable recovery boundary. Starting the exact
       // obligation now keeps foreground latency independent of subscriber
@@ -901,9 +895,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         state,
         runInBackground: this.#runScriptInBackground,
       });
+      return { executionId, expiresAt, requestedOffset: requested.offset };
     } catch (error) {
-      completionAbort.abort(error);
-      void observedCompletion;
       // Before #startOwnedScript schedules work, the foreground path owns
       // only an in-memory reservation. Releasing it lets durable recovery
       // adopt any request whose append committed before this failure.
@@ -912,51 +905,11 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       }
       throw error;
     }
-    const completion = await observedCompletion;
-    if (completion.status === "rejected") {
-      throw new Error(
-        `Script execution "${executionId}" did not settle before its absolute deadline.`,
-        { cause: completion.error },
-      );
-    }
-    const { event, settlement } = completion.event;
-    if (settlement.status === "failed") throw new Error(settlement.error);
-    return {
-      completedEvent: event,
-      executionId,
-      result: settlement.result ?? null,
-    };
   }
 
   async #assertCreated(): Promise<void> {
     const { state } = await this.#reads.snapshot();
     this.#requireBirthCertificate(state.birthCertificate);
-  }
-
-  async #waitForScriptCompletion(executionId: string, timeoutMs: number, signal: AbortSignal) {
-    let completed: { event: StreamEvent; settlement: ScriptExecutionSettlementValue } | undefined;
-    await this.#reads.waitUntilEvent({
-      predicate: (event) => {
-        if (event.type !== "events.iterate.com/capability-host/script-run-settled") return false;
-        const payload = event.payload;
-        if (
-          payload === null ||
-          typeof payload !== "object" ||
-          Array.isArray(payload) ||
-          payload.executionId !== executionId
-        ) {
-          return false;
-        }
-        const settlement = ScriptExecutionSettlement.safeParse(payload.settlement);
-        if (!settlement.success) return false;
-        completed = { event, settlement: settlement.data };
-        return true;
-      },
-      timeoutMs,
-      signal,
-    });
-    if (!completed) throw new Error(`script execution "${executionId}" completed without an event`);
-    return completed;
   }
 
   /**
@@ -1066,6 +1019,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     const executionExpiresAt = input.expiresAt - SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS;
     let durableAttemptEvidenceCommitted = false;
     await tracing.enterSpan("capability_host.script_execution", async (span) => {
+      span.setAttribute("iterate.capability_host.execution_id", input.executionId);
       span.setAttribute("iterate.capability_host.script_chars", input.code.length);
       span.setAttribute("iterate.capability_host.ancestor_declared", true);
       span.setAttribute(

@@ -2,10 +2,30 @@ import {
   ScriptExecutionSettlement as ScriptExecutionSettlementSchema,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
 } from "@iterate-com/shared/script-execution";
+import type { StreamEvent } from "../streams/schemas.ts";
 import type { DeadlineOutcome } from "./execution-deadline.ts";
 
 export const ScriptExecutionSettlement = ScriptExecutionSettlementSchema;
 export type ScriptExecutionSettlement = ScriptExecutionSettlementValue;
+
+/** Parse the terminal fact for one exact script obligation. */
+export function scriptSettlementFromEvent(
+  event: StreamEvent,
+  executionId: string,
+): ScriptExecutionSettlementValue | undefined {
+  if (event.type !== "events.iterate.com/capability-host/script-run-settled") return undefined;
+  const payload = event.payload;
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    payload.executionId !== executionId
+  ) {
+    return undefined;
+  }
+  const settlement = ScriptExecutionSettlement.safeParse(payload.settlement);
+  return settlement.success ? settlement.data : undefined;
+}
 
 // The worker must return before the obligation deadline so the host still has
 // time to journal its one durable settlement. Every individual journal append
