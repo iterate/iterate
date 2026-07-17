@@ -152,7 +152,7 @@ type ConfiguredEntry = {
   parkedAtOffset?: number;
 };
 
-function makeHarness() {
+function makeHarness(options: { includeEphemeral?: (subscriptionKey: string) => boolean } = {}) {
   let now = 0;
   let assignedMaxOffset = 0;
   let streamCreatedAt: string | undefined = "stream-v1";
@@ -226,6 +226,7 @@ function makeHarness() {
           maxOffset: assignedMaxOffset,
           configuredSubscribersByKey: configured,
         }),
+      includeEphemeral: options.includeEphemeral ?? (() => false),
       store,
       dial,
       appendFact: (event) => {
@@ -1607,8 +1608,8 @@ describe("StreamSubscribers", () => {
   });
 
   it("z2a. a protected push opt-in receives ephemeral and durable rows in exact offset order", async () => {
-    const h = makeHarness();
-    h.configure(pushPayload({ includeEphemeral: true }), 0);
+    const h = makeHarness({ includeEphemeral: (subscriptionKey) => subscriptionKey === "k" });
+    h.configure(pushPayload(), 0);
     h.append(
       evt(1, "durable"),
       { ...evt(2, "chunk"), ephemeral: true as const },

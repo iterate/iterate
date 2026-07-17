@@ -3122,7 +3122,9 @@ export type SubscriptionKey = string;
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
+ * stream assigns offset and timestamp at commit. `type` is a searchable
+ * operational identifier (1–256 URI-like ASCII characters), never arbitrary
+ * user content. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
  * excluded from ordinary durable subscribers (wake/push/webhook), and retained
  * until first-party observability acknowledges them — for transient signals

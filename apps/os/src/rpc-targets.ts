@@ -111,11 +111,10 @@ import {
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import {
-  assertPosthogSubscriptionWriteAllowed,
-  assertCanonicalPosthogDelivery,
+  assertPlatformEventWriteAllowed,
+  assertCanonicalPosthogDeliveryEnvelope,
   batchContainsCanonicalStreamCreated,
   capturePosthogStreamEventBatch,
-  posthogSubscriptionEvent,
 } from "./domains/integrations/posthog.ts";
 import {
   connectionSlackClient,
@@ -457,8 +456,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** @internal */
-  get durableObjectStub() {
+  get #durableObjectStub() {
     return env.STREAM.getByName(
       DurableObjectNameCodec.stringify(
         {
@@ -489,16 +487,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // ride the tagged methods.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    assertPosthogSubscriptionWriteAllowed(events, {
-      authority:
-        this.props.auth.principal === "admin"
-          ? "admin"
-          : this.props.auth.principal === STREAM_DELIVERY_PRINCIPAL
-            ? "managed"
-            : "userspace",
+    assertPlatformEventWriteAllowed(events, {
+      authority: this.props.auth.principal === "admin" ? "admin" : "userspace",
+      path: this.props.path,
       projectId: this.props.projectId,
     });
-    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    return this.#durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -516,7 +510,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    return this.#durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -527,7 +521,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    return this.#durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -552,14 +546,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+    return this.#durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
+    return this.#durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
   }
 
   /**
@@ -583,12 +577,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    return this.#durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void> {
-    return Promise.resolve(this.durableObjectStub.kill());
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   /**
@@ -646,7 +640,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // disposes a session's exports when the session ends, which is exactly an
     // ephemeral subscription's lifetime.
     const forward = retainProcessEventBatch(args.processEventBatch);
-    return this.durableObjectStub.subscribe({
+    return this.#durableObjectStub.subscribe({
       ...args,
       processEventBatch: (batch) => void forward(batch),
     });
@@ -667,7 +661,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     if (this.props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
       throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
-    return Promise.resolve(this.durableObjectStub.acceptCrossPost(batch));
+    return Promise.resolve(this.#durableObjectStub.acceptCrossPost(batch));
+  }
+
+  /** @internal Test-only control, deliberately guarded instead of exposing the raw DO stub. */
+  runIdleTeardownNow(): Promise<void> {
+    if (!this.props.auth.isAdmin()) {
+      throw new Error("forcing stream idle teardown requires an admin principal");
+    }
+    return Promise.resolve(this.#durableObjectStub.runIdleTeardownNow());
   }
 
   /**
@@ -3011,11 +3013,14 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
   }
 
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
-    assertCanonicalPosthogDelivery(batch);
+    assertCanonicalPosthogDeliveryEnvelope(batch);
     if (batch.projectId !== this.props.projectId) {
       throw new Error("PostHog stream delivery project does not match its itx authority");
     }
     const config = parseConfig(env).posthog;
+    // Deployed environment generation requires this block. Undefined is kept
+    // only for intentionally vendor-free local development; delivery parks
+    // loudly instead of pretending those rows were exported.
     if (config === undefined) {
       throw new StreamReceiverUnavailableError("PostHog is not configured for this deployment");
     }
@@ -4690,12 +4695,30 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // The auth worker may normalize the slug (slugify); adopt its canonical
     // form so stream events agree with the directory and ingress hostnames.
     args.slug = registered.slug;
-    // The creating session can use the project immediately; a signed-in user's
-    // claims catch up on the next token refresh (directory fallback covers the
-    // gap for other connections).
+    const creatorEmail = userPrincipalOf(this.props.auth)?.email;
+    const rootStreamName = streamDurableObjectName({
+      projectId: registered.projectId,
+      path: "/",
+    });
+    const [created, subscription] = await timedStep("create-timing", timing, "root-append", () =>
+      env.STREAM.getByName(rootStreamName).initializeProjectRoot({
+        ...(creatorEmail === undefined ? {} : { creatorEmail }),
+        slug: registered.slug,
+        projectProcessorSubscription: buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: "/",
+          }),
+          idempotencyKey: "project-processor-subscription-v1",
+          processor: ["processor"],
+          processorSlug: ProjectProcessorContract.slug,
+        }),
+      }),
+    );
+
+    // Birth is now durable and cannot be pre-empted by a session. Expose the
+    // project to the creator and prime slug resolution only after that fact.
     widenProjectAccess(this.props.auth, registered.projectId);
-    // Prime the slug->id directory cache so the post-create navigation (and
-    // the first project-host request) never miss into the auth worker.
     await timedStep("create-timing", timing, "prime-directory", () =>
       primeProjectDirectory(env.PROJECT_DIRECTORY, {
         id: registered.projectId,
@@ -4709,36 +4732,6 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       auth: this.props.auth,
       projectId: args.projectId,
     });
-
-    const creatorEmail = userPrincipalOf(this.props.auth)?.email;
-    const appendRootEvents = () =>
-      stream.append(
-        {
-          type: "events.iterate.com/project/created",
-          idempotencyKey: `project-created:${registered.projectId}`,
-          payload: {
-            config: {
-              onboardingActive: true,
-              slug: registered.slug,
-              ...(creatorEmail === undefined ? {} : { creatorEmail }),
-            },
-          },
-        },
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
-          }),
-          processor: ["processor"],
-          processorSlug: ProjectProcessorContract.slug,
-        }),
-      );
-    const [created, subscription] = await timedStep(
-      "create-timing",
-      timing,
-      "root-append",
-      appendRootEvents,
-    );
     const project = itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -5607,7 +5600,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       return;
     }
     try {
-      await this.streams.get(batch.path).append(posthogSubscriptionEvent());
+      const streamName = streamDurableObjectName({
+        projectId: batch.projectId,
+        path: batch.path,
+      });
+      await env.STREAM.getByName(streamName).installFirstPartyPosthogSubscription();
     } catch (error) {
       throw new StreamReceiverUnavailableError(
         "could not install the first-party PostHog subscription",

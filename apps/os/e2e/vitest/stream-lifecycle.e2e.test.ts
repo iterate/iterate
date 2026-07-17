@@ -702,15 +702,14 @@ async function waitForWaitForEventConnection(stream: Stream): Promise<string> {
 }
 
 async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
-  // Test-only operator path: exercise the idle teardown behavior without waiting
-  // for the production five-minute timer.
+  // Test-only, admin-guarded operator path: exercise the idle teardown behavior
+  // without waiting for the production five-minute timer. The raw DO stub is
+  // intentionally not reachable through the public Cap'n Web target.
   await (
     stream as unknown as {
-      durableObjectStub: {
-        runIdleTeardownNow(): Promise<void> | void;
-      };
+      runIdleTeardownNow(): Promise<void>;
     }
-  ).durableObjectStub.runIdleTeardownNow();
+  ).runIdleTeardownNow();
 }
 
 function configuredSubscriptionKeys(state: StreamRuntimeState): string[] {

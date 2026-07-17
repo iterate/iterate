@@ -27,7 +27,6 @@ const EXPECTED_POSTHOG_SUBSCRIPTION = {
       expression: ["integrations", "posthog", "processEventBatch"],
     },
     deliver: "all",
-    includeEphemeral: true,
     onPoison: "park",
   },
 } as const;
@@ -302,23 +301,38 @@ test("ephemeral events are raw-readable and delivered live, but never replayed t
     },
   });
 
-  const [before] = await stream.append({
-    type: STREAM_EVENT_TYPE,
-    payload: { marker, position: "before" },
-  });
-  const [chunk] = await stream.append({
-    type: ephemeralType,
-    ephemeral: true,
-    idempotencyKey: `chunk-${marker}`,
-    payload: { marker },
-  });
-  const [after] = await stream.append({
-    type: STREAM_EVENT_TYPE,
-    payload: { marker, position: "after" },
-  });
+  // Stream birth is processed asynchronously by the project worker. Let its
+  // fixed platform feed settle before asserting the offsets of our own atomic
+  // append; platform-owned facts are legitimate stream rows too.
+  await waitForCondition(
+    async () =>
+      (await stream.getEvents({ afterOffset: 0 })).some(
+        (event) =>
+          event.type === EXPECTED_POSTHOG_SUBSCRIPTION.type &&
+          event.payload?.subscriptionKey === POSTHOG_SUBSCRIPTION_KEY,
+      ),
+    { description: "the first-party PostHog subscription to finish installing" },
+  );
 
-  // An ordinary commit: consecutive offsets, self-describing flag, and
-  // idempotency dedup works (it is a row like any other).
+  const [before, chunk, after] = await stream.append(
+    {
+      type: STREAM_EVENT_TYPE,
+      payload: { marker, position: "before" },
+    },
+    {
+      type: ephemeralType,
+      ephemeral: true,
+      idempotencyKey: `chunk-${marker}`,
+      payload: { marker },
+    },
+    {
+      type: STREAM_EVENT_TYPE,
+      payload: { marker, position: "after" },
+    },
+  );
+
+  // One atomic commit has consecutive offsets. The ephemeral row remains
+  // self-describing and participates in ordinary idempotency deduplication.
   expect(chunk).toMatchObject({ offset: before!.offset + 1 });
   expect(after).toMatchObject({ offset: chunk!.offset + 1 });
   expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });

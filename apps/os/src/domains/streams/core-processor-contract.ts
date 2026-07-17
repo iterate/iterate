@@ -178,12 +178,6 @@ const SubscriptionConfiguredPayload = z
     description: z.string().trim().min(1).optional(),
     /** Which events this subscription receives. Absent = everything. */
     selector: EventSelector.optional(),
-    /**
-     * Include ephemeral rows in this push feed. Reserved for first-party
-     * observability: ordinary durable consumers must not build state or
-     * effects from rows the stream remains free to evict.
-     */
-    includeEphemeral: z.literal(true).optional(),
     /** Initial cursor for push/webhook (see {@link DeliverPolicy}). Ignored for wake mode. */
     deliver: DeliverPolicy.optional(),
     /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
@@ -211,13 +205,6 @@ const SubscriptionConfiguredPayload = z
           message: `"${field}" only applies to push/webhook subscriptions (wake subscribers own their checkpoint)`,
         });
       }
-    }
-    if (payload.delivery.mode !== "push" && payload.includeEphemeral !== undefined) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["includeEphemeral"],
-        message: '"includeEphemeral" only applies to push subscriptions',
-      });
     }
   });
 

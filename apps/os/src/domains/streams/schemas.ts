@@ -1,11 +1,20 @@
 import { z } from "zod";
 
+/** Searchable operational identifier exported by the first-party event feed. */
+export const StreamEventType = z
+  .string()
+  .max(256, "event type must be at most 256 characters")
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._:/@+*-]{0,255}$/,
+    "event type must be an identifier, not user content",
+  );
+
 /** Append input before the stream assigns offset and timestamp. */
 export const StreamEventInput = z.object({
   // Public operational schema identifier. PostHog indexes this field for all
   // project stream occurrences, so secrets and user content belong in the
   // payload (which the first-party feed intentionally never exports), not here.
-  type: z.string(),
+  type: StreamEventType,
   payload: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   // Deliberately NOT strict: committed rows are re-parsed through this schema
@@ -34,7 +43,7 @@ export const StreamEventInput = z.object({
           whileProcessing: z
             .object({
               offset: z.number().int().nonnegative(),
-              type: z.string().trim().min(1),
+              type: StreamEventType,
             })
             .optional(),
         })
@@ -49,7 +58,7 @@ export const StreamEventInput = z.object({
               offset: z.number().int().nonnegative(),
               path: z.string().trim().min(1),
               projectId: z.string().trim().min(1).nullable(),
-              type: z.string().trim().min(1),
+              type: StreamEventType,
             })
             .strict(),
         )
@@ -105,7 +114,9 @@ export const StreamListItem = z.object({
 // inferred, not hand-maintained (types.ts re-exports them for older importers).
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
+ * stream assigns offset and timestamp at commit. `type` is a searchable
+ * operational identifier (1–256 URI-like ASCII characters), never arbitrary
+ * user content. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
  * excluded from ordinary durable subscribers (wake/push/webhook), and retained
  * until first-party observability acknowledges them — for transient signals

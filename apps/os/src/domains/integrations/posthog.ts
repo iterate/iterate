@@ -12,7 +12,6 @@ export const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
 export const POSTHOG_STREAM_EVENT = "iterate stream event committed";
 
 const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/batch/";
-const POSTHOG_INDEXED_TEXT_MAX_CHARS = 1_024;
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
 const ProjectGroupBirthPayload = z.object({
   config: z.object({
@@ -32,7 +31,6 @@ const CanonicalPosthogSubscriptionPayload = z.strictObject({
     ]),
   }),
   deliver: z.literal("all"),
-  includeEphemeral: z.literal(true),
   onPoison: z.literal("park"),
 });
 
@@ -63,7 +61,6 @@ export function posthogSubscriptionEvent() {
         expression: ["integrations", "posthog", "processEventBatch"],
       },
       deliver: "all",
-      includeEphemeral: true,
       onPoison: "park",
     } satisfies SubscriptionConfiguredPayload,
   };
@@ -86,6 +83,14 @@ export function isFirstPartyPosthogSubscriptionConfiguration(event: StreamEventI
     event.source === undefined &&
     hasCanonicalPosthogPayload(event)
   );
+}
+
+/** Platform birth/subscription facts are local control state, never cross-postable product data. */
+export function isPlatformLocalControlEvent(event: StreamEventInput): boolean {
+  if (event.type === "events.iterate.com/project/created") return true;
+  if (!event.type.startsWith("events.iterate.com/stream/subscription-")) return false;
+  const key = event.payload?.subscriptionKey;
+  return key === POSTHOG_SUBSCRIPTION_KEY || key === PROJECT_WORKER_SUBSCRIPTION_KEY;
 }
 
 function isCanonicalProjectWorkerConfiguration(event: StreamEventInput): boolean {
@@ -119,7 +124,7 @@ export function batchContainsCanonicalStreamCreated(batch: StreamPushEventBatch)
 }
 
 /** Reject any ordinary push subscription trying to route through the first-party sink. */
-export function assertCanonicalPosthogDelivery(batch: StreamPushEventBatch): void {
+export function assertCanonicalPosthogDeliveryEnvelope(batch: StreamPushEventBatch): void {
   if (
     batch.subscriptionKey !== POSTHOG_SUBSCRIPTION_KEY ||
     batch.configuredEvent.path !== batch.path ||
@@ -130,18 +135,32 @@ export function assertCanonicalPosthogDelivery(batch: StreamPushEventBatch): voi
 }
 
 /**
- * The reserved key and the durable-ephemeral opt-in are platform powers, not
- * project-configurable subscription options.
+ * Reserved subscription configuration is installed inside the Stream Durable
+ * Object. Public append may only perform explicit operator resume/redrive
+ * actions; recovery import may replay authentic first-hand platform facts.
  */
-export function assertPosthogSubscriptionWriteAllowed(
+export function assertPlatformEventWriteAllowed(
   events: readonly StreamEventInput[],
   options: {
-    authority: "admin" | "managed" | "recovery" | "userspace";
+    authority: "admin" | "recovery" | "userspace";
+    path: string;
     projectId: string | null;
   },
 ): void {
   const canonical = posthogSubscriptionEvent();
   for (const event of events) {
+    if (event.type === "events.iterate.com/project/created") {
+      const authenticRecoveryBirth =
+        options.authority === "recovery" &&
+        options.projectId !== null &&
+        options.path === "/" &&
+        event.idempotencyKey === `project-created:${options.projectId}` &&
+        event.ephemeral === undefined &&
+        event.metadata === undefined &&
+        event.source === undefined;
+      if (authenticRecoveryBirth) continue;
+      throw new Error("project birth is managed by Iterate");
+    }
     if (isCanonicalProjectWorkerConfiguration(event)) {
       if (options.projectId === null) {
         throw new Error("the project worker birth subscription requires a project stream");
@@ -156,7 +175,7 @@ export function assertPosthogSubscriptionWriteAllowed(
       if (options.projectId === null) {
         throw new Error("the first-party PostHog subscription requires a project stream");
       }
-      if (options.authority !== "managed" && options.authority !== "recovery") {
+      if (options.authority !== "recovery") {
         throw new Error("the first-party PostHog subscription is managed by Iterate");
       }
       continue;
@@ -189,7 +208,7 @@ export function assertPosthogSubscriptionWriteAllowed(
         : undefined;
     const routesToPosthog =
       Array.isArray(expression) && expression[0] === "integrations" && expression[1] === "posthog";
-    if (key === POSTHOG_SUBSCRIPTION_KEY || event.payload?.includeEphemeral === true) {
+    if (key === POSTHOG_SUBSCRIPTION_KEY) {
       throw new Error("the first-party PostHog subscription is managed by Iterate");
     }
     if (routesToPosthog) {
@@ -232,13 +251,6 @@ function canonicalEventTimestamp(createdAt: string): string {
   return new Date(createdAt).toISOString();
 }
 
-function boundedIndexedText(value: string): { text: string; truncated: boolean } {
-  return {
-    text: value.slice(0, POSTHOG_INDEXED_TEXT_MAX_CHARS),
-    truncated: value.length > POSTHOG_INDEXED_TEXT_MAX_CHARS,
-  };
-}
-
 type PostHogBatchEvent = {
   distinct_id: string;
   event: string;
@@ -278,7 +290,6 @@ function projectGroupIdentifyEvent(args: {
       $group_key: projectId,
       $group_set: {
         id: projectId,
-        name: birth.data.config.slug,
         slug: birth.data.config.slug,
       },
       $group_type: "project",
@@ -305,10 +316,9 @@ function posthogEvents(args: {
   const streamId = posthogUuid(["stream-v1", workerName, projectId, batch.path]);
   const occurrences = batch.events.map((event) => {
     const createdAt = canonicalEventTimestamp(event.createdAt);
-    // Event types are operational schema identifiers, including custom
-    // project schemas. Export the exact bounded identifier for every row;
-    // unlike payload/metadata/path, it is deliberately part of the index.
-    const eventType = boundedIndexedText(event.type);
+    // Event types are validated bounded identifiers at the append boundary.
+    // Unlike payload/metadata/path, the exact identifier is deliberately
+    // exported as the searchable operational schema name.
     const eventUuid = eventIdentity(workerName, projectId, batch.path, {
       createdAt,
       offset: event.offset,
@@ -324,8 +334,7 @@ function posthogEvents(args: {
         stream_event_created_at: createdAt,
         stream_event_ephemeral: event.ephemeral === true,
         stream_event_offset: event.offset,
-        stream_event_type: eventType.text,
-        stream_event_type_truncated: eventType.truncated,
+        stream_event_type: event.type,
         stream_event_uuid: eventUuid,
         stream_max_offset: batch.streamMaxOffset,
         stream_id: streamId,

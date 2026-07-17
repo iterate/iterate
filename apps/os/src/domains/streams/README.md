@@ -117,6 +117,13 @@ webhook is the same cursor machinery pointed at plain HTTP:
 | replay                  | durable rows after `replayAfterOffset`; ephemeral rows only live after open | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`                                       | same as push                                     |
 | filter                  | `selector` / `eventTypes` on subscribe                                      | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config                                                 | same selector shape                              |
 
+### Event type identifiers
+
+An event `type` is indexed operational schema, not content: 1–256 ASCII
+characters matching a URI-like identifier (`A-Z a-z 0-9 . _ : / @ + * -`).
+Put user text and secrets in `payload`; the first-party PostHog feed indexes
+the exact type but deliberately never exports payload or metadata.
+
 ### Ephemeral events
 
 `append({ ..., ephemeral: true })` commits a SECOND-CLASS event: an ordinary

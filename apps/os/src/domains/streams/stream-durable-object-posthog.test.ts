@@ -1,11 +1,65 @@
 import { describe, expect, it, vi } from "vitest";
 import { POSTHOG_SUBSCRIPTION_KEY, posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { PROJECT_WORKER_SUBSCRIPTION_KEY } from "./core-processor-contract.ts";
 import type { StreamPushEventBatch } from "./rpc-types.ts";
 import type { StreamEvent } from "./schemas.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 
 describe("StreamDurableObject first-party PostHog boundaries", () => {
-  it("keeps local PostHog configuration out of a mixed cross-post batch", () => {
+  it("installs the one fixed all-stream feed without accepting configuration", () => {
+    const stream = prototypeStream();
+    const configured = {
+      ...posthogSubscriptionEvent(),
+      offset: 6,
+      createdAt: new Date(6).toISOString(),
+      path: "/agents/ada",
+    } satisfies StreamEvent;
+    const append = vi.fn(() => [configured]);
+    Object.defineProperty(stream, "append", { value: append });
+
+    expect(stream.installFirstPartyPosthogSubscription()).toEqual(configured);
+    expect(append).toHaveBeenCalledWith(posthogSubscriptionEvent());
+  });
+
+  it("constructs project group identity inside the root stream boundary", () => {
+    const stream = prototypeStream("prj_test", "/");
+    const projectProcessorSubscription = {
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: "project-processor-subscription-v1",
+      payload: {
+        subscriptionKey: "project-processor",
+        delivery: {
+          mode: "wake" as const,
+          expression: ["processor", "wakeStreamSubscriber"],
+        },
+      },
+    };
+    const append = vi.fn(() => []);
+    Object.defineProperty(stream, "append", { value: append });
+
+    stream.initializeProjectRoot({
+      creatorEmail: "private@example.com",
+      projectProcessorSubscription,
+      slug: "gold-path",
+    });
+
+    expect(append).toHaveBeenCalledWith(
+      {
+        type: "events.iterate.com/project/created",
+        idempotencyKey: "project-created:prj_test",
+        payload: {
+          config: {
+            creatorEmail: "private@example.com",
+            onboardingActive: true,
+            slug: "gold-path",
+          },
+        },
+      },
+      projectProcessorSubscription,
+    );
+  });
+
+  it("keeps every local platform-subscription fact out of cross-post history", () => {
     const stream = prototypeStream();
     const append = vi.fn();
     Object.defineProperty(stream, "append", { value: append });
@@ -15,10 +69,51 @@ describe("StreamDurableObject first-party PostHog boundaries", () => {
       createdAt: new Date(5).toISOString(),
       path: "/source",
     } satisfies StreamEvent;
-    const ready = event(6, "events.iterate.com/repo/ready", { path: "/repos/config" }, "/source");
+    const ready = event(10, "events.iterate.com/repo/ready", { path: "/repos/config" }, "/source");
+    const localControlFacts = [
+      event(
+        2,
+        "events.iterate.com/stream/subscription-configured",
+        {
+          subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
+          delivery: { mode: "push", expression: ["processEventBatch"] },
+          deliver: "all",
+          onPoison: "skip",
+        },
+        "/source",
+      ),
+      {
+        ...event(
+          4,
+          "events.iterate.com/project/created",
+          { config: { slug: "source-project" } },
+          "/source",
+        ),
+        idempotencyKey: "project-created:prj_test",
+      },
+      localPosthogConfiguration,
+      event(
+        7,
+        "events.iterate.com/stream/subscription-parked",
+        { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY, atOffset: 4, attempts: 15 },
+        "/source",
+      ),
+      event(
+        8,
+        "events.iterate.com/stream/subscription-resumed",
+        { subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY },
+        "/source",
+      ),
+      event(
+        9,
+        "events.iterate.com/stream/subscription-cursor-set",
+        { subscriptionKey: POSTHOG_SUBSCRIPTION_KEY, afterOffset: 0 },
+        "/source",
+      ),
+    ];
 
     expect(() =>
-      stream.acceptCrossPost(crossPostBatch(undefined, [localPosthogConfiguration, ready])),
+      stream.acceptCrossPost(crossPostBatch(undefined, [...localControlFacts, ready])),
     ).not.toThrow();
     expect(append).toHaveBeenCalledOnce();
     expect(append).toHaveBeenCalledWith(
@@ -36,8 +131,12 @@ describe("StreamDurableObject first-party PostHog boundaries", () => {
       `{ "type": "events.iterate.com/stream/subscription-removed", "payload": { "subscriptionKey": "${POSTHOG_SUBSCRIPTION_KEY}" } }`,
     ],
     [
-      "durable ephemeral-delivery escalation",
-      '{ "type": "events.iterate.com/stream/subscription-configured", "payload": { "subscriptionKey": "attacker", "delivery": { "mode": "push", "expression": ["processEventBatch"] }, "includeEphemeral": true } }',
+      "project-worker removal",
+      `{ "type": "events.iterate.com/stream/subscription-removed", "payload": { "subscriptionKey": "${PROJECT_WORKER_SUBSCRIPTION_KEY}" } }`,
+    ],
+    [
+      "project birth",
+      '{ "type": "events.iterate.com/project/created", "payload": { "config": { "slug": "forged" } } }',
     ],
   ])("rejects a cross-post transform attempting %s", (_label, transform) => {
     // This method reaches its guard before any private DO state. A prototype
@@ -52,10 +151,10 @@ describe("StreamDurableObject first-party PostHog boundaries", () => {
   });
 });
 
-function prototypeStream(): StreamDurableObject {
+function prototypeStream(projectId: string | null = "prj_test", path = "/agents/ada") {
   const stream = Object.create(StreamDurableObject.prototype) as StreamDurableObject;
   Object.defineProperty(stream, "name", {
-    value: { path: "/agents/ada", projectId: "prj_test" },
+    value: { path, projectId },
   });
   return stream;
 }

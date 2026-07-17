@@ -6,8 +6,8 @@ import {
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
-  assertCanonicalPosthogDelivery,
-  assertPosthogSubscriptionWriteAllowed,
+  assertCanonicalPosthogDeliveryEnvelope,
+  assertPlatformEventWriteAllowed,
   batchContainsCanonicalStreamCreated,
   capturePosthogStreamEventBatch,
   POSTHOG_STREAM_EVENT,
@@ -44,7 +44,7 @@ function batch(events: StreamEvent[]): StreamPushEventBatch {
     configuredEvent: {
       type: "events.iterate.com/stream/subscription-configured",
       path: "/agents/ada",
-      offset: 3,
+      offset: 4,
       createdAt: "2026-07-16T09:00:00.000Z",
       // The fold stores the schema-parsed payload, whose property order is
       // different from the builder. This is the real delivery shape.
@@ -92,10 +92,18 @@ const captureArgs = (events: StreamEvent[], workerName = "os-preview-6") => ({
   workerName,
 });
 
-const projectStream = { authority: "userspace", projectId: "prj_123" } as const;
+const projectStream = {
+  authority: "userspace",
+  path: "/agents/ada",
+  projectId: "prj_123",
+} as const;
 
 function assertPosthogRecoveryEventAllowed(event: StreamEvent, projectId: string | null): void {
-  assertPosthogSubscriptionWriteAllowed([event], { authority: "recovery", projectId });
+  assertPlatformEventWriteAllowed([event], {
+    authority: "recovery",
+    path: event.path,
+    projectId,
+  });
 }
 
 describe("first-party PostHog stream integration", () => {
@@ -112,7 +120,6 @@ describe("first-party PostHog stream integration", () => {
           expression: ["integrations", "posthog", "processEventBatch"],
         },
         deliver: "all",
-        includeEphemeral: true,
         onPoison: "park",
       },
     });
@@ -125,21 +132,21 @@ describe("first-party PostHog stream integration", () => {
   });
 
   it("accepts only the canonical delivery route and configuration", () => {
-    expect(() => assertCanonicalPosthogDelivery(batch([streamEvent()]))).not.toThrow();
+    expect(() => assertCanonicalPosthogDeliveryEnvelope(batch([streamEvent()]))).not.toThrow();
     expect(() =>
-      assertCanonicalPosthogDelivery({
+      assertCanonicalPosthogDeliveryEnvelope({
         ...batch([streamEvent()]),
         subscriptionKey: "customer-feed",
       }),
     ).toThrow(/canonical stream subscription/);
     expect(() =>
-      assertCanonicalPosthogDelivery({
+      assertCanonicalPosthogDeliveryEnvelope({
         ...batch([streamEvent()]),
         configuredEvent: { ...batch([streamEvent()]).configuredEvent, path: "/other" },
       }),
     ).toThrow(/canonical stream subscription/);
     expect(() =>
-      assertCanonicalPosthogDelivery({
+      assertCanonicalPosthogDeliveryEnvelope({
         ...batch([streamEvent()]),
         configuredEvent: {
           ...batch([streamEvent()]).configuredEvent,
@@ -149,12 +156,12 @@ describe("first-party PostHog stream integration", () => {
     ).toThrow(/canonical stream subscription/);
   });
 
-  it("reserves the key, idempotency key, and ephemeral durable-delivery power", () => {
+  it("reserves the platform key, idempotency key, and delivery route", () => {
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed([posthogSubscriptionEvent()], projectStream),
+      assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], projectStream),
     ).toThrow(/managed by Iterate/);
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed(
+      assertPlatformEventWriteAllowed(
         [
           {
             type: "events.iterate.com/stream/subscription-removed",
@@ -165,22 +172,7 @@ describe("first-party PostHog stream integration", () => {
       ),
     ).toThrow(/managed by Iterate/);
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed(
-        [
-          {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: {
-              subscriptionKey: "another-feed",
-              delivery: { mode: "push", expression: ["processEventBatch"] },
-              includeEphemeral: true,
-            },
-          },
-        ],
-        projectStream,
-      ),
-    ).toThrow(/managed by Iterate/);
-    expect(() =>
-      assertPosthogSubscriptionWriteAllowed(
+      assertPlatformEventWriteAllowed(
         [
           {
             type: "events.iterate.com/stream/subscription-configured",
@@ -197,68 +189,94 @@ describe("first-party PostHog stream integration", () => {
       ),
     ).toThrow(/delivery route is managed by Iterate/);
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed([posthogSubscriptionEvent()], {
-        authority: "managed",
-        projectId: "prj_123",
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertPosthogSubscriptionWriteAllowed([posthogSubscriptionEvent()], {
+      assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], {
         authority: "admin",
+        path: "/agents/ada",
         projectId: "prj_123",
       }),
     ).toThrow(/managed by Iterate/);
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed(
+      assertPlatformEventWriteAllowed(
         [{ ...posthogSubscriptionEvent(), metadata: { forged: true } }],
-        { authority: "managed", projectId: "prj_123" },
+        { authority: "userspace", path: "/agents/ada", projectId: "prj_123" },
       ),
     ).toThrow(/noncanonical owner/);
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed([posthogSubscriptionEvent()], {
-        authority: "managed",
+      assertPlatformEventWriteAllowed([posthogSubscriptionEvent()], {
+        authority: "userspace",
+        path: "/agents/ada",
         projectId: null,
       }),
     ).toThrow(/requires a project stream/);
 
     const projectWorkerBirth = projectWorkerBatch([streamEvent()]).configuredEvent;
+    expect(() => assertPlatformEventWriteAllowed([projectWorkerBirth], projectStream)).toThrow(
+      /project worker birth subscription is managed/,
+    );
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed([projectWorkerBirth], projectStream),
-    ).toThrow(/project worker birth subscription is managed/);
-    expect(() =>
-      assertPosthogSubscriptionWriteAllowed([projectWorkerBirth], {
+      assertPlatformEventWriteAllowed([projectWorkerBirth], {
         authority: "recovery",
+        path: "/agents/ada",
         projectId: "prj_123",
       }),
     ).not.toThrow();
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed([projectWorkerBirth], {
+      assertPlatformEventWriteAllowed([projectWorkerBirth], {
         authority: "recovery",
+        path: "/agents/ada",
         projectId: null,
       }),
     ).toThrow(/requires a project stream/);
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed(
+      assertPlatformEventWriteAllowed(
         [
           {
             type: "events.iterate.com/stream/subscription-cursor-set",
             payload: { subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY, afterOffset: 1 },
           },
         ],
-        { authority: "admin", projectId: "prj_123" },
+        { authority: "admin", path: "/agents/ada", projectId: "prj_123" },
       ),
     ).toThrow(/project worker birth subscription is managed/);
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed(
+      assertPlatformEventWriteAllowed(
         [
           {
             type: "events.iterate.com/stream/subscription-resumed",
             payload: { subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY },
           },
         ],
-        { authority: "admin", projectId: "prj_123" },
+        { authority: "admin", path: "/agents/ada", projectId: "prj_123" },
       ),
     ).not.toThrow();
+  });
+
+  it("reserves the one authentic project-group birth certificate", () => {
+    const birth = streamEvent({
+      type: "events.iterate.com/project/created",
+      path: "/",
+      offset: 4,
+      idempotencyKey: "project-created:prj_123",
+      metadata: undefined,
+      source: undefined,
+      payload: { config: { onboardingActive: true, slug: "gold-path" } },
+    });
+
+    expect(() =>
+      assertPlatformEventWriteAllowed([birth], {
+        authority: "userspace",
+        path: "/",
+        projectId: "prj_123",
+      }),
+    ).toThrow(/project birth is managed by Iterate/);
+    expect(() => assertPosthogRecoveryEventAllowed(birth, "prj_123")).not.toThrow();
+    expect(() =>
+      assertPlatformEventWriteAllowed([birth], {
+        authority: "recovery",
+        path: "/other",
+        projectId: "prj_123",
+      }),
+    ).toThrow(/project birth is managed by Iterate/);
   });
 
   it("provisions only from the stream's canonical offset-one birth certificate", () => {
@@ -415,15 +433,17 @@ describe("first-party PostHog stream integration", () => {
     }
     for (const event of lifecycle.slice(1)) {
       expect(() =>
-        assertPosthogSubscriptionWriteAllowed([event], {
+        assertPlatformEventWriteAllowed([event], {
           authority: "admin",
+          path: "/agents/ada",
           projectId: "prj_123",
         }),
       ).not.toThrow();
     }
     expect(() =>
-      assertPosthogSubscriptionWriteAllowed([lifecycle[0]!], {
+      assertPlatformEventWriteAllowed([lifecycle[0]!], {
         authority: "admin",
+        path: "/agents/ada",
         projectId: "prj_123",
       }),
     ).toThrow(/managed by Iterate/);
@@ -475,7 +495,6 @@ describe("first-party PostHog stream integration", () => {
         stream_event_ephemeral: true,
         stream_event_offset: 8,
         stream_event_type: "events.iterate.com/customer/ephemeral",
-        stream_event_type_truncated: false,
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
         stream_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
         worker_name: "os-preview-6",
@@ -488,7 +507,7 @@ describe("first-party PostHog stream integration", () => {
     const created = streamEvent({
       type: "events.iterate.com/project/created",
       path: "/",
-      offset: 3,
+      offset: 4,
       idempotencyKey: "project-created:prj_123",
       metadata: undefined,
       source: undefined,
@@ -515,7 +534,7 @@ describe("first-party PostHog stream integration", () => {
       properties: {
         $geoip_disable: true,
         $group_key: "prj_123",
-        $group_set: { id: "prj_123", name: "gold-path", slug: "gold-path" },
+        $group_set: { id: "prj_123", slug: "gold-path" },
         $group_type: "project",
         $is_server: true,
       },
@@ -524,7 +543,7 @@ describe("first-party PostHog stream integration", () => {
     });
     expect(first[0]!.batch[1]).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
-      properties: { $groups: { project: "prj_123" }, stream_event_offset: 3 },
+      properties: { $groups: { project: "prj_123" }, stream_event_offset: 4 },
     });
     expect(JSON.stringify(first[0])).not.toContain("private@example.com");
     expect(first[0]!.batch[0]).toEqual(retry[0]!.batch[0]);
@@ -534,7 +553,7 @@ describe("first-party PostHog stream integration", () => {
     const authentic = streamEvent({
       type: "events.iterate.com/project/created",
       path: "/",
-      offset: 3,
+      offset: 4,
       idempotencyKey: "project-created:prj_123",
       metadata: undefined,
       source: undefined,
@@ -590,15 +609,14 @@ describe("first-party PostHog stream integration", () => {
     expect(requests[1]!.batch[0]!.distinct_id).toBe(secondIdentity);
   });
 
-  it("indexes every custom event type as a bounded operational identifier", async () => {
+  it("indexes the exact bounded custom event identifier", async () => {
     const requests: CapturedRequest[] = [];
-    const eventType = `custom/${"x".repeat(4_000)}`;
+    const eventType = `custom/${"x".repeat(249)}`;
     await capturePosthogStreamEventBatch(captureArgs([streamEvent({ type: eventType })]), {
       fetch: acceptingFetch(requests),
     });
     const properties = requests[0]!.batch[0]!.properties as Record<string, unknown>;
-    expect(properties.stream_event_type).toBe(eventType.slice(0, 1_024));
-    expect(properties.stream_event_type_truncated).toBe(true);
+    expect(properties.stream_event_type).toBe(eventType);
     expect(properties.stream_event_uuid).toMatch(/^[0-9a-f-]{36}$/);
   });
 
@@ -635,22 +653,6 @@ describe("first-party PostHog stream integration", () => {
 
     expect(captureBody.length).toBeLessThan(10_000);
     expect(captureBody).not.toContain(huge.payload!.body as string);
-  });
-
-  it("does not copy a complete unbounded event type into UUID material or the request", async () => {
-    const hugeType = `custom/${"x".repeat(3 * 1_024 * 1_024)}`;
-    let captureBody = "";
-    const captureFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      captureBody = String(init?.body);
-      return new Response(null, { status: 200 });
-    });
-
-    await capturePosthogStreamEventBatch(captureArgs([streamEvent({ type: hugeType })]), {
-      fetch: captureFetch,
-    });
-
-    expect(captureBody.length).toBeLessThan(10_000);
-    expect(captureBody).not.toContain(hugeType);
   });
 
   it("keeps retry UUIDs stable without conflating deployments or recreated streams", async () => {

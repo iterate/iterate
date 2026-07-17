@@ -5,8 +5,10 @@ import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
-  assertPosthogSubscriptionWriteAllowed,
-  isFirstPartyPosthogSubscriptionConfiguration,
+  assertPlatformEventWriteAllowed,
+  isPlatformLocalControlEvent,
+  POSTHOG_SUBSCRIPTION_KEY,
+  posthogSubscriptionEvent,
 } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { DurableObjectAlarm } from "./durable-object-alarm.ts";
@@ -118,6 +120,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
+      includeEphemeral: (subscriptionKey) => subscriptionKey === POSTHOG_SUBSCRIPTION_KEY,
       store: this.#subscriptionCursorStore,
       dial: createSubscriberDial({
         projectId: this.name.projectId,
@@ -350,6 +353,39 @@ export class StreamDurableObject extends DurableObject<Env> {
     return events;
   }
 
+  /** Install the fixed first-party feed without exposing a configurable append lane. */
+  installFirstPartyPosthogSubscription(): StreamEvent {
+    if (this.name.projectId === null) {
+      throw new Error("the first-party PostHog subscription requires a project stream");
+    }
+    return this.append(posthogSubscriptionEvent())[0]!;
+  }
+
+  /** Create the unforgeable root birth fact before the project is exposed to sessions. */
+  initializeProjectRoot(args: {
+    creatorEmail?: string;
+    projectProcessorSubscription: StreamEventInput;
+    slug: string;
+  }): StreamEvent[] {
+    if (this.name.projectId === null || this.name.path !== "/") {
+      throw new Error("project birth requires a project root stream");
+    }
+    return this.append(
+      {
+        type: "events.iterate.com/project/created",
+        idempotencyKey: `project-created:${this.name.projectId}`,
+        payload: {
+          config: {
+            onboardingActive: true,
+            slug: args.slug,
+            ...(args.creatorEmail === undefined ? {} : { creatorEmail: args.creatorEmail }),
+          },
+        },
+      },
+      args.projectProcessorSubscription,
+    );
+  }
+
   /**
    * Synchronous committed-event read used by the append transaction and
    * delivery catch-up. Keep await-free; callers that cross an RPC seam get the
@@ -562,8 +598,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     let next = CoreProcessorContract.stateSchema.parse({});
     for (const event of input.events) {
       try {
-        assertPosthogSubscriptionWriteAllowed([event], {
+        assertPlatformEventWriteAllowed([event], {
           authority: "recovery",
+          path: this.name.path,
           projectId: this.name.projectId,
         });
         if (
@@ -1089,14 +1126,14 @@ export class StreamDurableObject extends DurableObject<Env> {
    * only appends the built inputs in its own synchronous turn.
    */
   acceptCrossPost(batch: StreamPushEventBatch): void {
-    // This reserved configuration is local desired state, not a product fact
-    // to replicate. Its source stream's own all-event feed captures it once;
-    // copying it would create a misleading inert control row on the target.
+    // Platform birth and subscription facts are local control state, not
+    // product facts to replicate. The source's all-event feed captures them;
+    // copying them would create misleading inert rows on the target.
     // Filter before the optional transform so a userspace event transformed
     // into reserved configuration still reaches the guard below and fails.
     const localEventsRemoved = {
       ...batch,
-      events: batch.events.filter((event) => !isFirstPartyPosthogSubscriptionConfiguration(event)),
+      events: batch.events.filter((event) => !isPlatformLocalControlEvent(event)),
     };
     const inputs = buildAcceptCrossPostAppendInputs(localEventsRemoved, {
       projectId: this.name.projectId,
@@ -1105,8 +1142,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     // A transform is user-controlled and can construct stream control facts.
     // Protect the platform key at this second append boundary; the public
     // StreamRpcTarget guard alone cannot see the transformed destination row.
-    assertPosthogSubscriptionWriteAllowed(inputs, {
+    assertPlatformEventWriteAllowed(inputs, {
       authority: "userspace",
+      path: this.name.path,
       projectId: this.name.projectId,
     });
     if (inputs.length > 0) this.append(...inputs);

@@ -128,6 +128,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           eventCount: log.length,
           configuredSubscribersByKey: configured,
         }),
+      includeEphemeral: () => false,
       store,
       dial: {
         poke: async (_expression, request) => {

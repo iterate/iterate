@@ -4,10 +4,42 @@
 // the fix is pinned by observable behaviour rather than by inspection.
 
 import { expect, test } from "vitest";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/security-e2e";
+
+test("streams do not expose their raw Durable Object stub over RPC", async () => {
+  const marker = crypto.randomUUID();
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `sec-stream-stub-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(`/e2e/security/raw-stub/${marker}`);
+
+  // `@internal` only affects generated TypeScript. This reaches past that type
+  // surface exactly as a hostile Cap'n Web client would; a prototype getter
+  // here would serialize the ServiceStub and bypass every StreamRpcTarget
+  // append guard.
+  const raw = stream as unknown as {
+    durableObjectStub: { append(event: unknown): Promise<unknown> };
+  };
+  await expect(async () => {
+    await raw.durableObjectStub.append({
+      type: "events.iterate.com/project/created",
+      payload: { config: { slug: `forged-${marker}` } },
+    });
+  }).rejects.toThrow();
+
+  expect(
+    (await stream.getEvents({ afterOffset: 0, includeEphemeral: true })).filter(
+      (event) => event.type === "events.iterate.com/project/created",
+    ),
+  ).toEqual([]);
+});
 
 // B2: the processor capability handed over RPC must expose only the read-only
 // StreamProcessorRpc surface. Before the fix the DO returned the live
@@ -62,18 +94,30 @@ test("append accepts an offset assertion on a subscription-configured core event
   using project = itx.projects.create({ slug: `sec-offset-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
 
-  // A brand-new project stream has committed created(1) + the birth-certificate
-  // project-worker feed's subscription-configured(2) + woken(3); the next append
-  // is 4. `offset` is the DO's optimistic-concurrency assertion. It rides on the
+  // The project-worker feed asynchronously installs one more platform fact.
+  // Let that settle, then assert against the actual head rather than assuming
+  // no platform writer can share this log. `offset` is the DO's
+  // optimistic-concurrency assertion. It rides on the
   // append input at runtime but is intentionally absent from the narrow public
   // `Stream` type, so it is cast in here exactly as a concurrency-sensitive
   // caller would.
   const appendWithOffset = stream.append as unknown as (
     event: Record<string, unknown>,
   ) => Promise<{ offset: number }[]>;
+  await waitForCondition(
+    async () =>
+      (await stream.getEvents({ afterOffset: 0 })).some(
+        (event) => event.payload?.subscriptionKey === "iterate-platform-posthog",
+      ),
+    { description: "the first-party PostHog subscription to finish installing" },
+  );
+  const runtime = (await stream.runtimeState()) as {
+    coreProcessorState: { maxOffset: number };
+  };
+  const expectedOffset = runtime.coreProcessorState.maxOffset + 1;
   const [configured] = await appendWithOffset({
     type: "events.iterate.com/stream/subscription-configured",
-    offset: 4,
+    offset: expectedOffset,
     payload: {
       subscriptionKey: `cross-post-${marker}`,
       delivery: {
@@ -88,7 +132,7 @@ test("append accepts an offset assertion on a subscription-configured core event
     },
   });
 
-  expect(configured!).toMatchObject({ offset: 4 });
+  expect(configured!).toMatchObject({ offset: expectedOffset });
 });
 
 // B6: the subscriber descriptor supplied to subscribe() must be validated at the

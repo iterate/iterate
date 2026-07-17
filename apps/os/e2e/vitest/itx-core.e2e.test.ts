@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { newHttpBatchRpcSession } from "capnweb";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
 import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 
@@ -177,25 +178,36 @@ test("Authenticated internal auth itx can create project and append to stream", 
   const [committedEvent] = await project.streams.get("/some/path").append({
     type: "hello-world",
   });
-  expect(committedEvent).toMatchObject({
-    type: "hello-world",
-    // The birth certificate: created(1), the project-worker feed's
-    // subscription-configured(2), woken(3) — the first user append is 4.
-    offset: 4,
-  });
-  expect(await project.streams.get("/some/path").getEvents()).toMatchObject([
-    {
-      type: "events.iterate.com/stream/created",
-    },
+  expect(committedEvent).toMatchObject({ type: "hello-world" });
+  // created(1), project-worker(2), and woken(3) are synchronous birth facts;
+  // the first-party PostHog configuration may race this userspace append.
+  expect(committedEvent!.offset).toBeGreaterThanOrEqual(4);
+  const somePath = project.streams.get("/some/path");
+  await waitForCondition(
+    async () =>
+      (await somePath.getEvents()).some(
+        (event) => event.payload?.subscriptionKey === "iterate-platform-posthog",
+      ),
+    { description: "the first-party PostHog subscription to finish installing" },
+  );
+  const somePathEvents = await somePath.getEvents();
+  expect(somePathEvents.slice(0, 3)).toMatchObject([
+    { type: "events.iterate.com/stream/created" },
     {
       type: "events.iterate.com/stream/subscription-configured",
       payload: { subscriptionKey: "project-worker" },
     },
-    {
-      type: "events.iterate.com/stream/woken",
-    },
-    committedEvent,
+    { type: "events.iterate.com/stream/woken" },
   ]);
+  expect(somePathEvents).toEqual(
+    expect.arrayContaining([
+      committedEvent,
+      expect.objectContaining({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: expect.objectContaining({ subscriptionKey: "iterate-platform-posthog" }),
+      }),
+    ]),
+  );
 
   const getSecret = async () => "bananas";
 

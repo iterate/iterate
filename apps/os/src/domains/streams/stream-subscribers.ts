@@ -230,6 +230,8 @@ type StreamSubscribersHooks = {
   readEvents(args: { afterOffset: number; limit: number }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
+  /** Platform policy: whether this protected subscription sees ephemeral rows. */
+  includeEphemeral(subscriptionKey: string): boolean;
   /** The spine's durable cursor rows (SQLite next to the event log). */
   store: SubscriptionCursorStore;
   /** Transport quarantine (see {@link SubscriberDial}). */
@@ -627,10 +629,9 @@ export class StreamSubscribers {
           );
 
           // Ordinary durable receivers never see ephemeral rows. The sole
-          // exception is an explicitly protected first-party observability
-          // feed: it needs the exact committed stream while remaining a
-          // consumer, never a dependency of the product commit path.
-          const visible = config.includeEphemeral
+          // exception is fixed by the owning stream's platform policy; there
+          // is deliberately no public configuration field that can opt in.
+          const visible = this.#hooks.includeEphemeral(subscriptionKey)
             ? sized.map((entry) => entry.event)
             : sized.filter((entry) => entry.event.ephemeral !== true).map((entry) => entry.event);
           const { matched, conditionErrors } = this.#applySelector(
