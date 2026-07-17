@@ -78,7 +78,11 @@ async function buildInSandbox(
   // npm cache never enter workspace snapshots (the builder's backups stay
   // empty). The cache warms rebuilds only while the container stays up —
   // good enough, and content-addressed artifacts make cold rebuilds correct.
-  const buildDir = `/build/${input.buildKey}`;
+  // The random suffix keeps CONCURRENT builds of one key (which the loader
+  // deliberately allows) in separate trees — a shared directory would let one
+  // attempt's `rm -rf` or file writes corrupt the other mid-build. Duplicates
+  // still converge on the one idempotent KV write.
+  const buildDir = `/build/${input.buildKey}-${crypto.randomUUID().slice(0, 8)}`;
   try {
     const directories = new Set([buildDir]);
     for (const name of Object.keys(recipe.files)) {

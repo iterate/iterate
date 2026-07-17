@@ -66,20 +66,22 @@ export async function getOrCreateBuilderSandbox(
     if (claimedType !== BUILDER_SANDBOX_INSTANCE_TYPE) continue;
 
     // The Durable Object record is the strict authority on live/destroyed/
-    // unborn. Only the two well-known unusable answers advance the probe;
-    // anything else (transport weather) must propagate as a retryable build
-    // error rather than minting garbage generations.
+    // unborn. Only the well-known unusable answers advance to a create or the
+    // next generation; anything else (transport weather) must propagate as a
+    // retryable build error rather than minting garbage generations.
     try {
       await sandbox.assertCreated(identity);
       return { path, sandbox };
     } catch (error) {
       if (isDestroyedSandboxError(error)) continue;
-      if (!isNeverCreatedSandboxError(error)) throw error;
+      if (!isUnbornSandboxError(error)) throw error;
     }
 
-    // Claimed but never born (fresh claim, or a create that died between the
-    // catalogue append and the Durable Object call) — birth it. A racing
-    // sibling's "already exists" is success by another name.
+    // Claimed but not (fully) born: a fresh claim, a create that died between
+    // the catalogue append and the Durable Object call, or a durable
+    // `creationPending` record from an interrupted birth — `create` is the
+    // documented recovery for all three (it resumes the idempotent birth
+    // batch). A racing sibling's "already exists" is success by another name.
     try {
       await sandbox.create({ instanceType: BUILDER_SANDBOX_INSTANCE_TYPE, path, projectId });
     } catch (error) {
@@ -105,9 +107,14 @@ function isDestroyedSandboxError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("cannot be reused");
 }
 
-function isNeverCreatedSandboxError(error: unknown): boolean {
+/** Unborn = no record yet ("does not exist"/"never created") or an
+ * interrupted birth left a durable creationPending record ("creation did not
+ * finish"). Both heal through `create` — see the call site. */
+function isUnbornSandboxError(error: unknown): boolean {
   return (
     error instanceof Error &&
-    (error.message.includes("does not exist") || error.message.includes("never created"))
+    (error.message.includes("does not exist") ||
+      error.message.includes("never created") ||
+      error.message.includes("creation did not finish"))
   );
 }
