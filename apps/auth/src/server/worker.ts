@@ -40,6 +40,7 @@ import {
   getProjectBySlug,
   listProjectsForUser,
   mintProjectId,
+  userCanAccessProject,
 } from "./project-directory.ts";
 
 const app = hono();
@@ -235,7 +236,7 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
 function projectAppSessionDependencies() {
   return {
     secret: config.betterAuthSecret.exposeSecret(),
-    userHasProject: async ({ projectId, userId }: { projectId: string; userId: string }) =>
-      (await listProjectsForUser({ userId }, db)).some((project) => project.id === projectId),
+    userCanAccessProject: (input: { projectId: string; userId: string }) =>
+      userCanAccessProject(input, db),
   };
 }
