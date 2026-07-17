@@ -18,8 +18,8 @@ import {
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 const HomeSearch = StreamViewSearch.extend({
-  /** Set by the create form: play the creation checklist, then hand over to
-   * the onboarding agent if this route is reached before the direct agent URL. */
+  /** Set by the create form: play the creation checklist until `ready`, then
+   * hand over to the onboarding agent. */
   welcome: z.boolean().optional().catch(undefined),
 });
 
@@ -62,11 +62,12 @@ function ProjectHomePage() {
   // Onboarding phase: the completion event has not been appended yet. This
   // keys off the explicit project phase marker, independently of agent state.
   const inOnboarding = lifecycle.value === undefined ? false : isOnboardingActive(lifecycle.value);
-  const handOffToOnboarding = welcome === true && inOnboarding;
+  // Create lands here with `welcome` as soon as the project exists. Stay on
+  // the checklist until bootstrap flips `ready`, then hand off to the
+  // onboarding agent so the user watches the saga rather than waiting on the
+  // create button.
+  const handOffToOnboarding = welcome === true && ready && inOnboarding;
 
-  // The welcome handoff: arrived here from an older create/root redirect, so
-  // as soon as the state confirms the onboarding phase, continue into the
-  // agent page.
   useEffect(() => {
     if (!handOffToOnboarding) return;
     void navigate({
@@ -107,8 +108,8 @@ function ProjectHomePage() {
         />
       </>
     ) : (
-      // Creating, or the welcome handoff is in flight (the effect above is
-      // navigating): keep showing the checklist rather than flashing settings.
+      // Creating (including welcome), or the welcome handoff is in flight:
+      // keep showing the checklist rather than flashing settings.
       <ProjectCreationProgress state={lifecycle.value} />
     );
 

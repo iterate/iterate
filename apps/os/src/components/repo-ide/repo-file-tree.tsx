@@ -13,6 +13,7 @@ import {
   ContextMenuTrigger,
 } from "@iterate-com/ui/components/context-menu";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { untitledPath } from "./repo-file-tree-paths.ts";
 import { effectiveEntry, workingTreeGitStatus, type WorkingTreeChanges } from "./staged-changes.ts";
 
 /**
@@ -262,12 +263,4 @@ function mergePaths(headPaths: string[], changes: WorkingTreeChanges): string[] 
     if (effectiveEntry(change)?.type !== "delete") merged.add(path);
   }
   return [...merged].sort();
-}
-
-function untitledPath(directoryPath: string | null, taken: ReadonlySet<string>): string {
-  const prefix = directoryPath === null || directoryPath === "" ? "" : `${directoryPath}/`;
-  for (let n = 0; ; n++) {
-    const candidate = `${prefix}untitled${n === 0 ? "" : `-${n}`}.txt`;
-    if (!taken.has(candidate)) return candidate;
-  }
 }
