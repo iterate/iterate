@@ -7,8 +7,10 @@ import {
   CircleDotDashedIcon,
   CircleIcon,
   BotIcon,
+  ChevronDownIcon,
   FilePenLineIcon,
   FolderIcon,
+  GitCommitVerticalIcon,
   PlusIcon,
   SearchIcon,
   SlidersHorizontalIcon,
@@ -27,6 +29,7 @@ import {
 } from "@iterate-com/ui/components/alert-dialog";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import { ButtonGroup } from "@iterate-com/ui/components/button-group";
 import { Field, FieldGroup, FieldLabel, FieldTitle } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import {
@@ -66,6 +69,7 @@ import { useItxQuery } from "iterate/react";
 import {
   createRepoTask,
   isRepoTaskPath,
+  listRepoTaskChanges,
   parseRepoTask,
   queryRepoTaskBoard,
   repoTaskHeadingSelection,
@@ -84,6 +88,8 @@ import {
   type RepoTaskBoardProjection,
   type RepoTaskBoardQuery,
   type RepoTaskBoardRowField,
+  type RepoTaskChange,
+  type RepoTaskChangeStatus,
 } from "./repo-tasks.ts";
 import {
   effectiveEntry,
@@ -100,6 +106,7 @@ import {
   type EditorPathDraft,
   type EditorPathOverride,
 } from "./repo-task-editor-state.ts";
+import { useRepoTaskCommit } from "./use-repo-task-commit.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 type SearchPatch = {
@@ -122,6 +129,8 @@ export function RepoTasksView({
   onSetWorking,
   onDelete,
   onAssignAgent,
+  onCommitTaskChanges,
+  commitPending,
 }: {
   projectId: string;
   projectSlug: string;
@@ -134,19 +143,9 @@ export function RepoTasksView({
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
   onDelete: (path: string) => void;
   onAssignAgent: (task: RepoTask, renamedFromPath?: string) => Promise<string | undefined>;
+  onCommitTaskChanges: (message: string) => Promise<unknown>;
+  commitPending: boolean;
 }) {
-  const [draft, setDraft] = useState<RepoTask | undefined>();
-  const [editorPathOverride, setEditorPathOverride] = useState<EditorPathOverride>();
-  const editorPath =
-    editorPathOverride !== undefined && editorPathOverride.source === selectedPath
-      ? editorPathOverride.target
-      : selectedPath;
-  const renameOrigins = useRef(new Map<string, string>());
-  const lastCreationContext = useRef<{
-    state: string;
-    folderPath: string;
-    labels?: readonly string[];
-  }>({ state: "todo", folderPath: "/" });
   // All task file contents in ONE clone, keyed by path. The previous approach
   // (list the whole tree, then a readFile per task) fanned N reads at the repo
   // DO, and on any repo without the root workspace cache each readFile is its
@@ -178,6 +177,105 @@ export function RepoTasksView({
       })
       .sort((left, right) => left.title.localeCompare(right.title));
   }, [changes, headContents]);
+
+  // Prefer listTaskFiles paths for HEAD membership: the file tree listing can
+  // lag a newer task-files commit snapshot the board already observes.
+  const headPathSet = useMemo(
+    () => new Set([...headPaths, ...Object.keys(headContents)]),
+    [headContents, headPaths],
+  );
+  const taskChanges = useMemo(
+    () => listRepoTaskChanges(changes, headPathSet, headContents),
+    [changes, headContents, headPathSet],
+  );
+  const taskChangeByPath = useMemo(
+    () => new Map(taskChanges.map((change) => [change.path, change.status] as const)),
+    [taskChanges],
+  );
+  const deletedTaskChanges = useMemo(
+    () => taskChanges.filter((change) => change.status === "deleted"),
+    [taskChanges],
+  );
+  const taskChangeSignature = useMemo(
+    () =>
+      taskChanges
+        .map((change) => `${change.path}:${change.status}:${entryFingerprint(change.entry)}`)
+        .join("|"),
+    [taskChanges],
+  );
+  const commit = useRepoTaskCommit({
+    taskChanges,
+    taskChangeSignature,
+    commitPending,
+    onCommitTaskChanges,
+  });
+
+  return (
+    <RepoTaskWorkspace
+      projectSlug={projectSlug}
+      headPaths={headPaths}
+      headContents={headContents}
+      changes={changes}
+      tasks={tasks}
+      taskChangeByPath={taskChangeByPath}
+      deletedTaskChanges={deletedTaskChanges}
+      taskChanges={taskChanges}
+      selectedPath={selectedPath}
+      onPatchSearch={onPatchSearch}
+      onSetWorking={onSetWorking}
+      onDelete={onDelete}
+      onAssignAgent={onAssignAgent}
+      commitPending={commitPending}
+      commit={commit}
+    />
+  );
+}
+
+function RepoTaskWorkspace({
+  projectSlug,
+  headPaths,
+  headContents,
+  changes,
+  tasks,
+  taskChangeByPath,
+  deletedTaskChanges,
+  taskChanges,
+  selectedPath,
+  onPatchSearch,
+  onSetWorking,
+  onDelete,
+  onAssignAgent,
+  commitPending,
+  commit,
+}: {
+  projectSlug: string;
+  headPaths: readonly string[];
+  headContents: Record<string, string>;
+  changes: WorkingTreeChanges;
+  tasks: readonly RepoTask[];
+  taskChangeByPath: ReadonlyMap<string, RepoTaskChangeStatus>;
+  deletedTaskChanges: readonly RepoTaskChange[];
+  taskChanges: readonly RepoTaskChange[];
+  selectedPath: string | undefined;
+  onPatchSearch: (patch: SearchPatch) => void;
+  onSetWorking: (path: string, entry: FileEntry | undefined) => void;
+  onDelete: (path: string) => void;
+  onAssignAgent: (task: RepoTask, renamedFromPath?: string) => Promise<string | undefined>;
+  commitPending: boolean;
+  commit: ReturnType<typeof useRepoTaskCommit>;
+}) {
+  const [draft, setDraft] = useState<RepoTask | undefined>();
+  const [editorPathOverride, setEditorPathOverride] = useState<EditorPathOverride>();
+  const editorPath =
+    editorPathOverride !== undefined && editorPathOverride.source === selectedPath
+      ? editorPathOverride.target
+      : selectedPath;
+  const renameOrigins = useRef(new Map<string, string>());
+  const lastCreationContext = useRef<{
+    state: string;
+    folderPath: string;
+    labels?: readonly string[];
+  }>({ state: "todo", folderPath: "/" });
 
   const effectivePaths = useMemo(() => {
     const paths = repoTaskCreationPaths(
@@ -351,7 +449,22 @@ export function RepoTasksView({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <TaskBoard tasks={tasks} onOpen={openTask} onMove={moveTaskOnBoard} onCreate={createTask} />
+      <TaskBoard
+        tasks={tasks}
+        taskChangeByPath={taskChangeByPath}
+        deletedTaskChanges={deletedTaskChanges}
+        taskChanges={taskChanges}
+        commitMessage={commit.commitMessage}
+        onCommitMessageChange={commit.setCommitMessage}
+        commitPending={commitPending}
+        generatingMessage={commit.generatingMessage}
+        autoSaveSecondsLeft={commit.autoSaveSecondsLeft}
+        onMakeCommit={commit.makeCommit}
+        onWriteCommitMessage={commit.writeCommitMessage}
+        onOpen={openTask}
+        onMove={moveTaskOnBoard}
+        onCreate={createTask}
+      />
       <TaskEditorSheet
         task={editorTask}
         projectSlug={projectSlug}
@@ -393,11 +506,31 @@ const TASK_CELL_PREFIX = "task-cell:";
 
 function TaskBoard({
   tasks,
+  taskChangeByPath,
+  deletedTaskChanges,
+  taskChanges,
+  commitMessage,
+  onCommitMessageChange,
+  commitPending,
+  generatingMessage,
+  autoSaveSecondsLeft,
+  onMakeCommit,
+  onWriteCommitMessage,
   onOpen,
   onMove,
   onCreate,
 }: {
   tasks: readonly RepoTask[];
+  taskChangeByPath: ReadonlyMap<string, RepoTaskChangeStatus>;
+  deletedTaskChanges: readonly RepoTaskChange[];
+  taskChanges: readonly RepoTaskChange[];
+  commitMessage: string;
+  onCommitMessageChange: (message: string) => void;
+  commitPending: boolean;
+  generatingMessage: boolean;
+  autoSaveSecondsLeft: number | undefined;
+  onMakeCommit: () => void;
+  onWriteCommitMessage: () => void;
   onOpen: (task: RepoTask) => void;
   onMove: (task: RepoTask, state: string, folderPath: string, labels?: readonly string[]) => void;
   onCreate: (state: string, folderPath: string, labels?: readonly string[]) => void;
@@ -475,9 +608,36 @@ function TaskBoard({
             <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
               {board.taskCount} {board.taskCount === 1 ? "task" : "tasks"}
             </span>
+            <TaskCommitControls
+              taskChanges={taskChanges}
+              commitMessage={commitMessage}
+              onCommitMessageChange={onCommitMessageChange}
+              commitPending={commitPending}
+              generatingMessage={generatingMessage}
+              autoSaveSecondsLeft={autoSaveSecondsLeft}
+              onMakeCommit={onMakeCommit}
+              onWriteCommitMessage={onWriteCommitMessage}
+            />
             <BoardDisplaySettings rowField={rowField} onChangeRowField={setRowField} />
           </div>
         </div>
+        {deletedTaskChanges.length === 0 ? null : (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background px-2 py-2">
+            <span className="text-xs font-medium text-muted-foreground">Deleted</span>
+            {deletedTaskChanges.map((change) => (
+              <Badge
+                key={change.path}
+                variant="outline"
+                className="max-w-full gap-1 border-red-500/40 bg-red-500/5 text-red-700 dark:text-red-300"
+                title={change.path}
+              >
+                <Trash2Icon aria-hidden className="size-3" />
+                <span className="truncate">{change.title}</span>
+                <span className="font-normal text-red-600/80 dark:text-red-300/80">Deleted</span>
+              </Badge>
+            ))}
+          </div>
+        )}
         <div ref={boardScrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto p-2">
           <div className="flex min-h-full w-max min-w-full flex-col gap-4">
             {board.rows.map((row, rowIndex) => (
@@ -507,6 +667,7 @@ function TaskBoard({
                       rowKey={row.key}
                       rowLabel={row.label}
                       tasks={cell.tasks}
+                      taskChangeByPath={taskChangeByPath}
                       visibleProperties={board.visibleProperties}
                       showHeader={rowIndex === 0}
                       onOpen={(task) => {
@@ -531,6 +692,160 @@ function TaskBoard({
       </div>
     </DragDropProvider>
   );
+}
+
+function TaskCommitControls({
+  taskChanges,
+  commitMessage,
+  onCommitMessageChange,
+  commitPending,
+  generatingMessage,
+  autoSaveSecondsLeft,
+  onMakeCommit,
+  onWriteCommitMessage,
+}: {
+  taskChanges: readonly RepoTaskChange[];
+  commitMessage: string;
+  onCommitMessageChange: (message: string) => void;
+  commitPending: boolean;
+  generatingMessage: boolean;
+  autoSaveSecondsLeft: number | undefined;
+  onMakeCommit: () => void;
+  onWriteCommitMessage: () => void;
+}) {
+  const dirty = taskChanges.length > 0;
+  const busy = commitPending || generatingMessage;
+  const autosaveLabel =
+    !dirty || commitPending || autoSaveSecondsLeft === undefined
+      ? null
+      : autoSaveSecondsLeft <= 0
+        ? "Auto saving…"
+        : `Auto saving in ${autoSaveSecondsLeft}s`;
+
+  return (
+    <div className="flex items-center gap-2">
+      {autosaveLabel === null ? null : (
+        <span className="hidden text-xs tabular-nums text-muted-foreground md:inline">
+          {autosaveLabel}
+        </span>
+      )}
+      <ButtonGroup>
+        <Button
+          variant="default"
+          size="default"
+          disabled={!dirty || busy}
+          onClick={onMakeCommit}
+          title={
+            dirty
+              ? "Commit task changes (empty message auto-generates via AI)"
+              : "No task changes to commit"
+          }
+        >
+          {commitPending ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <GitCommitVerticalIcon data-icon="inline-start" />
+          )}
+          {commitPending ? "Committing…" : "Make Commit"}
+        </Button>
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button
+                variant="default"
+                size="icon"
+                disabled={!dirty && !busy}
+                aria-label="Task commit options"
+                title="Review task changes and commit message"
+              />
+            }
+          >
+            <ChevronDownIcon />
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-96 gap-3 p-3">
+            <PopoverHeader className="gap-1">
+              <PopoverTitle>Task changes</PopoverTitle>
+              <PopoverDescription>
+                {dirty
+                  ? `${taskChanges.length} uncommitted task ${taskChanges.length === 1 ? "file" : "files"}. Leave the message empty to auto-generate.`
+                  : "No uncommitted task changes."}
+              </PopoverDescription>
+            </PopoverHeader>
+            {dirty ? (
+              <ul className="max-h-40 space-y-1 overflow-auto rounded-md border bg-muted/30 p-2">
+                {taskChanges.map((change) => (
+                  <li
+                    key={change.path}
+                    className="flex min-w-0 items-center gap-2 text-xs"
+                    title={change.path}
+                  >
+                    <span
+                      className={cn(
+                        "shrink-0 font-mono font-semibold",
+                        change.status === "added" && "text-emerald-600",
+                        change.status === "modified" && "text-amber-600",
+                        change.status === "deleted" && "text-red-600",
+                      )}
+                    >
+                      {change.status === "added" ? "A" : change.status === "deleted" ? "D" : "M"}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{change.title}</span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {change.status === "added"
+                        ? "New"
+                        : change.status === "deleted"
+                          ? "Deleted"
+                          : "Edited"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <FieldGroup className="gap-2">
+              <Field className="gap-1.5">
+                <FieldLabel htmlFor="task-commit-message" className="sr-only">
+                  Commit message
+                </FieldLabel>
+                <Input
+                  id="task-commit-message"
+                  value={commitMessage}
+                  onChange={(event) => onCommitMessageChange(event.currentTarget.value)}
+                  placeholder="Commit message (leave empty to auto-generate)"
+                  disabled={!dirty || busy}
+                />
+              </Field>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!dirty || busy}
+                  onClick={onWriteCommitMessage}
+                >
+                  {generatingMessage ? "Writing…" : "Write commit message"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="ml-auto"
+                  disabled={!dirty || busy}
+                  onClick={onMakeCommit}
+                >
+                  {commitPending ? "Committing…" : "Make Commit"}
+                </Button>
+              </div>
+            </FieldGroup>
+          </PopoverContent>
+        </Popover>
+      </ButtonGroup>
+    </div>
+  );
+}
+
+function entryFingerprint(entry: FileEntry): string {
+  if (entry.type === "delete") return "delete";
+  if (entry.type === "write") return `write:${entry.content.length}:${entry.content.slice(0, 64)}`;
+  return `b64:${entry.contentBase64.length}:${entry.contentBase64.slice(0, 64)}`;
 }
 
 function BoardDisplaySettings({
@@ -598,6 +913,7 @@ export function TaskColumn({
   rowKey,
   rowLabel,
   tasks,
+  taskChangeByPath = new Map(),
   visibleProperties,
   showHeader,
   onOpen,
@@ -607,6 +923,7 @@ export function TaskColumn({
   rowKey: string;
   rowLabel: string | null;
   tasks: readonly RepoTask[];
+  taskChangeByPath?: ReadonlyMap<string, RepoTaskChangeStatus>;
   visibleProperties: RepoTaskBoardProjection["visibleProperties"];
   showHeader: boolean;
   onOpen: (task: RepoTask) => void;
@@ -640,6 +957,7 @@ export function TaskColumn({
             <TaskCard
               key={task.path}
               task={task}
+              changeStatus={taskChangeByPath.get(task.path)}
               dragId={`${TASK_CARD_PREFIX}${encodeURIComponent(task.path)}:${encodeURIComponent(rowKey)}`}
               visibleProperties={visibleProperties}
               onOpen={onOpen}
@@ -676,36 +994,56 @@ function taskCellFromDropId(id: string): { rowKey: string; state: string } | und
 
 function TaskCard({
   task,
+  changeStatus,
   dragId,
   visibleProperties,
   onOpen,
 }: {
   task: RepoTask;
+  changeStatus: RepoTaskChangeStatus | undefined;
   dragId: string;
   visibleProperties: RepoTaskBoardProjection["visibleProperties"];
   onOpen: (task: RepoTask) => void;
 }) {
   const { ref, isDragging } = useDraggable({ id: dragId, type: "repo-task" });
   const summary = task.description.replace(/\s+/g, " ").slice(0, 160);
+  const changeLabel =
+    changeStatus === "added" ? "New" : changeStatus === "modified" ? "Edited" : undefined;
   return (
     <button
       type="button"
       ref={ref}
       data-task-path={task.path}
-      aria-label={task.title}
+      data-task-change={changeStatus}
+      aria-label={changeLabel === undefined ? task.title : `${task.title} (${changeLabel})`}
       onClick={() => onOpen(task)}
       className={cn(
-        "w-full cursor-grab rounded-lg border bg-card p-3 text-left shadow-xs transition-[background-color,border-color,box-shadow,opacity] hover:border-foreground/15 hover:bg-accent/30 hover:shadow-sm active:cursor-grabbing",
+        "relative w-full cursor-grab rounded-lg border bg-card p-3 text-left shadow-xs transition-[background-color,border-color,box-shadow,opacity] hover:border-foreground/15 hover:bg-accent/30 hover:shadow-sm active:cursor-grabbing",
+        changeStatus === "added" &&
+          "border-emerald-500/70 bg-emerald-500/5 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.12)] hover:border-emerald-500",
+        changeStatus === "modified" &&
+          "border-amber-500/70 bg-amber-500/5 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12)] hover:border-amber-500",
         isDragging && "opacity-40 shadow-none",
       )}
     >
+      {changeLabel === undefined ? null : (
+        <span
+          className={cn(
+            "absolute right-2 top-2 rounded-md px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
+            changeStatus === "added" && "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+            changeStatus === "modified" && "bg-amber-500/15 text-amber-800 dark:text-amber-300",
+          )}
+        >
+          {changeLabel}
+        </span>
+      )}
       {visibleProperties.folder ? (
-        <div className="mb-2 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="mb-2 flex min-w-0 items-center gap-1.5 pr-12 text-[11px] text-muted-foreground">
           <FolderIcon aria-hidden className="size-3 shrink-0" />
           <span className="truncate font-mono">{task.folderPath}</span>
         </div>
       ) : null}
-      <div className="flex items-start gap-2">
+      <div className={cn("flex items-start gap-2", changeLabel !== undefined && "pr-12")}>
         {visibleProperties.state ? (
           <TaskStateIcon state={taskColumnState(task)} className="mt-0.5" />
         ) : null}

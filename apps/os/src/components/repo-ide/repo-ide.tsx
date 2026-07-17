@@ -33,6 +33,7 @@ import {
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
   repoTaskAssignmentHeadPaths,
+  taskCommitFileChanges,
   type RepoTask,
 } from "./repo-tasks.ts";
 import {
@@ -223,6 +224,50 @@ export function RepoIde({
       toast.error(error instanceof Error ? error.message : "Could not commit.");
     },
   });
+
+  /** Tasks view: commit only task-path changes, leave unrelated working-tree edits. */
+  const commitTasks = useMutation({
+    mutationFn: async (message: string) => {
+      const plan = taskCommitFileChanges(store.changes);
+      if (plan.paths.length === 0) return null;
+      const result = await itx.repos.get(repoPath).commitFiles({
+        message,
+        changes: plan.fileChanges,
+      });
+      // Clear immediately so the board drops New/Edited/Deleted chrome before
+      // the HEAD oid migration finishes.
+      for (const path of plan.paths) {
+        store.setWorking(path, undefined);
+        store.setStaged(path, undefined);
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-files", projectId, repoPath],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-log", projectId, repoPath],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-task-files", projectId, repoPath],
+      });
+      store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
+      return result;
+    },
+    onSuccess: (result) => {
+      if (result === null) return;
+      toast.success(
+        result.noChanges
+          ? "No task changes to commit."
+          : `Committed ${result.changedPaths.length} task file(s) (${result.commitOid.slice(0, 7)}).`,
+      );
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not commit tasks.");
+    },
+  });
+  const commitTaskChanges = useCallback(
+    (message: string) => commitTasks.mutateAsync(message),
+    [commitTasks],
+  );
 
   const assignTaskAgent = async (task: RepoTask, pendingRenameFromPath?: string) => {
     const assignment = prepareRepoTaskAssignment(task, repoPath);
@@ -453,6 +498,8 @@ export function RepoIde({
             onSetWorking={(path, entry) => store.setWorking(path, entry)}
             onDelete={removePath}
             onAssignAgent={assignTaskAgent}
+            commitPending={commitTasks.isPending}
+            onCommitTaskChanges={commitTaskChanges}
           />
         </Suspense>
       ) : (

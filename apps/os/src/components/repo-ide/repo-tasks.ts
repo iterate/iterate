@@ -2,6 +2,7 @@ import type { Document } from "yaml";
 import { isRepoTaskMarkdownPath } from "../../domains/repos/repo-task-events.ts";
 import type { RepoFileChange } from "../../domains/repos/types.ts";
 import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-frontmatter.ts";
+import { effectiveEntry, type FileEntry, type WorkingTreeChanges } from "./staged-changes.ts";
 
 const DEFAULT_TASK_STATE = "todo";
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
@@ -360,6 +361,111 @@ export function taskStateLabel(state: string): string {
     .filter(Boolean)
     .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
     .join(" ");
+}
+
+/** Uncommitted board status for a task path (working or staged). */
+export type RepoTaskChangeStatus = "added" | "modified" | "deleted";
+
+export type RepoTaskChange = {
+  path: string;
+  status: RepoTaskChangeStatus;
+  title: string;
+  entry: FileEntry;
+};
+
+/**
+ * Task-only working-tree changes for the board's staged/visual + commit UI.
+ * Titles prefer live content, then HEAD content for pure deletions.
+ */
+export function listRepoTaskChanges(
+  changes: WorkingTreeChanges,
+  headPaths: ReadonlySet<string>,
+  headContents: Readonly<Record<string, string>> = {},
+): RepoTaskChange[] {
+  const listed: RepoTaskChange[] = [];
+  for (const [path, change] of changes) {
+    if (!isRepoTaskPath(path)) continue;
+    const entry = effectiveEntry(change);
+    if (entry === undefined) continue;
+    const status: RepoTaskChangeStatus =
+      entry.type === "delete" ? "deleted" : headPaths.has(path) ? "modified" : "added";
+    const liveContent = textContentFromEntry(entry);
+    const content = liveContent ?? headContents[path];
+    const parsed = content === undefined ? null : parseRepoTask(path, content);
+    listed.push({
+      path,
+      status,
+      title:
+        parsed?.title ?? (pathSegments(path).at(-1) ?? "task").replace(/\.(?:md|markdown)$/i, ""),
+      entry,
+    });
+  }
+  return listed.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+/** File changes for a tasks-only commit (ignores non-task paths and stage mode). */
+export function taskCommitFileChanges(changes: WorkingTreeChanges): {
+  paths: string[];
+  fileChanges: RepoFileChange[];
+} {
+  const paths: string[] = [];
+  const fileChanges: RepoFileChange[] = [];
+  for (const [path, change] of changes) {
+    if (!isRepoTaskPath(path)) continue;
+    const entry = effectiveEntry(change);
+    if (entry === undefined) continue;
+    paths.push(path);
+    if (entry.type === "delete") fileChanges.push({ path, delete: true });
+    else if (entry.type === "write-base64")
+      fileChanges.push({ path, contentBase64: entry.contentBase64 });
+    else fileChanges.push({ path, content: entry.content });
+  }
+  return { paths, fileChanges };
+}
+
+/** Deterministic commit message when AI is unavailable or empty. */
+export function fallbackTaskCommitMessage(taskChanges: readonly RepoTaskChange[]): string {
+  if (taskChanges.length === 0) return "Update tasks";
+  const added = taskChanges.filter((change) => change.status === "added");
+  const modified = taskChanges.filter((change) => change.status === "modified");
+  const deleted = taskChanges.filter((change) => change.status === "deleted");
+  const parts: string[] = [];
+  if (added.length === 1) parts.push(`add ${added[0]!.title}`);
+  else if (added.length > 1) parts.push(`add ${added.length} tasks`);
+  if (modified.length === 1) parts.push(`update ${modified[0]!.title}`);
+  else if (modified.length > 1) parts.push(`update ${modified.length} tasks`);
+  if (deleted.length === 1) parts.push(`delete ${deleted[0]!.title}`);
+  else if (deleted.length > 1) parts.push(`delete ${deleted.length} tasks`);
+  const body = parts.join(", ");
+  return body === "" ? "Update tasks" : `${body[0]!.toUpperCase()}${body.slice(1)}`;
+}
+
+/** Prompt payload for `itx.ai.run` commit-message generation. */
+export function taskCommitMessagePrompt(taskChanges: readonly RepoTaskChange[]): {
+  system: string;
+  user: string;
+} {
+  const lines = taskChanges.map((change) => {
+    const verb =
+      change.status === "added" ? "Added" : change.status === "deleted" ? "Deleted" : "Edited";
+    return `- ${verb}: ${change.title} (${change.path})`;
+  });
+  return {
+    system:
+      "You write short git commit messages for a task board. Reply with one line only, imperative mood, no quotes, no trailing period, max 72 characters.",
+    user: `Write a commit message for these task changes:\n${lines.join("\n")}`,
+  };
+}
+
+function textContentFromEntry(entry: FileEntry): string | undefined {
+  if (entry.type === "write") return entry.content;
+  if (entry.type !== "write-base64") return undefined;
+  try {
+    const bytes = Uint8Array.from(atob(entry.contentBase64.trim()), (char) => char.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
 }
 
 function pathSegments(path: string): string[] {

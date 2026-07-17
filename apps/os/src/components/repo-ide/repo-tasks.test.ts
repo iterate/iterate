@@ -1,7 +1,9 @@
 import { expect, test } from "vitest";
 import {
   createRepoTask,
+  fallbackTaskCommitMessage,
   isRepoTaskPath,
+  listRepoTaskChanges,
   parseRepoTask,
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
@@ -15,6 +17,8 @@ import {
   repoTaskWithPath,
   repoTaskCreationPaths,
   taskColumnState,
+  taskCommitFileChanges,
+  taskCommitMessagePrompt,
   taskDirectoryForFolder,
   taskDirectoryForPath,
   taskStateColumns,
@@ -378,4 +382,36 @@ test("filters the board projection and can group multi-label tasks", () => {
   expect(
     queryRepoTaskBoard([task], { filter: "missing", columns: "state", rows: null }).taskCount,
   ).toBe(0);
+});
+
+test("lists only task working-tree changes with board statuses", () => {
+  const changes = new Map([
+    ["tasks/new.md", { working: { type: "write" as const, content: "# Brand new\n" } }],
+    [
+      "tasks/edited.md",
+      { working: { type: "write" as const, content: "---\nstate: done\n---\n# Edited\n" } },
+    ],
+    ["tasks/gone.md", { working: { type: "delete" as const } }],
+    ["src/app.ts", { working: { type: "write" as const, content: "export {}" } }],
+  ]);
+  const headPaths = new Set(["tasks/edited.md", "tasks/gone.md", "src/app.ts"]);
+  const listed = listRepoTaskChanges(changes, headPaths, {
+    "tasks/gone.md": "# Gone task\n",
+  });
+
+  expect(listed.map((change) => [change.path, change.status, change.title])).toEqual([
+    ["tasks/edited.md", "modified", "Edited"],
+    ["tasks/gone.md", "deleted", "Gone task"],
+    ["tasks/new.md", "added", "Brand new"],
+  ]);
+  expect(taskCommitFileChanges(changes)).toEqual({
+    paths: ["tasks/new.md", "tasks/edited.md", "tasks/gone.md"],
+    fileChanges: [
+      { path: "tasks/new.md", content: "# Brand new\n" },
+      { path: "tasks/edited.md", content: "---\nstate: done\n---\n# Edited\n" },
+      { path: "tasks/gone.md", delete: true },
+    ],
+  });
+  expect(fallbackTaskCommitMessage(listed)).toBe("Add Brand new, update Edited, delete Gone task");
+  expect(taskCommitMessagePrompt(listed).user).toContain("Added: Brand new");
 });
