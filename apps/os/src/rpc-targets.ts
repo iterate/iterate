@@ -446,6 +446,18 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
 
+function detachPlainRpcResult<T>(result: T[]): T[];
+function detachPlainRpcResult<T extends object>(result: T): T;
+function detachPlainRpcResult(result: object): object {
+  try {
+    const detached = Array.isArray(result) ? [...result] : { ...result };
+    Reflect.deleteProperty(detached, Symbol.dispose);
+    return detached;
+  } finally {
+    disposeIgnoredRpcResult(result);
+  }
+}
+
 /**
  * Durable event stream capability.
  *
@@ -514,11 +526,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
-    try {
-      return [...result];
-    } finally {
-      disposeIgnoredRpcResult(result);
-    }
+    return detachPlainRpcResult(result);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -538,13 +546,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   ): Promise<StreamEvent | undefined> {
     const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
     if (result === undefined) return undefined;
-    try {
-      const detached = { ...result };
-      Reflect.deleteProperty(detached, Symbol.dispose);
-      return detached;
-    } finally {
-      disposeIgnoredRpcResult(result);
-    }
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -556,11 +558,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    */
   async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
-    try {
-      return [...result];
-    } finally {
-      disposeIgnoredRpcResult(result);
-    }
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -588,7 +586,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // Preserve the DO's validation error for invalid timeouts instead of
     // manufacturing a deadline from NaN/Infinity/a non-positive duration.
     if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
-      return await this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+      const result = await this.durableObjectStub
+        .waitForEvent(args)
+        .catch(rethrowStreamUnavailable);
+      return detachPlainRpcResult(result);
     }
 
     const deadline = Date.now() + args.timeoutMs;
@@ -637,7 +638,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
             afterOffset: replayAfterOffset,
             timeoutMs: remoteTimeoutMs,
           }),
-        );
+        ).then((result) => detachPlainRpcResult(result));
       } catch (error) {
         rethrowStreamUnavailable(error);
       }
@@ -676,10 +677,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
-  getProcessorRuntimeState(args: {
+  async getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub
+      .getProcessorRuntimeState(args)
+      .catch(rethrowStreamUnavailable);
+    return result === null ? null : detachPlainRpcResult(result);
   }
 
   /**
@@ -693,7 +697,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * throttled mutual-ping round over the live connections (observer-driven
    * sampling), so a polling debug UI sees RTTs populate.
    */
-  runtimeState(): Promise<{
+  async runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, ConnectionRuntimeState>;
@@ -703,7 +707,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

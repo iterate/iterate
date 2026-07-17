@@ -8,7 +8,7 @@ import {
 } from "../../rpc-targets.ts";
 
 describe("StreamRpcTarget", () => {
-  it("detaches plain data from native RPC results and releases every invocation", async () => {
+  it("detaches every plain-data result and releases its native RPC invocation", async () => {
     const event = {
       createdAt: new Date(0).toISOString(),
       offset: 9,
@@ -19,12 +19,29 @@ describe("StreamRpcTarget", () => {
     const appended = [{ ...event }];
     const read = { ...event };
     const page = [{ ...event }];
+    const waited = { ...event };
+    const processorState = { snapshot: { offset: 9, state: { seen: true } } };
+    const runtimeState = {
+      coreProcessorState: {},
+      runtime: {
+        connections: {},
+        metrics: {},
+        storageSizeBytes: 123,
+        subscriptions: {},
+      },
+    };
     const appendDispose = vi.fn();
     const readDispose = vi.fn();
     const pageDispose = vi.fn();
+    const waitDispose = vi.fn();
+    const processorStateDispose = vi.fn();
+    const runtimeStateDispose = vi.fn();
     Object.defineProperty(appended, Symbol.dispose, { value: appendDispose });
     Object.defineProperty(read, Symbol.dispose, { enumerable: true, value: readDispose });
     Object.defineProperty(page, Symbol.dispose, { value: pageDispose });
+    Object.defineProperty(waited, Symbol.dispose, { value: waitDispose });
+    Object.defineProperty(processorState, Symbol.dispose, { value: processorStateDispose });
+    Object.defineProperty(runtimeState, Symbol.dispose, { value: runtimeStateDispose });
 
     class TestStreamRpcTarget extends StreamRpcTarget {
       override get durableObjectStub() {
@@ -32,6 +49,9 @@ describe("StreamRpcTarget", () => {
           append: async () => appended,
           getEvent: async () => read,
           getEvents: async () => page,
+          getProcessorRuntimeState: async () => processorState,
+          runtimeState: async () => runtimeState,
+          waitForEvent: async () => waited,
         } as never;
       }
     }
@@ -44,6 +64,11 @@ describe("StreamRpcTarget", () => {
     const appendedResult = await stream.append(event);
     const readResult = await stream.getEvent({ offset: event.offset });
     const pageResult = await stream.getEvents();
+    const waitedResult = await stream.waitForEvent({ afterOffset: 8, timeoutMs: 1_000 });
+    const processorStateResult = await stream.getProcessorRuntimeState({
+      subscriptionKey: "project-worker",
+    });
+    const runtimeStateResult = await stream.runtimeState();
 
     expect(appendedResult).toEqual([event]);
     expect(appendedResult).not.toBe(appended);
@@ -52,9 +77,18 @@ describe("StreamRpcTarget", () => {
     expect(Reflect.has(readResult ?? {}, Symbol.dispose)).toBe(false);
     expect(pageResult).toEqual([event]);
     expect(pageResult).not.toBe(page);
+    expect(waitedResult).toEqual(event);
+    expect(waitedResult).not.toBe(waited);
+    expect(processorStateResult).toEqual(processorState);
+    expect(processorStateResult).not.toBe(processorState);
+    expect(runtimeStateResult).toEqual(runtimeState);
+    expect(runtimeStateResult).not.toBe(runtimeState);
     expect(appendDispose).toHaveBeenCalledOnce();
     expect(readDispose).toHaveBeenCalledOnce();
     expect(pageDispose).toHaveBeenCalledOnce();
+    expect(waitDispose).toHaveBeenCalledOnce();
+    expect(processorStateDispose).toHaveBeenCalledOnce();
+    expect(runtimeStateDispose).toHaveBeenCalledOnce();
   });
 
   it("re-acquires when a remote stream waiter is orphaned", async () => {
@@ -90,7 +124,7 @@ describe("StreamRpcTarget", () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(acquisitions).toBe(2);
-      await expect(waiting).resolves.toBe(event);
+      await expect(waiting).resolves.toEqual(event);
     } finally {
       firstWait.reject(new Error("late rejection from superseded stream waiter"));
       await waiting.catch(() => undefined);
@@ -139,7 +173,7 @@ describe("StreamRpcTarget", () => {
       expect(remoteTimeouts).toEqual([20_000, 20_000]);
 
       firstWait.resolve(event);
-      await expect(waiting).resolves.toBe(event);
+      await expect(waiting).resolves.toEqual(event);
     } finally {
       firstWait.resolve(event);
       secondWait.reject(new Error("late rejection after the ephemeral match"));
@@ -192,7 +226,7 @@ describe("StreamRpcTarget", () => {
       expect(headReads).toBe(1);
       expect(waitInputs).toHaveLength(2);
       expect(waitInputs.map(({ afterOffset }) => afterOffset)).toEqual([8, 8]);
-      await expect(waiting).resolves.toBe(event);
+      await expect(waiting).resolves.toEqual(event);
     } finally {
       firstWait.reject(new Error("late rejection from superseded cursor-less wait"));
       await waiting.catch(() => undefined);
@@ -237,7 +271,7 @@ describe("StreamRpcTarget", () => {
 
       expect(headReads).toBe(2);
       expect(waits).toBe(1);
-      await expect(waiting).resolves.toBe(event);
+      await expect(waiting).resolves.toEqual(event);
     } finally {
       firstHead.reject(new Error("late rejection from superseded head read"));
       await waiting.catch(() => undefined);
