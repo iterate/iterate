@@ -43,7 +43,12 @@ class PlaygroundItxRoot extends WorkersRpcTarget {
  * loops through `ItxEntrypoint`, and it never accidentally constructs OS's
  * project root inside the standalone playground.
  */
-configureStreamSubscriberAuthorityRoot(() => new PlaygroundItxRoot());
+configureStreamSubscriberAuthorityRoot(() => ({
+  root: new PlaygroundItxRoot(),
+  // The playground also constructs its root locally; no client reference is
+  // created by acquisition.
+  [Symbol.dispose]() {},
+}));
 
 export class ItxEntrypoint extends WorkerEntrypoint {
   get() {

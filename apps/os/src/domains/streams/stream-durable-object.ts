@@ -27,7 +27,10 @@ import {
 } from "./stream-subscribers.ts";
 import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
-import { createSubscriberDial } from "./subscriber-sinks.ts";
+import {
+  createSubscriberDial,
+  type StreamSubscriberAuthorityRootLease,
+} from "./subscriber-sinks.ts";
 import type { StreamEventWaitLeaseInput, StreamEventWaitLeaseResult } from "./wait-for-event.ts";
 import {
   STREAM_IDEMPOTENCY_KEY_HEADER,
@@ -97,7 +100,7 @@ const SEARCH_INDEX_SUBSCRIPTION_KEY = "platform-search-index";
 type StreamSubscriberAuthorityRootFactory = (args: {
   ctx: DurableObjectState;
   projectId: string | null;
-}) => unknown;
+}) => StreamSubscriberAuthorityRootLease;
 
 let streamSubscriberAuthorityRootFactory: StreamSubscriberAuthorityRootFactory | undefined;
 let streamDurableObjectConstructed = false;
@@ -151,7 +154,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
-        authorityRoot: () => this.createSubscriberAuthorityRoot(),
+        acquireAuthorityRoot: () => this.acquireSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -185,7 +188,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * and constructs its own root locally, while only the selected receiver
    * capability crosses Workers RPC.
    */
-  protected createSubscriberAuthorityRoot(): unknown {
+  protected acquireSubscriberAuthorityRoot(): StreamSubscriberAuthorityRootLease {
     const factory = streamSubscriberAuthorityRootFactory;
     if (factory === undefined) {
       throw new Error("stream subscriber authority root host was not configured");

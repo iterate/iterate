@@ -51,14 +51,23 @@ import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 
 configureStreamSubscriberAuthorityRoot(({ ctx, projectId }) => {
   const auth = streamDeliveryAuthContext();
-  return projectId === null
-    ? deploymentItxForInternal({ auth, ctx })
-    : itxForScope({
-        auth,
-        ctx,
-        path: "/",
-        projectId,
-      });
+  const root =
+    projectId === null
+      ? deploymentItxForInternal({ auth, ctx })
+      : itxForScope({
+          auth,
+          ctx,
+          path: "/",
+          projectId,
+        });
+  return {
+    root,
+    // This host constructs a local server-side RpcTarget, so acquiring it
+    // creates no client reference to release. The explicit lease keeps that
+    // ownership decision at the host boundary instead of making the stream
+    // infer it from the root's shape.
+    [Symbol.dispose]() {},
+  };
 });
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */

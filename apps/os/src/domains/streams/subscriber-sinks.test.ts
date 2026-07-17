@@ -119,13 +119,24 @@ const batch: StreamPushEventBatch = {
 };
 
 describe("createSubscriberDial", () => {
-  it("uses a fresh local authority root for each push delivery", async () => {
+  it("acquires and releases a fresh authority lease for each push delivery", async () => {
     const received: StreamPushEventBatch[] = [];
-    const authorityRoots = vi.fn(() => {
+    const acquired: Array<{
+      disposeRawRoot: ReturnType<typeof vi.fn>;
+      releaseLease: ReturnType<typeof vi.fn>;
+    }> = [];
+    const acquireAuthorityRoot = vi.fn(() => {
+      const disposeRawRoot = vi.fn();
+      const releaseLease = vi.fn();
+      acquired.push({ disposeRawRoot, releaseLease });
       return {
-        receive: async (input: StreamPushEventBatch) => {
-          received.push(input);
+        root: {
+          [Symbol.dispose]: disposeRawRoot,
+          receive: async (input: StreamPushEventBatch) => {
+            received.push(input);
+          },
         },
+        [Symbol.dispose]: releaseLease,
       };
     });
     const loopback = vi.fn(() => {
@@ -134,17 +145,45 @@ describe("createSubscriberDial", () => {
     const dial = createSubscriberDial({
       projectId: "prj_test",
       exports: { ItxEntrypoint: loopback },
-      authorityRoot: authorityRoots,
+      acquireAuthorityRoot,
       onDurableDeliveryError: vi.fn(),
     });
 
     await dial.push(["receive"], batch);
     expect(received).toEqual([batch]);
-    expect(authorityRoots).toHaveBeenCalledTimes(1);
+    expect(acquireAuthorityRoot).toHaveBeenCalledTimes(1);
+    expect(acquired[0]!.releaseLease).toHaveBeenCalledOnce();
+    expect(acquired[0]!.disposeRawRoot).not.toHaveBeenCalled();
     expect(loopback).not.toHaveBeenCalled();
 
     await dial.push(["receive"], batch);
     expect(received).toEqual([batch, batch]);
-    expect(authorityRoots).toHaveBeenCalledTimes(2);
+    expect(acquireAuthorityRoot).toHaveBeenCalledTimes(2);
+    expect(acquired[0]!.releaseLease).toHaveBeenCalledOnce();
+    expect(acquired[1]!.releaseLease).toHaveBeenCalledOnce();
+    expect(acquired[1]!.disposeRawRoot).not.toHaveBeenCalled();
+    expect(loopback).not.toHaveBeenCalled();
+  });
+
+  it("releases the push authority lease when delivery rejects", async () => {
+    const rejection = new Error("receiver rejected the batch");
+    const releaseLease = vi.fn();
+    const disposeRawRoot = vi.fn();
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      acquireAuthorityRoot: () => ({
+        root: {
+          [Symbol.dispose]: disposeRawRoot,
+          receive: async () => Promise.reject(rejection),
+        },
+        [Symbol.dispose]: releaseLease,
+      }),
+      onDurableDeliveryError: vi.fn(),
+    });
+
+    await expect(dial.push(["receive"], batch)).rejects.toBe(rejection);
+    expect(releaseLease).toHaveBeenCalledOnce();
+    expect(disposeRawRoot).not.toHaveBeenCalled();
   });
 });

@@ -298,6 +298,18 @@ export function retainWakeHandshakeResponse(args: {
 // =============================================================================
 
 /**
+ * One explicit acquisition of the authority used to evaluate a subscriber
+ * expression. Releasing the lease tears down resources created by the host to
+ * produce the root; it does not imply that the raw root itself is disposable.
+ * In-process hosts therefore return a no-op lease, while a transport-backed
+ * host can release its binding and root chain here.
+ */
+export type StreamSubscriberAuthorityRootLease = {
+  readonly root: unknown;
+  [Symbol.dispose](): void;
+};
+
+/**
  * Builds the spine's {@link SubscriberDial}. Wake and push share ONE lane: the
  * persisted itx expression is evaluated against the stream's authority root.
  * The owning Durable Object supplies that root from the same scoped-itx factory
@@ -309,15 +321,13 @@ export function retainWakeHandshakeResponse(args: {
 export function createSubscriberDial(deps: {
   /** The stream's projectId; `null` = global stream (deployment authority root). */
   projectId: string | null;
-  /** The Durable Object's `ctx.exports` (the in-worker loopback registry). */
+  /** The Durable Object's `ctx.exports`, used to mint project egress bindings. */
   exports: unknown;
   /**
-   * A fresh local authority root from `itxForScope` (or the deployment-global
-   * equivalent). It is a server-side RpcTarget, not a client stub: expression
-   * evaluation owns any transport stubs reached through it, while the root
-   * itself has no remote lifetime to retain or dispose.
+   * Acquires one explicitly owned authority-root lease from the embedding
+   * host. Push owns it for one batch; wake transfers it to the retained sink.
    */
-  authorityRoot(): unknown;
+  acquireAuthorityRoot(): StreamSubscriberAuthorityRootLease;
   /** Where durable-sink delivery rejections land (spine: close → re-poke). */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void;
 }): SubscriberDial {
@@ -334,18 +344,23 @@ export function createSubscriberDial(deps: {
      * policy attached.
      */
     async poke(expression: ItxExpression, request: StreamSubscriberWakeRequest) {
-      const { value } = await evaluateItxExpression(
-        deps.authorityRoot(),
-        toInvocation(expression, request),
-      );
+      const authority = deps.acquireAuthorityRoot();
+      let value: unknown;
+      try {
+        ({ value } = await evaluateItxExpression(
+          authority.root,
+          toInvocation(expression, request),
+        ));
+      } catch (error) {
+        authority[Symbol.dispose]();
+        throw error;
+      }
       return retainWakeHandshakeResponse({
         value,
         onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
-        // The authority root is an in-process RpcTarget owned by the Stream
-        // DO, not a client stub. The returned handshake value still owns an
-        // RPC disposal group; retainWakeHandshakeResponse transfers and
-        // releases that group independently.
-        onDisposed: () => undefined,
+        // The returned capabilities may proxy through the authority chain, so
+        // its lease belongs to the retained sink rather than the poke call.
+        onDisposed: () => authority[Symbol.dispose](),
       });
     },
 
@@ -356,12 +371,18 @@ export function createSubscriberDial(deps: {
      * `["streams", ["get", path], "acceptCrossPost"]` reaches a sibling stream —
      * through exactly the calls ordinary user code would make. The
      * awaited resolve is the ack; a reject propagates to the spine's
-     * retry/park machine. The root is a fresh local RpcTarget: only the receiver
-     * hop crosses RPC, so a modelled receiver rejection stays in the spine's
-     * backoff state instead of poisoning Worker entrypoint error telemetry.
+     * retry/park machine. Each batch owns a fresh host lease and releases it
+     * after the evaluation settles. With the OS host's local RpcTarget, only
+     * the receiver hop crosses RPC, so a modelled receiver rejection stays in
+     * the spine's backoff state instead of poisoning entrypoint telemetry.
      */
     async push(expression: ItxExpression, batch: StreamPushEventBatch) {
-      await evaluateItxExpression(deps.authorityRoot(), toInvocation(expression, batch));
+      const authority = deps.acquireAuthorityRoot();
+      try {
+        await evaluateItxExpression(authority.root, toInvocation(expression, batch));
+      } finally {
+        authority[Symbol.dispose]();
+      }
     },
 
     /**
@@ -380,8 +401,9 @@ export function createSubscriberDial(deps: {
       if (deps.projectId === null) {
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
-      // Webhook drains deliver per EVENT, so cache the egress binding; any
-      // failure drops it and the retry re-mints.
+      // Webhook drains deliver per EVENT, so a per-POST egress binding mint
+      // would be paid at the highest possible rate. Any failure drops it and
+      // the retry re-mints.
       webhookEgress ??= projectEgressFetcher(
         deps.exports as ExecutionContext["exports"],
         deps.projectId,
