@@ -20,7 +20,8 @@ import type {
   StreamPushEventBatch,
 } from "./itx-api.generated.ts";
 
-// Extensionless on purpose: this specifier lands verbatim in the published
+// `.ts`-suffixed like every relative import here; tsc's
+// rewriteRelativeImportExtensions keeps the declaration emit for the published
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated.ts";
 

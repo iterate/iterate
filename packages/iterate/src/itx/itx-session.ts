@@ -72,6 +72,7 @@ import type {
   Session,
   UnauthenticatedOs,
 } from "../itx-api.generated.ts";
+import { apiWebSocketUrl } from "./api-url.ts";
 
 // A handle is a capnweb `RpcStub` — a chainable proxy over the contract
 // interface. `authenticate()` / `projects.get()` return an `RpcPromise` (a stub
@@ -115,15 +116,13 @@ export function configureIterateSession(config: IterateSessionConfig): void {
 }
 
 function dialTarget(): { url: URL; credentials: ItxAuthCredentials } {
-  if (explicitConfig !== undefined) {
-    const url = new URL("/api", explicitConfig.baseUrl.replace(/\/+$/, ""));
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    return { url, credentials: explicitConfig.credentials ?? { type: "from-server-cookie" } };
-  }
-  if (typeof window === "undefined") noDialTarget();
-  const url = new URL("/api", window.location.href);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return { url, credentials: { type: "from-server-cookie" } };
+  const base =
+    explicitConfig?.baseUrl ??
+    (typeof window === "undefined" ? noDialTarget() : window.location.href);
+  return {
+    url: apiWebSocketUrl(base),
+    credentials: explicitConfig?.credentials ?? { type: "from-server-cookie" },
+  };
 }
 
 function noDialTarget(): never {
@@ -265,7 +264,8 @@ export const serverSnapshot = (): never => noDialTarget();
  * parked generation — see Generation.failed) until {@link reconnectIterateSession}.
  */
 export function connectIterateSession(): Promise<SessionStub> {
-  if (explicitConfig === undefined && typeof window === "undefined") noDialTarget();
+  // No runtime guard here: `dial()` resolves its target first thing, so an
+  // unconfigured non-browser call throws the no-target error synchronously.
   return (current ?? dial()).connecting;
 }
 
@@ -641,6 +641,19 @@ export type ItxLiveSubscriptionHandle = {
   unsubscribe(): unknown;
   [Symbol.dispose]?(): void;
 };
+
+/**
+ * Release a live subscription handle completely: `unsubscribe()` closes the
+ * server side (already-dead is fine — the rejection is swallowed), then
+ * `[Symbol.dispose]` frees the caller-owned stub. One helper because
+ * forgetting either half leaks (see {@link ItxLiveSubscriptionHandle}).
+ */
+export function releaseItxSubscription(handle: ItxLiveSubscriptionHandle): void {
+  void Promise.resolve()
+    .then(() => handle.unsubscribe())
+    .catch(() => {})
+    .finally(() => handle[Symbol.dispose]?.());
+}
 
 /**
  * Poll a subscription handle's `ping()` until it stops answering `true`, then

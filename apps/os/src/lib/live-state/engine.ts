@@ -1,5 +1,4 @@
-import { diff } from "iterate/client";
-import type { LiveUpdate } from "iterate/client";
+import { diff, type LiveUpdate } from "iterate/live-state";
 import {
   disposeIgnoredRpcResult,
   isThenable,

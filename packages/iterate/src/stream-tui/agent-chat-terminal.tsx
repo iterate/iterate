@@ -234,11 +234,7 @@ function parseArgs(argv: string[]) {
     throw new Error(`--agent-path must start with "/agents/", got "${agentPath}".`);
   }
 
-  return {
-    baseUrl: baseUrl.replace(/\/+$/, ""),
-    projectId,
-    agentPath,
-  };
+  return { baseUrl, projectId, agentPath };
 }
 
 function readFlag(argv: string[], flagName: string) {

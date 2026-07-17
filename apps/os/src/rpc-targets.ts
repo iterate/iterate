@@ -28,7 +28,7 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
-import type { LiveUpdate } from "iterate/client";
+import type { LiveUpdate } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {

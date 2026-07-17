@@ -4,10 +4,13 @@ export default defineConfig([
   {
     entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
-    // react + react-query are PEERS for the library entries (the consumer's
-    // app must own one copy), but the published CLI/TUI is its own process and
-    // must not depend on a package manager auto-installing peers — inline them
-    // into this bundle only.
+    // The CLI + TUI are STANDALONE PROCESS artifacts (bin/iterate spawns the
+    // TUI as its own bun process; nothing imports these files in-process), so
+    // this bundle is deliberately self-contained: react + react-query inline
+    // here (they are peers for the library entries, where the consumer's app
+    // must own the one copy), and the TUI carries its own private copy of the
+    // keeper — module-state sharing with the library entries is a non-goal
+    // across process boundaries.
     deps: {
       alwaysBundle: ["react", "@tanstack/react-query"],
     },
@@ -44,14 +47,15 @@ export default defineConfig([
     copy: [{ from: "src/worker.d.mts", to: "dist" }],
   },
   {
-    // The itx client entries. ONE config object on purpose: rolldown splits
-    // their shared modules (the session keeper, live-state) into common chunks,
-    // so `iterate/client` and `iterate/react` share ONE keeper module instance
-    // in the published artifact — separate objects would inline a private copy
-    // each and fork the one-socket module state. No dts here for the same
-    // reason as sdk (the generated contract crashes rolldown-plugin-dts);
-    // declarations come from `tsc -p tsconfig.sdk.json`.
-    entry: ["src/client.ts", "src/node.ts", "src/react.ts"],
+    // The itx client LIBRARY entries. ONE config object on purpose: rolldown
+    // splits their shared modules (the session keeper, live-state) into common
+    // chunks, so every importable entry shares ONE keeper module instance in
+    // the published artifact — separate objects would inline a private copy
+    // each and fork the one-socket module state. (The TUI bundle above is the
+    // deliberate exception: a spawned-process artifact, never imported.) No
+    // dts here for the same reason as sdk (the generated contract crashes
+    // rolldown-plugin-dts); declarations come from `tsc -p tsconfig.sdk.json`.
+    entry: ["src/client.ts", "src/live-state.ts", "src/node.ts", "src/react.ts"],
     format: "esm",
     dts: false,
     sourcemap: true,

@@ -75,6 +75,7 @@ import {
   currentSnapshot,
   isItxTransportError,
   projectStubFor,
+  releaseItxSubscription,
   reportTransportSuspicion,
   serverSnapshot,
   subscribeSession,
@@ -440,12 +441,7 @@ export function useItxSubscription(
           // and, if genuinely half-open, re-dials, whose generation re-runs this
           // effect); a straggler handle is unsubscribed AND disposed.
           void pending.then(
-            (late) => {
-              void Promise.resolve()
-                .then(() => late.unsubscribe())
-                .catch(() => {})
-                .finally(() => late[Symbol.dispose]?.());
-            },
+            (late) => releaseItxSubscription(late),
             () => {},
           );
           if (signal.disposed) return;
@@ -472,13 +468,7 @@ export function useItxSubscription(
         const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
         return () => clearTimeout(retry);
       }
-      const dispose = () =>
-        void Promise.resolve()
-          .then(() => subscription.unsubscribe())
-          .catch(() => {
-            // The server side of a dead subscription is already gone.
-          })
-          .finally(() => subscription[Symbol.dispose]?.());
+      const dispose = () => releaseItxSubscription(subscription);
       if (signal.disposed) {
         dispose();
         return;

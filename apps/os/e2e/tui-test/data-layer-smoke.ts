@@ -11,7 +11,12 @@
 // Exits 0 on PASS, 1 on timeout/failure.
 
 import process from "node:process";
-import { configureIterateSession, connectItx } from "iterate/client";
+import {
+  configureIterateSession,
+  connectItx,
+  releaseItxSubscription,
+  type ItxLiveSubscriptionHandle,
+} from "iterate/client";
 import { createAgentFeedModel } from "../../../../packages/iterate/src/stream-tui/agent-feed-model.ts";
 import { resolveItxAuth } from "../../../../packages/iterate/src/stream-tui/itx-auth.ts";
 import { onboardingAgentCreateInput } from "../../src/lib/onboarding-agent.ts";
@@ -36,12 +41,12 @@ configureIterateSession({
 });
 const itx = await connectItx(project.project.id);
 const agent = itx.agents.get(AGENT_PATH);
-let subscription: { unsubscribe(): unknown; [Symbol.dispose]?(): void } | undefined;
+let subscription: ItxLiveSubscriptionHandle | undefined;
 
 try {
-  // Fresh project: birth the onboarding agent with the real birth batch if the
-  // server-side birth hasn't landed yet (the TUI itself refuses this and sends
-  // users to the dashboard; the smoke owns its project so it births directly).
+  // Fresh project: birth the onboarding agent with the real birth batch when
+  // unborn — the same create-if-unborn the TUI's subscribeAgentFeed performs
+  // (births are deferred to first chat-open; they cost a real LLM turn).
   const processorSnapshot = await agent.processor.snapshot();
   if (processorSnapshot.state.birthCertificate === null) {
     await agent.create(onboardingAgentCreateInput(project.project.id));
@@ -100,12 +105,7 @@ try {
   );
   process.exit(1);
 } finally {
-  try {
-    await subscription?.unsubscribe();
-  } catch {
-    // The deployment side may already be gone; local teardown continues.
-  }
-  subscription?.[Symbol.dispose]?.();
+  if (subscription) releaseItxSubscription(subscription);
   await project[Symbol.asyncDispose]();
 }
 

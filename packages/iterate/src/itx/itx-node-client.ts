@@ -11,6 +11,7 @@ import type {
   Session,
   UnauthenticatedOs,
 } from "../itx-api.generated.ts";
+import { apiWebSocketUrl } from "./api-url.ts";
 import { withOwnedRpcSession } from "./owned-rpc-session.ts";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
@@ -36,16 +37,6 @@ type ConnectAgentItxInput = ConnectItxAuthenticatedInput & {
   agentPath: string;
   projectId: string;
 };
-
-function websocketUrl(pathname: string, input: { baseUrl: string }) {
-  const baseUrl = input.baseUrl?.trim();
-  if (!baseUrl) {
-    throw new Error("connectItx requires a baseUrl (the deployment's APP_CONFIG_BASE_URL).");
-  }
-  const url = new URL(pathname, baseUrl.replace(/\/+$/, ""));
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
 
 /** Decode a raw ws frame (outbound string, inbound Buffer/ArrayBuffer) into its parsed JSON value. */
 function parseFrame(data: unknown): unknown {
@@ -111,7 +102,7 @@ export function connectItx(
   | CapnRpcStub<Session>
   | CapnRpcStub<UnauthenticatedOs> {
   const session = connect<UnauthenticatedOs>(
-    websocketUrl("/api", input),
+    apiWebSocketUrl(input.baseUrl).toString(),
     input.headers,
     input.onWebSocketMessage,
   );
