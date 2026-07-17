@@ -35,13 +35,12 @@ import {
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
   repoTaskAssignmentHeadPaths,
-  taskCommitFileChanges,
-  taskCommitMessagePrompt,
   type RepoTask,
 } from "./repo-tasks.ts";
 import {
   commitPlan,
   effectiveEntry,
+  fileChangeForEntry,
   textContentForEntry,
   useWorkingTree,
   workingTreeStore,
@@ -232,38 +231,6 @@ export function RepoIde({
   /** Tasks view: commit only task-path changes, leave unrelated working-tree edits. */
   const commitTasks = useMutation({
     mutationFn: async (message: string | undefined) => {
-      // Snapshot first so the RPC payload and any auto-generated message describe
-      // the same change set, even if the user keeps editing during AI generation.
-      const plan = taskCommitFileChanges(store.changes);
-      if (plan.paths.length === 0) return null;
-      const plannedChanges = new Map(
-        plan.paths.flatMap((path) => {
-          const change = store.changes.get(path);
-          return change === undefined ? [] : [[path, change] as const];
-        }),
-      );
-      const listed = listRepoTaskChanges(plannedChanges, headPathSet, {});
-      const typed = message?.trim() ?? "";
-      const commitMessage =
-        typed !== ""
-          ? typed
-          : await (async () => {
-              const prompt = taskCommitMessagePrompt(listed);
-              try {
-                const generated = (await itx.ai.run("openai/gpt-5.5", {
-                  messages: [
-                    { role: "system", content: prompt.system },
-                    { role: "user", content: prompt.user },
-                  ],
-                })) as { response?: string };
-                const text = generated.response?.trim().replace(/^["']|["']$/g, "");
-                if (text) return text.slice(0, 72);
-              } catch {
-                // Fall through to the deterministic summary.
-              }
-              return fallbackTaskCommitMessage(listed);
-            })();
-
       const previousTaskContents =
         queryClient.getQueryData<Record<string, string>>([
           "itx",
@@ -272,10 +239,21 @@ export function RepoIde({
           repoPath,
           files.commitOid,
         ]) ?? {};
+      // One snapshot drives the RPC payload, the generated message, and the
+      // post-commit cleanup, so all three describe the same change set. An
+      // empty message summarizes deterministically — no AI call sits between
+      // an autosave firing and the commit.
+      const listed = listRepoTaskChanges(
+        store.changes,
+        new Set([...headPaths, ...Object.keys(previousTaskContents)]),
+        previousTaskContents,
+      );
+      if (listed.length === 0) return null;
+      const typed = message?.trim() ?? "";
 
       const result = await itx.repos.get(repoPath).commitFiles({
-        message: commitMessage,
-        changes: plan.fileChanges,
+        message: typed === "" ? fallbackTaskCommitMessage(listed) : typed,
+        changes: listed.map((change) => fileChangeForEntry(change.path, change.entry)),
       });
 
       // Seed the new HEAD's task + file-list caches before clearing overlays so
@@ -283,22 +261,15 @@ export function RepoIde({
       // the post-commit store even if invalidateQueries is still stale.
       const nextTaskContents = { ...previousTaskContents };
       const nextPathSet = new Set(headPaths);
-      for (const change of plan.fileChanges) {
-        if ("delete" in change && change.delete) {
-          delete nextTaskContents[change.path];
-          nextPathSet.delete(change.path);
+      for (const { path, entry } of listed) {
+        if (entry.type === "delete") {
+          delete nextTaskContents[path];
+          nextPathSet.delete(path);
           continue;
         }
-        nextPathSet.add(change.path);
-        const content =
-          "content" in change && typeof change.content === "string"
-            ? change.content
-            : textContentForEntry(
-                "contentBase64" in change && typeof change.contentBase64 === "string"
-                  ? { type: "write-base64", contentBase64: change.contentBase64 }
-                  : undefined,
-              );
-        if (content !== undefined) nextTaskContents[change.path] = content;
+        nextPathSet.add(path);
+        const content = textContentForEntry(entry);
+        if (content !== undefined) nextTaskContents[path] = content;
       }
       queryClient.setQueryData<Record<string, string>>(
         ["itx", "repo-task-files", projectId, repoPath, result.commitOid],
@@ -309,10 +280,9 @@ export function RepoIde({
         paths: [...nextPathSet].sort((left, right) => left.localeCompare(right)),
       });
 
-      for (const path of plan.paths) {
-        store.setWorking(path, undefined);
-        store.setStaged(path, undefined);
-      }
+      // Equality-guarded: a slot the user re-edited while the RPC was in
+      // flight no longer matches its committed entry and survives to migrate.
+      store.clearCommitted(new Map(listed.map((change) => [change.path, change.entry])));
       await queryClient.invalidateQueries({
         queryKey: ["itx", "repo-files", projectId, repoPath],
       });
@@ -337,11 +307,6 @@ export function RepoIde({
       toast.error(error instanceof Error ? error.message : "Could not commit tasks.");
     },
   });
-  const commitTaskChanges = useCallback(
-    (message: string | undefined) => commitTasks.mutateAsync(message),
-    [commitTasks],
-  );
-
   const assignTaskAgent = async (task: RepoTask, pendingRenameFromPath?: string) => {
     const assignment = prepareRepoTaskAssignment(task, repoPath);
     const renamedFromPath =
@@ -572,7 +537,7 @@ export function RepoIde({
             onDelete={removePath}
             onAssignAgent={assignTaskAgent}
             commitPending={commitTasks.isPending}
-            onCommitTaskChanges={commitTaskChanges}
+            onCommitTaskChanges={commitTasks.mutateAsync}
           />
         </Suspense>
       ) : (

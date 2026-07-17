@@ -2,7 +2,12 @@ import type { Document } from "yaml";
 import { isRepoTaskMarkdownPath } from "../../domains/repos/repo-task-events.ts";
 import type { RepoFileChange } from "../../domains/repos/types.ts";
 import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-frontmatter.ts";
-import { effectiveEntry, type FileEntry, type WorkingTreeChanges } from "./staged-changes.ts";
+import {
+  effectiveEntry,
+  textContentForEntry,
+  type FileEntry,
+  type WorkingTreeChanges,
+} from "./staged-changes.ts";
 
 const DEFAULT_TASK_STATE = "todo";
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
@@ -389,8 +394,7 @@ export function listRepoTaskChanges(
     if (entry === undefined) continue;
     const status: RepoTaskChangeStatus =
       entry.type === "delete" ? "deleted" : headPaths.has(path) ? "modified" : "added";
-    const liveContent = textContentFromEntry(entry);
-    const content = liveContent ?? headContents[path];
+    const content = textContentForEntry(entry) ?? headContents[path];
     const parsed = content === undefined ? null : parseRepoTask(path, content);
     listed.push({
       path,
@@ -401,26 +405,6 @@ export function listRepoTaskChanges(
     });
   }
   return listed.sort((left, right) => left.path.localeCompare(right.path));
-}
-
-/** File changes for a tasks-only commit (ignores non-task paths and stage mode). */
-export function taskCommitFileChanges(changes: WorkingTreeChanges): {
-  paths: string[];
-  fileChanges: RepoFileChange[];
-} {
-  const paths: string[] = [];
-  const fileChanges: RepoFileChange[] = [];
-  for (const [path, change] of changes) {
-    if (!isRepoTaskPath(path)) continue;
-    const entry = effectiveEntry(change);
-    if (entry === undefined) continue;
-    paths.push(path);
-    if (entry.type === "delete") fileChanges.push({ path, delete: true });
-    else if (entry.type === "write-base64")
-      fileChanges.push({ path, contentBase64: entry.contentBase64 });
-    else fileChanges.push({ path, content: entry.content });
-  }
-  return { paths, fileChanges };
 }
 
 /** Deterministic commit message when AI is unavailable or empty. */
@@ -455,17 +439,6 @@ export function taskCommitMessagePrompt(taskChanges: readonly RepoTaskChange[]):
       "You write short git commit messages for a task board. Reply with one line only, imperative mood, no quotes, no trailing period, max 72 characters.",
     user: `Write a commit message for these task changes:\n${lines.join("\n")}`,
   };
-}
-
-function textContentFromEntry(entry: FileEntry): string | undefined {
-  if (entry.type === "write") return entry.content;
-  if (entry.type !== "write-base64") return undefined;
-  try {
-    const bytes = Uint8Array.from(atob(entry.contentBase64.trim()), (char) => char.charCodeAt(0));
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return undefined;
-  }
 }
 
 function pathSegments(path: string): string[] {

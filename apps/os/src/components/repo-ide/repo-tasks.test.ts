@@ -17,7 +17,6 @@ import {
   repoTaskWithPath,
   repoTaskCreationPaths,
   taskColumnState,
-  taskCommitFileChanges,
   taskCommitMessagePrompt,
   taskDirectoryForFolder,
   taskDirectoryForPath,
@@ -26,6 +25,7 @@ import {
   updateRepoTaskAgent,
   updateRepoTaskState,
 } from "./repo-tasks.ts";
+import { fileChangeForEntry } from "./staged-changes.ts";
 
 test.for([
   { name: "a Markdown file in a root tasks directory", path: "tasks/ship-it.md", expected: true },
@@ -404,14 +404,11 @@ test("lists only task working-tree changes with board statuses", () => {
     ["tasks/gone.md", "deleted", "Gone task"],
     ["tasks/new.md", "added", "Brand new"],
   ]);
-  expect(taskCommitFileChanges(changes)).toEqual({
-    paths: ["tasks/new.md", "tasks/edited.md", "tasks/gone.md"],
-    fileChanges: [
-      { path: "tasks/new.md", content: "# Brand new\n" },
-      { path: "tasks/edited.md", content: "---\nstate: done\n---\n# Edited\n" },
-      { path: "tasks/gone.md", delete: true },
-    ],
-  });
+  expect(listed.map((change) => fileChangeForEntry(change.path, change.entry))).toEqual([
+    { path: "tasks/edited.md", content: "---\nstate: done\n---\n# Edited\n" },
+    { path: "tasks/gone.md", delete: true },
+    { path: "tasks/new.md", content: "# Brand new\n" },
+  ]);
   expect(fallbackTaskCommitMessage(listed)).toBe("Add Brand new, update Edited, delete Gone task");
   expect(taskCommitMessagePrompt(listed).user).toContain("Added: Brand new");
 });

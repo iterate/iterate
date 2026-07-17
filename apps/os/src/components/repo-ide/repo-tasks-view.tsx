@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from "react";
 import { DragDropProvider, useDraggable, useDroppable } from "@dnd-kit/react";
 import { Link } from "@tanstack/react-router";
 import {
@@ -108,6 +108,7 @@ import {
 } from "./repo-task-editor-state.ts";
 import { useRepoTaskCommit } from "./use-repo-task-commit.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 type SearchPatch = {
   file?: string;
@@ -206,7 +207,6 @@ export function RepoTasksView({
   const commit = useRepoTaskCommit({
     taskChanges,
     taskChangeSignature,
-    commitPending,
     onCommitTaskChanges,
   });
 
@@ -219,14 +219,23 @@ export function RepoTasksView({
       tasks={tasks}
       taskChangeByPath={taskChangeByPath}
       deletedTaskChanges={deletedTaskChanges}
-      taskChanges={taskChanges}
       selectedPath={selectedPath}
       onPatchSearch={onPatchSearch}
       onSetWorking={onSetWorking}
       onDelete={onDelete}
       onAssignAgent={onAssignAgent}
-      commitPending={commitPending}
-      commit={commit}
+      commitControls={
+        <TaskCommitControls
+          taskChanges={taskChanges}
+          commitMessage={commit.commitMessage}
+          onCommitMessageChange={commit.setCommitMessage}
+          commitPending={commitPending}
+          generatingMessage={commit.generatingMessage}
+          autoSaveDueAt={commit.autoSaveDueAt}
+          onMakeCommit={commit.makeCommit}
+          onWriteCommitMessage={commit.writeCommitMessage}
+        />
+      }
     />
   );
 }
@@ -239,14 +248,12 @@ function RepoTaskWorkspace({
   tasks,
   taskChangeByPath,
   deletedTaskChanges,
-  taskChanges,
   selectedPath,
   onPatchSearch,
   onSetWorking,
   onDelete,
   onAssignAgent,
-  commitPending,
-  commit,
+  commitControls,
 }: {
   projectSlug: string;
   headPaths: readonly string[];
@@ -255,14 +262,12 @@ function RepoTaskWorkspace({
   tasks: readonly RepoTask[];
   taskChangeByPath: ReadonlyMap<string, RepoTaskChangeStatus>;
   deletedTaskChanges: readonly RepoTaskChange[];
-  taskChanges: readonly RepoTaskChange[];
   selectedPath: string | undefined;
   onPatchSearch: (patch: SearchPatch) => void;
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
   onDelete: (path: string) => void;
   onAssignAgent: (task: RepoTask, renamedFromPath?: string) => Promise<string | undefined>;
-  commitPending: boolean;
-  commit: ReturnType<typeof useRepoTaskCommit>;
+  commitControls: ReactNode;
 }) {
   const [draft, setDraft] = useState<RepoTask | undefined>();
   const [editorPathOverride, setEditorPathOverride] = useState<EditorPathOverride>();
@@ -453,14 +458,7 @@ function RepoTaskWorkspace({
         tasks={tasks}
         taskChangeByPath={taskChangeByPath}
         deletedTaskChanges={deletedTaskChanges}
-        taskChanges={taskChanges}
-        commitMessage={commit.commitMessage}
-        onCommitMessageChange={commit.setCommitMessage}
-        commitPending={commitPending}
-        generatingMessage={commit.generatingMessage}
-        autoSaveSecondsLeft={commit.autoSaveSecondsLeft}
-        onMakeCommit={commit.makeCommit}
-        onWriteCommitMessage={commit.writeCommitMessage}
+        commitControls={commitControls}
         onOpen={openTask}
         onMove={moveTaskOnBoard}
         onCreate={createTask}
@@ -508,14 +506,7 @@ function TaskBoard({
   tasks,
   taskChangeByPath,
   deletedTaskChanges,
-  taskChanges,
-  commitMessage,
-  onCommitMessageChange,
-  commitPending,
-  generatingMessage,
-  autoSaveSecondsLeft,
-  onMakeCommit,
-  onWriteCommitMessage,
+  commitControls,
   onOpen,
   onMove,
   onCreate,
@@ -523,14 +514,7 @@ function TaskBoard({
   tasks: readonly RepoTask[];
   taskChangeByPath: ReadonlyMap<string, RepoTaskChangeStatus>;
   deletedTaskChanges: readonly RepoTaskChange[];
-  taskChanges: readonly RepoTaskChange[];
-  commitMessage: string;
-  onCommitMessageChange: (message: string) => void;
-  commitPending: boolean;
-  generatingMessage: boolean;
-  autoSaveSecondsLeft: number | undefined;
-  onMakeCommit: () => void;
-  onWriteCommitMessage: () => void;
+  commitControls: ReactNode;
   onOpen: (task: RepoTask) => void;
   onMove: (task: RepoTask, state: string, folderPath: string, labels?: readonly string[]) => void;
   onCreate: (state: string, folderPath: string, labels?: readonly string[]) => void;
@@ -608,16 +592,7 @@ function TaskBoard({
             <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
               {board.taskCount} {board.taskCount === 1 ? "task" : "tasks"}
             </span>
-            <TaskCommitControls
-              taskChanges={taskChanges}
-              commitMessage={commitMessage}
-              onCommitMessageChange={onCommitMessageChange}
-              commitPending={commitPending}
-              generatingMessage={generatingMessage}
-              autoSaveSecondsLeft={autoSaveSecondsLeft}
-              onMakeCommit={onMakeCommit}
-              onWriteCommitMessage={onWriteCommitMessage}
-            />
+            {commitControls}
             <BoardDisplaySettings rowField={rowField} onChangeRowField={setRowField} />
           </div>
         </div>
@@ -700,7 +675,7 @@ function TaskCommitControls({
   onCommitMessageChange,
   commitPending,
   generatingMessage,
-  autoSaveSecondsLeft,
+  autoSaveDueAt,
   onMakeCommit,
   onWriteCommitMessage,
 }: {
@@ -709,18 +684,23 @@ function TaskCommitControls({
   onCommitMessageChange: (message: string) => void;
   commitPending: boolean;
   generatingMessage: boolean;
-  autoSaveSecondsLeft: number | undefined;
+  autoSaveDueAt: number | undefined;
   onMakeCommit: () => void;
   onWriteCommitMessage: () => void;
 }) {
   const dirty = taskChanges.length > 0;
   const busy = commitPending || generatingMessage;
-  const autosaveLabel =
-    !dirty || commitPending || autoSaveSecondsLeft === undefined
-      ? null
-      : autoSaveSecondsLeft <= 0
-        ? "Auto saving…"
-        : `Auto saving in ${autoSaveSecondsLeft}s`;
+  // The countdown ticks HERE, in the leaf: only this label re-renders every
+  // 250ms, never the board behind it.
+  const countingDown = dirty && !commitPending && autoSaveDueAt !== undefined;
+  const nowMs = useTickingNowMs(250, countingDown, autoSaveDueAt ?? null);
+  const autoSaveSecondsLeft =
+    autoSaveDueAt === undefined ? 0 : Math.max(0, Math.ceil((autoSaveDueAt - nowMs) / 1000));
+  const autosaveLabel = !countingDown
+    ? null
+    : autoSaveSecondsLeft <= 0
+      ? "Auto saving…"
+      : `Auto saving in ${autoSaveSecondsLeft}s`;
 
   return (
     <div className="flex items-center gap-2">
@@ -737,7 +717,7 @@ function TaskCommitControls({
           onClick={onMakeCommit}
           title={
             dirty
-              ? "Commit task changes (empty message auto-generates via AI)"
+              ? "Commit task changes (empty message uses a generated summary)"
               : "No task changes to commit"
           }
         >
@@ -754,7 +734,7 @@ function TaskCommitControls({
               <Button
                 variant="default"
                 size="icon"
-                disabled={!dirty && !busy}
+                disabled={!dirty}
                 aria-label="Task commit options"
                 title="Review task changes and commit message"
               />
@@ -842,10 +822,13 @@ function TaskCommitControls({
   );
 }
 
+/** Full content, not a truncated hash: task files are small, and a prefix
+ * fingerprint would miss edits past the cut and fail to restart the autosave
+ * window. */
 function entryFingerprint(entry: FileEntry): string {
   if (entry.type === "delete") return "delete";
-  if (entry.type === "write") return `write:${entry.content.length}:${entry.content.slice(0, 64)}`;
-  return `b64:${entry.contentBase64.length}:${entry.contentBase64.slice(0, 64)}`;
+  if (entry.type === "write") return `write:${entry.content.length}:${entry.content}`;
+  return `b64:${entry.contentBase64.length}:${entry.contentBase64}`;
 }
 
 function BoardDisplaySettings({
@@ -908,12 +891,15 @@ function BoardDisplaySettings({
   );
 }
 
+/** Stable default so omitting the prop (tests) never allocates per render. */
+const NO_TASK_CHANGES: ReadonlyMap<string, RepoTaskChangeStatus> = new Map();
+
 export function TaskColumn({
   state,
   rowKey,
   rowLabel,
   tasks,
-  taskChangeByPath = new Map(),
+  taskChangeByPath = NO_TASK_CHANGES,
   visibleProperties,
   showHeader,
   onOpen,
