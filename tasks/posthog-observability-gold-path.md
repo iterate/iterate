@@ -296,6 +296,11 @@ durable `subscription-parked` fact after the bounded attempt limit. Operators
 recover explicitly with resume/cursor-set; configuration is never silently
 replaced.
 
+The wire shape follows the batch endpoint rather than the single-event capture
+example: `distinct_id` is inside each event's `properties`. This matters
+because a malformed event can receive HTTP success and still be discarded by
+PostHog's asynchronous ingestion pipeline.
+
 That acknowledgement is deliberately described as **HTTP acceptance**, not
 proof of final indexing. PostHog validates and ingests public capture requests
 asynchronously; a 2xx can precede an ingestion warning, quota decision, or

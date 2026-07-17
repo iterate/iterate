@@ -75,7 +75,6 @@ function normalizeEventTimestamp(createdAt: string): string {
 }
 
 type PostHogBatchEvent = {
-  distinct_id: string;
   event: string;
   properties: Record<string, unknown>;
   timestamp: string;
@@ -130,7 +129,6 @@ function projectGroupIdentifyEvent(args: {
   // project slugs can change independently later.
   // https://posthog.com/docs/product-analytics/group-analytics
   return {
-    distinct_id: distinctId,
     event: "$groupidentify",
     properties: {
       $geoip_disable: true,
@@ -141,6 +139,7 @@ function projectGroupIdentifyEvent(args: {
           : { id: projectId, name: project.config.slug, slug: project.config.slug },
       $group_type: "project",
       $is_server: true,
+      distinct_id: distinctId,
     },
     timestamp,
     uuid: posthogUuid([
@@ -177,12 +176,15 @@ function posthogEvents(args: {
       offset: event.offset,
     });
     return {
-      distinct_id: distinctId,
       event: POSTHOG_STREAM_EVENT,
       properties: {
         $geoip_disable: true,
         $groups: { project: projectId },
         $is_server: true,
+        // PostHog's batch API documents distinct_id inside properties. A
+        // malformed event can receive HTTP 200 but still be rejected later by
+        // asynchronous ingestion, so keep the wire shape exact.
+        distinct_id: distinctId,
         project_id: projectId,
         stream_event_created_at: createdAt,
         stream_event_ephemeral: event.ephemeral === true,

@@ -129,10 +129,10 @@ describe("first-party PostHog stream integration", () => {
     expect(requests[0]).toMatchObject({ api_key: "phc_test" });
     expect(requests[0]!.batch).toHaveLength(2);
     expect(requests[0]!.batch[0]).toMatchObject({
-      distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
       event: POSTHOG_STREAM_EVENT,
       properties: {
         $groups: { project: "prj_123" },
+        distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
         project_id: "prj_123",
         stream_path: "/agents/ada",
         stream_event: durable,
@@ -140,6 +140,7 @@ describe("first-party PostHog stream integration", () => {
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
     });
+    expect(requests[0]!.batch[0]).not.toHaveProperty("distinct_id");
     expect(requests[0]!.batch[1]).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
       properties: {
@@ -177,6 +178,7 @@ describe("first-party PostHog stream integration", () => {
         $group_key: "prj_123",
         $group_set: { id: "prj_123", name: "gold-path", slug: "gold-path" },
         $group_type: "project",
+        distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
       },
     });
     expect(requests[0]!.batch[1]).toMatchObject({
