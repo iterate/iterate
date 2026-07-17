@@ -77,6 +77,9 @@ describe("worker fetch dispatch header", () => {
       namedError("WorkerBuildInProgressError", "still building"),
     );
     expect(building).toMatchObject({ status: 503 });
+    expect(
+      workerBuildStatusResponse(namedError("RepoNotSeededError", "config repo is still seeding")),
+    ).toMatchObject({ status: 503 });
 
     const failed = workerBuildStatusResponse(
       namedError("WorkerBuildFailedError", "Expected ; but found is"),
