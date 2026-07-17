@@ -69,6 +69,7 @@ const REPO_DEFAULT_BRANCH = "main";
 // lane". Distinct from null, which is an authoritative "not at HEAD".
 const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
+const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
 const TASK_FILE_INCLUDE_PATTERNS = [
   "tasks/**/*.md",
@@ -368,7 +369,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   // writes would otherwise clone the same head and the second (non-fast-
   // forward) push would clobber the first commit — while both callers got a
   // success result. All writes funnel through this one DO by design, which
-  // is exactly what makes a local chain a sufficient lock.
+  // makes a local chain a sufficient lock. Artifacts clones can still lag a
+  // completed push, so mutateArtifactRepo also verifies that its clone can
+  // reach the last pushed commit before it changes anything.
   #writeChain: Promise<unknown> = Promise.resolve();
   // Secondary repos have no root-workspace cache. Their HEAD reads otherwise
   // clone the complete Artifact once per call; a task board opening 42 files
@@ -393,10 +396,12 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     const parsed = parseCommitFilesInput(input);
     const repo = await this.gitAccess();
+    const branch = parsed.branch ?? repo.defaultBranch;
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
-      branch: parsed.branch ?? repo.defaultBranch,
+      branch,
       changes: parsed.changes,
+      expectedCommitOid: this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)),
       message: parsed.message,
       remote: repo.remote,
       token: repo.token,
@@ -430,9 +435,11 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
     const parsed = parseEditRepoFileInput(input);
     const repo = await this.gitAccess();
+    const branch = parsed.branch ?? repo.defaultBranch;
     const result = await editArtifactRepoFile({
       author: parsed.author,
-      branch: parsed.branch ?? repo.defaultBranch,
+      branch,
+      expectedCommitOid: this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)),
       message: parsed.message,
       newString: parsed.newString,
       oldString: parsed.oldString,
@@ -1296,7 +1303,10 @@ export class RepoDurableObject extends DurableObject<Env> {
         token,
       }),
     );
-    this.#headFilesSnapshot.clear();
+    // `repo/ready` is the creation boundary. Record the seed exactly like
+    // every later push so the first read or mutation waits for an Artifacts
+    // clone that can actually reach it instead of racing a stale replica.
+    this.#recordPushedHead({ branch: defaultBranch, commitOid: seeded.commitOid });
     this.ctx.storage.kv.put(repoHeadStorageKey(defaultBranch), {
       commitOid: seeded.commitOid,
       contentHash: seeded.contentHash,
@@ -1446,6 +1456,7 @@ async function commitFilesToArtifactRepo(input: {
   author?: { email: string; name: string };
   branch: string;
   changes: RepoFileChange[];
+  expectedCommitOid?: string;
   message: string;
   remote: string;
   token: string;
@@ -1453,6 +1464,7 @@ async function commitFilesToArtifactRepo(input: {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
+    expectedCommitOid: input.expectedCommitOid,
     message: input.message,
     remote: input.remote,
     token: input.token,
@@ -1486,6 +1498,7 @@ async function commitFilesToArtifactRepo(input: {
 async function editArtifactRepoFile(input: {
   author?: { email: string; name: string };
   branch: string;
+  expectedCommitOid?: string;
   message: string;
   newString: string;
   oldString: string;
@@ -1497,6 +1510,7 @@ async function editArtifactRepoFile(input: {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
+    expectedCommitOid: input.expectedCommitOid,
     message: input.message,
     remote: input.remote,
     token: input.token,
@@ -1533,21 +1547,58 @@ async function editArtifactRepoFile(input: {
 async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: {
   author?: { email: string; name: string };
   branch: string;
+  expectedCommitOid?: string;
   message: string;
   mutate: (repo: { filesystem: InMemoryFs; git: ReturnType<typeof createGit> }) => Promise<Extra>;
   remote: string;
   token: string;
 }): Promise<CommitRepoFilesResult & { contentHash: string } & Extra> {
-  const filesystem = new InMemoryFs();
-  const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
+  const clone = async () => {
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, REPO_DIR);
+    await git.clone({
+      branch: input.branch,
+      singleBranch: true,
+      url: input.remote,
+      ...credentials,
+    });
+    const [head] = await git.log({ depth: 1 });
+    if (!head) throw new RepoNotSeededError("Repo has no commits.");
+    return { filesystem, git, head };
+  };
 
-  await git.clone({
-    branch: input.branch,
-    singleBranch: true,
-    url: input.remote,
-    ...credentials,
-  });
+  let cloned: Awaited<ReturnType<typeof clone>> | undefined;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      cloned = await clone();
+      if (
+        input.expectedCommitOid === undefined ||
+        cloned.head.oid === input.expectedCommitOid ||
+        (await gitCloneContainsCommit(cloned.git, input.expectedCommitOid))
+      ) {
+        break;
+      }
+      if (attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
+        throw new Error(
+          `Artifact branch ${input.branch} remained behind the last pushed commit ${input.expectedCommitOid} (saw ${cloned.head.oid}); refusing to commit on a stale base.`,
+        );
+      }
+      console.warn(
+        `repo mutation clone is behind the last push (saw ${cloned.head.oid}, pushed ${input.expectedCommitOid}); retry ${attempt + 1}`,
+      );
+    } catch (error) {
+      if (input.expectedCommitOid === undefined || attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
+        throw error;
+      }
+      console.warn(
+        `repo mutation clone could not reach the last pushed commit ${input.expectedCommitOid}; retry ${attempt + 1}: ${String(error)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+  }
+
+  const { filesystem, git } = cloned;
 
   const extra = await input.mutate({ filesystem, git });
   const changedPaths = (await git.status()).map((entry) => entry.filepath).sort();
@@ -1571,9 +1622,10 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     },
     message: input.message,
   });
-  // No force: writes are serialized by the DO's #writeChain, so a fresh
-  // clone + one commit is always a fast-forward — a non-fast-forward push
-  // here means an out-of-band writer and should fail loudly, not clobber.
+  // No force: writes are serialized by the DO's #writeChain, and the clone
+  // above contains our last pushed commit, so one commit is a fast-forward.
+  // A rejection now means an out-of-band writer moved the ref after that
+  // checked clone and should fail loudly, not clobber.
   const pushed = await git.push({
     ref: input.branch,
     remote: "origin",
@@ -1591,6 +1643,18 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     noChanges: false,
     ...extra,
   };
+}
+
+async function gitCloneContainsCommit(
+  git: ReturnType<typeof createGit>,
+  commitOid: string,
+): Promise<boolean> {
+  try {
+    const [commit] = await git.log({ ref: commitOid, depth: 1 });
+    return commit?.oid === commitOid;
+  } catch {
+    return false;
+  }
 }
 
 function repoHeadStorageKey(branch: string) {

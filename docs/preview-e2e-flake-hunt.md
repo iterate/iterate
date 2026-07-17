@@ -430,6 +430,15 @@ keeps its one force-push: it runs once at repo creation, never concurrently.)
 The diagnosis is retained here because it explains _why_ main dropped `force` and
 serialized writes; the marathon re-verifies it end-to-end.
 
+**2026-07-17 correction:** serialization prevents two calls in one Repo DO
+from overlapping, but it does not make the Artifacts clone endpoint strongly
+consistent. A second serialized write can clone a replica that still advertises
+the pre-first-write head and then lose the server's ref compare-and-swap with
+`stale ref`. Mutations now record the seed and every successful push, and wait
+boundedly until their clone can reach that last pushed commit before changing
+anything. A later rejection therefore really does identify an out-of-band
+writer that moved the ref after the checked clone.
+
 ### 16. Marathon methodology: an incremental deploy splits the fleet head
 
 Not a product flake — a hole in the flake-hunt harness, surfaced while shipping
