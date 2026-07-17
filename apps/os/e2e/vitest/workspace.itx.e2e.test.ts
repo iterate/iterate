@@ -202,7 +202,7 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   // With "/" still mounted nothing is ever truly unmounted — the orphaned
   // local file now routes to the root mount as an ordinary addition.
   const statusAfterUnmount = await workspace.git.status();
-  expect(statusAfterUnmount.unmounted).toEqual([]);
+  expect(statusAfterUnmount).toMatchObject({ unmounted: [] });
   expect(statusAfterUnmount.mounts.find((mount) => mount.path === "/")?.changes).toContainEqual({
     change: "added",
     path: "/side/attempt.md",
