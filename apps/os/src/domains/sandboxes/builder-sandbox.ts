@@ -86,7 +86,21 @@ export async function getOrCreateBuilderSandbox(
     // (it is mid-birth) — for the latter, the assert loop below waits it out
     // rather than flaking the first concurrent builds of a fresh project.
     try {
-      await sandbox.create({ instanceType: BUILDER_SANDBOX_INSTANCE_TYPE, path, projectId });
+      await sandbox.create({
+        instanceType: BUILDER_SANDBOX_INSTANCE_TYPE,
+        path,
+        projectId,
+        // Aggressive on purpose, and load-bearing: builder containers are
+        // one-per-project, and container instance slots are a small per-class
+        // cap shared by EVERY sandbox in the deployment (preview: 10 basics).
+        // Fixture-heavy flows (e2e) birth builders across many projects at
+        // once — observed live squatting 8/10 slots and starving every other
+        // sandbox's placement. A build burst keeps the container awake; a
+        // minute idle frees the slot (there is nothing to snapshot — /build
+        // is outside /workspace), and the next build pays a ~5s stock-image
+        // boot.
+        sleepAfter: "60s",
+      });
     } catch (error) {
       if (isDestroyedSandboxError(error)) continue;
       const siblingIsBirthing =
