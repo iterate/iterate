@@ -348,36 +348,7 @@ export function createSubscriberDial(deps: {
     }
   };
 
-  /**
-   * The push lane's CACHED authority root. The authority is the ambient
-   * trusted context at the stream's own fixed scope — there is nothing
-   * per-delivery to re-derive — so re-minting the loopback chain (an awaited
-   * RPC round trip plus target-graph construction) on every batch bought
-   * nothing and sat directly on the ack latency path; at trickle rates every
-   * append paid it. Any delivery failure disposes the chain and the next
-   * attempt re-mints (bounds a wedged chain); the chain is same-isolate, so
-   * holding it pins memory, not cross-isolate duration. The WAKE lane stays
-   * per-acquisition: its chain's lifetime is tied to the sink the poke
-   * returns (see `onDisposed` below).
-   */
-  let pushRoot: Promise<{ root: unknown; dispose: () => void }> | undefined;
-  const acquirePushRoot = () => {
-    if (pushRoot === undefined) {
-      const acquiring = acquireAuthorityRoot();
-      pushRoot = acquiring;
-      // A failed mint must not cache a forever-rejected promise.
-      acquiring.catch(() => {
-        if (pushRoot === acquiring) pushRoot = undefined;
-      });
-    }
-    return pushRoot;
-  };
-  const invalidatePushRoot = (chain: Promise<{ root: unknown; dispose: () => void }>) => {
-    if (pushRoot === chain) pushRoot = undefined;
-    void chain.then((acquired) => acquired.dispose()).catch(() => {});
-  };
-
-  /** The webhook lane's cached project-egress fetcher (same policy as `pushRoot`). */
+  /** The webhook lane's cached project-egress fetcher, dropped on failure. */
   let webhookEgress: ReturnType<typeof projectEgressFetcher> | undefined;
 
   return {
@@ -415,20 +386,15 @@ export function createSubscriberDial(deps: {
      * `["streams", ["get", path], "acceptCrossPost"]` reaches a sibling stream —
      * through exactly the calls ordinary user code would make. The
      * awaited resolve is the ack; a reject propagates to the spine's
-     * retry/park machine. The authority root is cached across deliveries and
-     * dropped on failure (see `acquirePushRoot`).
+     * retry/park machine. The authority-root RPC chain belongs to this batch
+     * and is disposed as soon as that evaluation settles.
      */
     async push(expression: ItxExpression, batch: StreamPushEventBatch) {
-      const chain = acquirePushRoot();
-      const { root } = await chain;
+      const { root, dispose } = await acquireAuthorityRoot();
       try {
         await evaluateItxExpression(root, toInvocation(expression, batch));
-      } catch (error) {
-        // The failure may BE a broken chain; drop it so the retry re-mints.
-        // A concurrent delivery mid-evaluate on the same chain fails with it
-        // and retries on a fresh one — the spine's backoff owns both.
-        invalidatePushRoot(chain);
-        throw error;
+      } finally {
+        dispose();
       }
     },
 
@@ -448,9 +414,9 @@ export function createSubscriberDial(deps: {
       if (deps.projectId === null) {
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
-      // Cached like the push root (webhook drains deliver per EVENT, so a
-      // per-POST loopback mint would be paid at the highest possible rate);
-      // any failure drops it and the retry re-mints.
+      // Webhook drains deliver per EVENT, so a per-POST egress binding mint
+      // would be paid at the highest possible rate. Any failure drops it and
+      // the retry re-mints.
       webhookEgress ??= projectEgressFetcher(
         deps.exports as ExecutionContext["exports"],
         deps.projectId,
