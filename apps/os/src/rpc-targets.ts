@@ -66,6 +66,7 @@ import {
   primeProjectDirectory,
   readProjectById,
   resolveProjectIdBySlug,
+  type ProjectIdentity,
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
@@ -4934,6 +4935,18 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       path: "/",
       projectId: args.projectId,
     });
+    // Both lanes drive processor birth through the same wait; they differ
+    // only in who pays for it. A create must never leave its caller parked
+    // behind a wedged processor indefinitely: one project birth frame has a
+    // shared 60s sibling-barrier deadline; 75s leaves 15s for
+    // durable-delivery backoff and transport redial.
+    const driveBirth = (step: string) =>
+      timedStep("create-timing", timing, step, () =>
+        project.processor.waitUntilProcessed({
+          offset: Math.max(created.offset, subscription.offset),
+          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+        }),
+      );
     // Fast path: identity + directory + birth events are enough for callers
     // that watch the saga as live state. Nobody is left waiting, so create
     // itself must stay the guaranteed birth driver: nudge the processor
@@ -4941,38 +4954,12 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // nudge is telemetry, not a create failure — durable delivery retries
     // and the checklist's stall detector cover the rest.
     if (args.waitUntilReady === false) {
-      this.props.ctx.waitUntil(
-        timedStep("create-timing", timing, "nudge-project-birth", () =>
-          project.processor.waitUntilProcessed({
-            offset: Math.max(created.offset, subscription.offset),
-            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-          }),
-        ).catch(() => undefined),
-      );
+      this.props.ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
       return project;
     }
 
-    await timedStep("create-timing", timing, "wait-project-birth", () =>
-      project.processor.waitUntilProcessed({
-        offset: Math.max(created.offset, subscription.offset),
-        // A create must never leave its caller parked behind a wedged
-        // processor indefinitely. One project birth frame has a shared 60s
-        // sibling-barrier deadline; 75s leaves 15s for durable-delivery
-        // backoff and transport redial.
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-      }),
-    );
-    await timedStep("create-timing", timing, "wait-project-ready", () =>
-      stream.waitForEvent({
-        afterOffset: created.offset,
-        eventTypes: ["events.iterate.com/project/ready"],
-        // Tight on purpose: the saga should complete in seconds (see
-        // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-        // be fixed, not waited out). Preview CI warms slots before the suites.
-        timeoutMs: 60_000,
-      }),
-    );
-
+    await driveBirth("wait-project-birth");
+    await timedStep("create-timing", timing, "wait-project-ready", () => project.waitUntilReady());
     return project;
   }
 
@@ -5461,13 +5448,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * dial — so it is safe pre-birth and cheap to pipeline through
    * `projects.create()`.
    */
-  async identity(): Promise<{
-    projectId: string;
-    slug: string;
-    organizationId: string | null;
-    name: string;
-  }> {
-    const record = await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId);
+  async identity(): Promise<ProjectIdentity> {
+    // readProjectById folds transient KV read errors into null; one retry
+    // keeps a blip from reporting a just-created project as missing.
+    const record =
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId)) ??
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId));
     if (record == null) {
       throw new Error(`Project ${this.#props.projectId} is missing from the project directory.`);
     }
@@ -5487,14 +5473,22 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * `projects.create({ waitUntilReady: false })`.
    */
   async waitUntilReady(args?: { timeoutMs?: number }): Promise<void> {
-    // Loading the processor folds any unprocessed events, so this wait
-    // drives a stalled saga instead of watching it.
-    void this.processor.snapshot().catch(() => undefined);
+    // snapshot() pulls the journal through the registry's catch-up, so this
+    // wait drives a stalled saga instead of just watching it. Post-response
+    // work (waitUntil), never awaited: a wedged DO dial must not burn the
+    // caller's timeout budget before the timed waiter below even opens.
+    this.#props.ctx.waitUntil(
+      this.processor.snapshot().then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
     await rootStream({ auth: this.#props.auth, projectId: this.#props.projectId }).waitForEvent({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/project/ready"],
       // Tight on purpose: the saga should complete in seconds (see
-      // tasks/os-cold-create-latency.md for the cold-slot outliers).
+      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+      // be fixed, not waited out). Preview CI warms slots before the suites.
       timeoutMs: args?.timeoutMs ?? 60_000,
     });
   }

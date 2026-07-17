@@ -67,7 +67,7 @@ export function CreateProjectForm({
       const identity = await project.identity();
       return { slug: identity.slug };
     },
-    onSuccess: (project) => {
+    onSuccess: ({ slug }) => {
       setNavigatingAway(true);
       // Onto the project home immediately with `welcome` so the creation
       // checklist paints while the bootstrap saga runs. The project route
@@ -77,7 +77,7 @@ export function CreateProjectForm({
       // hands off to the onboarding agent.
       void router.navigate({
         to: "/projects/$projectSlug",
-        params: { projectSlug: project.slug },
+        params: { projectSlug: slug },
         search: { welcome: true },
       });
       // Session catch-up runs BEHIND the navigation: refresh the browser auth

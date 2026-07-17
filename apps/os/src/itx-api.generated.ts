@@ -87,12 +87,7 @@ export interface Project {
    * dial — so it is safe pre-birth and cheap to pipeline through
    * `projects.create()`.
    */
-  identity(): Promise<{
-    projectId: string;
-    slug: string;
-    organizationId: string | null;
-    name: string;
-  }>;
+  identity(): Promise<ProjectIdentity>;
   /**
    * Resolve once the bootstrap saga has committed `project/ready`. Replays
    * stream history first, so an already-ready project resolves immediately,
@@ -1782,6 +1777,18 @@ export type ItxAuthCredentials =
 export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
+
+/**
+ * What `itx.identity()` returns: the directory's canonical project record,
+ * with the itx surface's `projectId` field name (the surface always says
+ * `projectId`; `id` is the directory/list convention).
+ */
+export type ProjectIdentity = {
+  projectId: string;
+  slug: string;
+  organizationId: string | null;
+  name: string;
+};
 
 /** What a project itx's `__describe()` returns: the Description convention plus identity and the capability inventory. */
 export type ProjectDescription = Description & {
