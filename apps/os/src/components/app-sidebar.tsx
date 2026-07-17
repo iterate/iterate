@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
-import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
+import { Link, useMatches, useMatchRoute, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
@@ -12,6 +12,7 @@ import {
   ExternalLink,
   GitBranch,
   KeyRound,
+  ListTodo,
   LogOut,
   Plug,
   Plus,
@@ -513,12 +514,20 @@ function ProjectSidebarGroup({
   appBaseUrl?: string;
 }) {
   const matchRoute = useMatchRoute();
+  const routeSearch = useSearch({ strict: false }) as { tasks?: boolean };
   const isNewChatActive = Boolean(
     matchRoute({
       to: "/projects/$projectSlug/agents/new",
       params: { projectSlug },
       fuzzy: false,
     }),
+  );
+  const isConfigTasksActive = Boolean(
+    matchRoute({
+      to: "/projects/$projectSlug/repos/$",
+      params: { projectSlug, _splat: "config" },
+      fuzzy: false,
+    }) && routeSearch.tasks === true,
   );
   const projectWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
@@ -550,6 +559,18 @@ function ProjectSidebarGroup({
                   fuzzy: false,
                 }),
               )}
+            />
+            <ProjectSidebarMenuItem
+              icon={ListTodo}
+              label="Tasks"
+              render={
+                <Link
+                  to="/projects/$projectSlug/repos/$"
+                  params={{ projectSlug, _splat: "config" }}
+                  search={{ tasks: true }}
+                />
+              }
+              isActive={isConfigTasksActive}
             />
             <ProjectSidebarMenuItem
               icon={SquareTerminal}

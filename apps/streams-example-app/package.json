@@ -35,6 +35,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "iterate": "workspace:*",
     "tailwindcss": "^4.3.2",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
