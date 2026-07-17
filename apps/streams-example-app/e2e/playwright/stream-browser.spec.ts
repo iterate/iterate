@@ -297,7 +297,9 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
   });
-  await expect(page.locator(`[data-index='${expectedCount - 1}']`)).toBeVisible();
+  const tailRow = page.locator(`[data-index='${expectedCount - 1}']`);
+  await expect(tailRow.getByTestId("event-meta")).toBeVisible();
+  await expect(tailRow).toHaveCSS("height", "40px");
   await expectAtStreamEnd(page);
 
   await page.reload();
