@@ -6,7 +6,9 @@
 // are small enough to just reduce everything from offset 0 on each update.
 
 import {
+  formatAgentUiActivitySummary,
   initialAgentUiState,
+  isAgentUiActivityWorking,
   reduceAgentUi,
   type AgentUiActivity,
   type AgentUiItem,
@@ -52,29 +54,12 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
   return {
     items,
     live: state.live,
-    working: state.live != null && state.live.status === "running",
+    working: isAgentUiActivityWorking(state.live),
     state,
   };
 }
 
 /** One-line summary for a collapsed activity row: "Ran code 2× · 3 requests · 7.4s". */
 export function summarizeActivity(activity: AgentUiActivity): string {
-  const codeRuns = activity.steps.filter((step) => step.kind === "code").length;
-  const llmRequests = activity.steps.filter((step) => step.kind === "llm").length;
-  const failed = activity.steps.some(
-    (step) =>
-      (step.kind === "code" && step.status === "done" && step.success === false) ||
-      (step.kind === "llm" && step.outcome === "failed"),
-  );
-  const parts = [
-    ...(codeRuns > 0 ? [`Ran code ${codeRuns}×`] : []),
-    ...(llmRequests > 0 ? [`${llmRequests} request${llmRequests === 1 ? "" : "s"}`] : []),
-  ];
-  if (parts.length === 0) parts.push("Activity");
-  const endedAtMs = activity.endedAtMs;
-  if (endedAtMs != null) {
-    const seconds = (endedAtMs - activity.startedAtMs) / 1000;
-    if (seconds > 0.05) parts.push(`${seconds.toFixed(1)}s`);
-  }
-  return parts.join(" · ") + (failed ? " · failed" : "");
+  return formatAgentUiActivitySummary(activity);
 }

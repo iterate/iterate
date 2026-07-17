@@ -3,7 +3,10 @@
 // durations, file sizes, timestamps). Pure string functions — no locale
 // state, no React.
 
-import type { AgentUiStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import {
+  formatAgentUiDuration,
+  type AgentUiStep,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** `950`, `2.5k` — compact token count; `?` when the model reported none. */
 export function formatTokens(count: number | undefined): string {
@@ -14,11 +17,7 @@ export function formatTokens(count: number | undefined): string {
 
 /** `950 ms`, `2.4 s`, `1m 40s` — duration from milliseconds. */
 export function formatSeconds(durationMs: number): string {
-  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.round(seconds % 60)}s`;
+  return formatAgentUiDuration(durationMs);
 }
 
 /**

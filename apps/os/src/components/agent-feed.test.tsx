@@ -1,20 +1,72 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
-import type { AgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type {
+  AgentUiActivity,
+  AgentUiLlmStep,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentFeedItemRow, AgentLiveActivity } from "./agent-feed.tsx";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
+function llmStep(
+  offset: number,
+  startedAtMs: number,
+  overrides: Partial<AgentUiLlmStep> = {},
+): AgentUiLlmStep {
+  return {
+    kind: "llm",
+    id: `llm:${offset}`,
+    llmRequestOffset: offset,
+    status: "done",
+    thinkingText: "",
+    responseText: "",
+    outcome: "completed",
+    startedAtMs,
+    ...overrides,
+  };
+}
+
+function activity(overrides: Partial<AgentUiActivity>): AgentUiActivity {
+  return {
+    kind: "activity",
+    id: "activity:test",
+    status: "done",
+    startedAtMs: 0,
+    steps: [],
+    ...overrides,
+  };
+}
+
+function renderActivity(activity: AgentUiActivity, expanded = true): HTMLDivElement {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentFeedItemRow
+      item={activity}
+      toggledIds={expanded ? new Set([activity.id]) : new Set()}
+      onToggle={() => {}}
+      onInspectLlmRequest={() => {}}
+      onInspectScriptExecution={() => {}}
+    />,
+  );
+  return container;
+}
+
+function renderLiveActivity(live: AgentUiActivity): HTMLDivElement {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
+  );
+  return container;
+}
+
 test("the live tail shows accumulated work above a timer for the current LLM phase", () => {
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
   vi.setSystemTime(now);
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:1",
+  const live = activity({
     status: "running",
     startedAtMs: now - 8_000,
     phase: "llm",
@@ -52,12 +104,9 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
         startedAtMs: now - 3_400,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
-  );
+  const container = renderLiveActivity(live);
   const summary = container.querySelector('[data-testid="agent-live-summary"]');
   const status = container.querySelector('[data-testid="agent-live-status"]');
 
@@ -70,9 +119,7 @@ test("the accumulated line does not claim that the active operation already fini
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
   vi.setSystemTime(now);
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:first-script",
+  const live = activity({
     status: "running",
     startedAtMs: now - 500,
     phase: "script",
@@ -88,12 +135,9 @@ test("the accumulated line does not claim that the active operation already fini
         expiresAtMs: now + 60_000,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
-  );
+  const container = renderLiveActivity(live);
 
   expect(container.querySelector('[data-testid="agent-live-summary"]')).toBeNull();
   expect(container.querySelector('[data-testid="agent-live-status"]')?.textContent).toContain(
@@ -102,11 +146,104 @@ test("the accumulated line does not claim that the active operation already fini
   expect(container.textContent).not.toContain("Ran code");
 });
 
-test("a newly announced phase never links to a previous completed operation", () => {
+test("a recovered restart is calm, excludes the dead attempt, and explains the retry", () => {
+  const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
+  const recovered = activity({
+    startedAtMs,
+    endedAtMs: startedAtMs + 31_000,
+    steps: [
+      llmStep(1, startedAtMs, {
+        model: "openai/gpt-5.6-sol",
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
+        durationMs: 5_000,
+        responseText: "zombie partial",
+      }),
+      llmStep(2, startedAtMs + 6_000),
+      llmStep(3, startedAtMs + 20_000),
+    ],
+  });
+  const container = renderActivity(recovered);
+  const summary = container.querySelector('button[title^="Agent activity"]');
+
+  expect(summary?.textContent).toBe("2 requests · 1 retry · recovered · 31 s");
+  expect(summary?.querySelector("svg.lucide-refresh-cw")).not.toBeNull();
+  expect(summary?.querySelector("svg.lucide-ban")).toBeNull();
+  expect(container.textContent).toContain("Agent restartedopenai/gpt-5.6-sol · 5 s");
+  expect(container.textContent).toContain("Platform restarted this agent.");
+  expect(container.textContent).not.toContain("partial response");
+});
+
+test("known and unknown cancellations stay visibly distinct from restart failure", () => {
+  const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
+  const interrupted = renderActivity(
+    activity({
+      startedAtMs,
+      endedAtMs: startedAtMs + 5_000,
+      steps: [
+        llmStep(1, startedAtMs, {
+          outcome: "cancelled",
+          cancelReason: "interrupted-by-user-input",
+          responseText: "partial",
+        }),
+        llmStep(3, startedAtMs + 1, { outcome: "cancelled" }),
+      ],
+    }),
+  );
+  const restartFailed = renderActivity(
+    activity({
+      startedAtMs,
+      endedAtMs: startedAtMs + 5_000,
+      steps: [
+        llmStep(2, startedAtMs, {
+          outcome: "cancelled",
+          cancelReason: "durable-object-crashed",
+        }),
+      ],
+    }),
+  );
+
+  expect(interrupted.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
+    "2 requests · failed · 5 s",
+  );
+  expect(interrupted.querySelector("svg.lucide-ban")).not.toBeNull();
+  expect(interrupted.textContent).toContain("Request cancelled");
+  expect(restartFailed.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
+    "0 requests · 1 retry · restart failed · 5 s",
+  );
+  expect(restartFailed.querySelector("svg.lucide-circle-alert")).not.toBeNull();
+});
+
+test("an earlier failure does not mask a pending crash recovery", () => {
+  vi.useFakeTimers();
+  const now = Date.UTC(2026, 6, 16, 14, 41, 28);
+  vi.setSystemTime(now);
+  const live = activity({
+    status: "running",
+    startedAtMs: now - 7_000,
+    steps: [
+      llmStep(0, now - 7_000, { outcome: "failed" }),
+      llmStep(1, now - 5_000, {
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
+        durationMs: 5_000,
+      }),
+    ],
+  });
+  const container = renderLiveActivity(live);
+
+  expect(container.querySelector('[data-testid="agent-live-summary"]')?.textContent).toContain(
+    "1 request · 1 retry · failed",
+  );
+  expect(container.querySelector('[data-testid="agent-live-status"]')?.textContent).toContain(
+    "Restarted — continuing… 0.0s",
+  );
+  expect(container.querySelector("svg.lucide-loader-circle")).not.toBeNull();
+});
+
+test("a resumed recovery phase shows its own status without linking to the crashed operation", () => {
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:between-operations",
+  const live = activity({
     status: "running",
     startedAtMs: now - 8_000,
     phase: "llm",
@@ -119,23 +256,15 @@ test("a newly announced phase never links to a previous completed operation", ()
         status: "done",
         thinkingText: "",
         responseText: "done",
-        outcome: "completed",
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
         startedAtMs: now - 8_000,
         durationMs: 2_000,
       },
     ],
-  };
+  });
 
-  const inspect = vi.fn();
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity
-      live={live}
-      toggledIds={new Set()}
-      onToggle={() => {}}
-      onInspectLlmRequest={inspect}
-    />,
-  );
+  const container = renderLiveActivity(live);
 
   const status = container.querySelector<HTMLButtonElement>('[data-testid="agent-live-status"]');
   expect(status?.disabled).toBe(true);
@@ -148,9 +277,7 @@ test("a running code row stops counting and fails visibly at its absolute deadli
   const now = Date.UTC(2026, 6, 15, 22, 0, 20);
   vi.setSystemTime(now);
   const startedAtMs = now - 10_000;
-  const live: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:expired-code",
+  const live = activity({
     status: "running",
     startedAtMs,
     phase: "script",
@@ -166,12 +293,9 @@ test("a running code row stops counting and fails visibly at its absolute deadli
         expiresAtMs: startedAtMs + 5_000,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
-  );
+  const container = renderLiveActivity(live);
   const status = container.querySelector('[data-testid="agent-live-status"]');
 
   expect(status?.textContent).toContain("Code deadline exceeded 5.0s");
@@ -181,10 +305,7 @@ test("a running code row stops counting and fails visibly at its absolute deadli
 
 test("expanded activity rows are themselves inspector buttons without inline trace details", () => {
   const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
-  const activity: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:inspectors",
-    status: "done",
+  const inspected = activity({
     startedAtMs,
     endedAtMs: startedAtMs + 5_000,
     steps: [
@@ -214,18 +335,9 @@ test("expanded activity rows are themselves inspector buttons without inline tra
         expiresAtMs: startedAtMs + 60_000,
       },
     ],
-  };
+  });
 
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentFeedItemRow
-      item={activity}
-      toggledIds={new Set([activity.id])}
-      onToggle={() => {}}
-      onInspectLlmRequest={() => {}}
-      onInspectScriptExecution={() => {}}
-    />,
-  );
+  const container = renderActivity(inspected);
 
   const llmRow = container.querySelector('[data-testid="agent-feed-inspect-llm-request"]');
   const scriptRow = container.querySelector('[data-testid="agent-feed-inspect-script-execution"]');
@@ -240,12 +352,9 @@ test("expanded activity rows are themselves inspector buttons without inline tra
 
 test("failed script outcomes are explicit in both collapsed and expanded activity rows", () => {
   const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
-  const activity: AgentUiActivity = {
-    kind: "activity",
-    id: "activity:failed",
-    status: "done",
+  const failed = activity({
     startedAtMs,
-    endedAtMs: startedAtMs + 5_000,
+    endedAtMs: startedAtMs + 119_500,
     steps: [
       {
         kind: "code",
@@ -256,23 +365,15 @@ test("failed script outcomes are explicit in both collapsed and expanded activit
         success: false,
         errorMessage: "boom",
         startedAtMs,
-        durationMs: 5_000,
-        expiresAtMs: startedAtMs + 60_000,
+        durationMs: 119_500,
+        expiresAtMs: startedAtMs + 120_000,
       },
     ],
-  };
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
-    <AgentFeedItemRow
-      item={activity}
-      toggledIds={new Set([activity.id])}
-      onToggle={() => {}}
-      onInspectScriptExecution={() => {}}
-    />,
-  );
+  });
+  const container = renderActivity(failed);
 
-  expect(container.textContent).toContain("Ran code 1× · 0 requests · failed · 5 s");
+  expect(container.textContent).toContain("Ran code 1× · 0 requests · failed · 2m 0s");
   expect(
     container.querySelector('[data-testid="agent-feed-inspect-script-execution"]')?.textContent,
-  ).toContain("Code failed");
+  ).toMatch(/Code failedStarted .* · 2m 0s/);
 });

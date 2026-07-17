@@ -9,6 +9,7 @@ import {
   AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
   initialAgentUiState,
   reduceAgentUi,
+  summarizeAgentUiActivity,
   type AgentUiItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
@@ -42,6 +43,23 @@ function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unkn
     items.push(...step.items);
   }
   return { ...state, items };
+}
+
+function llmEvent(
+  lifecycle: "requested" | "completed" | "cancelled",
+  offset: number,
+  reason = "durable-object-crashed",
+) {
+  return {
+    type: `events.iterate.com/agent/llm-request-${lifecycle}`,
+    ...(lifecycle === "requested" ? { offset } : {}),
+    payload:
+      lifecycle === "requested"
+        ? { model: "gpt-test" }
+        : lifecycle === "completed"
+          ? { llmRequestOffset: offset, result: { status: "success" } }
+          : { phase: "requested", llmRequestOffset: offset, reason },
+  };
 }
 
 describe("agent-ui reducer", () => {
@@ -1067,35 +1085,68 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  test("marks an LLM request cancelled when interrupted", () => {
+  test("keeps a failed activity together while a crashed request restarts", () => {
     const state = reduceAll([
+      llmEvent("requested", 7),
+      llmEvent("cancelled", 7, "future-cancel-reason"),
+      llmEvent("requested", 11),
+      llmEvent("cancelled", 11),
       {
-        type: "events.iterate.com/agent/llm-request-requested",
-        offset: 7,
-        payload: { model: "gpt-test" },
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", content: "queued" },
       },
-      {
-        type: "events.iterate.com/agent/llm-request-cancelled",
-        payload: {
-          phase: "requested",
-          llmRequestOffset: 7,
-          reason: "interrupted-by-user-input",
-        },
-      },
+      llmEvent("requested", 16),
       {
         type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 8 },
+        payload: { busy: false, sinceOffset: 17 },
       },
     ]);
 
     expect(state.live).toBeNull();
-    expect(state.items).toHaveLength(1);
+    expect(state.items).toHaveLength(2);
     const activity = state.items[0];
     if (activity?.kind !== "activity") throw new Error("expected activity item");
     expect(activity.steps[0]).toMatchObject({
       kind: "llm",
       status: "done",
       outcome: "cancelled",
+      durationMs: 1_000,
+    });
+    expect(activity.steps[1]).toMatchObject({ outcome: "cancelled" });
+    expect(summarizeAgentUiActivity(activity).outcome).toBe("failed");
+  });
+
+  test("classifies crash recovery and preserves the first settled fact", () => {
+    const state = reduceAll([
+      llmEvent("requested", 1),
+      llmEvent("cancelled", 1),
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", content: "and check the logs" },
+      },
+      { type: "events.iterate.com/agents/web-message-sent", payload: { message: "deferred" } },
+      llmEvent("completed", 1),
+      llmEvent("requested", 6),
+      llmEvent("completed", 6),
+      llmEvent("cancelled", 6),
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 8 },
+      },
+    ]);
+
+    const activity = state.items[0];
+    if (activity?.kind !== "activity") throw new Error("expected activity item");
+    expect(state.items.map((item) => item.kind)).toEqual(["activity", "assistant", "user"]);
+    expect(state.items[2]).toMatchObject({ text: "and check the logs" });
+    expect(activity.steps).toMatchObject([
+      { outcome: "cancelled", cancelReason: "durable-object-crashed" },
+      { outcome: "completed" },
+    ]);
+    expect(summarizeAgentUiActivity(activity)).toMatchObject({
+      outcome: "recovered",
+      requestCount: 1,
+      retryCount: 1,
     });
   });
 
