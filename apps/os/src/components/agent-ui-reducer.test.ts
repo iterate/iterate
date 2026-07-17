@@ -1109,7 +1109,7 @@ describe("agent-ui reducer", () => {
       durationMs: 1_000,
     });
     expect(activity.steps[1]).toMatchObject({ outcome: "cancelled" });
-    expect(activity.steps[1]).not.toHaveProperty("cancelReason");
+    expect(summarizeAgentUiActivity(activity).outcome).toBe("failed");
   });
 
   test("classifies crash recovery and preserves the first settled fact", () => {

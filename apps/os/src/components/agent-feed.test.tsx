@@ -162,11 +162,11 @@ test("a recovered restart is calm, excludes the dead attempt, and explains the r
   expect(summary?.querySelector("svg.lucide-refresh-cw")).not.toBeNull();
   expect(summary?.querySelector("svg.lucide-ban")).toBeNull();
   expect(container.textContent).toContain("Agent restartedopenai/gpt-5.6-sol · 5 s");
-  expect(container.textContent).toContain("Platform restarted this agent. Retried automatically.");
+  expect(container.textContent).toContain("Platform restarted this agent.");
   expect(container.textContent).not.toContain("partial response");
 });
 
-test("user interruption and an unrecovered restart remain distinct failures", () => {
+test("known and unknown cancellations stay visibly distinct from restart failure", () => {
   const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
   const interrupted = renderActivity({
     kind: "activity",
@@ -180,6 +180,7 @@ test("user interruption and an unrecovered restart remain distinct failures", ()
         cancelReason: "interrupted-by-user-input",
         responseText: "partial",
       }),
+      llmStep(3, startedAtMs + 1, { outcome: "cancelled" }),
     ],
   });
   const restartFailed = renderActivity({
@@ -197,10 +198,10 @@ test("user interruption and an unrecovered restart remain distinct failures", ()
   });
 
   expect(interrupted.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
-    "1 request · interrupted (click to see partial response) · 5 s",
+    "2 requests · failed · 5 s",
   );
   expect(interrupted.querySelector("svg.lucide-ban")).not.toBeNull();
-  expect(interrupted.textContent).toContain("Stopped for your new message");
+  expect(interrupted.textContent).toContain("Request cancelled");
   expect(restartFailed.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
     "0 requests · 1 retry · restart failed · 5 s",
   );

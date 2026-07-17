@@ -548,7 +548,7 @@ function AgentActivityStep({
       >
         {cancelReason === "durable-object-crashed" ? (
           <RefreshCwIcon data-icon="inline-start" />
-        ) : cancelReason === "interrupted-by-user-input" ? (
+        ) : step.kind === "llm" && step.outcome === "cancelled" ? (
           <BanIcon data-icon="inline-start" className="text-destructive" />
         ) : step.kind === "llm" ? (
           <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
@@ -566,7 +566,7 @@ function AgentActivityStep({
           className="ml-3 text-[11px] text-muted-foreground"
           data-testid="agent-feed-recovery-reason"
         >
-          Platform restarted this agent. Retried automatically.
+          Platform restarted this agent.
         </span>
       ) : null}
     </div>
@@ -580,6 +580,7 @@ function stepLabel(step: AgentUiStep): string {
   }
   if (step.cancelReason === "durable-object-crashed") return "Agent restarted";
   if (step.cancelReason === "interrupted-by-user-input") return "Stopped for your new message";
+  if (step.outcome === "cancelled") return "Request cancelled";
   return step.model ?? "LLM request";
 }
 

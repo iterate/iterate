@@ -105,17 +105,17 @@ export function summarizeAgentUiActivity(
       return;
     }
 
-    const crashCancel =
-      step.outcome === "cancelled" && step.cancelReason === "durable-object-crashed";
+    const cancelled = step.outcome === "cancelled";
+    const crashCancel = cancelled && step.cancelReason === "durable-object-crashed";
     if (!crashCancel) requestCount += 1;
-    if (step.outcome === "failed") failed = true;
+    if (step.outcome === "failed" || (cancelled && step.cancelReason == null)) failed = true;
     if (step.outcome === "completed") lastCompletionIndex = index;
     if (crashCancel) {
       retryCount += 1;
       lastRestartIndex = index;
       recoveryStartedAtMs = step.startedAtMs + (step.durationMs ?? 0);
     }
-    if (step.outcome === "cancelled" && step.cancelReason === "interrupted-by-user-input") {
+    if (cancelled && step.cancelReason === "interrupted-by-user-input") {
       interrupted = true;
       interruptedWithPartialResponse ||= step.thinkingText !== "" || step.responseText !== "";
     }
