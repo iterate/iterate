@@ -90,10 +90,18 @@ Slack Web API calls normally never hold material: the request carries a
 `getSecret(path)` placeholder for the connection's token and traverses project
 egress, which substitutes it inside the Secret Durable Object and records
 `secret/used` audit events. If Slack rejects a live connection's token, trusted
-platform code may retry with the deployment Slack app's recovery token only
+platform code may retry with the deployment Slack app's optional fallback token only
 after `auth.test` proves its team id matches the connection journal. A typo'd
 or disconnected connection still errors loudly instead of silently posting
 with a deployment-wide credential.
+
+That deployment token is an optional outbound fallback, not connection state.
+It can be revoked and must never be used to recreate a project association.
+Only OAuth completion owns the sequence “validated token → secret → router
+birth/subscription → connected fact → global team claim.” A validly signed
+webhook that arrives before the final claim is ACKed and ignored; creating a
+claim beside an unvalidated token therefore produces a false-connected project
+and silent inbound loss rather than a partial restoration.
 
 **Status is a journal tail-fold for every provider** — one machine, no
 per-provider mechanism: `getConnection` pages backwards from the journal head

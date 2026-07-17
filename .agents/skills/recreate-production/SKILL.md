@@ -17,12 +17,21 @@ user at consequential forks unless they explicitly waive consultation.
 - Capture ordinary durable event histories only as evidence. Derive the desired
   current domain state, then use normal creation/connection/update APIs. Those
   APIs append new events with new offsets and run current validation.
+- The reconstruction program lives outside deployed OS. It may read the export
+  page files, select the small set of semantic facts named in the reconstruction
+  sheet, and map them to freshly constructed current-version event inputs or
+  public API calls. The export itself is never an executable replay payload.
 - Do not replay stream control facts, processor outputs, old idempotency keys,
   cross-post provenance, or encrypted secret payloads. Recreate subscriptions
   through their owning domain commands.
 - Secret values and integration credentials must come from an authoritative
   external source or a deliberately audited local conversion. Old ciphertext
   is not portable to a new stream offset. Stop if required material is unavailable.
+- Never reconstruct a built-in integration by hand-creating its secret and
+  appending `connected` or directory-claim events. The owning connect command
+  is the atomic invariant boundary: it validates fresh credentials, writes the
+  secret, creates the router/subscription, records lifecycle state, and claims
+  webhook ingress in the supported order.
 - Treat the linked GitHub repository as config authority. Record its connection,
   owner, repo, installation ID, and head before cutover.
 - Discard ordinary streams, schedules, files, workspaces, sandboxes, derived
@@ -47,7 +56,10 @@ user at consequential forks unless they explicitly waive consultation.
 4. Inspect the histories locally and write an explicit reconstruction sheet:
    each desired object, its fresh create/update/connect command, the source of
    any required credential, and what will intentionally be lost. Histories are
-   evidence—not executable restore payloads.
+   evidence—not executable restore payloads. Write the external reconstruction
+   script against the export here: select only the required semantic facts and
+   construct new current-version inputs without copied offsets, timestamps,
+   source/provenance, idempotency keys, or stream-control events.
 5. Call `repo.pushToGithub({})` and require its commit to equal the recorded
    config head. Summarize the reconstruction and intended losses, run
    pre-cutover checks, and obtain destructive-step approval unless already granted.
@@ -68,16 +80,26 @@ user at consequential forks unless they explicitly waive consultation.
    use an admin session for this step: caller-supplied admin projects are
    intentionally organization-less test/operator fixtures. Stop on any mismatch,
    and do not hand-append historical bootstrap events.
-4. Recreate selected secrets through `secrets.get(path).create/update` with
-   freshly supplied material and egress policy. Reconnect integrations through
-   their current connect/OAuth flows. These owning commands must recreate any
-   router subscriptions and deployment-wide directory claims.
+4. Recreate selected non-integration secrets through
+   `secrets.get(path).create/update` with freshly supplied material and egress
+   policy. Reconnect integrations only through their current connect/OAuth
+   flows. Do not seed a Slack connection from
+   `APP_CONFIG_INTEGRATIONS__SLACK.botToken`: that optional deployment fallback
+   may be stale and is not project restoration material. Do not hand-append a
+   provider's `connected`, processor-birth/subscription, or directory-claim
+   events. If interactive OAuth cannot be completed, the reconstruction is
+   incomplete and the maintenance window stays open.
 5. Recreate any other explicitly retained domain object through its current
    public `create`/configuration command. If the domain contract is itself an
-   event API, append a newly constructed current event—not the old envelope.
+   event API, let the external reconstruction script select the relevant old
+   fact and append a newly constructed current event—not the old envelope.
 6. Recreate the erased config repo with `repo.create()`, `repo.linkGithub()` and
-   `repo.syncFromGithub({ force: true })` without a depth limit. Require the
-   local head to equal the recorded GitHub head; GitHub remains authoritative.
+   `repo.syncFromGithub({ force: true })` without a depth limit. `linkGithub()`
+   attempts an initial mirror push, so bracket it with a GitHub ref check: the
+   recorded remote head must still exist, and if the link advanced the default
+   branch, restore that ref to the recorded head before syncing. Require both
+   the remote default branch and local Artifacts head to equal the recorded
+   head; GitHub remains authoritative.
 7. Re-enable automatic deployment if it was disabled.
 
 ## Finish only after proof
@@ -88,6 +110,15 @@ claims, [Slack webhook delivery](../../../docs/slack-testing.md#post-recreation-
 the complete [GitHub production smoke](../../../docs/github-smoke-testing.md),
 project-worker boot, and AI Search indexing. Add PR-specific checks for whatever
 changed. Do not trigger externally visible provider actions without approval.
+
+For Slack, run
+[`scripts/verify-slack-connection.itx.js`](scripts/verify-slack-connection.itx.js)
+without a project context immediately after OAuth. It requires a successful
+`auth.test`, an exact team-id match, connected lifecycle state, and the matching
+deployment-wide directory claim. Only then send a **new** mention smoke. A
+validly signed webhook delivered before the claim exists is ACKed and ignored
+by design and Slack will not replay it after association, so an earlier message
+is never proof of the re-established path.
 
 Show the evidence and intentional losses to the user and ask whether production
 is done. Continue repairing until they explicitly say yes. Only then delete the

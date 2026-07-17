@@ -120,7 +120,9 @@ function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null 
   const repoGet = vi.fn(() => ({ processor: { snapshot } }));
   const project = {
     agents: { get: agentGet },
-    projectId: "prj_1",
+    // Project is an RPC stub in userspace: property reads are thenables until
+    // awaited, even though the generated ergonomic interface exposes string.
+    projectId: Promise.resolve("prj_1"),
     repos: { get: repoGet },
   };
   // This fake implements the handler's three RPC calls; the generated Project
@@ -174,6 +176,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.appendBatches).toHaveLength(1);
     expect(test.appendBatches[0]?.path).toBe(agentPath);
     expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.appendBatches[0]?.events[0]?.source?.crossPostedFrom?.[0]?.projectId).toBe("prj_1");
     expect(test.appendBatches[0]?.events[0]).toMatchObject({
       idempotencyKey: "github-pr/webhook:/integrations/github/install-789:12",
       payload: event.payload,
