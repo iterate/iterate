@@ -12,8 +12,11 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 // drives the whole loop: arm through the reserved verb, read the armed time
 // back, FAIL the first delivery on purpose (proving a throwing userspace
 // handler rethrows into the platform's native alarm retry), see the retried
-// fire land with its AlarmInvocationInfo and consume the alarm, then disarm
-// an armed alarm and prove it never fires.
+// fire land with its AlarmInvocationInfo and consume the alarm, disarm an
+// armed alarm and prove it never fires — then SELF-ARM: the worker arms
+// through its own native `this.ctx.storage.setAlarm`, which only works if
+// the host delivered the worker's own ref (the platform bootstrap the SDK's
+// alarm shim dials through), and that fire lands too.
 test(
   "a stateful dynamic worker's alarm fires into its own alarm() method, with native retry",
   { timeout: 180_000 },
@@ -57,6 +60,13 @@ test(
                       lastAlarmInfo: this.ctx.storage.kv.get("lastAlarmInfo") ?? null,
                     };
                   }
+
+                  // The native shape a worker actually writes: arm your own
+                  // alarm from a handler with the standard storage API.
+                  async armSelf(inMs) {
+                    await this.ctx.storage.setAlarm(Date.now() + inMs);
+                    return this.ctx.storage.getAlarm();
+                  }
                 }
               `,
           },
@@ -69,6 +79,7 @@ test(
     // to the real public type; capnweb's stub wrapper defeats direct
     // assignment, hence `as unknown` (the e2e idiom).
     using probe = project.workers.get(ref) as unknown as DynamicWorkerCapability<{
+      armSelf(inMs: number): Promise<number | null>;
       report(): Promise<{ fires: number; lastAlarmInfo: { isRetry?: boolean } | null }>;
     }>;
 
@@ -99,5 +110,16 @@ test(
     expect(await probe.getAlarm()).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, disarmAtMs + 3_000 - Date.now()));
     expect(await probe.report()).toMatchObject({ fires: 1 });
+
+    // Self-addressed arming: the worker arms with the NATIVE storage API —
+    // no ref anywhere in its code — which only resolves if the host
+    // delivered the worker's own identity. Both alarm views agree, and the
+    // fire lands.
+    const selfArmed = await probe.armSelf(3_000);
+    expect(selfArmed).toEqual(expect.any(Number));
+    expect(await probe.getAlarm()).toBe(selfArmed);
+    await expect
+      .poll(async () => (await probe.report()).fires, { interval: 500, timeout: 90_000 })
+      .toBe(2);
   },
 );

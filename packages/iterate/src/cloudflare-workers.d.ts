@@ -8,8 +8,8 @@ declare module "cloudflare:workers" {
   }
   export abstract class DurableObject<Env = unknown> {
     protected env: Env;
-    protected ctx: unknown;
-    constructor(ctx: unknown, env: Env);
+    protected ctx: DurableObjectState;
+    constructor(ctx: DurableObjectState, env: Env);
   }
   /** Structural stub of workerd's tracing API (the processor registry wraps
    * alarm fires in a span). Real spans exist only inside workerd; this keeps

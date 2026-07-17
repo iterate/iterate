@@ -9,9 +9,10 @@ branch: stateful-worker-alarms
 > platform alarm IS the facet's alarm (the only extra state is the worker
 > recipe to boot a cold fire), fires are delivered through the worker's
 > `invokeCapability` dispatcher (workerd reserves `alarm` as an RPC name)
-> and rethrow into native retry; `withStatefulWorkerAlarms` in `iterate/sdk`
-> presents the standard `ctx.storage` alarm API; the template guestbook
-> registers with `{ recovery: true }`, passing its own build identity
+> and rethrow into native retry; `IterateDurableObject` presents the
+> standard `ctx.storage` alarm API automatically (the host delivers the
+> worker's own ref on first contact); the template guestbook registers
+> with `{ recovery: true }`, passing its own build identity
 > (`env.ITERATE_WORKER_VERSION`) as the registry version so the crash-loop
 > budget's deploy-reset lane works.
 
