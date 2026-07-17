@@ -48,6 +48,16 @@ export default function ChatListScreen() {
             <View style={styles.headerActions}>
               <Pressable
                 onPress={() =>
+                  router.push({
+                    pathname: "/project/[projectId]/ide-prototype",
+                    params: { projectId },
+                  })
+                }
+              >
+                <Text style={styles.switchProject}>IDE</Text>
+              </Pressable>
+              <Pressable
+                onPress={() =>
                   router.push({ pathname: "/project/[projectId]/examples", params: { projectId } })
                 }
               >

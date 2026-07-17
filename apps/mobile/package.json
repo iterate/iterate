@@ -11,12 +11,20 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/state": "^6.5.4",
+    "@codemirror/view": "^6.39.16",
     "@expo/metro-runtime": "~6.1.2",
     "@iterate-com/ui": "workspace:*",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@tanstack/react-query": "^5.90.0",
     "capnweb": "^0.8.0",
+    "codemirror": "^6.0.2",
     "expo": "~54.0.35",
     "expo-auth-session": "~7.0.11",
     "expo-constants": "~18.0.13",
@@ -30,14 +38,18 @@
     "expo-system-ui": "~6.0.9",
     "expo-web-browser": "~15.0.11",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-safe-area-context": "~5.6.2",
     "react-native-screens": "4.16.0",
-    "react-native-url-polyfill": "^3.0.0"
+    "react-native-url-polyfill": "^3.0.0",
+    "react-native-web": "0.21.0",
+    "react-native-webview": "13.15.0"
   },
   "devDependencies": {
     "@types/react": "~19.1.17",
+    "@types/react-dom": "19.1.9",
     "typescript": "~5.9.3",
     "vitest": "^4.1.7"
   }
