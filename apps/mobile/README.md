@@ -36,14 +36,16 @@ pnpm --dir apps/mobile start:web
 For a repeatable 390×844 Chromium pass, run:
 
 ```sh
-pnpm --dir apps/mobile test:screenshots
+pnpm spec --project=mobile
 ```
 
 Playwright starts and stops its own Expo Web server, checks the signed-out
 server-picker interaction, and compares the result with the PNGs in
-`e2e/playwright/screenshots/`. After an intentional UI change, review the new
+`specs/mobile/screenshots/`. The root `pnpm spec` command runs this alongside
+the `web` project; `pnpm spec --project=web` runs only the dashboard specs.
+After an intentional UI change, review the new
 rendering and refresh those files with
-`pnpm --dir apps/mobile test:screenshots --update-snapshots`.
+`pnpm spec --project=mobile --update-snapshots`.
 
 This is a fast visual-development and PR-screenshot lane, not an iOS emulator:
 platform-native behavior such as the in-app OAuth handoff, Keychain, Face ID,
@@ -113,7 +115,7 @@ testable from the phone alone. See `tasks/mobile-examples-runner.md`.
 | Lane                                                          | What it proves                                                                                                                                                                                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                                             |
-| `pnpm --dir apps/mobile test:screenshots`                     | Real Expo Router + React Native Web rendering at a phone-sized viewport, one visible interaction, and reviewed Playwright screenshot baselines; no Xcode/native build                                                           |
+| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web rendering at a phone-sized viewport, one visible interaction, and reviewed Playwright screenshot baselines; no Xcode/native build                                                           |
 | `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip from Node through the app's own dial: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
 | `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                                           |
 | Expo Go on a phone                                            | Native integration: the in-app browser OAuth hop, Keychain/Face ID, and device-specific behavior                                                                                                                                |

@@ -9,8 +9,7 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:screenshots": "playwright test --config playwright.config.ts"
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
@@ -41,7 +40,6 @@
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
-    "@playwright/test": "1.60.0",
     "@types/react": "~19.1.17",
     "@types/react-dom": "~19.1.11",
     "typescript": "~5.9.3",
