@@ -7,7 +7,7 @@ size: medium
 
 ## Status
 
-Implementation is roughly 85% complete. Durable deny-by-default policy, router enforcement, deterministic denial replies, public RPC methods, and the dashboard editor are implemented with focused and full OS unit coverage. Remaining work is visible browser QA, repository-wide checks, PR media/review follow-up, and final task completion bookkeeping.
+Implementation is roughly 95% complete. Durable deny-by-default policy, router enforcement, deterministic denial replies, public RPC methods, and the dashboard editor are implemented and locally verified. Remaining work is preview CI/review follow-up and final task completion bookkeeping.
 
 ## Goal
 
@@ -32,7 +32,7 @@ A connected Telegram bot must not grant project-agent access to every Telegram u
 - [x] Send denied users a deterministic, helpful response containing denial, resolution, dashboard deep link, and their numeric user ID. *Fresh ordinary messages get a direct Bot API handoff; historical refolds and sender-less updates stay silent.*
 - [x] Add a dashboard allowlist editor for each connected Telegram bot, including deep-link opening and clear numeric-ID guidance. *The integrations page exposes a per-bot access Sheet controlled by `?telegramAccess=<connection>`.*
 - [x] Cover authorization, denial response, missing sender identity, allowed routing, policy replacement, and dashboard link construction with focused tests. *Telegram processor coverage exercises the public stream behavior and exact denial body/link.*
-- [ ] Run focused tests and the repository's pre-PR checks; capture visual evidence for the dashboard change.
+- [x] Run focused tests and the repository's pre-PR checks; capture visual evidence for the dashboard change. *Typecheck, lint, format, and the complete monorepo test suite pass; headed browser evidence is included in the draft PR.*
 - [ ] Update this task's status/log, move it to `tasks/complete/`, and update the pull request body when complete.
 
 ## Implementation log
@@ -41,3 +41,4 @@ A connected Telegram bot must not grant project-agent access to every Telegram u
 - 2026-07-17: Added refold freshness protection so deploying deny-by-default does not send denial messages for historical webhook events. Historical unauthorized content remains blocked from agents without generating outbound traffic.
 - 2026-07-17: `pnpm --dir apps/os test` passed: 182 files, 1,809 passed, 1 skipped. OS typecheck and focused Telegram tests also passed.
 - 2026-07-17: Headed browser QA proved the denial deep link opens the exact bot editor, saving `555`/`777` closes the Sheet with a success toast, and reopening reads the persisted policy back. Screenshot: `docs/pr-assets/telegram-user-access.png`.
+- 2026-07-17: The canonical repository checks passed: `pnpm typecheck`, `pnpm lint`, `pnpm format`, and `pnpm test`. The OS unit lane reported 182 files passed with 1,810 tests passed and 1 skipped.
