@@ -24,8 +24,8 @@ import {
   type ProcessorProgressStore,
   type ProcessorRecovery,
 } from "iterate/processors";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import type { Stream } from "../../itx-api.generated.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 
 const REQUESTED = "events.iterate.com/test-task/requested";
 const COMPLETED = "events.iterate.com/test-task/completed";

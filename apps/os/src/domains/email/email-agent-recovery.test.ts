@@ -25,8 +25,8 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 

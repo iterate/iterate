@@ -88,7 +88,7 @@
     "tswasm": "0.1.0-alpha.1",
     "uuid": "11.1.0",
     "yaml": "^2.8.3",
-    "zod": "4.4.3"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",

@@ -16,8 +16,8 @@ import {
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
 import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import type { Stream } from "../../itx-api.generated.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,

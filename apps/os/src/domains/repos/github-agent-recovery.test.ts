@@ -25,7 +25,7 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import { GITHUB_LINK, pullRequestBody, webhookPayload } from "./github-agent-test-helpers.ts";
 import { GithubAgentProcessorContract } from "./github-agent-processor-contract.ts";
 import { GithubAgentProcessor } from "./github-agent-processor-implementation.ts";

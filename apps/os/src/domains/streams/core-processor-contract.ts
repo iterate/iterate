@@ -18,12 +18,6 @@ import {
 import { ItxExpression } from "../../itx/expression.ts";
 import { EventSelector } from "./event-selector.ts";
 
-// The machinery-shared halves of this contract (the revival event TYPE the
-// runner/keepalive agree on, and the announcement shape presence facts carry)
-// live in `iterate/processors`; re-exported here so contract consumers keep
-// one import next to the event definitions.
-export { ProcessorContractAnnouncement, STREAM_PROCESSOR_REVIVED_EVENT_TYPE };
-
 // Version of the persisted core reduced state ("state" in KV). Bump this when
 // the core reducer starts deriving NEW state from already-reduced events
 // (already-committed events are never re-reduced on the incremental catch-up

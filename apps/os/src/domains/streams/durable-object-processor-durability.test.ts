@@ -22,8 +22,8 @@ import {
   processorKeepaliveKey,
   processorProgressKey,
 } from "iterate/processors/cloudflare";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import type { Stream } from "../../itx-api.generated.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 
 const SLUG = "test-durability";
 const REQUESTED = "events.iterate.com/test-durability/requested";

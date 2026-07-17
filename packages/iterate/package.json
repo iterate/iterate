@@ -117,7 +117,7 @@
     "react": "^19.2.0",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
-    "zod": "4.4.3"
+    "zod": "4.3.6"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",
