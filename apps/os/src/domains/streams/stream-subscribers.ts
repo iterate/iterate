@@ -39,8 +39,7 @@
 // (stream-subscribers.test.ts). The only streams file that knows RPC exists is
 // subscriber-sinks.ts.
 
-import type { ItxExpression } from "../../itx/expression.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
@@ -50,8 +49,10 @@ import type {
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { isStreamReceiverUnavailableError } from "./rpc-types.ts";
+} from "iterate/processors";
+import { isStreamReceiverUnavailableError } from "iterate/processors";
+import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
+import type { ItxExpression } from "../../itx/expression.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,
@@ -70,7 +71,6 @@ import {
   type RetainedProcessEventBatch,
   type RetainedSubscriberPing,
 } from "./subscriber-sinks.ts";
-import { LatencyRing, pingRoundTrip, type LatencyStats } from "./stream-runtime-metrics.ts";
 import {
   computeBackoffMs,
   deliveryId,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MemoryStream, driveProcessor } from "../streams/test-helpers.ts";
+import { MemoryStream, driveProcessor } from "iterate/processors/testing";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { SandboxProcessor } from "./sandbox-processor-implementation.ts";
 

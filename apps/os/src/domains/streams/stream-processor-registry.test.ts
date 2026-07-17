@@ -16,15 +16,12 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineProcessorContract } from "./processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processors";
+import { StreamProcessor } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
+import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
-import { StreamProcessor } from "./stream-processor.ts";
-import { KEEPALIVE_ALARM_LEAD_MS } from "./stream-processor-keepalive.ts";
-import { MemoryStream } from "./test-helpers.ts";
-import {
-  createStreamProcessorRegistry,
-  type StreamProcessorRegistry,
-} from "./stream-processor-registry.ts";
 
 const HOME = "/tests/registry";
 const REQUESTED = "events.iterate.com/registry-test/requested";

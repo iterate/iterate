@@ -7,8 +7,8 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
-import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
-import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
+import type { StreamEventBatch } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 

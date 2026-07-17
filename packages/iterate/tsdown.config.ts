@@ -46,6 +46,25 @@ export default defineConfig([
     copy: [{ from: "src/worker.d.mts", to: "dist" }],
   },
   {
+    // The stream-processor machinery + its node test harness. Worker-targeted
+    // (the registry imports cloudflare:workers tracing), so cloudflare:*
+    // stays external; zod/capnweb are ordinary dependencies and stay external
+    // like every library entry. No module-state sharing with the client
+    // entries (the shared live-state modules are stateless codecs), so a
+    // separate config object is safe. No dts for the sdk reason above.
+    entry: {
+      processors: "src/processors/index.ts",
+      "processors-testing": "src/processors/testing.ts",
+    },
+    format: "esm",
+    deps: {
+      neverBundle: ["cloudflare:workers"],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
+  {
     // The itx client LIBRARY entries. ONE config object on purpose: rolldown
     // splits their shared modules (the session keeper, live-state) into common
     // chunks, so every importable entry shares ONE keeper module instance in

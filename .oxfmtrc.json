@@ -23,6 +23,7 @@
     ".wrangler/",
     "routeTree.gen.ts",
     "config-repo-template.generated.ts",
+    "iterate-processors-virtual-module.generated.ts",
     "iterate-sdk-virtual-module.generated.ts",
     "worker-configuration.d.ts",
     "apps/auth/wrangler.jsonc",

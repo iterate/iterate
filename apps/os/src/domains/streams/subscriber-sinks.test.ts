@@ -3,7 +3,7 @@ import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
   StreamSubscriberPing,
-} from "./rpc-types.ts";
+} from "iterate/processors";
 import { retainWakeHandshakeResponse } from "./subscriber-sinks.ts";
 
 function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {

@@ -19,12 +19,9 @@
 // and the durable alarm survive.
 
 import { describe, expect, it } from "vitest";
-import { KEEPALIVE_ALARM_LEAD_MS } from "../streams/stream-processor-keepalive.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
-import {
-  createStreamProcessorRegistry,
-  type StreamProcessorRegistry,
-} from "../streams/stream-processor-registry.ts";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
+import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { GITHUB_LINK, pullRequestBody, webhookPayload } from "./github-agent-test-helpers.ts";
 import { GithubAgentProcessorContract } from "./github-agent-processor-contract.ts";

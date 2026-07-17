@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StreamEvent } from "iterate/processors";
+import type { ProcessorReads } from "iterate/processors";
 import {
   ProcessorRelayRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
-import type { StreamEvent } from "./schemas.ts";
-import type { ProcessorReads } from "./stream-processor.ts";
 
 describe("StreamRpcTarget", () => {
   it("re-acquires when a remote stream waiter is orphaned", async () => {

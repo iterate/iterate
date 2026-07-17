@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  StreamProcessorRunner,
+  type ProcessorProgress,
+  type ProcessorProgressStore,
+} from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
+import {
   activeSpans,
   recordedSpans,
   resetRecordedSpans,
 } from "../../test/cloudflare-workers-shim.ts";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-  type ProcessorProgressStore,
-} from "../streams/stream-processor-runner.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
 import {
   SchedulerProcessor,
   type SchedulerProcessorDeps,

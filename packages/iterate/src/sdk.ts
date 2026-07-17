@@ -16,9 +16,12 @@ import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerRef,
   ItxBinding,
+  Project,
   StreamEvent,
+  StreamEventPager,
   StreamPushEventBatch,
 } from "./itx-api.generated.ts";
+import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-handle.ts";
 
 // `.ts`-suffixed like every relative import here; tsc's
 // rewriteRelativeImportExtensions keeps the declaration emit for the published
@@ -84,6 +87,64 @@ async function invokeCapability(
     throw new Error(`"${path.join(".")}" is not a method on this worker`);
   }
   return await Reflect.apply(handler, receiver, args);
+}
+
+/** Dispose an RPC stub, tolerating stubs without a disposer and disposers
+ * that throw — cleanup must never mask the value it was cleaning up after. */
+function disposeStub(stub: unknown): void {
+  try {
+    (stub as Partial<Disposable>)[Symbol.dispose]?.();
+  } catch {}
+}
+
+/**
+ * A {@link ProcessorStream} over the project stream at `path`, dialed through
+ * the platform ITX binding — the stream handle a worker-hosted stream
+ * processor registry needs (`iterate/processors`; see the config-repo
+ * template's guestbook for the full hosting shape). RPC stubs from
+ * `env.ITX.get()` must not outlive the invocation that dialed them, so every
+ * operation opens, uses, and disposes its own session; `readEvents` owns one
+ * session for its pager's lifetime (scope it with `using`, like any pager).
+ */
+export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream {
+  const withStream = async <T>(fn: (stream: Project["streams"]) => Promise<T>): Promise<T> => {
+    const project = await env.ITX.get();
+    try {
+      return await fn(project.streams);
+    } finally {
+      disposeStub(project);
+    }
+  };
+  return {
+    append: (...events) => withStream((streams) => streams.get(path).append(...events)),
+    getEvent: (args) => withStream((streams) => streams.get(path).getEvent(args)),
+    getEvents: (args) => withStream((streams) => streams.get(path).getEvents(args)),
+    readEvents: (args): ProcessorStreamPager => {
+      let opened: Promise<{ pager: StreamEventPager; project: Disposable }> | undefined;
+      let closed = false;
+      return {
+        next: async () => {
+          if (closed) return [];
+          opened ??= env.ITX.get().then((project) => ({
+            pager: project.streams.get(path).readEvents(args),
+            project,
+          }));
+          const { pager } = await opened;
+          return await pager.next();
+        },
+        [Symbol.dispose]() {
+          closed = true;
+          void opened
+            ?.then(({ pager, project }) => {
+              disposeStub(pager);
+              disposeStub(project);
+            })
+            .catch(() => {});
+        },
+      };
+    },
+    at: (siblingPath) => itxProjectStream(env, siblingPath),
+  };
 }
 
 /**

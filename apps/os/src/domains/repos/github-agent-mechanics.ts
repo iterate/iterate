@@ -1,8 +1,8 @@
 // Explicit creation batch for one routed GitHub pull-request agent. Kept
 // beside the GitHub facet because the repo router owns its birth.
 
+import type { EmittedInput } from "iterate/processors";
 import { agentCreationForPath, PR_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import type { EmittedInput } from "../streams/processor-contracts.ts";
 import { GithubAgentProcessorContract } from "./github-agent-processor-contract.ts";
 import type { RepoProcessorContract } from "./repo-processor-contract.ts";
 

@@ -12,13 +12,10 @@
 // dies; the journal, KV progress, and the durable alarm survive.
 
 import { describe, expect, it, vi } from "vitest";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
+import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
 import type { Project } from "../../itx-api.generated.ts";
-import { KEEPALIVE_ALARM_LEAD_MS } from "../streams/stream-processor-keepalive.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
-import {
-  createStreamProcessorRegistry,
-  type StreamProcessorRegistry,
-} from "../streams/stream-processor-registry.ts";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";

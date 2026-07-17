@@ -69,9 +69,9 @@
 // park-resume controls remain the operator escape. Do not read this file as
 // retry-forever.
 
-import { tracing } from "cloudflare:workers";
-import type { Stream } from "../../itx-api.generated.ts";
-import { LiveState } from "../../lib/live-state/engine.ts";
+import * as cloudflareWorkers from "cloudflare:workers";
+import { LiveState } from "../itx/live-state/engine.ts";
+import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
@@ -86,6 +86,17 @@ import {
   hostRuntimeCapabilities,
   type AnyHostedProcessor,
 } from "./processor-host-capabilities.ts";
+
+// Namespace import + fallback rather than a named import: named imports of a
+// missing export are ESM LINK errors, and workerd only exposes `tracing`
+// where the tracing API is enabled. OS workers get real spans; a runtime
+// without them (dynamic user workers, node harnesses) gets the no-op.
+const tracing: {
+  enterSpan<T>(
+    name: string,
+    fn: (span: { setAttribute(key: string, value: unknown): void }) => T,
+  ): T;
+} = cloudflareWorkers.tracing ?? { enterSpan: (_name, fn) => fn({ setAttribute() {} }) };
 
 /**
  * What `register` accepts: a real {@link StreamProcessor} subclass instance
@@ -144,7 +155,7 @@ type RegistryEntry = {
 };
 
 export type StreamProcessorRegistry<Live extends object = Record<string, unknown>> = {
-  readonly stream: Stream;
+  readonly stream: ProcessorStream;
   /** The node's live-state engine; a `.liveState` RpcTarget exposes getState()/subscribe() over it. */
   readonly live: LiveState<Live>;
   /**
@@ -233,7 +244,7 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
 export function createStreamProcessorRegistry<Live extends object = Record<string, unknown>>(
   ctx: DurableObjectState,
   options: {
-    stream: Stream;
+    stream: ProcessorStream;
     /** Path of the hosted stream. The registry fences every
      * `wakeStreamSubscriber` against this exact `(projectId, path)`: a wake
      * carrying a matching processor slug but a DIFFERENT coordinate is

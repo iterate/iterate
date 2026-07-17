@@ -10,16 +10,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
+import { MemoryStream, MemoryStreamNetwork } from "iterate/processors/testing";
+import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
+import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
 import type { Stream } from "../../itx-api.generated.ts";
-import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
-import {
-  createStreamProcessorRegistry,
-  type StreamProcessorRegistry,
-} from "../streams/stream-processor-registry.ts";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-} from "../streams/stream-processor-runner.ts";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import {

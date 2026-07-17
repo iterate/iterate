@@ -1,6 +1,6 @@
 import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "iterate/processors";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
   CoreProcessorContract,

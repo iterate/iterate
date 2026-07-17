@@ -1,9 +1,9 @@
 // GitHub-router/agent test fixtures over the canonical in-memory stream
 // harness (../streams/test-helpers.ts).
 
-import { MemoryStreamNetwork as CanonicalMemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { MemoryStreamNetwork as CanonicalMemoryStreamNetwork } from "iterate/processors/testing";
 
-export { MemoryStream } from "../streams/test-helpers.ts";
+export { MemoryStream } from "iterate/processors/testing";
 
 /**
  * The canonical network with its clock pinned to the epoch: the GitHub agent

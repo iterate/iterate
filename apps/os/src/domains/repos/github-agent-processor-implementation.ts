@@ -4,7 +4,7 @@
 // turn. Emitted event types, payloads, and idempotency keys are wire formats.
 
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/processors";
 import {
   githubAccessTokenPlaceholder,
   readNumber,

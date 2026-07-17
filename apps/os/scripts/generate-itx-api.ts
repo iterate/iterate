@@ -280,13 +280,18 @@ export function generateItxApi(): string {
   }
   // Contract wire types that live in the published package rather than the
   // apps/os root file set (the live-state protocol moved into `iterate/client`
-  // so the browser store and the server engine share one definition). They are
-  // reached through package imports, which the root-file walk above skips —
-  // chase them explicitly, and fail loudly if the program does not carry them
-  // under their real path (a resolution change would otherwise silently drop
-  // types from the contract).
+  // so the browser store and the server engine share one definition, and the
+  // stream event/processor wire shapes moved into `iterate/processors` with
+  // the processor machinery). They are reached through package imports, which
+  // the root-file walk above skips — chase them explicitly, and fail loudly
+  // if the program does not carry them under their real path (a resolution
+  // change would otherwise silently drop types from the contract).
   for (const fileName of [
     path.resolve(projectDir, "../../packages/iterate/src/itx/live-state/protocol.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/schemas.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/rpc-types.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/stream-runtime-metrics.ts"),
+    path.resolve(projectDir, "../../packages/iterate/src/processors/subscriber-metrics.ts"),
   ]) {
     const sourceFile = project.program.getSourceFile(fileName);
     if (!sourceFile) {

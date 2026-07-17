@@ -1,6 +1,6 @@
 import { z } from "zod";
+import { defineProcessorContract } from "iterate/processors";
 import { ItxExpressionStep } from "../../itx/expression.ts";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import {
   CoreProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
