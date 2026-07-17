@@ -372,6 +372,11 @@ export const resolveChatProject = async (input: {
 }) => {
   const configured = input.explicitProject || input.configuredDefaultProject;
 
+  // A project ID is already the routing key. Enumerating every accessible
+  // project before using it makes startup proportional to account history;
+  // the scoped itx connection will validate the ID directly.
+  if (configured?.startsWith("prj_")) return configured;
+
   return await withAuthenticatedOsSession({
     auth: input.auth,
     baseUrl: input.baseUrl,
@@ -396,7 +401,6 @@ export const resolveChatProject = async (input: {
           (candidate) => candidate.id === configured || candidate.slug === configured,
         );
         if (!project) {
-          if (configured.startsWith("prj_")) return configured;
           throw new Error(
             `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
           );

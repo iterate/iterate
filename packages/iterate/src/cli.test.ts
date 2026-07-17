@@ -477,8 +477,9 @@ describe("resolveChatProject", () => {
     );
   });
 
-  test("passes through a configured project id that is not in the project list", async () => {
-    const fake = createFakeSession({ projects: [] });
+  test("uses a project id directly without enumerating accessible projects", async () => {
+    const onConnect = vi.fn();
+    const fake = createFakeSession({ onConnect, projects: [] });
 
     await expect(
       resolveChatProject({
@@ -486,10 +487,12 @@ describe("resolveChatProject", () => {
         baseUrl: "https://os.iterate.com",
         configName: "prd",
         configPath: "/tmp/config.json",
-        configuredDefaultProject: "prj_manual",
+        explicitProject: "prj_manual",
         createSession: fake.createSession,
       }),
     ).resolves.toBe("prj_manual");
+
+    expect(onConnect).not.toHaveBeenCalled();
   });
 
   test("does not bypass project resolution when listing accessible projects fails", async () => {
