@@ -5,7 +5,7 @@ import {
 } from "./stream-unavailable.ts";
 
 /** Direct-DO fetch protocol. This URL never leaves the OS Worker. */
-export const STREAM_IDEMPOTENCY_WAIT_URL =
+const STREAM_IDEMPOTENCY_WAIT_URL =
   "https://stream.iterate.internal/__iterate/wait-for-idempotency-key";
 export const STREAM_IDEMPOTENCY_WAIT_PATH = new URL(STREAM_IDEMPOTENCY_WAIT_URL).pathname;
 export const STREAM_IDEMPOTENCY_KEY_HEADER = "x-iterate-stream-idempotency-key";

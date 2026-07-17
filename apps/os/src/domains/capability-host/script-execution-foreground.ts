@@ -13,12 +13,6 @@ export type ForegroundScriptExecutor = {
   run(input: ScriptExecutorRunInput): Promise<unknown>;
 };
 
-export type ForegroundScriptPreparation = {
-  code: string;
-  emittedJs?: string;
-  expiresAt: number;
-};
-
 const MAX_SETTLEMENT_COMMIT_ATTEMPTS = 4;
 
 /**
@@ -29,7 +23,11 @@ const MAX_SETTLEMENT_COMMIT_ATTEMPTS = 4;
 export async function executeForegroundScript(input: {
   authority: ScriptExecutionAuthority;
   executor: ForegroundScriptExecutor;
-  preparation: ForegroundScriptPreparation;
+  preparation: {
+    code: string;
+    emittedJs?: string;
+    expiresAt: number;
+  };
   now?: () => number;
 }): Promise<ScriptExecutionSettlement> {
   const now = input.now ?? Date.now;
