@@ -273,6 +273,21 @@ test("a resumed recovery phase shows its own status without linking to the crash
   expect(status?.querySelector("svg.lucide-chevron-right")).toBeNull();
 });
 
+test("a scheduled LLM request stays queued until the request starts", () => {
+  const live = activity({
+    status: "running",
+    startedAtMs: Date.UTC(2026, 6, 15, 22, 0, 0),
+  });
+  const container = renderLiveActivity(live, {
+    ...ZERO_AGENT_RUNTIME,
+    llmRequests: { scheduled: 1, requested: 0, started: 0 },
+  });
+
+  const status = container.querySelector('[data-testid="agent-live-status"]');
+  expect(status?.textContent).toContain("Queued");
+  expect(status?.textContent).not.toContain("Waiting for a response");
+});
+
 test("a running code row stops counting and fails visibly at its absolute deadline", () => {
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 15, 22, 0, 20);

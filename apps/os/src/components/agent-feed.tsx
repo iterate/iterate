@@ -33,6 +33,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import {
   formatClockTime,
   formatDateTime,
@@ -623,15 +624,13 @@ export function AgentLiveActivity({
     (doneSteps.length > 0 ||
       runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step)));
 
+  const runtimeDisplayState = deriveAgentDisplayState(runtime);
   const runtimeWorkKind =
-    runtime.runningScripts > 0
+    runtimeDisplayState === "running_code"
       ? "code"
-      : runtime.llmRequests.scheduled +
-            runtime.llmRequests.requested +
-            runtime.llmRequests.started >
-          0
+      : runtimeDisplayState === "waiting_for_model"
         ? "llm"
-        : runtime.triggers.runnable > 0
+        : runtimeDisplayState === "queued"
           ? "queued"
           : null;
   const currentWorkKind = runtimeWorkKind ?? liveStep?.kind ?? null;
