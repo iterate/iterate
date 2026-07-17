@@ -64,6 +64,7 @@ async function makeProcessor(options: {
     itx: (options.itx ?? {}) as Project,
     path: options.path ?? "/",
     projectId: null,
+    setScriptDeadline: async () => undefined,
     validateCapabilityTypes: options.validateCapabilityTypes,
     reads: {
       snapshot: () => runner.snapshot(),

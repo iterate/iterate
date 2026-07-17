@@ -16,8 +16,8 @@ export type ForegroundScriptExecutor = {
 const MAX_SETTLEMENT_COMMIT_ATTEMPTS = 4;
 
 /**
- * Invoke one already-prepared script from the existing top-level ITX request.
- * The CapabilityHost call that journaled and prepared it has returned, so the
+ * Invoke one already-prepared script from its explicit foreground driver. The
+ * CapabilityHost call that journaled and prepared it has returned, so the
  * Dynamic Worker's callbacks enter the host from a bounded request lineage.
  */
 export async function executeForegroundScript(input: {

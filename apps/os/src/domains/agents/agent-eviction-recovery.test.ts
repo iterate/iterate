@@ -81,10 +81,12 @@ const runnerReadsByProcessor = new WeakMap<AgentProcessor, AgentSnapshotReads>()
  * `reads` dep is wired lazily to whatever read surface ends up driving this
  * processor (see runnerReadsByProcessor). */
 function makeAgentProcessor(
-  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads">,
+  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads" | "runScript"> &
+    Partial<Pick<ConstructorParameters<typeof AgentProcessor>[0], "runScript">>,
 ): AgentProcessor {
   const processor: AgentProcessor = new AgentProcessor({
     ...deps,
+    runScript: deps.runScript ?? (async () => undefined),
     reads: {
       snapshot: () => {
         const reads = runnerReadsByProcessor.get(processor);

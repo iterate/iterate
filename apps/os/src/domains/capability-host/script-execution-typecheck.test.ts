@@ -19,8 +19,8 @@ import {
   CapabilityHostProcessor,
   type CapabilityHostAncestor,
   type CapabilityHostProcessorReads,
-  type ScriptRunRequest,
 } from "./capability-host-processor-implementation.ts";
+import type { ScriptExecutionHandoff, ScriptExecutionIntent } from "./script-execution-driver.ts";
 import { scriptSettlementFromEvent } from "./script-execution-settlement.ts";
 
 const T = {
@@ -45,19 +45,30 @@ function capabilityHostStream(ancestorPath: string | null = null): MemoryStream 
 }
 
 type Harness = {
-  execute(request: ScriptRunRequest): Promise<void>;
+  execute(request: ScriptExecutionHandoff): Promise<void>;
   processor: CapabilityHostProcessor;
   runner: StreamProcessorRunner<CapabilityHostProcessorContract>;
 };
 
+let nextExecution = 0;
+function executionIntent(code: string): ScriptExecutionIntent {
+  nextExecution += 1;
+  return {
+    code,
+    executionId: `typecheck-test:${nextExecution}`,
+    expiresAt: Date.now() + 60_000,
+  };
+}
+
 /** REAL runner drive (the production registry's driver): the processor
- * journals/prepares, the simulated top-level caller executes, and fold reads
+ * journals/prepares, the simulated explicit caller executes, and fold reads
  * ride committed runner progress exactly as the hosting DO wires them. */
 function makeProcessor(options: {
   stream: MemoryStream;
   run?: (code: string) => Promise<unknown>;
   ancestor?: CapabilityHostAncestor;
   path?: string;
+  setScriptDeadline?: (executionId: string, expiresAt: number | null) => Promise<void>;
   typecheckScript?: (input: {
     capabilities: CapabilityDescription[];
     code: string;
@@ -74,6 +85,7 @@ function makeProcessor(options: {
     itx: {} as Project,
     path: options.path ?? "/",
     projectId: null,
+    setScriptDeadline: options.setScriptDeadline ?? (async () => undefined),
     resolveAncestor: options.ancestor === undefined ? undefined : () => options.ancestor!,
     typecheckScript: options.typecheckScript,
     reads: {
@@ -126,7 +138,9 @@ async function requestScript(stream: MemoryStream, harness: Harness) {
     });
   }
   await harness.runner.catchUp();
-  const request = await harness.processor.requestScript("async (itx) => itx.streams.gett('/')");
+  const request = await harness.processor.requestScript(
+    executionIntent("async (itx) => itx.streams.gett('/')"),
+  );
   await harness.execute(request);
   return request;
 }
@@ -137,12 +151,12 @@ function completion(stream: MemoryStream) {
 
 async function runScript(stream: MemoryStream, harness: Harness, code: string) {
   await harness.runner.catchUp();
-  const request = await harness.processor.requestScript(code);
+  const request = await harness.processor.requestScript(executionIntent(code));
   await harness.execute(request);
   return await scriptResult(stream, request);
 }
 
-async function scriptResult(stream: MemoryStream, request: ScriptRunRequest) {
+async function scriptResult(stream: MemoryStream, request: ScriptExecutionHandoff) {
   let completed = stream.events.find(
     (event) =>
       event.type === T.completed &&
@@ -472,7 +486,7 @@ describe("script execution typecheck gate", () => {
     const harness = makeProcessor({ stream, run });
     await harness.runner.catchUp();
 
-    const request = await harness.processor.requestScript("async () => null");
+    const request = await harness.processor.requestScript(executionIntent("async () => null"));
     expect(request.preparation).toMatchObject({ status: "ready", code: "async () => null" });
     expect(stream.events.find((event) => event.type === T.started)?.payload).toEqual({
       executionId: request.executionId,
@@ -484,7 +498,45 @@ describe("script execution typecheck gate", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("executes concurrent requests independently from their foreground RPCs", async () => {
+  it("grants one ready handoff and makes every deterministic replay observe it", async () => {
+    const stream = capabilityHostStream();
+    const run = vi.fn(async () => "ok");
+    const harness = makeProcessor({ stream, run });
+    const intent = executionIntent("async () => 'ok'");
+    await harness.runner.catchUp();
+
+    const first = await harness.processor.requestScript(intent);
+    const concurrentReplay = await harness.processor.requestScript(intent);
+    expect(first.preparation.status).toBe("ready");
+    expect(concurrentReplay.preparation).toEqual({ status: "observe" });
+
+    await harness.execute(first);
+    await harness.runner.catchUp();
+    const settledReplay = await harness.processor.requestScript(intent);
+    expect(settledReplay.preparation).toEqual({ status: "settled" });
+    expect(stream.events.filter((event) => event.type === T.requested)).toHaveLength(1);
+    expect(stream.events.filter((event) => event.type === T.started)).toHaveLength(1);
+    expect(stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a reused execution id with different immutable input", async () => {
+    const stream = capabilityHostStream();
+    const setScriptDeadline = vi.fn(async () => undefined);
+    const harness = makeProcessor({ stream, setScriptDeadline });
+    const intent = executionIntent("async () => 1");
+    await harness.runner.catchUp();
+    await harness.processor.requestScript(intent);
+
+    await expect(
+      harness.processor.requestScript({ ...intent, code: "async () => 2" }),
+    ).rejects.toThrow("already requested with different immutable input");
+    expect(stream.events.filter((event) => event.type === T.requested)).toHaveLength(1);
+    expect(stream.events.filter((event) => event.type === T.started)).toHaveLength(1);
+    expect(setScriptDeadline).toHaveBeenCalledExactlyOnceWith(intent.executionId, intent.expiresAt);
+  });
+
+  it("executes concurrent requests independently from their foreground drivers", async () => {
     const stream = capabilityHostStream();
     const harness = makeProcessor({
       stream,

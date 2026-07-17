@@ -19,6 +19,16 @@ import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
+import {
+  driveScriptExecution,
+  type ForegroundScriptExecutor,
+  type ScriptExecutionHost,
+  type ScriptExecutionIntent,
+} from "../capability-host/script-execution-driver.ts";
+import {
+  connectStreamIdempotencyWaitSocket,
+  waitForStreamIdempotencyKey,
+} from "../streams/wait-for-idempotency-key.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor, type AgentProcessorReads } from "./agent-processor-implementation.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
@@ -53,6 +63,7 @@ export class AgentDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
       reads: this.#agentProcessorReads(),
+      runScript: (input) => this.#runScript(input),
       ai: this.env.AI,
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the DO.
@@ -107,6 +118,45 @@ export class AgentDurableObject extends DurableObject<Env> {
    * field-initializer inference cycle. */
   #agentProcessorReads(): AgentProcessorReads {
     return { snapshot: () => this.#agentReads.snapshot() };
+  }
+
+  /**
+   * The Agent DO is the explicit foreground owner for scripts extracted from
+   * model output. It is a different Durable Object from the capability host,
+   * so executor callbacks return to the host through a bounded lineage rather
+   * than recursively entering the object that launched them.
+   */
+  async #runScript(intent: ScriptExecutionIntent): Promise<void> {
+    const executionId = intent.executionId;
+    const host = this.env.CAPABILITY_HOST.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      }),
+    ) as unknown as ScriptExecutionHost;
+    await driveScriptExecution({
+      authority: {
+        ownerWorkerName: this.env.WORKER_SELF,
+        projectId: this.#name.projectId,
+        scopePath: this.#name.path,
+      },
+      executor: this.env.SCRIPT_EXECUTOR as unknown as ForegroundScriptExecutor,
+      host,
+      intent,
+      observeCompletion: ({ idempotencyKey, timeoutMs }) =>
+        waitForStreamIdempotencyKey({
+          connect: (key) => connectStreamIdempotencyWaitSocket(this.#stream.durableObjectStub, key),
+          idempotencyKey,
+          timeoutMs,
+        }),
+      onCommitFailure: ({ attempt, error }) => {
+        console.warn("[agent] script settlement commit attempt failed", {
+          attempt,
+          error,
+          executionId,
+        });
+      },
+    });
   }
 
   // Registered on every agent host; it only wakes on routed Slack agent

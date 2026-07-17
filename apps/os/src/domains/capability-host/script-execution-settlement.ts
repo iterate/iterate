@@ -66,19 +66,6 @@ export function settlementForUndrivenScript(
       };
 }
 
-/** A committed request whose foreground RPC vanished before the handoff. */
-export function settlementForLostForegroundRequest(): ScriptExecutionSettlementValue {
-  return {
-    status: "failed",
-    error:
-      "Script execution lost its foreground request before executable code was handed off. It never ran and was NOT replayed.",
-    failureKind: "orphaned",
-    phase: "recovery",
-    executionMayHaveOccurred: false,
-    cancellation: "not-applicable",
-  };
-}
-
 export function settlementFromWorkerOutcome(
   outcome: DeadlineOutcome<unknown>,
 ): ScriptExecutionSettlementValue {

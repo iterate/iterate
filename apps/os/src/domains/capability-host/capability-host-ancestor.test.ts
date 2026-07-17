@@ -21,6 +21,7 @@ function makeProcessor(input: {
     itx: {} as Project,
     path: input.path,
     projectId: null,
+    setScriptDeadline: async () => undefined,
     resolveAncestor: input.resolveAncestor,
     reads: {
       snapshot: () => runner.snapshot(),
@@ -107,7 +108,13 @@ describe("explicit capability-host ancestors", () => {
     await expect(processor.describeCapabilities()).rejects.toThrow(
       "capability host at /agents/web/unconfigured-conversation has not been created",
     );
-    await expect(processor.requestScript("async () => null")).rejects.toThrow(
+    await expect(
+      processor.requestScript({
+        code: "async () => null",
+        executionId: "unconfigured-host-test",
+        expiresAt: Date.now() + 60_000,
+      }),
+    ).rejects.toThrow(
       "capability host at /agents/web/unconfigured-conversation has not been created",
     );
     expect(resolveAncestor).not.toHaveBeenCalled();

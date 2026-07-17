@@ -247,8 +247,9 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     // (the runner throws at construction otherwise): its ordinary delivery is
     // the guaranteed at-head turn where the obligation reconcile
     // (`processEvent` under `delivery.caughtUp`) reconciles open script
-    // obligations — ownerless requested scripts fail as never run, while
-    // started work is left until its deadline and never replayed. Reduce
+    // obligations — requested scripts remain claimable by their deterministic
+    // driver until expiry, while started work is left until its deadline and
+    // never replayed. Reduce
     // ignores it, and it is absent from `emits`:
     // the recovery adapter appends it raw, as the runtime speaking.
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,

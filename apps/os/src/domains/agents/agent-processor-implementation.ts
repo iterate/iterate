@@ -24,6 +24,7 @@ import {
   mergeProcessorConfig,
 } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
+import type { ScriptExecutionIntent } from "../capability-host/script-execution-driver.ts";
 import {
   AGENT_COMPACTION_TRIGGER_FRACTION,
   AGENT_LLM_REQUEST_BACKSTOP_MS,
@@ -69,6 +70,10 @@ export type AgentProcessorReads = Pick<ProcessorReads<AgentState>, "snapshot">;
  * Host-provided deps beyond the stream plumbing.
  *
  * - `reads` — runner-backed fold reads; see {@link AgentProcessorReads}.
+ * - `runScript` — the explicit, caller-owned execution driver for this
+ *   agent's capability host. It journals, executes, and durably settles one
+ *   deterministic intent before resolving; the settlement event itself is
+ *   still what feeds the result back into the agent loop.
  * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
  *   Optional so a host without one fails requests with a journaled error
  *   instead of crashing at construction.
@@ -97,6 +102,7 @@ export type AgentProcessorReads = Pick<ProcessorReads<AgentState>, "snapshot">;
  */
 type AgentProcessorDeps = {
   reads: AgentProcessorReads;
+  runScript: (input: ScriptExecutionIntent) => Promise<void>;
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
@@ -293,14 +299,17 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             });
             return;
           }
-          await append({
-            type: "events.iterate.com/capability-host/script-run-requested",
-            idempotencyKey: this.idempotencyKey("script-run-requested", event),
-            payload: {
-              code: extraction.code,
-              executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
-              expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-            },
+          const committedAt = Date.parse(event.createdAt);
+          if (!Number.isFinite(committedAt)) {
+            throw new Error(`assistant context event @${event.offset} has invalid createdAt`);
+          }
+          await this.deps.runScript({
+            code: extraction.code,
+            executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
+            // Derive the absolute deadline from the immutable source event,
+            // not this delivery attempt. A crash/replay therefore presents
+            // the exact same intent and can observe or reclaim it safely.
+            expiresAt: committedAt + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
           });
         });
         return;

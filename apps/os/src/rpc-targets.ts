@@ -27,7 +27,7 @@
  *   shortcuts onto it); `itx.capabilityHosts.get(path)` addresses any other
  *   scope's host, including the project root at `"/"`.
  */
-import { RpcTarget, tracing } from "cloudflare:workers";
+import { RpcTarget } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -64,14 +64,11 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { capabilityHostBirthEvents } from "./domains/capability-host/capability-host-birth.ts";
 import {
-  SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
-  scriptSettlementFromEvent,
-} from "./domains/capability-host/script-execution-settlement.ts";
-import {
-  commitForegroundScriptSettlement,
-  executeForegroundScript,
+  driveScriptExecution,
   type ForegroundScriptExecutor,
-} from "./domains/capability-host/script-execution-foreground.ts";
+  type ScriptExecutionHost,
+} from "./domains/capability-host/script-execution-driver.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -161,7 +158,6 @@ import {
 import { waitForStreamEvent } from "./domains/streams/wait-for-event.ts";
 import {
   connectStreamIdempotencyWaitSocket,
-  StreamIdempotencyWaitTimeoutError,
   waitForStreamIdempotencyKey,
 } from "./domains/streams/wait-for-idempotency-key.ts";
 import {
@@ -5060,87 +5056,38 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     executionId: string;
     result: unknown;
   }> {
-    const request = await this.#durableObject.requestScript(code);
-    const observeCompletion = () =>
-      waitForStreamIdempotencyKey({
-        connect: (idempotencyKey) =>
-          connectStreamIdempotencyWaitSocket(this.#stream.durableObjectStub, idempotencyKey),
-        idempotencyKey: request.completionIdempotencyKey,
-        timeoutMs: Math.max(
-          1,
-          request.expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - Date.now(),
-        ),
-      });
-    let completedEvent: StreamEvent;
-    try {
-      if (request.preparation.status === "ready") {
-        const preparation = request.preparation;
-        // Do not open the completion WebSocket before invoking the executor.
-        // It is intentionally long-lived and can otherwise occupy the exact
-        // outbound request lane needed to create the event it waits for.
-        const settlement = await tracing.enterSpan(
-          "capability_host.script_foreground_execute",
-          async (span) => {
-            span.setAttribute("iterate.capability_host.execution_id", request.executionId);
-            return await executeForegroundScript({
-              authority: {
-                ownerWorkerName: env.WORKER_SELF,
-                projectId: this.#props.projectId,
-                scopePath: this.#props.path,
-              },
-              executor: env.SCRIPT_EXECUTOR as unknown as ForegroundScriptExecutor,
-              preparation: {
-                ...preparation,
-                expiresAt: request.expiresAt,
-              },
-            });
-          },
-        );
-        completedEvent = await tracing.enterSpan(
-          "capability_host.script_settlement_commit",
-          async (span) => {
-            span.setAttribute("iterate.capability_host.execution_id", request.executionId);
-            return await commitForegroundScriptSettlement({
-              commit: () =>
-                this.#durableObject.settleScriptExecution({
-                  executionId: request.executionId,
-                  settlement,
-                }),
-              observe: observeCompletion,
-              onCommitFailure: ({ attempt, error }) => {
-                console.warn("[capability-host] script settlement commit attempt failed", {
-                  attempt,
-                  error,
-                  executionId: request.executionId,
-                });
-              },
-            });
-          },
-        );
-      } else {
-        completedEvent = await observeCompletion();
-      }
-    } catch (error) {
-      if (!(error instanceof StreamIdempotencyWaitTimeoutError)) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Script execution "${request.executionId}" settlement observation failed: ${detail}`,
-          { cause: error },
-        );
-      }
-      throw new Error(
-        `Script execution "${request.executionId}" did not settle before its absolute deadline.`,
-        { cause: error },
-      );
-    }
-    const settlement = scriptSettlementFromEvent(completedEvent, request.executionId);
-    if (settlement === undefined) {
-      throw new Error(`script execution "${request.executionId}" completed without a settlement`);
-    }
+    const executionId = crypto.randomUUID();
+    const { completedEvent, settlement } = await driveScriptExecution({
+      authority: {
+        ownerWorkerName: env.WORKER_SELF,
+        projectId: this.#props.projectId,
+        scopePath: this.#props.path,
+      },
+      executor: env.SCRIPT_EXECUTOR as unknown as ForegroundScriptExecutor,
+      host: this.#durableObject as unknown as ScriptExecutionHost,
+      intent: {
+        code,
+        executionId,
+        expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+      },
+      observeCompletion: ({ idempotencyKey, timeoutMs }) =>
+        waitForStreamIdempotencyKey({
+          connect: (key) => connectStreamIdempotencyWaitSocket(this.#stream.durableObjectStub, key),
+          idempotencyKey,
+          timeoutMs,
+        }),
+      onCommitFailure: ({ attempt, error }) => {
+        console.warn("[capability-host] script settlement commit attempt failed", {
+          attempt,
+          error,
+          executionId,
+        });
+      },
+    });
     if (settlement.status === "failed") throw new Error(settlement.error);
     return {
       completedEvent,
-      executionId: request.executionId,
+      executionId,
       result: settlement.result ?? null,
     };
   }

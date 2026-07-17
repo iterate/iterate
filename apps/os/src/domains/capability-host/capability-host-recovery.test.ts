@@ -73,6 +73,8 @@ function makeHarness() {
         projectId: null,
         itx: {} as Project,
         now: () => clock.now,
+        setScriptDeadline: (executionId, expiresAt) =>
+          registry.setAlarmSlice(`script-execution-deadline:${executionId}`, expiresAt),
         reads: {
           snapshot: () => registry.reads(processor).snapshot(),
           waitUntilEvent: (input) => registry.reads(processor).waitUntilEvent(input),
@@ -130,9 +132,19 @@ function makeHarness() {
         clock.now = Math.max(clock.now, alarm.at);
         alarm.at = null;
         await registry.handleAlarm();
+        // Mirror CapabilityHostDurableObject.alarm(): the registry owns the
+        // shared platform alarm, then the host performs two passes so the
+        // first can append a deadline settlement and the second can fold it.
+        await registry.catchUp(SLUG);
+        await processor.reconcileScriptDeadlines();
+        await registry.catchUp(SLUG);
         await settle();
       }
       clock.now = target;
+    },
+    async requestScript(input: { code: string; executionId: string; expiresAt: number }) {
+      await registry.catchUp(SLUG);
+      return await processor.requestScript(input);
     },
   };
   return harness;
@@ -157,23 +169,53 @@ describe("script execution ownership recovery", () => {
     expect(h.state().scriptExecutions).toEqual({});
   });
 
-  it("settles a request whose foreground owner vanished without running it", async () => {
+  it("keeps a requested intent claimable until its durably armed deadline", async () => {
     const h = makeHarness();
+    const expiresAt = h.clock.now + 60_000;
     await h.stream.append({
       type: T.requested,
-      payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now + 60_000 },
+      payload: { code: "async () => 1", executionId: "exec-1", expiresAt },
     });
 
     await h.deliverPending();
 
     expect(h.stream.events.some((event) => event.type === T.started)).toBe(false);
+    expect(h.stream.events.some((event) => event.type === T.completed)).toBe(false);
+    expect(h.state().scriptExecutions["exec-1"]).toMatchObject({ status: "requested" });
+    expect(h.alarm.at).not.toBeNull();
+    expect(h.alarm.at!).toBeLessThanOrEqual(expiresAt);
+
+    await h.advance(60_000);
+
     expect(h.stream.events.find((event) => event.type === T.completed)?.payload).toMatchObject({
       executionId: "exec-1",
       settlement: {
-        failureKind: "orphaned",
+        failureKind: "expired",
         executionMayHaveOccurred: false,
       },
     });
+  });
+
+  it("lets a new host incarnation claim a deterministic request that never started", async () => {
+    const h = makeHarness();
+    const intent = {
+      code: "async () => 1",
+      executionId: "exec-claim-after-crash",
+      expiresAt: h.clock.now + 60_000,
+    };
+    await h.stream.append({ type: T.requested, payload: intent });
+    await h.deliverPending();
+
+    h.crash();
+    await h.deliverPending();
+    const handoff = await h.requestScript(intent);
+
+    expect(handoff.preparation).toEqual({ status: "ready", code: intent.code });
+    expect(
+      h.stream.events.filter(
+        (event) => event.type === T.started && event.payload?.executionId === intent.executionId,
+      ),
+    ).toHaveLength(1);
   });
 
   it("leaves a started foreground attempt open before the deadline", async () => {

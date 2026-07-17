@@ -6,6 +6,7 @@ import {
   StreamProcessorRunner,
   type ProcessorProgress,
 } from "../streams/stream-processor-runner.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,
@@ -44,10 +45,23 @@ const runnerReadsByProcessor = new WeakMap<AgentProcessor, AgentSnapshotReads>()
  * with (the processor instance holds no readable fold under runner drive).
  */
 function makeAgentProcessor(
-  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads">,
+  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads" | "runScript"> &
+    Partial<Pick<ConstructorParameters<typeof AgentProcessor>[0], "runScript">>,
 ): AgentProcessor {
   const processor: AgentProcessor = new AgentProcessor({
     ...deps,
+    // Most processor tests are about extraction/rendering rather than the
+    // capability-host driver. Mirror that driver's durable request append so
+    // those assertions retain a production-shaped journal seam.
+    runScript:
+      deps.runScript ??
+      (async (input) => {
+        await deps.stream.append({
+          type: "events.iterate.com/capability-host/script-run-requested",
+          idempotencyKey: `test/script-run-requested@${input.executionId}`,
+          payload: input,
+        });
+      }),
     reads: {
       snapshot: () => {
         const reads = runnerReadsByProcessor.get(processor);
@@ -604,6 +618,30 @@ describe("minimal web-chat agent processors", () => {
       (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(requested?.payload?.code).toBe(script);
+  });
+
+  it("hands provider scripts to an explicit driver with a stable execution identity", async () => {
+    const stream = agentStream();
+    const runScript = vi.fn(async () => undefined);
+    const agent = makeAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      runScript,
+    });
+    const code = "async (itx) => { await itx.chat.sendMessage('hello'); }";
+
+    const output = await appendProviderOutput(stream, `\`\`\`ts\n${code}\n\`\`\``);
+    await agentRunner(agent, stream).catchUp();
+
+    expect(runScript).toHaveBeenCalledExactlyOnceWith({
+      code,
+      executionId: `agent-output:${output.offset}`,
+      expiresAt: Date.parse(output.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+    });
+    expect(
+      eventsOfType(stream, "events.iterate.com/capability-host/script-run-requested"),
+    ).toHaveLength(0);
   });
 
   it("does not execute assistant context that merely claims an LLM request offset", async () => {
