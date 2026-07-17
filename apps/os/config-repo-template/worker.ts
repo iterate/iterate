@@ -563,8 +563,13 @@ export class GuestbookApp extends IterateDurableObject {
     }
 
     // Read-your-writes before every render: wake delivery is asynchronous,
-    // so pull the runner to head, then read the fold through the
-    // registry's runner-backed snapshot.
+    // so pull the runner to head and read the fold through the registry's
+    // runner-backed snapshot. Two passes: a milestone the first pass's
+    // at-head reconcile journals lands AFTER the scan that pass already
+    // finished, so only the second pass folds it (the unit tests deliver
+    // twice for the same reason). One extra pass is a fixed point —
+    // folding a milestone never emits another.
+    await registry.catchUp("guestbook");
     await registry.catchUp("guestbook");
     const { state } = await registry.reads(guestbook).snapshot();
     const title = escapeHtml(state.birthCertificate?.config.title ?? "Guestbook");
