@@ -36,6 +36,7 @@ import {
 } from "./stream-subscribers.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
+import type { StreamEventWaitLeaseInput, StreamEventWaitLeaseResult } from "./wait-for-event.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -1359,6 +1360,16 @@ export class StreamDurableObject extends DurableObject<Env> {
    * never by an inbound subscribe call.
    */
   subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
+    return this.#openEphemeralSubscription(args);
+  }
+
+  #openEphemeralSubscription(
+    args: Parameters<Stream["subscribe"]>[0],
+    internal: {
+      recordLifecycleFacts?: boolean;
+      replayEphemeralAfterOffset?: boolean;
+    } = {},
+  ): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
       throw new Error(`subscriptionKey "${subscriptionKey}" is reserved for a durable subscriber`);
@@ -1411,11 +1422,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriptionKey,
       sink: args.processEventBatch,
       replayAfterOffset: args.replayAfterOffset,
+      replayEphemeralAfterOffset: internal.replayEphemeralAfterOffset,
       expectedIncarnation: args.expectedIncarnation,
       maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector,
       events: args.events,
       presence,
+      recordLifecycleFacts: internal.recordLifecycleFacts,
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,
     });
@@ -1429,23 +1442,16 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * One-shot convenience over `subscribe()`: replay durable events from the
-   * requested cursor, then live-tail until a caller predicate accepts an event.
+   * Internal bounded leg of the public waitForEvent implementation.
    *
-   * Rides an ephemeral subscription, so it CAN match an ephemeral event
-   * appended after this wait opens. It never matches a historical ephemeral
-   * row, regardless of `afterOffset`.
-   *
-   * Intentionally not a durable waiter. If the RPC caller or this DO
-   * incarnation dies, the wait dies too; callers that need retry semantics
-   * should call again with the same `afterOffset`.
+   * A pending JS-RPC call does not keep a Stream Durable Object resident. This
+   * method therefore returns after one short lease even when no event matched,
+   * together with the exact raw-log cursor scanned. StreamRpcTarget reopens
+   * from that cursor in whichever incarnation is current.
    */
-  async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): Promise<StreamEvent> {
-    if (args.eventTypes === undefined && args.predicate === undefined) {
-      throw new Error("waitForEvent requires eventTypes or predicate.");
-    }
+  async waitForEventLease(args: StreamEventWaitLeaseInput): Promise<StreamEventWaitLeaseResult> {
     if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
-      throw new Error("waitForEvent timeoutMs must be a positive number.");
+      throw new Error("waitForEvent lease timeoutMs must be a positive number.");
     }
     if (
       args.afterOffset !== undefined &&
@@ -1454,56 +1460,35 @@ export class StreamDurableObject extends DurableObject<Env> {
       throw new Error("waitForEvent afterOffset must be a non-negative safe integer.");
     }
 
-    const predicate = args.predicate ?? (() => true);
-    const found = Promise.withResolvers<StreamEvent>();
-
-    // Bound the memory a long wait on a busy stream can hold: keep a count and a
-    // small ring of recent types for the timeout message rather than every seen
-    // event (events can be multi-megabyte).
-    let seenCount = 0;
-    const recentTypes: string[] = [];
+    const found = Promise.withResolvers<StreamEventWaitLeaseResult>();
+    let scannedThroughOffset = args.afterOffset ?? this.#coreProcessorState.maxOffset;
     let settled = false;
 
-    // Scan delivered batches in order. Predicate work is chained instead of run
-    // inline so an async predicate never blocks stream delivery, and a later
-    // batch can never overtake an earlier one. The first match wins; a predicate
-    // that throws rejects the wait.
-    let scan: Promise<void> = Promise.resolve();
-    const handle = this.subscribe({
-      eventTypes: args.eventTypes,
-      replayAfterOffset: args.afterOffset,
-      subscriber: { description: "waitForEvent" },
-      processEventBatch: ({ events }) => {
-        scan = scan.then(async () => {
-          for (const event of events) {
-            if (settled) break;
-            seenCount += 1;
-            recentTypes.push(event.type);
-            if (recentTypes.length > 20) recentTypes.shift();
-            if (await predicate(event)) {
-              settled = true;
-              found.resolve(event);
-              break;
-            }
-          }
-        });
-        void scan.catch((error: unknown) => {
-          if (settled) return;
+    const handle = this.#openEphemeralSubscription(
+      {
+        eventTypes: args.eventTypes,
+        replayAfterOffset: args.afterOffset,
+        subscriber: { description: "waitForEvent" },
+        processEventBatch: (batch) => {
+          scannedThroughOffset = Math.max(scannedThroughOffset, batch.scannedThroughOffset);
+          if (settled || batch.events.length === 0) return;
           settled = true;
-          found.reject(error);
-        });
+          found.resolve({ events: batch.events, scannedThroughOffset });
+        },
       },
-    });
+      {
+        // A sequence of short leases is one logical wait, not a parade of
+        // subscribers. Keep it visible in runtimeState for diagnostics but do
+        // not append connected/disconnected facts every four seconds.
+        recordLifecycleFacts: false,
+        replayEphemeralAfterOffset: args.replayEphemeralAfterOffset,
+      },
+    );
 
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      found.reject(
-        new Error(
-          `Timed out waiting for stream event after ${args.timeoutMs}ms ` +
-            `(saw ${seenCount} events; recent types: ${recentTypes.join(", ") || "none"}).`,
-        ),
-      );
+      found.resolve({ events: [], scannedThroughOffset });
     }, args.timeoutMs);
 
     try {

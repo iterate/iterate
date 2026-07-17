@@ -181,6 +181,12 @@ type OpenConnectionArgs = {
   /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
   sink: RetainedProcessEventBatch;
   replayAfterOffset?: number;
+  /**
+   * Internal continuation lane for one logical wait spanning several bounded
+   * connections. Public subscribe() never sets this: its historical
+   * ephemerals remain invisible by contract.
+   */
+  replayEphemeralAfterOffset?: boolean;
   /** Stable stream creation identity observed by the caller; null binds to an unborn stream. */
   expectedIncarnation?: string | null;
   /** Reject the open if replay would exceed this many raw offsets. */
@@ -188,8 +194,10 @@ type OpenConnectionArgs = {
   selector?: CompiledEventSelector;
   /** `false` = state-only batches. Default `true`. */
   events?: boolean;
-  /** Validated serializable identity, appended as the connected presence fact. */
+  /** Validated serializable identity surfaced in runtime state and presence facts. */
   presence?: StreamSubscriberDescriptor;
+  /** Internal subscriptions can stay runtime-visible without mutating the event log. */
+  recordLifecycleFacts?: boolean;
   /** Live processor runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
   /** Subscriber's ping capability, retained for the connection lifetime. */
@@ -385,11 +393,13 @@ export class StreamSubscribers {
     subscriptionKey: string;
     sink: ProcessEventBatch;
     replayAfterOffset?: number;
+    replayEphemeralAfterOffset?: boolean;
     expectedIncarnation?: string | null;
     maxReplayOffsetGap?: number;
     selector?: CompiledEventSelector;
     events?: boolean;
     presence?: StreamSubscriberDescriptor;
+    recordLifecycleFacts?: boolean;
     getRuntimeState?: GetProcessorRuntimeState;
     ping?: StreamSubscriberPing;
   }): Connection {
@@ -402,11 +412,13 @@ export class StreamSubscribers {
       // subscriber's problem: explicit unsubscribe or best-effort onRpcBroken.
       sink: retainProcessEventBatch(args.sink),
       replayAfterOffset: args.replayAfterOffset,
+      replayEphemeralAfterOffset: args.replayEphemeralAfterOffset,
       expectedIncarnation: args.expectedIncarnation,
       maxReplayOffsetGap: args.maxReplayOffsetGap,
       selector: args.selector,
       events: args.events,
       presence: args.presence,
+      recordLifecycleFacts: args.recordLifecycleFacts,
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,
     });
@@ -1157,7 +1169,10 @@ export class StreamSubscribers {
                   ? readEvents.filter((entry) => entry.event.ephemeral !== true)
                   : readEvents.filter(
                       (entry) =>
-                        entry.event.ephemeral !== true || entry.event.offset > openedAtOffset,
+                        entry.event.ephemeral !== true ||
+                        entry.event.offset > openedAtOffset ||
+                        (args.replayEphemeralAfterOffset === true &&
+                          entry.event.offset > (args.replayAfterOffset ?? openedAtOffset)),
                     );
               const delivered =
                 args.selector === undefined
@@ -1241,6 +1256,7 @@ export class StreamSubscribers {
       }
     };
 
+    const recordLifecycleFacts = args.recordLifecycleFacts ?? true;
     const connection: Connection = {
       subscriptionType,
       startedAt: new Date(this.#hooks.now()).toISOString(),
@@ -1258,7 +1274,7 @@ export class StreamSubscribers {
       wake: () => void pump(),
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
-      close: (reason, recordFact = true) => {
+      close: (reason, recordFact = recordLifecycleFacts) => {
         if (!open) return;
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
@@ -1287,14 +1303,16 @@ export class StreamSubscribers {
     };
 
     this.#connections.set(subscriptionKey, connection);
-    this.#hooks.appendFact({
-      type: "events.iterate.com/stream/subscriber-connected",
-      payload: {
-        subscriptionKey,
-        subscriptionType,
-        ...(args.presence === undefined ? {} : { subscriber: args.presence }),
-      },
-    });
+    if (recordLifecycleFacts) {
+      this.#hooks.appendFact({
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: {
+          subscriptionKey,
+          subscriptionType,
+          ...(args.presence === undefined ? {} : { subscriber: args.presence }),
+        },
+      });
+    }
     sink.onRpcBroken?.(() => connection.close("rpc-broken"));
     connection.wake();
     return connection;

@@ -154,6 +154,7 @@ import {
   retryStreamUnavailable,
   rethrowStreamUnavailable,
 } from "./domains/streams/stream-unavailable.ts";
+import { waitForStreamEvent } from "./domains/streams/wait-for-event.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -546,15 +547,21 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
    * Durable rows after `afterOffset` are replayed. It can also match an
    * `ephemeral: true` event appended after this wait opens, but historical
-   * ephemeral rows are never replayed.
+   * ephemeral rows are never replayed. One logical wait transparently reopens
+   * bounded leases across normal Stream DO hibernation or restart; a repeated
+   * lifecycle-failure storm rejects as `stream-unavailable` instead of
+   * retrying without bound.
    */
-  waitForEvent(args: {
+  async waitForEvent(args: {
     afterOffset?: number;
     eventTypes?: readonly string[];
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+    return await waitForStreamEvent({
+      args,
+      lease: (leaseArgs) => this.durableObjectStub.waitForEventLease(leaseArgs),
+    });
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */

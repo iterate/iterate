@@ -37,6 +37,7 @@
 import { itxEnv } from "../../env.ts";
 import { ItxExpression } from "../../itx/expression.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
+import { deleteR2ObjectIfPresent } from "./r2-delete.ts";
 import { expectedSearchSyncSkipReason } from "./search-sync-outcome.ts";
 import {
   MAX_SEARCH_KEY_BYTES,
@@ -210,7 +211,7 @@ export async function indexStreamOffsets(input: {
       // rather than skip so a segment that RENDERED before but no longer does
       // (e.g. after a disallow-list change) self-heals instead of serving a
       // stale document forever.
-      await itxEnv.SEARCH_BUCKET.delete(key);
+      await deleteR2ObjectIfPresent(itxEnv.SEARCH_BUCKET, key);
       continue;
     }
     const { first: firstOffset, last: lastOffset } = segmentOffsetRange(segment);
@@ -322,7 +323,7 @@ export async function mirrorFileToSearchIndex(input: {
   const key = fileSearchKey({ projectId: input.projectId, path: input.path });
   try {
     if (input.bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) {
-      await itxEnv.SEARCH_BUCKET.delete(key);
+      await deleteR2ObjectIfPresent(itxEnv.SEARCH_BUCKET, key);
       return "skipped";
     }
     await itxEnv.SEARCH_BUCKET.put(key, input.bytes, {
@@ -342,7 +343,8 @@ export async function removeFileFromSearchIndex(input: {
   projectId: string;
 }): Promise<void> {
   try {
-    await itxEnv.SEARCH_BUCKET.delete(
+    await deleteR2ObjectIfPresent(
+      itxEnv.SEARCH_BUCKET,
       fileSearchKey({ projectId: input.projectId, path: input.path }),
     );
   } catch (error) {

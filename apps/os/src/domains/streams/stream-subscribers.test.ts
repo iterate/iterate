@@ -1060,6 +1060,22 @@ describe("StreamSubscribers", () => {
     ]);
   });
 
+  it("n2. internal ephemeral leases are runtime-visible without lifecycle facts", () => {
+    const h = makeHarness();
+    const connection = h.subscribers.openEphemeral({
+      subscriptionKey: "internal-wait-lease",
+      sink: () => undefined,
+      recordLifecycleFacts: false,
+    });
+
+    expect(h.subscribers.hasConnection("internal-wait-lease")).toBe(true);
+    expect(h.factsOfType(CONNECTED)).toEqual([]);
+
+    connection.close("unsubscribed");
+    expect(h.subscribers.hasConnection("internal-wait-lease")).toBe(false);
+    expect(h.factsOfType(DISCONNECTED)).toEqual([]);
+  });
+
   it("o. webhook: one POST per event in order, per-event acking, lean envelope", async () => {
     const h = makeHarness();
     h.configure(webhookPayload(), 0);

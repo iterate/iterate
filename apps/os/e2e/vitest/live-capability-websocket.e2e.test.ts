@@ -102,7 +102,13 @@ test("the boundary, pinned: a socket-carrying Response dies crossing the worker 
 
 test.fails(
   "DESIRED: a live-capability fetch handler serves WebSockets at an app host",
-  { timeout: 150_000 },
+  {
+    // This is an explicitly classified expected failure. Vitest otherwise
+    // applies the suite's CI retry before inverting the result, creating false
+    // retry telemetry for the same pinned platform boundary on every run.
+    retry: 0,
+    timeout: 150_000,
+  },
   async () => {
     const marker = crypto.randomUUID().slice(0, 8);
     const slug = `live-ws-${marker}`;

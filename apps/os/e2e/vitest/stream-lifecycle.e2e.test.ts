@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../../src/domains/streams/schemas.ts";
+import { isStreamUnavailableError } from "../../src/domains/streams/stream-unavailable.ts";
 import type { Stream } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -536,10 +537,10 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
 });
 
 // KNOWN GAP (2026-07-02, fails against deployed previews): when a WebSocket
-// client drops mid-waitForEvent, the stream keeps the internal waitForEvent
-// subscription until session cleanup notices — the DO stays pinned longer than
-// it should (same failure family as the cross-script subscription DO-duration
-// incident). Un-skip once waitForEvent registers an abort on transport drop.
+// client drops mid-waitForEvent, the worker-side call does not observe that
+// transport abort. Bounded leases now release each DO subscription within four
+// seconds, but the orphaned worker call still reopens leases until its overall
+// timeout. Un-skip once waitForEvent propagates the transport abort.
 test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitForEvent subscription", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/lifecycle-wait-for-event-${marker}`;
@@ -586,16 +587,12 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
   }
 });
 
-test("a stream DO kill mid-call rejects with the stream-unavailable tag", async () => {
-  // The retryability contract: a rejection caused by the DO incarnation dying
-  // (kill/eviction/deploy reset) must cross the wire tagged
-  // `stream-unavailable: …` so clients can retry instead of treating it as an
-  // app-level failure — the browser mirror's appendBatch rides exactly this
-  // tag to survive kills mid-blast (see domains/streams/stream-unavailable.ts;
-  // workerd's `durableObjectReset` flag never survives capnweb, so the worker
-  // door is the only hop that can tell the two apart). The parked waitForEvent
-  // makes the proof deterministic: its runtime connection registering proves
-  // the call is in flight inside the DO when kill() lands.
+test("waitForEvent survives a stream DO kill and resolves from the next incarnation", async () => {
+  // A pending JS-RPC promise does not pin a Stream DO. The public wait must
+  // therefore be one worker-owned operation made from bounded DO leases, not a
+  // single parked call whose timer can outlive the incarnation receiving new
+  // appends. Registering the internal subscription before kill() makes the
+  // incarnation split deterministic.
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -606,24 +603,37 @@ test("a stream DO kill mid-call rejects with the stream-unavailable tag", async 
   using project = itx.projects.create({ slug: `lifecycle-kill-tag-${marker}` });
   using stream = project.streams.get(`/lifecycle-kill-tag-${marker}`);
 
-  const parked = (async () => {
-    try {
-      await stream.waitForEvent({ eventTypes: [WAIT_FOR_EVENT_TYPE], timeoutMs: 60_000 });
-      return undefined;
-    } catch (error) {
-      return error;
-    }
-  })();
+  const pending = stream.waitForEvent({ eventTypes: [WAIT_FOR_EVENT_TYPE], timeoutMs: 60_000 });
   await waitForWaitForEventConnection(stream);
 
-  // The abort can take the kill() call itself down with it — that rejection
-  // is incidental; the parked call's is the one under test.
+  // The abort can take the kill() call itself down with it; that rejection is
+  // incidental. A stable idempotency key makes the post-reset append safe to
+  // retry if its commit wins a race with the old incarnation's teardown.
   await stream.kill().catch(() => undefined);
+  await waitForCondition(
+    async () => {
+      try {
+        await stream.append({
+          idempotencyKey: `wait-after-kill-${marker}`,
+          payload: { marker },
+          type: WAIT_FOR_EVENT_TYPE,
+        });
+        return true;
+      } catch (error) {
+        if (isStreamUnavailableError(error)) return false;
+        throw error;
+      }
+    },
+    {
+      description: "the replacement stream incarnation to accept an append",
+      timeoutMs: 30_000,
+    },
+  );
 
-  const rejection = await parked;
-  expect(rejection).toBeInstanceOf(Error);
-  expect((rejection as Error).message).toContain("stream-unavailable: ");
-  expect((rejection as Error).message).toContain("kill requested");
+  await expect(pending).resolves.toMatchObject({
+    payload: { marker },
+    type: WAIT_FOR_EVENT_TYPE,
+  });
 });
 
 async function waitForConfiguredProcessorConnections(
