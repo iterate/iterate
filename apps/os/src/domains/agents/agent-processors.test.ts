@@ -3191,8 +3191,9 @@ describe("busy/idle status announcements", () => {
       // The busy trigger lands, with a successor event so its frame is not
       // the final page; the parked pull reduces AND COMMITS it, then holds
       // before the at-head pass. The successor is a CONSUMED lifecycle
-      // re-check (`stream/woken`): the at-head reconcile fires only on a
-      // consumed event delivered at head, and this is that event.
+      // re-check (`stream/woken`), so this scenario exercises the normal
+      // consumed-event at-head pass. A final scan containing no consumed event
+      // would instead exercise the runner's eventless at-head pass.
       const [busyMessage] = await stream.append({ return: "events" }, userMessage());
       await stream.append({
         type: "events.iterate.com/stream/woken",

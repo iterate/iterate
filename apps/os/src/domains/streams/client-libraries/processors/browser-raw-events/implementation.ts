@@ -58,6 +58,7 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEvent"]>[0],
   ): undefined {
     const event = args.event;
+    // Event-less at-head pass: this projection has no at-head work.
     if (event === null) return;
     // Sparse offsets are expected: historical ephemerals are intentionally
     // absent. The runner validates the enclosing scan envelope before this

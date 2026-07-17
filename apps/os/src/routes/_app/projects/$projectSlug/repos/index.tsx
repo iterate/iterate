@@ -23,8 +23,8 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { useItx, useLiveState } from "iterate/react";
 import { AddRepoFromGithub } from "~/components/add-repo-from-github.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
@@ -36,7 +36,6 @@ import {
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
   path: z
@@ -63,16 +62,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
       routeConfig: await getPublicRouteConfig(),
       streamBreadcrumb: streamBreadcrumb(context.project, "/repos"),
     }),
-  component: ProjectReposIndexPage,
+  component: ProjectReposIndexContent,
 });
-
-function ProjectReposIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectReposIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectReposIndexContent() {
   const params = Route.useParams();

@@ -95,6 +95,7 @@ export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract
     event,
     state,
   }: Parameters<StreamProcessor<TelegramProcessorContract>["processEvent"]>[0]): undefined {
+    // Event-less at-head pass: this processor has no at-head work.
     if (event === null) return;
     if (event.type === "events.iterate.com/telegram/created") return;
     const connection = state.birthCertificate?.config.connection;

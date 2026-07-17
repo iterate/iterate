@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { Input } from "@iterate-com/ui/components/input";
+import { useItxQuery } from "iterate/react";
 import {
   listInstallationRepos,
   type InstallationRepo,
 } from "~/components/github-installation-repos.ts";
-import { useItxQuery } from "~/itx/itx-react.tsx";
 
 /** Filter + pick an installation repo. Suspends on the Octokit list. */
 export function InstallationRepoPicker({

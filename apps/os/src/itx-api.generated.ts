@@ -64,8 +64,6 @@ export interface Session {
   streams: StreamCollection;
   /** Deployment-wide repos (admin only; projectId: null). */
   repos: RepoCollection;
-  /** Admin-only exact-offset Stream Durable Object recovery. */
-  streamRecovery: StreamRecoveryCollection;
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
   projects: ProjectCollection;
 }
@@ -198,16 +196,19 @@ export interface RepoCollection {
   get(path: string): Repo;
 }
 
-/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
-export interface StreamRecoveryCollection {
-  get(input: { projectId: string | null; path: string }): StreamRecovery;
-}
-
 /** Catalog of projects reachable from a {@link Session}. */
 export interface ProjectCollection {
   __describe(): Promise<Description>;
-  /** The itx at the project root for a `prj_…` id. */
-  get(projectId: string): Promise<Project>;
+  /**
+   * The itx at the project root, addressable by `prj_…` id OR by URL slug — the
+   * browser passes `params.projectSlug` straight through, no client-side
+   * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution
+   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},
+   * which passes `prj_` ids through untouched and resolves slugs); slugs are
+   * immutable, so a slug handle can't silently repoint. Confinement stays keyed
+   * on the resolved id — the access check runs on the id, never the raw input.
+   */
+  get(idOrSlug: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
    * bootstrap saga has committed `project/ready` — convenient for scripts
@@ -1427,28 +1428,6 @@ export interface Stream {
   }): Promise<StreamEvent>;
   /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
-}
-
-/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
-export interface StreamRecovery {
-  exportForRecovery(args?: {
-    afterOffset?: number;
-    limit?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportPage>;
-  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
-  exportToRecovery(args: {
-    sink: StreamRecoveryExportSink;
-    afterOffset?: number;
-    limit?: number;
-    maxPages?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportSummary>;
-  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
-    restoredEventCount: number;
-    lastImportedOffset: number;
-    currentMaxOffset: number;
-  }>;
 }
 
 /**
@@ -3278,104 +3257,6 @@ export type StreamSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
   unsubscribe(): void;
-};
-
-/** One bounded page of a stream's storage-level recovery export. */
-export type StreamRecoveryExportPage = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  events: {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          crossPostedFrom?:
-            | {
-                subscriptionKey: string;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  }[];
-  throughOffset: number;
-  complete: boolean;
-};
-
-/** Acknowledged page sink used by one long-running recovery export RPC. */
-export type StreamRecoveryExportSink = {
-  write(page: StreamRecoveryExportPage): Promise<void>;
-};
-
-/** Small result returned after every exported page has been acknowledged. */
-export type StreamRecoveryExportSummary = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  throughOffset: number;
-  exportedEventCount: number;
-  pageCount: number;
-  lastExportedOffset: number;
-  complete: boolean;
-};
-
-/** A complete normalized stream log accepted by storage-level recovery restore. */
-export type StreamRecoveryRestoreInput = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  events: {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          crossPostedFrom?:
-            | {
-                subscriptionKey: string;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  }[];
-  highestAssignedOffset: number;
 };
 
 /**

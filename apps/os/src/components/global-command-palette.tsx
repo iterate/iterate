@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMatches, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -8,12 +7,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
+import { connectItx, connectIterateSession, useIterateSessionQuery } from "iterate/react";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
-import { fetchProjectsList, projectsListQueryKey } from "~/lib/projects-query.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
@@ -106,11 +104,10 @@ export function GlobalCommandPalette() {
       return {
         source: (path) => ({
           async subscribe(args) {
-            const itx = await connectItxBrowser();
             const stream =
               adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
-                ? itx.streams.get(path)
-                : itx.projects.get(adminStream.adminProjectId).streams.get(path);
+                ? (await connectIterateSession()).streams.get(path)
+                : (await connectItx(adminStream.adminProjectId)).streams.get(path);
             return stream.subscribe(args);
           },
         }),
@@ -128,8 +125,8 @@ export function GlobalCommandPalette() {
     return {
       source: (path) => ({
         async subscribe(args) {
-          // Key by project ID so we share the project provider's pooled socket.
-          const itx = await connectItxBrowser({ projectId: activeStream.projectId });
+          // The one session socket, narrowed to this project by id.
+          const itx = await connectItx(activeStream.projectId);
           return itx.streams.get(path).subscribe(args);
         },
       }),
@@ -191,9 +188,9 @@ function ProjectPickerDialog({
   onPick: (project: { id: string; slug: string }) => void;
   open: boolean;
 }) {
-  const { data: projects } = useQuery({
-    queryKey: projectsListQueryKey,
-    queryFn: fetchProjectsList,
+  const { data: projects } = useIterateSessionQuery({
+    key: ["projects"],
+    query: (session) => session.projects.list(),
     enabled: open,
   });
 

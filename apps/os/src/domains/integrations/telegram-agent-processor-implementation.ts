@@ -125,13 +125,14 @@ export class TelegramAgentProcessor extends StreamProcessor<
   protected override processEvent(
     args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0],
   ): undefined {
-    if (args.state.birthCertificate === null) return;
-    if (args.event !== null && args.event.type === "events.iterate.com/telegram-agent/created")
+    if (args.event !== null && args.event.type === "events.iterate.com/telegram-agent/created") {
       return;
+    }
+    if (args.state.birthCertificate === null) return;
     this.#perEventSideEffects(args);
-    // The at-head typing repaint (was `onCaughtUp`): fires only for the last
-    // consumed event of a batch that reached head (`delivery.caughtUp`), and
-    // only AFTER the per-event switch above, so a typing-worthy head event has
+    // The at-head typing repaint fires after the scan reaches head, on the
+    // last consumed event or the runner's eventless pass. It runs only AFTER
+    // the per-event switch above, so a typing-worthy head event has
     // already landed in the memo when the repaint reads it. ONE blocking
     // closure registered here; the former inner
     // `blockProcessorWhile(#sendTyping…)` is a direct await inside it — a
@@ -153,6 +154,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     event,
     state,
   }: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0]): undefined {
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
     if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/telegram/webhook-received": {

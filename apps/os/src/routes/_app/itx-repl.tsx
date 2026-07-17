@@ -5,24 +5,31 @@
 // dynamic worker — and the browser can PROVIDE live capabilities too (see the
 // examples).
 //
-// The REPL rides the ONE browser itx primitive — useItx (~/itx/itx-react.tsx).
-// It does NOT open its own socket: the global repl shares the tab's global
-// socket, the project repl shares that project's socket, and neither owns the
-// connection. ConnectedItxRepl is the single connect wrapper both routes use.
-// See the itx-react.tsx header for the single-socket-per-context model and the
-// disposal contract.
+// The REPL rides the ONE browser itx session — useIterateSession (iterate/react).
+// It does NOT open its own socket: the tab has a single itx socket, and the
+// global repl uses the Session while a project repl narrows it via
+// session.projects.get(id); neither owns the connection. ConnectedItxRepl is
+// the single connect wrapper both routes use. See the itx-react.tsx header for
+// the one-socket model and the disposal contract.
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
+import type { RpcStub } from "capnweb";
+import { useItx, useIterateSession } from "iterate/react";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   runBrowserReplEntry,
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
+import type { Project, Session } from "~/itx-api.generated.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
-import { useItx, type ItxReactHandle } from "~/itx/itx-react.tsx";
 import { ItxRepl } from "~/components/itx-repl.tsx";
+
+/** The REPL holds EITHER the Session (global repl) or a project itx — the
+ * runner (`browser-repl.ts`) executes arbitrary code against `itx: unknown`, so
+ * the honest handle type is the union, not a cast that erases the boundary. */
+type ReplHandle = RpcStub<Session> | RpcStub<Project>;
 
 export const Route = createFileRoute("/_app/itx-repl")({
   staticData: {
@@ -41,12 +48,12 @@ function ItxReplConnecting() {
 }
 
 /**
- * The one connect wrapper both repls share. `useItx` never SSRs and suspends
+ * The one connect wrapper both repls share. `useIterateSession` never SSRs and suspends
  * until connected, so this gates it behind ClientOnly (the route still SSRs its
- * shell) + Suspense, then renders the repl against the live pooled handle.
- * `poolContext` is the useItx key — a project id, or undefined for global = the
- * connect endpoint. It also keys the inner component, so switching project
- * remounts the repl with a fresh scope + history.
+ * shell) + Suspense, then renders the repl against the live handle. `poolContext`
+ * is a project id/slug to narrow to, or undefined for the global session. It also
+ * keys the inner component, so switching project remounts the repl with a fresh
+ * scope + history.
  */
 export function ConnectedItxRepl({
   poolContext,
@@ -85,8 +92,44 @@ function ItxReplConnected({
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
-  const itx = useItx({ projectId: poolContext });
-  return <ItxReplPage itx={itx} context={context} initialCode={initialCode} scope={scope} />;
+  // One socket either way, but split so each branch calls ONE hook: the global
+  // repl reads the Session; a project repl reads the CACHED project itx (useItx —
+  // not `session.projects.get()` per render, which would leak an undisposed
+  // capability every render). ConnectedItxRepl keys by poolContext, so this
+  // branch is stable per mount. The pool owns the connection; the REPL never
+  // disposes this handle.
+  return poolContext === undefined ? (
+    <SessionReplConnected context={context} initialCode={initialCode} scope={scope} />
+  ) : (
+    <ProjectReplConnected
+      poolContext={poolContext}
+      context={context}
+      initialCode={initialCode}
+      scope={scope}
+    />
+  );
+}
+
+// oxlint-disable-next-line iterate/no-single-use-helpers -- isolates the single useIterateSession() call to the global branch; inlining into ItxReplConnected's conditional would be a rules-of-hooks violation.
+function SessionReplConnected(props: {
+  context?: "session" | "project";
+  initialCode?: string;
+  scope?: Record<string, unknown>;
+}) {
+  return <ItxReplPage itx={useIterateSession()} {...props} />;
+}
+
+// oxlint-disable-next-line iterate/no-single-use-helpers -- isolates the single useItx(poolContext) call to the project branch; inlining into ItxReplConnected's conditional would be a rules-of-hooks violation.
+function ProjectReplConnected({
+  poolContext,
+  ...props
+}: {
+  poolContext: string;
+  context?: "session" | "project";
+  initialCode?: string;
+  scope?: Record<string, unknown>;
+}) {
+  return <ItxReplPage itx={useItx(poolContext)} {...props} />;
 }
 
 function ItxReplPage({
@@ -98,7 +141,7 @@ function ItxReplPage({
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
-  itx: ItxReactHandle;
+  itx: ReplHandle;
   context?: "session" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
@@ -117,7 +160,7 @@ function ItxReplPage({
   // binds/clears a reference — it never disposes `itx` or closes the socket
   // (the pool owns that). A fresh stub after a pool reconnect rebinds here.
   useEffect(() => {
-    const globals = globalThis as typeof globalThis & { itx?: ItxReactHandle };
+    const globals = globalThis as typeof globalThis & { itx?: ReplHandle };
     globals.itx = itx;
     return () => {
       if (globals.itx === itx) delete globals.itx;

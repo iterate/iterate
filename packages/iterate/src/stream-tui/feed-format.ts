@@ -1,42 +1,38 @@
 /**
  * Pure terminal formatting for agent feed items. Phrasing deliberately rhymes
  * with the web feed (apps/os/src/components/agent-feed.tsx): activities read
- * "Ran code 2× · 3 requests · 7.4s", steps read "gpt-5 · 1.2s". Live status
+ * "Ran code 2× · 3 requests · 7.4 s", steps read "gpt-5 · 1.2s". Live status
  * is "Thinking" / "Waiting for a response" / "Running code 0.9s".
  */
-import type {
-  AgentUiActivity,
-  AgentUiStep,
+import {
+  summarizeAgentUiActivity,
+  type AgentUiActivity,
+  type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
-export function formatActivitySummary(activity: AgentUiActivity): string {
-  const codeCount = activity.steps.filter((step) => step.kind === "code").length;
-  const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
-  const interrupted = activity.steps.some(
-    (step) => step.kind === "llm" && step.outcome === "cancelled",
-  );
-  const parts: string[] = [];
-  if (codeCount > 0) parts.push(`Ran code ${codeCount}×`);
-  parts.push(`${requestCount} request${requestCount === 1 ? "" : "s"}`);
-  if (interrupted) parts.push("interrupted");
-  const totalMs =
-    activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
-  if (totalMs != null && totalMs > 0) parts.push(formatSeconds(totalMs));
-  return parts.join(" · ");
-}
+export { formatAgentUiActivitySummary as formatActivitySummary } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export function formatStepLine(step: AgentUiStep): string {
   if (step.kind === "code" && step.status === "running") {
     return "Running code";
   }
-  const label = step.kind === "code" ? "Ran code" : (step.model ?? "LLM request");
+  const label =
+    step.kind === "code"
+      ? "Ran code"
+      : step.cancelReason === "durable-object-crashed"
+        ? "Agent restarted"
+        : step.cancelReason === "interrupted-by-user-input"
+          ? "Stopped for your new message"
+          : step.outcome === "cancelled"
+            ? "Request cancelled"
+            : (step.model ?? "LLM request");
   const parts: string[] = [label];
   if (step.kind === "llm") {
+    if (step.outcome === "cancelled" && step.model != null) parts.push(step.model);
     if (step.inputTokens != null || step.outputTokens != null) {
       parts.push(`${formatTokens(step.inputTokens)} → ${formatTokens(step.outputTokens)} tok`);
     }
     if (step.outcome === "failed") parts.push("failed");
-    if (step.outcome === "cancelled") parts.push("interrupted");
   } else if (step.success === false) {
     parts.push("failed");
   }
@@ -55,11 +51,18 @@ export function formatLiveActivityLabel(
 ): string {
   const running = activity.steps.filter((step) => step.status === "running");
   const code = running.find((step) => step.kind === "code");
-  if (code != null) {
-    return `Running code ${formatSeconds(Math.max(0, nowMs - code.startedAtMs))}`;
+  if (code != null || activity.phase === "script") {
+    const startedAtMs = code?.startedAtMs ?? activity.phaseStartedAtMs ?? activity.startedAtMs;
+    return `Running code ${formatSeconds(Math.max(0, nowMs - startedAtMs))}`;
   }
   const llm = running.findLast((step) => step.kind === "llm");
-  if (llm == null || llm.kind !== "llm") return "Working…";
+  if (llm == null || llm.kind !== "llm") {
+    if (activity.phase === "llm") return "Waiting for a response";
+    if (summarizeAgentUiActivity(activity).restartPending) {
+      return "Restarted — continuing…";
+    }
+    return "Working…";
+  }
   if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
   return "Waiting for a response";
 }

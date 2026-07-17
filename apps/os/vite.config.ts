@@ -7,6 +7,7 @@ import viteReact from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
+import { canonicalizeOutputWranglerConfig } from "./scripts/canonicalize-output-wrangler-config.ts";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
 // wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
@@ -68,6 +69,10 @@ export default defineConfig({
   },
   resolve: {
     tsconfigPaths: true,
+    // apps/os consumes the workspace `iterate` package as TS source; dedupe
+    // pins the React trio to ONE instance even if a resolver walks into the
+    // linked package's own node_modules (two reacts = invalid-hook-call).
+    dedupe: ["react", "react-dom", "@tanstack/react-query"],
   },
   server: {
     host,
@@ -103,6 +108,7 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     tailwindcss(),
+    canonicalizeOutputWranglerConfig(),
     devServerDiscoveryFile(),
     ...(captunName
       ? [

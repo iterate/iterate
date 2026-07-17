@@ -192,8 +192,8 @@ type Connection = {
   hasPendingDelivery(): boolean;
   /** Whether this pump still needs parsed payloads below its newest notified head. */
   needsRetainedPayloads(): boolean;
-  /** Stop the pump, dispose the sink, optionally append the disconnect fact, drop from the table. */
-  close(reason: StreamSubscriberDisconnectReason, recordFact?: boolean): void;
+  /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
+  close(reason: StreamSubscriberDisconnectReason): void;
 };
 
 /** Everything `open()` needs to start one delivery connection. */
@@ -361,8 +361,6 @@ export class StreamSubscribers {
   #configuredConnectionCount = 0;
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
   #idleDeadlineMs: number | undefined;
-  /** Invalidates async delivery work started against a pre-recovery journal. */
-  #recoveryGeneration = 0;
 
   // Durable-lane in-memory state. All of it is reconstructible: a DO eviction
   // resets these and the durable rows + folded config re-derive every decision
@@ -548,37 +546,6 @@ export class StreamSubscribers {
     this.#releaseRetainedPayloadsIfIdle();
   }
 
-  /**
-   * Quiesce every delivery lane before storage-level recovery. Async calls
-   * cannot be cancelled, so their generation fence makes late results inert.
-   */
-  resetForRecovery(): void {
-    this.#recoveryGeneration += 1;
-    this.#clearIdleTimer();
-    this.#tearingDown = true;
-    try {
-      for (const connection of [...this.#connections.values()]) {
-        connection.close("replaced", false);
-      }
-    } finally {
-      this.#tearingDown = false;
-    }
-    this.#pokesInFlight.clear();
-    this.#pushDrains.clear();
-    this.#batchLimits.clear();
-    this.#consecutiveSkips.clear();
-    this.#subscriptionMetrics.clear();
-    this.#configuredSubscribers = undefined;
-    this.#configuredSubscriberEntries = [];
-    this.#sharedPushEventTypes = undefined;
-    this.#latestConfiguredOffsets.clear();
-    this.#compiledSelectors.clear();
-    this.#wakeGeneration += 1;
-    this.#wakeStateGeneration = -1;
-    this.#wakeState = undefined;
-    this.#deliveryFrameReader.releaseRetainedPayloads();
-  }
-
   /** Reuse the already-retained append tail when it proves a complete public read. */
   tryReadFreshEvents(args: {
     afterOffset: number;
@@ -589,7 +556,6 @@ export class StreamSubscribers {
   }): StreamEvent[] | undefined {
     return this.#deliveryFrameReader.tryReadFreshEvents(args);
   }
-
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
     this.wake();
@@ -710,7 +676,6 @@ export class StreamSubscribers {
     configOffset: number,
     epoch: number,
   ): void {
-    const recoveryGeneration = this.#recoveryGeneration;
     const state = this.#hooks.coreState();
     if (state.projectId === undefined || state.path === undefined) return;
     const request: StreamSubscriberWakeRequest = {
@@ -730,10 +695,6 @@ export class StreamSubscribers {
         const response = await withDeliveryTimeout(pokePromise, `poke ${subscriptionKey}`, {
           onLateResolve: (late) => late.sink[Symbol.dispose](),
         });
-        if (recoveryGeneration !== this.#recoveryGeneration) {
-          response.sink[Symbol.dispose]();
-          return;
-        }
         const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
         if (
           current === undefined ||
@@ -794,17 +755,12 @@ export class StreamSubscribers {
           this.#hooks.store.advanceWatermark(subscriptionKey, response.checkpointOffset, epoch);
         }
       } catch (error) {
-        if (
-          recoveryGeneration === this.#recoveryGeneration &&
-          !this.#onDeliveryFailure({ subscriptionKey, configOffset, epoch, error })
-        ) {
+        if (!this.#onDeliveryFailure({ subscriptionKey, configOffset, epoch, error })) {
           queueMicrotask(() => this.wake());
         }
       } finally {
-        if (recoveryGeneration === this.#recoveryGeneration) {
-          this.#pokesInFlight.delete(subscriptionKey);
-          this.#releaseRetainedPayloadsIfIdle();
-        }
+        this.#pokesInFlight.delete(subscriptionKey);
+        this.#releaseRetainedPayloadsIfIdle();
       }
     })();
     this.#hooks.keepAlive(work);
@@ -819,7 +775,6 @@ export class StreamSubscribers {
    * can own their cursors. Push delivers per batch; webhook per event.
    */
   #drainPush(subscriptionKey: string, start: PushDrainStart): void {
-    const recoveryGeneration = this.#recoveryGeneration;
     this.#pushDrains.add(subscriptionKey);
     const work = (async () => {
       // Reconciliation invokes this async body synchronously through its first
@@ -827,7 +782,6 @@ export class StreamSubscribers {
       let initial: PushDrainStart | undefined = start;
       try {
         for (;;) {
-          if (recoveryGeneration !== this.#recoveryGeneration) return;
           const snapshot = initial;
           initial = undefined;
           const state = snapshot?.state ?? this.#hooks.coreState();
@@ -1053,7 +1007,6 @@ export class StreamSubscribers {
               );
             }
           } catch (error) {
-            if (recoveryGeneration !== this.#recoveryGeneration) return;
             // "continue" = the failure handler already moved the goalposts
             // (halved the bisect window or stepped over confirmed poison) and
             // the loop should try again NOW; anything else backs off or parks
@@ -1074,7 +1027,6 @@ export class StreamSubscribers {
             }
             return;
           }
-          if (recoveryGeneration !== this.#recoveryGeneration) return;
           // The awaited resolve above IS this lane's consumption ack — record
           // both the call duration (transport+receiver latency) and the
           // commit→acked age of the newest delivered event, all on the
@@ -1111,10 +1063,8 @@ export class StreamSubscribers {
           }
         }
       } finally {
-        if (recoveryGeneration === this.#recoveryGeneration) {
-          this.#pushDrains.delete(subscriptionKey);
-          this.#releaseRetainedPayloadsIfIdle();
-        }
+        this.#pushDrains.delete(subscriptionKey);
+        this.#releaseRetainedPayloadsIfIdle();
       }
     })();
     this.#hooks.keepAlive(
@@ -1809,7 +1759,7 @@ export class StreamSubscribers {
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
       needsRetainedPayloads: () => open && cursor < notifiedHead,
-      close: (reason, recordFact = true) => {
+      close: (reason) => {
         if (!open) return;
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
@@ -1825,12 +1775,10 @@ export class StreamSubscribers {
         connection.ping?.[Symbol.dispose]();
         sink[Symbol.dispose]();
         connection.getProcessorRuntimeState?.[Symbol.dispose]();
-        if (recordFact) {
-          this.#hooks.appendFact({
-            type: "events.iterate.com/stream/subscriber-disconnected",
-            payload: { subscriptionKey, reason },
-          });
-        }
+        this.#hooks.appendFact({
+          type: "events.iterate.com/stream/subscriber-disconnected",
+          payload: { subscriptionKey, reason },
+        });
         this.#releaseRetainedPayloadsIfIdle();
         // A dead durable connection makes its watermark decisive again. Only
         // genuinely-broken closes re-reconcile: idle teardown suppresses

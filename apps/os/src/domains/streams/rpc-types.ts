@@ -4,7 +4,7 @@
  * These are hand-authored shapes (generics preserved) that both the public itx
  * contract and the server-side host/subscriber machinery build against.
  */
-import type { LiveUpdate } from "../../lib/live-state/protocol.ts";
+import type { LiveUpdate } from "iterate/live-state";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 
 /**

@@ -3,15 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ActivityIcon, PlusIcon, RadioIcon, TimerIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 import {
   useItx,
   useItxSubscription,
   useLiveState,
   type ItxSubscriptionStatus,
-} from "~/itx/itx-react.tsx";
+} from "iterate/react";
+import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 // The live-state PLAYGROUND — one primitive from several angles: a DO-backed
 // composite (`itx.liveState`: the project's folded `reduced` state + the streams
@@ -22,7 +21,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
   staticData: breadcrumbStaticData("Reactivity"),
   ssr: false,
   loader: ({ context }) => ({ project: context.project }),
-  component: ProjectReactivityPage,
+  component: ProjectReactivityContent,
 });
 
 const REACTIVITY_TEST_STREAM_PATH = "/reactivity-test";
@@ -61,14 +60,6 @@ function useReactivityTestStream(): ReactivityTestStreamState {
     [],
   );
   return { ...feed, error: subscription.error, status: subscription.status };
-}
-
-function ProjectReactivityPage() {
-  return (
-    <ItxBoundary>
-      <ProjectReactivityContent />
-    </ItxBoundary>
-  );
 }
 
 type ReactivityActionState = {

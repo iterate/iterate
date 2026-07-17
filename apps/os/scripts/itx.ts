@@ -14,7 +14,7 @@ import repl from "node:repl";
 
 import { RpcTarget } from "capnweb";
 
-import { connectItx } from "../src/itx-client.ts";
+import { connectItx } from "iterate/node";
 import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";

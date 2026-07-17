@@ -25,7 +25,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { useItx, useLiveState } from "iterate/react";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import {
@@ -34,7 +34,6 @@ import {
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 /** Secrets live at `/secrets/<name>`; the route param is the bare name. */
 const secretPathFromName = (name: string) => `/secrets/${name}`;
@@ -74,16 +73,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, "/secrets"),
     }),
-  component: ProjectSecretsIndexPage,
+  component: ProjectSecretsIndexContent,
 });
-
-function ProjectSecretsIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectSecretsIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectSecretsIndexContent() {
   const params = Route.useParams();

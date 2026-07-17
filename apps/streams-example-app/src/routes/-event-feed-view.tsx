@@ -106,7 +106,7 @@ function FeedItemRows({
   streamStore: StreamBrowserStore;
 }) {
   const topScrollAffordanceHeight = 48;
-  const estimatedFeedRowHeight = 44;
+  const estimatedFeedRowHeight = 44; // Pending + pb-2 must measure exactly this.
   const parentRef = useRef<HTMLDivElement>(null);
   const previousItemCount = useRef(itemCount);
   const initialScrollOffset = useRef(
@@ -429,7 +429,7 @@ function FeedItemWindow({
       >
         {row === undefined ? (
           <article
-            className="box-border h-[30px] rounded-md border border-[#e1e5eb]"
+            className="box-border h-9 rounded-md border border-[#e1e5eb]"
             data-testid="feed-item-pending"
           />
         ) : (

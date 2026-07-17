@@ -74,8 +74,11 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   });
   expect(await subscription.ping()).toBe(true);
 
-  // Sending the first message IS chat creation (lazy agent seeding).
+  // Stream processor births are explicit: create() before the first
+  // message, same as the dashboard's new-chat page and the app's own send
+  // mutation (chat.tsx).
   const agent = project.agents.get(agentPath) as RpcStub<Agent>;
+  await agent.create({});
   const sent = await agent.message(
     "Reply with a short greeting. Do not run any code or take any other action.",
   );

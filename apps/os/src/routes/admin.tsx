@@ -30,10 +30,10 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
+import { isItxTransportError, useIterateSession } from "iterate/react";
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -84,21 +84,21 @@ function AdminConnecting() {
 type AdminAuthority = { status: "checking" } | { status: "locked" } | { status: "ready" };
 
 function AdminGate() {
-  // The admin handle is the global itx socket — the SAME connection the rest of
-  // the tab uses (one browser itx primitive, one /api route; see
-  // ~/itx/itx-react.tsx). Its global authority comes from the operator cookie on
+  // The admin handle is the itx SESSION — the SAME one socket the rest of the
+  // tab uses (one browser itx primitive, one /api route; see
+  // iterate/react). Its global authority comes from the operator cookie on
   // the WebSocket handshake. The CLI redemption flow loads this page only after
   // installing that cookie, so this component never handles admin material.
-  const itx = useItx();
+  const session = useIterateSession();
   const [authority, setAuthority] = useState<AdminAuthority>({ status: "checking" });
 
   useEffect(() => {
     let cancelled = false;
     setAuthority({ status: "checking" });
-    // Probe global authority: itx.streams on a global handle throws unless the
-    // connection authenticated as admin, so one cheap call tells us whether to
-    // render the admin pages or the unlock form.
-    void itx.streams
+    // Probe global authority: session.streams throws unless the connection
+    // authenticated as admin, so one cheap call tells us whether to render the
+    // admin pages or the unlock form.
+    void session.streams
       .get("/")
       .head()
       .then(
@@ -106,23 +106,30 @@ function AdminGate() {
           if (!cancelled) setAuthority({ status: "ready" });
         },
         (error: unknown) => {
-          if (!cancelled) {
-            console.error("admin authority probe failed", error);
-            setAuthority({ status: "locked" });
+          if (cancelled) return;
+          // A transport-shaped rejection is a reconnect blip, not a denied
+          // operator: stay "checking" — the socket re-dials and the effect
+          // re-runs on the fresh session (its identity is the dep). Only a real
+          // authority rejection (session.streams throws for non-admins) locks.
+          if (isItxTransportError(error)) {
+            setAuthority({ status: "checking" });
+            return;
           }
+          console.error("admin authority probe failed", error);
+          setAuthority({ status: "locked" });
         },
       );
     return () => {
       cancelled = true;
     };
-  }, [itx]);
+  }, [session]);
 
   if (authority.status === "checking") return <AdminConnecting />;
   if (authority.status === "locked") return <AdminSessionRequired />;
-  // Children just call useItx() for the same global pooled handle — no admin
-  // context to thread, and they only render here, under the authorized gate.
-  // The ⌘K stream switcher mounts here too: its admin tier dials the same
-  // global session, which only has authority once this gate has passed.
+  // Children just call useIterateSession() for the same one socket — no admin context
+  // to thread, and they only render here, under the authorized gate. The ⌘K
+  // stream switcher mounts here too: its admin tier reads the same session,
+  // which only has authority once this gate has passed.
   return (
     <>
       <Outlet />

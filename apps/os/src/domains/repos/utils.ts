@@ -1,3 +1,4 @@
+import type { Git } from "@cloudflare/shell/git";
 import type { StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 
 type RepoArtifactNameParts = {
@@ -77,20 +78,51 @@ export function isRepoNotSeededError(error: unknown): boolean {
  * Wraps a branch-clone failure as {@link RepoNotSeededError} when it means
  * "the remote has no such ref/commits" — isomorphic-git's NotFoundError for a
  * ref (an empty Artifacts remote answers HEAD with a branch that has no
- * commits, observed as "Could not find refs/heads/master"), or the Artifacts
- * repo itself missing (`NOT_FOUND` — created lazily by the bootstrap saga).
- * Anything else returns unchanged.
+ * commits, observed as either "Could not find refs/heads/master" or "Could
+ * not find main" depending on whether isomorphic-git resolves HEAD or an
+ * explicitly requested branch), or the Artifacts repo itself missing
+ * (`NOT_FOUND` — created lazily by the bootstrap saga). Anything else returns
+ * unchanged.
  */
-export function classifyRepoAccessError(error: unknown): unknown {
+export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  const missingRequestedBranch =
+    branch !== undefined &&
+    typeof message === "string" &&
+    (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
   const notSeeded =
     code === "NOT_FOUND" ||
-    (code === "NotFoundError" && typeof message === "string" && message.includes("refs/"));
+    (code === "NotFoundError" &&
+      typeof message === "string" &&
+      (message.includes("refs/") || missingRequestedBranch));
   if (!notSeeded) return error;
   return new RepoNotSeededError(
     `Repo has no commits yet (unseeded or still seeding): ${typeof message === "string" ? message : String(error)}`,
     { cause: error },
   );
+}
+
+/**
+ * Whether `commitOid` is in a branch's ancestry in a complete local clone.
+ *
+ * @cloudflare/shell's git.log defaults to only 20 commits. Grow the walk until
+ * the commit is found or the root is reached so a remote branch that advanced
+ * beyond our recorded Artifacts head is accepted, while a stale or force-moved
+ * branch is not confused with a descendant merely because the old object still
+ * exists in the clone.
+ */
+export async function gitBranchContainsCommit(input: {
+  branch: string;
+  commitOid: string;
+  git: Git;
+}): Promise<boolean> {
+  let depth = 32;
+  for (;;) {
+    const history = await input.git.log({ depth, ref: input.branch });
+    if (history.some((commit) => commit.oid === input.commitOid)) return true;
+    if (history.length < depth) return false;
+    depth *= 2;
+  }
 }
 
 function normalizeRepoPath(path: string): string {

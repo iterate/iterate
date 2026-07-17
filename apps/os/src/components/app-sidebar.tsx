@@ -28,7 +28,6 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
-import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
 import { Button } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
@@ -64,16 +63,13 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
+import { useIterateSessionQuery } from "iterate/react";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { SidebarRecentAgents } from "./agent-roster.tsx";
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import {
-  fetchProjectsList,
-  projectsListQueryKey,
-  projectsListStaleTime,
-} from "~/lib/projects-query.ts";
+import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 
@@ -81,12 +77,12 @@ type PublicConfig = PublicAppConfig<AppConfig>;
 
 export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   // Client-only read through the itx session (itx never SSRs): the sidebar
-  // renders empty during SSR and populates after hydration. Plain useQuery —
-  // not the suspending useItxQuery — so the always-mounted shell never
+  // renders empty during SSR and populates after hydration. useIterateSessionQuery is
+  // non-suspending (unlike useItxQuery) so the always-mounted shell never
   // suspends on the socket.
-  const { data } = useQuery({
-    queryKey: projectsListQueryKey,
-    queryFn: fetchProjectsList,
+  const { data } = useIterateSessionQuery({
+    key: ["projects"],
+    query: (session) => session.projects.list(),
     staleTime: projectsListStaleTime,
   });
   // Missing projects (auth knows them, this deployment's engine does not) are

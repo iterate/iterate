@@ -13,8 +13,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { Project } from "../../itx-api.generated.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import { KEEPALIVE_ALARM_LEAD_MS } from "../streams/stream-processor-keepalive.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
+import { isStreamAppendResultOptions, type StreamAppendArguments } from "../streams/rpc-types.ts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
@@ -236,27 +238,178 @@ describe("script execution reconciliation", () => {
 
   it("settles an orphaned execution (started, incarnation died) without re-running it", async () => {
     const h = makeHarness();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
     // The dead incarnation's evidence, written before it was evicted.
-    await h.stream.append(
-      {
-        type: T.requested,
-        payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now + 60_000 },
-      },
-      { type: T.started, payload: { executionId: "exec-1" } },
-    );
-    await h.deliverPending(); // run.impl throws if invoked
+    try {
+      await h.stream.append(
+        {
+          type: T.requested,
+          payload: {
+            code: "async () => 1",
+            executionId: "exec-1",
+            expiresAt: h.clock.now + 60_000,
+          },
+        },
+        { type: T.started, payload: { executionId: "exec-1" } },
+      );
+      await h.deliverPending(); // run.impl throws if invoked
 
-    await vi.waitFor(() => {
-      const completed = h.stream.events.find((event) => event.type === T.completed);
-      expect(completed?.payload).toMatchObject({
-        executionId: "exec-1",
-        settlement: {
-          status: "failed",
-          error: expect.stringContaining("orphaned"),
+      await vi.waitFor(() => {
+        const completed = h.stream.events.find((event) => event.type === T.completed);
+        expect(completed?.payload).toMatchObject({
+          executionId: "exec-1",
+          settlement: {
+            status: "failed",
+            error: expect.stringContaining("orphaned"),
+            failureKind: "orphaned",
+          },
+        });
+      });
+      expect(consoleInfo).toHaveBeenCalledWith(
+        "[capability-host] recovering undriven script execution",
+        {
+          cancellation: "external-work-may-continue",
+          executionId: "exec-1",
           failureKind: "orphaned",
+          phase: "recovery",
+          status: "failed",
+        },
+      );
+      expect(consoleInfo).toHaveBeenCalledTimes(1);
+      expect(consoleError).not.toHaveBeenCalledWith(
+        "[capability-host] settling undriven script execution",
+        expect.anything(),
+      );
+    } finally {
+      consoleError.mockRestore();
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it("retries a known settlement without misclassifying it as orphan recovery", async () => {
+    const h = makeHarness();
+    h.run.impl = async () => ({ status: "succeeded" as const, result: "ok" });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    try {
+      h.stream.failAppendsOfType = T.completed;
+      await h.stream.append({
+        type: T.requested,
+        payload: {
+          code: "async () => 'ok'",
+          executionId: "exec-retry",
+          expiresAt: h.clock.now + 60_000,
         },
       });
-    });
+      await h.deliverPending();
+      await vi.waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "stream processor runner background work failed",
+          expect.anything(),
+        );
+      });
+
+      consoleError.mockClear();
+      consoleInfo.mockClear();
+      h.stream.failAppendsOfType = undefined;
+      await h.stream.append({
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: "settlement-retry" },
+      });
+      await h.deliverPending();
+
+      await vi.waitFor(() => {
+        expect(h.stream.events.find((event) => event.type === T.completed)?.payload).toMatchObject({
+          executionId: "exec-retry",
+          settlement: { result: "ok", status: "succeeded" },
+        });
+      });
+      expect(consoleError).not.toHaveBeenCalledWith(
+        "[capability-host] settling undriven script execution",
+        expect.anything(),
+      );
+      expect(consoleInfo).not.toHaveBeenCalledWith(
+        "[capability-host] recovering undriven script execution",
+        expect.anything(),
+      );
+    } finally {
+      h.stream.failAppendsOfType = undefined;
+      consoleError.mockRestore();
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it("preserves a replacement incarnation's settlement when the old executor finishes late", async () => {
+    const h = makeHarness();
+    const executionFinished = Promise.withResolvers<unknown>();
+    h.run.impl = () => executionFinished.promise;
+
+    // Match production's strict idempotency contract for this race: the same
+    // completion key may dedupe only an identical event. MemoryStream is
+    // deliberately looser for generic processor tests.
+    const append = h.stream.append.bind(h.stream);
+    let conflicts = 0;
+    h.stream.append = (async (...args: StreamAppendArguments) => {
+      const inputs = (
+        isStreamAppendResultOptions(args[0]) ? args.slice(1) : args
+      ) as StreamEventInput[];
+      for (const input of inputs) {
+        const existing =
+          input.idempotencyKey === undefined
+            ? undefined
+            : h.stream.events.find((event) => event.idempotencyKey === input.idempotencyKey);
+        if (
+          existing !== undefined &&
+          JSON.stringify(existing.payload) !== JSON.stringify(input.payload)
+        ) {
+          conflicts += 1;
+          throw new Error(
+            `idempotency key "${input.idempotencyKey}" already names a different event at offset ${existing.offset}`,
+          );
+        }
+      }
+      return await Reflect.apply(append, undefined, args);
+    }) as typeof h.stream.append;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await h.stream.append({
+        type: T.requested,
+        payload: {
+          code: "async () => 'late success'",
+          executionId: "exec-late",
+          expiresAt: h.clock.now + 60_000,
+        },
+      });
+      await h.deliverPending();
+      await vi.waitFor(() => {
+        expect(h.stream.events.some((event) => event.type === T.started)).toBe(true);
+      });
+
+      h.crash();
+      await h.deliverPending();
+      await vi.waitFor(() => {
+        expect(h.stream.events.find((event) => event.type === T.completed)?.payload).toMatchObject({
+          executionId: "exec-late",
+          settlement: { failureKind: "orphaned", status: "failed" },
+        });
+      });
+
+      executionFinished.resolve({ status: "succeeded", result: "too late" });
+      await vi.waitFor(() => expect(conflicts).toBe(1));
+      await h.settle();
+
+      expect(consoleError).not.toHaveBeenCalledWith(
+        "stream processor runner background work failed",
+        expect.anything(),
+      );
+      expect(h.stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
+    } finally {
+      executionFinished.resolve({ status: "succeeded", result: "too late" });
+      consoleError.mockRestore();
+    }
   });
 
   it("recovers a request whose incarnation died BEFORE any attempt started (provably never ran → runs it)", async () => {

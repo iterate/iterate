@@ -1063,8 +1063,8 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
 
 // =============================================================================
 // 7. At-head reconcile (`delivery.caughtUp`) — fires on the LAST CONSUMED event
-//    of a batch whose raw scan reaches the observed stream head. A head-reaching
-//    batch that consumes nothing gets exactly one event-less reconcile pass.
+//    of a frame whose scan reaches the observed stream head. If that frame
+//    consumes nothing, one eventless pass reconciles the same final fold.
 // =============================================================================
 
 describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
@@ -1096,7 +1096,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     };
     const harness = makeHarness({ journal, hooks });
     const { sink } = await harness.runner.openDelivery();
-    const [requestedEvent, noiseEvent] = journal.rows();
+    const [requestedEvent] = journal.rows();
 
     // Frame 1: the requested event, delivered mid-catch-up (head is at 2). It
     // is behind head, so NOT caughtUp — nothing may act on a partial fold.
@@ -1105,12 +1105,17 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     expect(headCalls).toEqual([]);
     expect(journal.rows(SIBLING)).toHaveLength(0);
 
-    // Frame 2: ONLY the unconsumed tail event. The batch reaches head but
-    // consumes nothing — so no consumed event carries `caughtUp`. The runner
-    // fires the EVENT-LESS at-head pass (event=null) and the obligation opened
-    // by event 1 DRIVES. (This is the prd fix: without it the obligation would
-    // strand forever behind the unconsumed head.)
-    await sink(deliveryFrame([noiseEvent!], 2));
+    // Frame 2 proves the selector scanned offset 2 but omits its unconsumed
+    // event. The frame reaches head but no consumed event carries `caughtUp`.
+    // The runner fires the EVENT-LESS at-head pass (event=null), and the
+    // obligation opened by event 1 drives instead of stranding on a quiet
+    // stream.
+    await sink({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
     expect(processPhases).toEqual(["1:catching-up:1"]); // still no per-event processEvent
     expect(headCalls).toEqual([{ open: ["a"], event: null }]); // event-less pass drove it
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
@@ -1243,6 +1248,32 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     await expect(harness.runner.snapshot()).resolves.toEqual({
       offset: 2,
       state: { count: 1, open: ["a"] },
+    });
+  });
+
+  it("self-pulls when a filtered frame's scan proof stops before the advertised raw head", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } });
+    journal.seed({ type: NOISE, payload: {} });
+
+    const headCalls: (number | null)[] = [];
+    const harness = makeHarness({
+      journal,
+      hooks: {
+        onHead: (args) => {
+          headCalls.push(args.event?.offset ?? null);
+        },
+      },
+    });
+    const { sink } = await harness.runner.openDelivery();
+
+    // A stale/legacy filtered sender advertises raw head 2 but proves only
+    // through selected event 1. The background unfiltered pull folds offset 2
+    // and supplies the eventless at-head pass on the quiet stream.
+    await sink(deliveryFrame([journal.rows()[0]!], 2));
+    await vi.waitFor(() => {
+      expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
+      expect(headCalls).toEqual([null]);
     });
   });
 

@@ -50,18 +50,13 @@ import {
   envShapedVars,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
+  RETIRED_AUTH_SERVICE_TOKEN,
+  RETIRED_WORKER_SECRETS,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 
-const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
-const RETIRED_WORKER_SECRETS = [
-  RETIRED_AUTH_SERVICE_TOKEN,
-  "APP_CONFIG_GEMINI_API_KEY",
-  "APP_CONFIG_LOGS",
-  "APP_CONFIG_X_AI_API_KEY",
-] as const;
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 
 /** Preview OS always runs its first-party integration proof against the

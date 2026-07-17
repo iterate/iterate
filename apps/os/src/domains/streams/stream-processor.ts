@@ -131,15 +131,20 @@ type SideEffectHelpers = {
 type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
   SideEffectHelpers & {
     /**
-     * The consumed event being processed, or `null` for an event-less at-head
-     * reconciliation pass. Per-event dispatch must return early for `null`;
-     * state-derived reconciliation still runs under `delivery.caughtUp`.
+     * The consumed event being processed — or `null` for the EVENT-LESS at-head
+     * pass (`delivery.caughtUp` is then true). The runner fires that pass when a
+     * batch reaches head but no consumed event carried `caughtUp` (an unconsumed
+     * event sits at head — e.g. stream/subscriber-disconnected — or a self-pull
+     * folded only foreign events): the reconcile still has to run over the head
+     * fold, or the obligation strands. A per-event switch MUST guard on
+     * `event !== null`; the at-head reconcile reads `state` and needs no event.
      */
     event: ReducedEvent<Contract>["event"] | null;
     /**
      * Append one or more events listed in `contract.emits` to this stream,
      * stamped with `source.processor` provenance pointing at THIS event as
-     * `whileProcessing`. The binding is a closure, so appends made later from
+     * `whileProcessing` (unstamped on the event-less at-head pass). The binding
+     * is a closure, so appends made later from
      * `blockProcessorWhile`/`runInBackground` work scheduled here still stamp
      * the event that was being processed.
      */
@@ -274,10 +279,10 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
  * - `reduce` — pure projection of one consumed event into the next state
  * - `processEvent` — synchronous per-event side effects; what most processors
  *   implement. It is ALSO the at-head reconcile: gated on
- *   `args.delivery.caughtUp` (this event was the observed head), an obligation
- *   processor drives undriven obligations and settles dead ones over the whole
- *   fold. The runner never sets `caughtUp` behind head, so that branch never
- *   needs its own mid-refold gate.
+ *   `args.delivery.caughtUp`, an obligation processor drives undriven
+ *   obligations and settles dead ones over the whole fold. `args.event` is
+ *   `null` only when a head-reaching scan contained no consumed event; authors
+ *   skip their per-event switch but still run state-level reconciliation.
  * - `validate` — the optional pre-commit gate (inline Phase-2 runner only)
  *
  * Every hook runs inside the runner's serialized delivery chain: a later
@@ -416,10 +421,11 @@ export abstract class StreamProcessor<
   }
 
   /**
-   * Synchronous per-event side-effect hook, called by the runner once per
-   * consumed event. It is ALSO the at-head reconcile: when
-   * `args.delivery.caughtUp` is true (this event was the observed head when
-   * delivered, so `args.state` is the whole fold), an obligation processor
+   * Synchronous side-effect hook, called by the runner once per consumed event
+   * and, when necessary, once more with `event: null` for a head-reaching scan
+   * that consumed nothing. It is ALSO the at-head reconcile: when
+   * `args.delivery.caughtUp` is true (`args.state` is the whole observed fold),
+   * an obligation processor
    * drives its undriven obligations and settles dead ones — scheduling that
    * async work via `args.blockProcessorWhile`, keyed by STABLE obligation keys
    * (`this.idempotencyKey(<obligation>)` with the deciding state folded into

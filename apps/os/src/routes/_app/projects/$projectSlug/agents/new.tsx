@@ -5,7 +5,7 @@ import { ArrowUpIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import { connectItx } from "iterate/react";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
   // Not a stream view (a centered composer), so no streamBreadcrumb: the
@@ -31,10 +31,10 @@ function NewAgentPage() {
   const createAgent = useMutation({
     mutationFn: async (content: string) => {
       const agentPath = `/agents/web/${slugifyCreationTime(new Date())}`;
-      // connectItxBrowser (imperative, not the suspending hook) lands on the project
-      // provider's socket (keyed by project ID). Birth is explicit and
-      // completes before the first conversational event is appended.
-      const itx = await connectItxBrowser({ projectId: project.id });
+      // connectItx (imperative, not the suspending hook) narrows the one session
+      // socket to this project. Birth is explicit and completes before the first
+      // conversational event is appended.
+      const itx = await connectItx(project.id);
       const agent = itx.agents.get(agentPath);
       await agent.create({});
       await agent.message(content);

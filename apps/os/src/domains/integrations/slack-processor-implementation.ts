@@ -61,6 +61,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     runInBackground,
     state,
   }: Parameters<StreamProcessor<SlackProcessorContract>["processEvent"]>[0]): undefined {
+    // Event-less at-head pass: this processor has no at-head work.
     if (event === null) return;
     if (event.type === "events.iterate.com/slack/created") return;
     const connection = state.birthCertificate?.config.connection;

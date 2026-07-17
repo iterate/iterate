@@ -41,6 +41,9 @@ import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
 const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
+// Secret folds are pure and normally complete during catchUp. If ingestion is
+// broken, fail the command instead of retaining its RPC forever.
+const INGEST_WAIT_TIMEOUT_MS = 15_000;
 
 /**
  * One path-addressed secret. THE INVARIANT (the whole design, one sentence):
@@ -601,7 +604,7 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #waitUntilProcessed(offset: number): Promise<void> {
     await this.#registry.catchUp(SecretProcessorContract.slug);
-    await this.#reads.waitUntilEvent({ offset });
+    await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
   }
 
   async #decrypt(
@@ -653,19 +656,32 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async #commitRefreshedMaterial(material: unknown, snapshot: SecretSnapshot): Promise<void> {
-    try {
-      await this.#appendMaterialUpdate({
-        egress: snapshot.state.egress,
-        material,
-        offset: snapshot.offset + 1,
-      });
-    } catch (error) {
-      if (isStreamOffsetConflictError(error)) {
-        // The token was derived from a state that is no longer current. Never
-        // resurrect it under a later policy or refresh configuration.
+    let current = snapshot;
+    for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
+      // Offset-only stream facts (subscriber connection telemetry, wake facts,
+      // or concurrent audit events) may advance the raw stream while a token
+      // is being minted. They do not invalidate the refresh. A real secret
+      // update does: updatedOffset covers material, egress, and refresh policy.
+      if (
+        current.state.updatedOffset !== snapshot.state.updatedOffset ||
+        !sameRefresh(current.state.refresh, snapshot.state.refresh)
+      ) {
         throw new SecretSubstitutionError("secret_not_found");
       }
-      throw error;
+      try {
+        await this.#appendMaterialUpdate({
+          egress: snapshot.state.egress,
+          material,
+          offset: current.offset + 1,
+        });
+        return;
+      } catch (error) {
+        if (!isStreamOffsetConflictError(error)) throw error;
+        if (attempt === MAX_MATERIAL_APPEND_ATTEMPTS) {
+          throw new SecretSubstitutionError("secret_not_found");
+        }
+        current = await this.#snapshotWithOffset();
+      }
     }
   }
 
@@ -751,8 +767,9 @@ function optionalStringField(material: Record<string, unknown>, field: string): 
   return typeof value === "string" ? value : undefined;
 }
 
-function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh): boolean {
-  if (current === null || current.kind !== expected.kind) return false;
+function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh | null): boolean {
+  if (current === null || expected === null) return current === expected;
+  if (current.kind !== expected.kind) return false;
   // Refresh facts are JSON values produced by the same schema. Comparing their
   // serialized form preserves the exact-fact semantics: even a configuration
   // replacement that is nearly identical invalidates an already-started use.

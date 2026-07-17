@@ -113,7 +113,10 @@ describe("graphql session-login door", () => {
     expect((await api(shop, "/api/me", token)).status).toBe(401);
 
     const fresh = (await login(shop)).accessToken as string;
-    await shop("/__backdoor/expire-tokens", { method: "POST" });
+    await shop("/__backdoor/expire-tokens", {
+      method: "POST",
+      body: JSON.stringify({ clientId: "graphql-session-login" }),
+    });
     expect((await api(shop, "/api/me", fresh)).status).toBe(401);
   });
 

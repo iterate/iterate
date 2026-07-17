@@ -3,6 +3,7 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowRightIcon } from "lucide-react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { z } from "zod";
+import { useLiveState } from "iterate/react";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectCustomDomainsSettings } from "~/components/project-custom-domains-settings.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
@@ -15,7 +16,6 @@ import {
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useLiveState } from "~/itx/itx-react.tsx";
 
 const HomeSearch = StreamViewSearch.extend({
   /** Set by the create form: play the creation checklist, then hand over to
@@ -56,7 +56,7 @@ function ProjectHomePage() {
     (itx) => itx.liveState,
     (state) => state.reduced,
     [project.id],
-    { address: { projectId: project.id } },
+    { slug: project.id },
   );
   const ready = lifecycle.value?.ready ?? false;
   // Onboarding phase: the completion event has not been appended yet. This

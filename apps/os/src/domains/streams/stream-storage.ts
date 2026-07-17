@@ -557,53 +557,6 @@ export class StreamEventLog {
       : transactionRunner.transactionSync(insertBatched);
   }
 
-  /**
-   * Atomically replace the complete committed log while preserving supplied
-   * offsets and the allocator's non-reuse floor. This is a recovery primitive,
-   * not a normal append path; callers validate the stream birth certificate
-   * and current core contract before reaching storage.
-   */
-  replaceAll(
-    events: readonly StreamEvent[],
-    highestAssignedOffset: number,
-    transactionRunner: TransactionRunner,
-    afterReplace?: () => void,
-  ): void {
-    if (!Number.isSafeInteger(highestAssignedOffset) || highestAssignedOffset < 0) {
-      throw new Error(`Invalid highest assigned offset: ${highestAssignedOffset}`);
-    }
-    let previousOffset = 0;
-    for (const event of events) {
-      if (event.path !== this.#path) {
-        throw new Error(`Cannot store event for path ${event.path} in stream ${this.#path}`);
-      }
-      if (!Number.isSafeInteger(event.offset) || event.offset <= previousOffset) {
-        throw new Error("Replacement event offsets must be safe, unique, and strictly increasing");
-      }
-      previousOffset = event.offset;
-    }
-    if (previousOffset > highestAssignedOffset) {
-      throw new Error("Highest assigned offset cannot precede the last replacement event");
-    }
-
-    transactionRunner.transactionSync(() => {
-      this.sql.exec("delete from event_chunks");
-      this.sql.exec("delete from events");
-      if (events.length > 0) this.insert(events);
-      this.sql.exec(
-        `update stream_storage_schema
-         set evicted_offset_floor = ?
-         where singleton = 1`,
-        highestAssignedOffset,
-      );
-      afterReplace?.();
-    });
-    this.#bootstrapOffsetBounds = {
-      highestOffset: previousOffset,
-      highestAssignedOffset,
-    };
-  }
-
   getByOffset(offset: number): StreamEvent | undefined {
     const row = this.sql
       .exec<{ eventJson: string | null }>(

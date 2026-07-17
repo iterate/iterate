@@ -17,7 +17,7 @@
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
 import { fileURLToPath } from "node:url";
-import { connectItx } from "../../src/itx-client.ts";
+import { connectItx } from "iterate/node";
 import { onboardingAgentCreateInput } from "../../src/lib/onboarding-agent.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 

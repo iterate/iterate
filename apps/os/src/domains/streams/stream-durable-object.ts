@@ -25,16 +25,6 @@ import type {
 } from "./rpc-types.ts";
 import { StreamOffsetConflictError, StreamReceiverUnavailableError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import {
-  assertValidStreamRecoveryLog,
-  STREAM_RECOVERY_FORMAT,
-  STREAM_RECOVERY_VERSION,
-  StreamRecoveryRestoreInput as StreamRecoveryRestoreInputSchema,
-  type StreamRecoveryExportPage,
-  type StreamRecoveryExportSink,
-  type StreamRecoveryExportSummary,
-  type StreamRecoveryRestoreInput,
-} from "./recovery.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
@@ -49,6 +39,7 @@ import {
 } from "./stream-subscribers.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
+import { STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX } from "./stream-unavailable.ts";
 import {
   CORE_STATE_VERSION,
   parseCoreProcessorCheckpoint,
@@ -61,10 +52,6 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
-/** Keep recovery callback frames far below Cap'n Web's 32 MiB value limit. */
-const RECOVERY_EXPORT_PAGE_BYTE_LIMIT = 1024 * 1024;
-/** Bound CPU per RPC; the client continues the same fixed export window. */
-const RECOVERY_EXPORT_SESSION_PAGE_LIMIT = 32;
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -584,187 +571,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Export one byte- and count-bounded page from a fixed offset window. */
-  exportForRecovery(
-    args: { afterOffset?: number; limit?: number; throughOffset?: number } = {},
-  ): StreamRecoveryExportPage {
-    const afterOffset = args.afterOffset ?? 0;
-    const limit = args.limit ?? MAX_GET_EVENTS_LIMIT;
-    if (!Number.isInteger(afterOffset) || afterOffset < 0) {
-      throw new Error("recovery export afterOffset must be a non-negative integer");
-    }
-    if (!Number.isInteger(limit) || limit <= 0 || limit > MAX_GET_EVENTS_LIMIT) {
-      throw new Error(`recovery export limit must be an integer from 1 to ${MAX_GET_EVENTS_LIMIT}`);
-    }
-    const currentHighestAssignedOffset = this.#log.highestAssignedOffset();
-    const throughOffset = args.throughOffset ?? currentHighestAssignedOffset;
-    if (
-      !Number.isInteger(throughOffset) ||
-      throughOffset < 0 ||
-      throughOffset > currentHighestAssignedOffset
-    ) {
-      throw new Error(
-        `recovery export throughOffset must be an integer from 0 to ${currentHighestAssignedOffset}`,
-      );
-    }
-    const sizes = this.#log.getRangeSizes({
-      afterOffset,
-      beforeOffset: throughOffset + 1,
-      limit,
-      includeEphemeral: true,
-    });
-    let pageLength = sizes.length;
-    let pageBytes = 0;
-    for (let index = 0; index < sizes.length; index += 1) {
-      pageBytes += sizes[index]!.byteLength;
-      // A single event may exceed the soft cap, but is still the smallest
-      // possible recovery unit. Ordinary stream events are already RPC-sized.
-      if (pageBytes > RECOVERY_EXPORT_PAGE_BYTE_LIMIT && index > 0) {
-        pageLength = index;
-        break;
-      }
-    }
-    const events = this.#log.getRange({
-      afterOffset,
-      beforeOffset: throughOffset + 1,
-      limit: pageLength,
-      includeEphemeral: true,
-    });
-    const truncatedByBytes = pageLength < sizes.length;
-    return {
-      format: STREAM_RECOVERY_FORMAT,
-      version: STREAM_RECOVERY_VERSION,
-      stream: { projectId: this.name.projectId, path: this.name.path },
-      events,
-      throughOffset,
-      complete:
-        !truncatedByBytes && (sizes.length < limit || events.at(-1)?.offset === throughOffset),
-    };
-  }
-
-  /** Export part of a fixed recovery window through one acknowledged callback session. */
-  async exportToRecovery(args: {
-    sink: StreamRecoveryExportSink;
-    afterOffset?: number;
-    limit?: number;
-    maxPages?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportSummary> {
-    const maxPages = args.maxPages ?? RECOVERY_EXPORT_SESSION_PAGE_LIMIT;
-    if (
-      !Number.isInteger(maxPages) ||
-      maxPages <= 0 ||
-      maxPages > RECOVERY_EXPORT_SESSION_PAGE_LIMIT
-    ) {
-      throw new Error(
-        `recovery export maxPages must be an integer from 1 to ${RECOVERY_EXPORT_SESSION_PAGE_LIMIT}`,
-      );
-    }
-    const throughOffset = args.throughOffset ?? this.#log.highestAssignedOffset();
-    let afterOffset = args.afterOffset ?? 0;
-    let exportedEventCount = 0;
-    let pageCount = 0;
-    let complete = false;
-
-    for (;;) {
-      const page = this.exportForRecovery({ afterOffset, limit: args.limit, throughOffset });
-      await args.sink.write(page);
-      pageCount += 1;
-      exportedEventCount += page.events.length;
-      const nextOffset = page.events.at(-1)?.offset;
-      if (nextOffset !== undefined && nextOffset <= afterOffset) {
-        throw new Error("recovery export produced a non-advancing page");
-      }
-      if (nextOffset !== undefined) afterOffset = nextOffset;
-      if (page.complete) {
-        complete = true;
-        break;
-      }
-      if (nextOffset === undefined) {
-        throw new Error("recovery export produced an empty incomplete page");
-      }
-      if (pageCount >= maxPages) break;
-    }
-
-    return {
-      format: STREAM_RECOVERY_FORMAT,
-      version: STREAM_RECOVERY_VERSION,
-      stream: { projectId: this.name.projectId, path: this.name.path },
-      throughOffset,
-      exportedEventCount,
-      pageCount,
-      lastExportedOffset: afterOffset,
-      complete,
-    };
-  }
-
-  /** Replace this stream with a validated exact-offset recovery log. */
-  restoreFromRecovery(input: StreamRecoveryRestoreInput): {
-    restoredEventCount: number;
-    lastImportedOffset: number;
-    currentMaxOffset: number;
-  } {
-    const parsed = StreamRecoveryRestoreInputSchema.parse(input);
-    assertValidStreamRecoveryLog(parsed, this.name);
-    const recoveredCoreState = this.#foldRecoveryCoreProcessorState(parsed);
-
-    this.#log.replaceAll(parsed.events, parsed.highestAssignedOffset, this.ctx.storage, () => {
-      this.ctx.storage.sql.exec("delete from subscriptions");
-      this.ctx.storage.kv.put("coreState", {
-        version: CORE_STATE_VERSION,
-        state: recoveredCoreState,
-      } satisfies CoreProcessorCheckpoint);
-    });
-
-    // Only sever the old runtime after the storage transaction succeeds.
-    this.#subscribers.resetForRecovery();
-    this.#subscriptionCursorStore.resetForRecovery();
-    this.#acknowledgedIdempotencyOffsets = undefined;
-    this.#acknowledgedCrossPostDeliveries = undefined;
-    this.#alarmArmedForMs = null;
-    this.#coreProcessorState = recoveredCoreState;
-    this.#coreCheckpointSchedule.didWrite(Date.now());
-
-    // Live connections from the imported incarnation are gone. The fresh fact
-    // clears their folded roster and reconciles all recovered desired state.
-    const [woken] = this.append({
-      type: "events.iterate.com/stream/woken",
-      payload: { incarnationId: crypto.randomUUID() },
-    });
-    return {
-      restoredEventCount: parsed.events.length,
-      lastImportedOffset: parsed.events.at(-1)!.offset,
-      currentMaxOffset: woken!.offset,
-    };
-  }
-
-  /** Validate and fold the import completely before mutating live or durable state. */
-  #foldRecoveryCoreProcessorState(input: StreamRecoveryRestoreInput): CoreProcessorState {
-    let next = CoreProcessorContract.stateSchema.parse({});
-    for (const event of input.events) {
-      try {
-        if (
-          event.source?.crossPostedFrom === undefined &&
-          event.type === "events.iterate.com/stream/subscription-configured"
-        ) {
-          const configured = CoreProcessorContract.parseEvent(
-            "events.iterate.com/stream/subscription-configured",
-            event,
-          );
-          this.#validateSubscriptionConfiguration(configured.payload);
-        }
-        next = this.#reduceCore({ event, state: next });
-      } catch (error) {
-        throw new Error(
-          `recovery event at offset ${event.offset} (${event.type}) is incompatible with the current stream contract`,
-          { cause: error },
-        );
-      }
-    }
-    if (input.highestAssignedOffset > next.maxOffset) {
-      next = { ...next, maxOffset: input.highestAssignedOffset };
-    }
-    return next;
+  /** The committed head used to pin a recoverable public wait's replay cursor. */
+  getMaxOffset(): number {
+    return this.#coreProcessorState.maxOffset;
   }
 
   // ===========================================================================
@@ -817,7 +626,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         "events.iterate.com/stream/subscription-configured",
         args.event,
       );
-      this.#validateSubscriptionConfiguration(event.payload);
+      if (event.payload.delivery.mode === "webhook" && this.name.projectId === null) {
+        // Webhook POSTs ride the project egress lane (attribution +
+        // interception); a global stream has no project to attribute them to.
+        throw new Error("webhook subscriptions require a project-scoped stream");
+      }
+      // An unparseable selector condition must be rejected before it commits,
+      // not discovered as a per-event error forever after. (compile throws.)
+      compileEventSelector(event.payload.selector);
     }
 
     if (!args.state.paused) return;
@@ -844,17 +660,6 @@ export class StreamDurableObject extends DurableObject<Env> {
           `stream paused: ${args.state.pauseReason ?? "unknown reason"}`,
         );
     }
-  }
-
-  #validateSubscriptionConfiguration(payload: SubscriptionConfiguredPayload): void {
-    if (payload.delivery.mode === "webhook" && this.name.projectId === null) {
-      // Webhook POSTs ride the project egress lane (attribution +
-      // interception); a global stream has no project to attribute them to.
-      throw new Error("webhook subscriptions require a project-scoped stream");
-    }
-    // An unparseable selector condition must be rejected before it commits,
-    // not discovered as a per-event error forever after. (compile throws.)
-    compileEventSelector(payload.selector);
   }
 
   // Pure fold of one committed event into the next core state. Runs per event
@@ -1701,7 +1506,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       settled = true;
       found.reject(
         new Error(
-          `Timed out waiting for stream event after ${args.timeoutMs}ms ` +
+          `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
             `(saw ${seenCount} events; recent types: ${recentTypes.join(", ") || "none"}).`,
         ),
       );

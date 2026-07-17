@@ -1,4 +1,4 @@
-import type { ItxReactHandle } from "~/itx/itx-react.tsx";
+import type { Itx } from "iterate/react";
 
 const MAX_PAGES = 5;
 
@@ -11,7 +11,7 @@ export type InstallationRepo = {
 };
 
 /** Builtin GitHub connection names. Never throws (shared suspense cache key). */
-export async function listGithubConnections(itx: ItxReactHandle): Promise<string[]> {
+export async function listGithubConnections(itx: Itx): Promise<string[]> {
   try {
     const entries = await itx.integrations.list();
     return entries.flatMap((e) =>
@@ -25,7 +25,7 @@ export async function listGithubConnections(itx: ItxReactHandle): Promise<string
 
 /** Repos the App installation can see, via Octokit. Errors returned as data. */
 export async function listInstallationRepos(
-  itx: ItxReactHandle,
+  itx: Itx,
   connection: string,
 ): Promise<{ error: string | null; repos: InstallationRepo[]; totalCount: number }> {
   const repos: InstallationRepo[] = [];

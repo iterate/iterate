@@ -1,8 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useItx } from "iterate/react";
 import { appendedEvents } from "~/domains/streams/rpc-types.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { useItx } from "~/itx/itx-react.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,
@@ -28,16 +27,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, params._splat),
     }),
-  component: ProjectStreamDetailPage,
+  component: ProjectStreamDetailContent,
 });
-
-function ProjectStreamDetailPage() {
-  return (
-    <ItxBoundary>
-      <ProjectStreamDetailContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectStreamDetailContent() {
   const { project } = Route.useLoaderData();

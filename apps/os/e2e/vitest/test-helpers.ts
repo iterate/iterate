@@ -1,5 +1,5 @@
 import type { RpcStub } from "capnweb";
-import { connectItx, type ItxWebSocketMessage } from "../../src/itx-client.ts";
+import { connectItx, type ItxWebSocketMessage } from "iterate/node";
 import type { ItxAuthCredentials } from "../../src/auth.ts";
 import type {
   Agent,

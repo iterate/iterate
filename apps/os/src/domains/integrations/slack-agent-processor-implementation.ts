@@ -125,8 +125,8 @@ export class SlackAgentProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
   ): undefined {
     const { append, blockProcessorWhile, event, state } = args;
-    if (state.birthCertificate === null) return;
     if (event !== null && event.type === "events.iterate.com/slack-agent/created") return;
+    if (state.birthCertificate === null) return;
     const { birthCertificate } = state;
     // Status announcements drive the assistant status, which is repainted
     // once per at-head pass — nothing per event beyond remembering the
@@ -139,15 +139,16 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (event !== null && event.type === "events.iterate.com/agent/status-changed") {
       this.#unpaintedStatusFact = event;
     }
-    // AT-HEAD repaint (was `onCaughtUp`): fires for the last consumed event of
-    // a batch that reached head (`delivery.caughtUp`), so `args.state` is the
-    // whole fold. ONE blocking closure — the runner awaits it as this head
+    // AT-HEAD repaint: `delivery.caughtUp` means `args.state` is the whole
+    // observed fold. It rides the last consumed event or the runner's
+    // eventless pass. ONE blocking closure — the runner awaits it as this head
     // event's own work before the frame's deferred commit, so a failed paint
     // fails the frame and the transport replays it (the memo re-accumulates on
     // redelivery).
     if (args.delivery.caughtUp) {
       args.blockProcessorWhileCaughtUp(() => this.#reconcileStatus(args));
     }
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
     if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured": {

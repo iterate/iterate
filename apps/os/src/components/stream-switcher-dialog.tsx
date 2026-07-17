@@ -9,12 +9,12 @@ import {
 } from "@iterate-com/ui/components/dialog";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { useLiveState } from "iterate/react";
 import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathParent } from "~/lib/stream-links.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
 // segments separated by single slashes, no trailing slash. `~` is legal — GitHub
@@ -159,15 +159,14 @@ export function StreamSwitcherDialog({
   // instantly, and one warm per-tab subscription is the accepted price.
   //
   // `scope` is the project id. ⌘K opens from the global palette — the app shell,
-  // OUTSIDE the project's `<ItxProvider>` — so we subscribe through the project's
-  // own connection via `address`, which resolves inside the effect (never
-  // suspends the shell) rather than the ambient global socket, which has no
-  // `liveState`.
+  // OUTSIDE any `<ProjectScope>` — so we name the project explicitly via `slug`
+  // (an id works too). The subscription resolves the connection inside the
+  // effect, so it never suspends the shell.
   const streamsIndex = useLiveState(
     (itx) => itx.liveState,
     (state) => state.streamsIndex,
     [scope],
-    { address: { projectId: scope }, enabled: liveIndex },
+    { slug: scope, enabled: liveIndex },
   );
   const query = destination.trim().replace(/^\/+/, "").toLowerCase();
   // Default view (untouched): streams active in the last few minutes — ⌘K, glance,

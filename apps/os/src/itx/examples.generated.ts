@@ -572,13 +572,8 @@ await repo.commitFiles({
   changes: [{ path, content: "# Edit example\\n\\n" + beforeText }],
 });
 
-// commitFiles is durable when it returns, but a freshly-created repo's first
-// reads can race its bootstrap; poll briefly rather than flake.
-let before = await repo.readFile({ path });
-for (let attempt = 0; attempt < 25 && before === null; attempt += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  before = await repo.readFile({ path });
-}
+// create waits for repo/ready, and commitFiles is a read-your-write boundary.
+const before = await repo.readFile({ path });
 if (before === null) throw new Error("Expected seeded file to exist.");
 
 const edit = await repo.edit({
@@ -588,17 +583,8 @@ const edit = await repo.edit({
   newString: afterText,
 });
 
-// The same bootstrap race can serve a pre-edit snapshot right after the
-// commit; poll until the read reflects the edit.
-let after = await repo.readFile({ path });
-for (
-  let attempt = 0;
-  attempt < 25 && (after === null || after.content === before.content);
-  attempt += 1
-) {
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  after = await repo.readFile({ path });
-}
+// edit has the same read-your-write guarantee.
+const after = await repo.readFile({ path });
 if (after === null) throw new Error("Expected edited file to exist.");
 
 return {
@@ -650,6 +636,43 @@ const response = await itx.egress.fetch(
 const body = await response.text();
 
 return { status: response.status, bodyStart: body.slice(0, 200) };
+`.trim(),
+  },
+  {
+    id: "egress-rules-configured",
+    title: "Hold outbound requests to a host for human approval",
+    description:
+      "Egress rules are project state: append egress-rules-configured with a `hold` rule and any future request to a matching host — itx.egress.fetch, or an agent's own fetch inside its turn, same door either way — parks instead of completing, appending human-approval-requested. A human grants or rejects on the project stream (`iterate approve`, the mobile app's Approvals screen, or a raw grant/reject append) and the held call resolves or refuses. The event REPLACES the project's whole rule list (not a merge) — pass every rule you want kept, not just the new one. Run this once to seed a rule, then trigger a hold with egress-fetch (or just ask an agent to fetch the same host).",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+const host = vars.host ?? "httpbin.org";
+const ruleKey = vars.ruleKey ?? "repl-demo-hold";
+const appendResult = await itx.streams.get("/").append(
+  { return: "events" },
+  {
+    type: "events.iterate.com/project/egress-rules-configured",
+    payload: {
+      rules: [
+        {
+          ruleKey,
+          description: \`Outbound requests to \${host} need a human\`,
+          match: { hosts: [host] },
+          verdict: "hold",
+          approvalTimeoutMs: vars.approvalTimeoutMs ?? 600_000,
+        },
+      ],
+    },
+  },
+);
+if (!Array.isArray(appendResult)) {
+  throw new Error("append did not return committed events");
+}
+const [appended] = appendResult;
+if (typeof appended !== "object" || appended === null) {
+  throw new Error("append did not return a committed event");
+}
+return { host, ruleKey, offset: appended.offset };
 `.trim(),
   },
   {

@@ -186,17 +186,22 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
         // still advances through the complete scan envelope, so omitted live
         // chunks cannot become replayable persistent state on reconnect.
         const durableEvents = batch.events.filter((event) => event.ephemeral !== true);
-        // ONE download: every member receives the same scan proof. A byte-capped
-        // remainder arrives through the server pump's next frame; members never
-        // issue duplicate type-unfiltered pulls merely because the raw head is
-        // beyond this frame's scanned-through cursor.
+        // ONE download: the server byte-caps each frame but stamps it with the
+        // full raw head. Fanning that stamp to every runner would make each
+        // member self-pull the same tail the server subscription is about to
+        // deliver. Browser members have no at-head reconcile work, so stamp
+        // non-empty frames at their own tail. Empty frames retain the server
+        // head because no continuation is coming and self-pull is the recovery
+        // lane in that case.
+        const memberStreamMaxOffset =
+          batch.events.length === 0 ? batch.streamMaxOffset : batch.scannedThroughOffset;
         for (const open of opened) {
           // eslint-disable-next-line react-doctor/async-await-in-loop -- Commits must remain ordered on the members' shared SQLite connection.
           await open.delivery.sink({
             events: durableEvents,
             scannedAfterOffset: batch.scannedAfterOffset,
             scannedThroughOffset: batch.scannedThroughOffset,
-            streamMaxOffset: batch.streamMaxOffset,
+            streamMaxOffset: memberStreamMaxOffset,
           });
           open.acknowledgedThroughOffset = Math.max(
             open.acknowledgedThroughOffset,
@@ -241,7 +246,7 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
   }
 
   /** Dispose every member's runner (election teardown): queued frames and
-   * explicit catch-up pulls reject at their turn instead of racing the next
+   * trailing self-pulls reject at their turn instead of racing the next
    * election's drive over the shared mirror. In-flight commits are contained
    * durably by each member's progress-store fences either way. */
   dispose(): void {

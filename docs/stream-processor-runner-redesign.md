@@ -26,12 +26,12 @@ abstract class StreamProcessor<Contract> {
   abstract readonly contract: Contract; // schema + slug + consumes
   protected validate?(args): void; // OPTIONAL, sync — throw to reject (inline/pre-commit only)
   protected reduce(args): State; // OPTIONAL, pure fold, default identity
-  protected processEvent(args): undefined; // OPTIONAL, SYNCHRONOUS, default no-op
+  protected processEvent(args): undefined; // OPTIONAL, SYNCHRONOUS, event is null only for an eventless at-head pass
   // operator/inspection: snapshot(), getRuntimeState(), waitUntilEvent(), reReduce(), reprocessFrom(), skipThrough()
 }
 ```
 
-- **No public `reconcile`.** Reconciliation is ordinary `processEvent` logic (`ensureOutstandingObligations(state)`) run on relevant events + the revival event.
+- **No public `reconcile`.** Reconciliation is ordinary `processEvent` logic under `delivery.caughtUp`. It normally rides the last consumed event in a head-reaching scan; if that scan contains no consumed event, the runner makes one eventless call (`event: null`) over the final fold. Per-event dispatch guards `event !== null`.
 - **No author-overridable `processEventBatch`.** It survives only as the internal Stream-DO→runner _wire callback_.
 - A **stateless** processor implements only `processEvent`. A **pure fold** implements only `reduce`.
 
@@ -76,8 +76,8 @@ type Progress<State> = {
 
 ### Revival
 
-- Per-processor **`<namespace>/revived`** (e.g. `agent/revived`), typed, **declared explicitly in `consumes`**. Handled as an ordinary `processEvent` arm. Simple processors never see it.
-- **`runInBackground` requires a recovery adapter.** The runner **throws at construction** if recovery is wired but `consumes` omits `<ns>/revived`. (Not a type-level generic — keeps trivial processors trivial.)
+- One core **`stream/processor-revived`** event, with `processorSlug` in its payload, is **declared explicitly in `consumes`** by processors wired for recovery. Simple processors never see it.
+- **`runInBackground` requires a recovery adapter.** The runner **throws at construction** if recovery is wired but `consumes` omits that exact core event. (Not a type-level generic — keeps trivial processors trivial.)
 - The keepalive alarm guarantees the revival delivery turn even at zero lag.
 
 ### Waiting / snapshot
@@ -88,7 +88,7 @@ type Progress<State> = {
 
 ```ts
 delivery: { phase: "catching-up" | "live"; observedHeadOffset: number;
-            eventsBehindObservedHead: number; cursorRevision: number;
+            eventsBehindObservedHead: number; caughtUp: boolean; cursorRevision: number;
             idempotencyKey(key: string): string }
 ```
 
@@ -98,7 +98,7 @@ delivery: { phase: "catching-up" | "live"; observedHeadOffset: number;
 
 - **`StreamProcessorRunner`** — plain, runtime-neutral object (browser / DO / test). _The name is free on current main_ (only dead comments reference the deleted DO class).
 - **The processor is passed INTO the runner.** `runner.openDelivery()` → `{ checkpointOffset, sink }`. `sink` is the internal `processEventBatch` wire callback that reduces/processes **one event at a time**; transport batching lives entirely inside it. The DO returns `sink` from `wakeStreamSubscriber`; the browser passes `sink` to `subscribe()`.
-- **`durability` (optional adapter)** = `{ progress, recovery? }`. `progress`: read/commit the two-cursor record, CAS-fenced by `cursorRevision`. `recovery`: arm keepalive + append `<ns>/revived` + `handleAlarm`. **No Cloudflare `ctx` in the runner core.**
+- **`durability` (optional adapter)** = `{ progress, recovery? }`. `progress`: read/commit the two-cursor record, CAS-fenced by `cursorRevision`. `recovery`: arm keepalive + append `stream/processor-revived` + `handleAlarm`. **No Cloudflare `ctx` in the runner core.**
 - **The host dies (option B — thin registry).** The DO holds its processors as **named fields** + one `StreamProcessorRunner` per processor. A deliberately thin registry owns only: the single-DO-alarm multiplex, slug→runner wake routing, and building `durability` from `ctx`. This replaces `createStreamProcessorHost` / `host.add(factory)`. If the registry grows behavior beyond those three jobs, it has failed.
 - **Two delivery drivers over one shared `reduce`/`progress`/`reReduce` core:**
   - `SubscriberRunner` — async pump, the full model above (Phase 1).
@@ -115,11 +115,11 @@ This is where the net reduction lives. Deletions/migrations measured on `origin/
 | `stream-processor.ts` public `reconcile` + at-head gate | —      | **delete**                                                                |
 | overridable `processEventBatch`                         | —      | **delete** (keep internal wire sink)                                      |
 | `github-agent` ordering override                        | ~30    | **pure delete** (per-event blocking is default)                           |
-| `agent` reconcile lane                                  | ~120   | relocate → `agent/revived` + relevant-event handlers                      |
+| `agent` reconcile lane                                  | ~120   | relocate → `processEvent` under `delivery.caughtUp`                       |
 | `slack-agent` reconcile + at-head status carry          | ~107   | relocate + private debounce                                               |
 | `telegram-agent` at-head typing carry                   | ~30    | private freshness                                                         |
-| `capability-host` at-head obligation gate               | ~36    | relocate → revived handler                                                |
-| `repo` at-head creation obligation                      | ~40    | relocate → revived handler                                                |
+| `capability-host` at-head obligation gate               | ~36    | relocate → `processEvent` under `delivery.caughtUp`                       |
+| `repo` at-head creation obligation                      | ~40    | relocate → `processEvent` under `delivery.caughtUp`                       |
 | `scheduler` alarm derivation                            | ~40    | absorb into runner                                                        |
 | `browser-feed` / `browser-raw-events` SQLite batch      | ~45    | private transactional committer (writes + progress in ONE txn)            |
 | `{offset,state}` snapshot                               | —      | split → two cursors + `cursorRevision` fencing; refold runs `reduce` only |
@@ -132,7 +132,7 @@ Three DOs (`slack`, `telegram`, `capability-host`) carry hand-written comments e
 1. **Additive** — new `StreamProcessor` interface, `Progress` types, `delivery` context, `StreamProcessorRunner` + `SubscriberRunner` skeleton, `durability`/`progress`/`recovery` adapter interfaces. Nothing deleted yet.
 2. `SubscriberRunner` per-event loop + two-cursor progress adapter (DO-KV backed) + cadence policy.
 3. **In-memory test harness = the executable spec** (see below).
-4. Migrate **one** processor end-to-end (`agent`) as the proof: reconcile lane → `agent/revived` + handlers; verify per-event ordering.
+4. Migrate **one** processor end-to-end (`agent`) as the proof: reconcile lane → `processEvent` under `delivery.caughtUp`; verify per-event ordering.
 5. Migrate the rest (capability-host, repo, slack, telegram, scheduler, github).
 6. Browser transactional committer (feed + raw-events); `reducerVersion`→`reReduce`, output-schema reset→`reprocessFrom(1)`.
 7. Delete the host; wire the thin registry into the 4 DOs.

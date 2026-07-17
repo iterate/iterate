@@ -62,6 +62,7 @@ import {
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { useItxQuery } from "iterate/react";
 import {
   createRepoTask,
   isRepoTaskPath,
@@ -99,7 +100,6 @@ import {
   type EditorPathDraft,
   type EditorPathOverride,
 } from "./repo-task-editor-state.ts";
-import { useItxQuery } from "~/itx/itx-react.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 type SearchPatch = {

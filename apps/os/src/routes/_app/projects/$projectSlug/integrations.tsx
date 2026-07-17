@@ -61,8 +61,8 @@ import {
   Unplug,
 } from "lucide-react";
 import { z } from "zod";
+import { useItx, useItxQuery, useLiveState } from "iterate/react";
 import type { Project } from "../../../../itx-api.generated.ts";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -71,7 +71,6 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
 type Connection = Awaited<ReturnType<Project["integrations"]["getConnection"]>>;
 
@@ -127,16 +126,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, "/integrations"),
     }),
-  component: ProjectIntegrationsPage,
+  component: ProjectIntegrationsContent,
 });
-
-function ProjectIntegrationsPage() {
-  return (
-    <ItxBoundary>
-      <ProjectIntegrationsContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectIntegrationsContent() {
   const search = Route.useSearch();
@@ -756,7 +747,7 @@ function AccountConnectionsItem() {
   // The connections list is derived from the project processor's live secrets
   // state — the same push-based slice the secrets page reads. Two payoffs over
   // a second useItxQuery: it does not suspend a second time (which would bubble
-  // to the route ItxBoundary and flash the whole panel back to the global
+  // to the route's `<Suspense>` boundary and flash the whole panel back to the
   // "Connecting…" placeholder), and a freshly-created session secret appears
   // here the instant its stream folds, with no manual invalidation to race.
   const secretsList = useLiveState(

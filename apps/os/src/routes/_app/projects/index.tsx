@@ -1,9 +1,4 @@
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
@@ -12,15 +7,15 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
+import {
+  connectIterateSession,
+  reconnectIterateSession,
+  useIterateSessionQuery,
+} from "iterate/react";
 import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import {
-  fetchProjectsList,
-  projectsListQueryKey,
-  projectsListStaleTime,
-} from "~/lib/projects-query.ts";
-import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
+import { projectsListQueryKey, projectsListStaleTime } from "~/lib/projects-query.ts";
 
 type OrganizationSummary = {
   id: string;
@@ -65,9 +60,9 @@ function ProjectsIndexPage() {
   const queryClient = useQueryClient();
   // The list comes straight from the itx session (`session.projects.list()`),
   // shared with the app sidebar through the one projects cache entry.
-  const { data, isPending } = useQuery({
-    queryKey: projectsListQueryKey,
-    queryFn: fetchProjectsList,
+  const { data, isPending } = useIterateSessionQuery({
+    key: ["projects"],
+    query: (session) => session.projects.list(),
     staleTime: projectsListStaleTime,
   });
   const projects = data ?? [];
@@ -88,8 +83,8 @@ function ProjectsIndexPage() {
   const recoverProject = useMutation({
     mutationFn: async (project: ProjectListEntry) => {
       const organizationSlug = organizationSlugFor(project);
-      const itx = await connectItxBrowser();
-      await itx.projects.create({
+      const session = await connectIterateSession();
+      await session.projects.create({
         projectId: project.id,
         slug: project.slug,
         ...(organizationSlug === undefined ? {} : { organizationSlug }),
@@ -98,7 +93,7 @@ function ProjectsIndexPage() {
     onSuccess: async () => {
       // Drop the global socket BEFORE refetching so the list re-dials with
       // the widened access, then invalidate the shared cache entry.
-      reconnectItx();
+      reconnectIterateSession();
       await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
       toast.success("Project set up");
     },

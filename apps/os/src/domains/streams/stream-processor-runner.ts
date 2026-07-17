@@ -182,12 +182,12 @@ export type DeliveryContext = {
   /** How far this event trails `observedHeadOffset`; 0 = at the observed head. */
   eventsBehindObservedHead: number;
   /**
-   * The frame's raw scan reached the observed head and this is its last
-   * deliverable event. The event itself may trail the head when the selector
-   * omitted a raw tail. This is the at-head reconcile signal: a processor
-   * drives undriven obligations / settles dead ones under this flag. If a
-   * head-reaching frame has no deliverable event, the runner makes one
-   * event-less pass with the same signal.
+   * The at-head reconciliation signal: the scan has reached the highest raw
+   * stream offset the runner has observed, so `state` is the complete fold it
+   * has seen. It is true on the last consumed event of a head-reaching frame.
+   * If that frame contains no consumed event, the runner makes one eventless
+   * `processEvent` call (`event: null`) with this flag instead; an unconsumed
+   * tail must not strand obligations on an otherwise quiet stream.
    */
   caughtUp: boolean;
   /** The processing cursor's current fencing token (see {@link ProcessingProgress}). */
@@ -361,6 +361,35 @@ export class StreamProcessorRunner<
         // next fire to revival); the transport observes the same rejection
         // through the returned promise and owns the redelivery.
         this.durability?.recovery?.keepAliveWhile(() => attempt);
+        // The production wake lane is consumes-FILTERED but stamped with the
+        // RAW stream head, so a successful
+        // frame can leave the acknowledged cursor behind `streamMaxOffset`
+        // with an unconsumed DURABLE tail nothing else will ever deliver —
+        // the cursor parks below head, the last consumed event's
+        // `delivery.caughtUp` never becomes true, and the obligation the frame
+        // opened wedges. Every behind frame therefore gets a trailing
+        // type-UNFILTERED self-pull that folds the tail up to head. Its final
+        // page either marks the last consumed event caught up or supplies the
+        // eventless at-head pass when the tail contains no consumed event. It
+        // rides the runner's chain — serialized
+        // with frames, reading the freshest cursor — and the keepalive lane,
+        // NOT the promise returned to the transport: a failed trailing pull
+        // reads as FAILURE to the keepalive, blocking the quiet-clean disarm
+        // and routing the next alarm fire to revival, whose unfiltered
+        // catch-up is this pull's retry. A failed main attempt takes the
+        // transport's redelivery lane instead; no trailing pull follows it.
+        this.#runInBackground(() =>
+          attempt.then(
+            () =>
+              this.#enqueue(async () => {
+                const { processing } = this.#requireProgress();
+                if (processing.acknowledgedThroughOffset < batch.streamMaxOffset) {
+                  await this.#selfCatchUp();
+                }
+              }),
+            () => undefined,
+          ),
+        );
         return attempt;
       },
     };

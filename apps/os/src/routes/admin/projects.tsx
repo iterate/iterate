@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ExternalLinkIcon, WaypointsIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
@@ -13,8 +12,8 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { useIterateSessionQuery } from "iterate/react";
 import type { ProjectListEntry } from "../../project-deployment-status.ts";
-import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin/projects")({
   component: AdminProjectsPage,
@@ -24,13 +23,11 @@ function AdminProjectsPage() {
   // This renders under the admin layout's AdminGate, so the global itx handle
   // carries admin authority: `projects.list({ scope: "deployment" })` returns
   // every deployment-known project (from the project directory), each with its engine status.
-  const itx = useItx();
-  const projectsQuery = useQuery({
-    // NOT the shared ["itx", "projects"] entry: the admin list is the
-    // deployment-wide view, the user list is claims-scoped — same socket,
-    // different results.
-    queryKey: ["itx", "admin-projects"],
-    queryFn: async () => await itx.projects.list({ scope: "deployment" }),
+  const projectsQuery = useIterateSessionQuery({
+    // NOT the shared ["projects"] entry: the admin list is the deployment-wide
+    // view, the user list is claims-scoped — same socket, different results.
+    key: ["admin-projects"],
+    query: (session) => session.projects.list({ scope: "deployment" }),
   });
   const projects = projectsQuery.data ?? [];
 

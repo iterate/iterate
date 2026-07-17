@@ -24,22 +24,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Session",
     kind: "interface",
     sourceText:
-      "/**\n * What you authenticate into: a catalog that vends itxs.\n *\n * A session is NOT an itx — it is the directory you use to reach one.\n * `projects` is principal-scoped. `streams` and `repos` here are the\n * deployment-wide surfaces backed by `projectId: null`, so only admin/internal\n * auth can reach them.\n */\nexport interface Session {\n  /** Includes `principal` — who this session is. */\n  __describe(): Promise<Description & { principal: string }>;\n  /** Deployment-wide streams (admin only; projectId: null). */\n  streams: StreamCollection;\n  /** Deployment-wide repos (admin only; projectId: null). */\n  repos: RepoCollection;\n  /** Admin-only exact-offset Stream Durable Object recovery. */\n  streamRecovery: StreamRecoveryCollection;\n  /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */\n  projects: ProjectCollection;\n}",
+      "/**\n * What you authenticate into: a catalog that vends itxs.\n *\n * A session is NOT an itx — it is the directory you use to reach one.\n * `projects` is principal-scoped. `streams` and `repos` here are the\n * deployment-wide surfaces backed by `projectId: null`, so only admin/internal\n * auth can reach them.\n */\nexport interface Session {\n  /** Includes `principal` — who this session is. */\n  __describe(): Promise<Description & { principal: string }>;\n  /** Deployment-wide streams (admin only; projectId: null). */\n  streams: StreamCollection;\n  /** Deployment-wide repos (admin only; projectId: null). */\n  repos: RepoCollection;\n  /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */\n  projects: ProjectCollection;\n}",
     summary: "What you authenticate into: a catalog that vends itxs.",
     memberSummaries: {
       __describe: "Includes `principal` — who this session is.",
       streams: "Deployment-wide streams (admin only; projectId: null).",
       repos: "Deployment-wide repos (admin only; projectId: null).",
-      streamRecovery: "Admin-only exact-offset Stream Durable Object recovery.",
       projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
     },
-    referencedTypeNames: [
-      "Description",
-      "StreamCollection",
-      "RepoCollection",
-      "StreamRecoveryCollection",
-      "ProjectCollection",
-    ],
+    referencedTypeNames: ["Description", "StreamCollection", "RepoCollection", "ProjectCollection"],
   },
   {
     name: "Project",
@@ -161,22 +154,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["Description", "Repo"],
   },
   {
-    name: "StreamRecoveryCollection",
-    kind: "interface",
-    sourceText:
-      "/** Admin-only catalog for exact-offset Stream Durable Object recovery. */\nexport interface StreamRecoveryCollection {\n  get(input: { projectId: string | null; path: string }): StreamRecovery;\n}",
-    summary: "Admin-only catalog for exact-offset Stream Durable Object recovery.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamRecovery"],
-  },
-  {
     name: "ProjectCollection",
     kind: "interface",
     sourceText:
-      '/** Catalog of projects reachable from a {@link Session}. */\nexport interface ProjectCollection {\n  __describe(): Promise<Description>;\n  /** The itx at the project root for a `prj_…` id. */\n  get(projectId: string): Promise<Project>;\n  /**\n   * Register and bootstrap a project. By default this resolves once the\n   * bootstrap saga has committed `project/ready` — convenient for scripts\n   * and tests that use the project immediately. Pass\n   * `waitUntilReady: false` to resolve once the `project/created` birth\n   * certificate has been processed\n   * (identity registered, directory primed, bootstrap events appended): the\n   * saga then runs behind the returned handle, and its progress is ordinary\n   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap\n   * lands). The dashboard uses the fast path to redirect into the project\n   * instantly and play creation progress from pushes.\n   */\n  create(args: {\n    organizationSlug?: string;\n    projectId?: string;\n    slug: string;\n    waitUntilReady?: boolean;\n  }): Promise<Project>;\n  /**\n   * The session\'s projects, enriched: identity (id/slug/org) from the auth\n   * claims or the project directory, deployment status from a concurrent\n   * engine probe (`state.ready` on each project\'s processor snapshot). A\n   * probe failure degrades THAT entry to "unknown" — the list always renders.\n   * Scope is explicit: "mine" (default for user principals) is the caller\'s\n   * own claims even when admin credentials ride the same socket;\n   * "deployment" (every directory-known project) requires an admin principal\n   * and is the default for non-user admin principals, which have no claims.\n   */\n  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;\n}',
+      '/** Catalog of projects reachable from a {@link Session}. */\nexport interface ProjectCollection {\n  __describe(): Promise<Description>;\n  /**\n   * The itx at the project root, addressable by `prj_…` id OR by URL slug — the\n   * browser passes `params.projectSlug` straight through, no client-side\n   * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution\n   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},\n   * which passes `prj_` ids through untouched and resolves slugs); slugs are\n   * immutable, so a slug handle can\'t silently repoint. Confinement stays keyed\n   * on the resolved id — the access check runs on the id, never the raw input.\n   */\n  get(idOrSlug: string): Promise<Project>;\n  /**\n   * Register and bootstrap a project. By default this resolves once the\n   * bootstrap saga has committed `project/ready` — convenient for scripts\n   * and tests that use the project immediately. Pass\n   * `waitUntilReady: false` to resolve once the `project/created` birth\n   * certificate has been processed\n   * (identity registered, directory primed, bootstrap events appended): the\n   * saga then runs behind the returned handle, and its progress is ordinary\n   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap\n   * lands). The dashboard uses the fast path to redirect into the project\n   * instantly and play creation progress from pushes.\n   */\n  create(args: {\n    organizationSlug?: string;\n    projectId?: string;\n    slug: string;\n    waitUntilReady?: boolean;\n  }): Promise<Project>;\n  /**\n   * The session\'s projects, enriched: identity (id/slug/org) from the auth\n   * claims or the project directory, deployment status from a concurrent\n   * engine probe (`state.ready` on each project\'s processor snapshot). A\n   * probe failure degrades THAT entry to "unknown" — the list always renders.\n   * Scope is explicit: "mine" (default for user principals) is the caller\'s\n   * own claims even when admin credentials ride the same socket;\n   * "deployment" (every directory-known project) requires an admin principal\n   * and is the default for non-user admin principals, which have no claims.\n   */\n  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;\n}',
     summary: "Catalog of projects reachable from a {@link Session}.",
     memberSummaries: {
-      get: "The itx at the project root for a `prj_…` id.",
+      get: 'The itx at the project root, addressable by `prj_…` id OR by URL slug — the browser passes `params.projectSlug` straight through, no client-side slug→id hop (`get("acme")` and `get("prj_123")` both work).',
       create: "Register and bootstrap a project.",
       list: "The session's projects, enriched: identity (id/slug/org) from the auth claims or the project directory, deployment status from a concurrent engine probe (`state.ready` on each project's processor snapshot).",
     },
@@ -753,23 +737,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamSubscriberPing",
       "StreamSubscriptionHandle",
       "StreamPushEventBatch",
-    ],
-  },
-  {
-    name: "StreamRecovery",
-    kind: "interface",
-    sourceText:
-      "/** Admin-only exact-offset export and replacement of one Stream Durable Object. */\nexport interface StreamRecovery {\n  exportForRecovery(args?: {\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportPage>;\n  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */\n  exportToRecovery(args: {\n    sink: StreamRecoveryExportSink;\n    afterOffset?: number;\n    limit?: number;\n    maxPages?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportSummary>;\n  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{\n    restoredEventCount: number;\n    lastImportedOffset: number;\n    currentMaxOffset: number;\n  }>;\n}",
-    summary: "Admin-only exact-offset export and replacement of one Stream Durable Object.",
-    memberSummaries: {
-      exportToRecovery:
-        "Stream part of a fixed export window to an acknowledged sink in bounded pages.",
-    },
-    referencedTypeNames: [
-      "StreamRecoveryExportPage",
-      "StreamRecoveryExportSink",
-      "StreamRecoveryExportSummary",
-      "StreamRecoveryRestoreInput",
     ],
   },
   {
@@ -1817,42 +1784,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "Live subscription handle returned by `Stream.subscribe`.",
     memberSummaries: {},
     referencedTypeNames: ["SubscriptionKey"],
-  },
-  {
-    name: "StreamRecoveryExportPage",
-    kind: "typeAlias",
-    sourceText:
-      '/** One bounded page of a stream\'s storage-level recovery export. */\nexport type StreamRecoveryExportPage = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  events: {\n    type: string;\n    payload?: Record<string, unknown> | undefined;\n    metadata?: Record<string, unknown> | undefined;\n    source?:\n      | {\n          processor?:\n            | {\n                slug: string;\n                version: string;\n                stream: { path: string; projectId: string | null };\n                whileProcessing?: { offset: number; type: string } | undefined;\n              }\n            | undefined;\n          crossPostedFrom?:\n            | {\n                subscriptionKey: string;\n                createdAt: string;\n                offset: number;\n                path: string;\n                projectId: string | null;\n                type: string;\n              }[]\n            | undefined;\n        }\n      | undefined;\n    idempotencyKey?: string | undefined;\n    ephemeral?: true | undefined;\n    offset: number;\n    createdAt: string;\n    path: string;\n  }[];\n  throughOffset: number;\n  complete: boolean;\n};',
-    summary: "One bounded page of a stream's storage-level recovery export.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "StreamRecoveryExportSink",
-    kind: "typeAlias",
-    sourceText:
-      "/** Acknowledged page sink used by one long-running recovery export RPC. */\nexport type StreamRecoveryExportSink = {\n  write(page: StreamRecoveryExportPage): Promise<void>;\n};",
-    summary: "Acknowledged page sink used by one long-running recovery export RPC.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamRecoveryExportPage"],
-  },
-  {
-    name: "StreamRecoveryExportSummary",
-    kind: "typeAlias",
-    sourceText:
-      '/** Small result returned after every exported page has been acknowledged. */\nexport type StreamRecoveryExportSummary = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  throughOffset: number;\n  exportedEventCount: number;\n  pageCount: number;\n  lastExportedOffset: number;\n  complete: boolean;\n};',
-    summary: "Small result returned after every exported page has been acknowledged.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "StreamRecoveryRestoreInput",
-    kind: "typeAlias",
-    sourceText:
-      '/** A complete normalized stream log accepted by storage-level recovery restore. */\nexport type StreamRecoveryRestoreInput = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  events: {\n    type: string;\n    payload?: Record<string, unknown> | undefined;\n    metadata?: Record<string, unknown> | undefined;\n    source?:\n      | {\n          processor?:\n            | {\n                slug: string;\n                version: string;\n                stream: { path: string; projectId: string | null };\n                whileProcessing?: { offset: number; type: string } | undefined;\n              }\n            | undefined;\n          crossPostedFrom?:\n            | {\n                subscriptionKey: string;\n                createdAt: string;\n                offset: number;\n                path: string;\n                projectId: string | null;\n                type: string;\n              }[]\n            | undefined;\n        }\n      | undefined;\n    idempotencyKey?: string | undefined;\n    ephemeral?: true | undefined;\n    offset: number;\n    createdAt: string;\n    path: string;\n  }[];\n  highestAssignedOffset: number;\n};',
-    summary: "A complete normalized stream log accepted by storage-level recovery restore.",
-    memberSummaries: {},
-    referencedTypeNames: [],
   },
   {
     name: "ProjectDeploymentStatus",

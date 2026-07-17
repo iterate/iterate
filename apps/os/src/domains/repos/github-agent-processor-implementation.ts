@@ -128,10 +128,9 @@ export class GithubAgentProcessor extends StreamProcessor<
     // At head: bound the same-drive trust bridge to this drive. Runs AFTER
     // the dispatch switch captured its bridge reference, so the head event's
     // own (follow-up-less) collaborator-check closures keep mutating the old
-    // bridge while the NEXT drive starts clean. A batch whose tail is a type
-    // this processor does not consume defers the reset to the next
-    // consumed-at-head event; that is benign — the durable verified fact
-    // folds `conversationActive` either way.
+    // bridge while the NEXT drive starts clean. An unconsumed raw tail gets
+    // the runner's eventless at-head pass, so the reset still happens at the
+    // end of this drive.
     if (args.delivery.caughtUp) this.#batchConversation = newBatchConversation();
   }
 
@@ -141,6 +140,7 @@ export class GithubAgentProcessor extends StreamProcessor<
     event,
     state,
   }: Parameters<StreamProcessor<GithubAgentProcessorContract>["processEvent"]>[0]): undefined {
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
     if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/github-agent/created": {

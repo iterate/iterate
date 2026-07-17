@@ -104,6 +104,7 @@ export class ProjectProcessor extends StreamProcessor<
     // included) pumps its own events into the worker's `processEventBatch`
     // with a durable checkpoint (see streams/project-worker-delivery.ts).
 
+    // Event-less at-head pass: this processor has no at-head work.
     if (event === null) return;
     if (event.type !== "events.iterate.com/project/created" && state.birthCertificate === null) {
       return;

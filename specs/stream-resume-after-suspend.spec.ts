@@ -20,6 +20,7 @@ import { test } from "./test-support/test.ts";
 
 const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
+const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
 // Two liveness-probe intervals (LIVENESS_PROBE_INTERVAL_MS = 10s): a clean
 // socket close is invisible to the runtime (the view's factory never wires
@@ -211,9 +212,20 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
-  // The onboarding greeting turn may still be streaming, and a live turn swaps
-  // the send button for "Stop generation" — wait for the settled composer so
-  // the mid-outage send below has a button to click.
+  // The composer initially renders a Send button before the onboarding
+  // greeting's activity reaches the browser. Waiting on that button alone can
+  // therefore race with the greeting and watch it turn into Stop generation
+  // while the test fills its draft. First require the greeting's durable
+  // response event and its painted row; only then is Send a settled control.
+  await agent.stream.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [WEB_MESSAGE_SENT],
+    timeoutMs: 120_000,
+  });
+  await page
+    .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
+    .first()
+    .waitFor({ timeout: 30_000 });
   await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
 
   // Blackhole the transport WITHOUT a close event — what a suspend-killed TCP

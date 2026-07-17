@@ -168,7 +168,7 @@ describe("CompositeMirrorDrive", () => {
     expect(feed.applied).toEqual([1, 1]);
   });
 
-  it("forwards scan progress so no member self-pulls a byte-capped frame's remainder", async () => {
+  it("re-stamps fanned frames at their own tail so no member self-pulls a byte-capped frame's remainder", async () => {
     const stream = new MemoryStream();
     const readEvents = vi.spyOn(stream, "readEvents");
     const raw = makeMember("browser-raw-events", stream);
@@ -186,7 +186,8 @@ describe("CompositeMirrorDrive", () => {
     await opened.sink(
       delivery([first!], { scannedThroughOffset: first!.offset, streamMaxOffset: second!.offset }),
     );
-    // Flush background work to prove no member starts an independent pull.
+    // Flush the runners' trailing background lane. Each member would otherwise
+    // self-pull the tail in parallel with the server pump.
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(readEvents).not.toHaveBeenCalled();
@@ -204,7 +205,7 @@ describe("CompositeMirrorDrive", () => {
     expect(feed.applied).toEqual([1, 2]);
   });
 
-  it("advances every member through an empty scan proof without self-pulling", async () => {
+  it("preserves an empty frame's server head so every member self-pulls the missing durable tail", async () => {
     const stream = new MemoryStream();
     const readEvents = vi.spyOn(stream, "readEvents");
     const raw = makeMember("browser-raw-events", stream);
@@ -216,14 +217,13 @@ describe("CompositeMirrorDrive", () => {
     );
 
     const opened = await composite.openDelivery();
-    await opened.sink(delivery([], { scannedThroughOffset: 2, streamMaxOffset: 2 }));
+    await opened.sink(delivery([], { scannedThroughOffset: 0, streamMaxOffset: 2 }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(readEvents).not.toHaveBeenCalled();
-    expect(raw.applied).toEqual([]);
-    expect(feed.applied).toEqual([]);
-    expect((await composite.snapshot()).offset).toBe(2);
+    expect(readEvents).toHaveBeenCalledTimes(2);
+    expect(raw.applied).toEqual([1, 2]);
+    expect(feed.applied).toEqual([1, 2]);
   });
 
   it("delegates subscriber metrics to the primary (first) member", () => {

@@ -135,6 +135,10 @@ describe("node-hosted stream processor (e2e)", () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(outputs.length).toBeGreaterThan(0);
+      // The echo append is blocking work that completes before the runner's
+      // frame commit. Seeing the echo therefore does not, by itself, prove
+      // that the reduction has been persisted yet.
+      await waitUntil(() => saved?.reduction.state.seen === 1, 5_000);
       expect(saved?.reduction.state.seen).toBe(1);
     } finally {
       handle.unsubscribe();

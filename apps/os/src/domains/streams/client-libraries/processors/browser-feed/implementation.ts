@@ -115,7 +115,8 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   protected override processEvent(
     args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
   ): undefined {
-    const event = args.event;
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+    const { event } = args;
     if (event === null) return;
     const { ops } = planBrowserFeedOps(args.previousState, [event]);
     // A drained buffer means a new frame has started. Pending rows exist only
