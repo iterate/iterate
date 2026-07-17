@@ -10,14 +10,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { StreamProcessorRunner } from "iterate/processors";
 import { MemoryStream } from "iterate/processors/testing";
+import type { ItxExpression } from "../../itx/expression.ts";
 import type { Project } from "../../itx-api.generated.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
-import {
-  CapabilityHostProcessor,
-  type ParentCapabilityHost,
-} from "./capability-host-processor-implementation.ts";
+import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
 
 const T = {
   created: "events.iterate.com/capability-host/created",
@@ -27,12 +25,12 @@ const T = {
   completed: "events.iterate.com/capability-host/script-run-settled",
 } as const;
 
-function capabilityHostStream(): MemoryStream {
+function capabilityHostStream(options: { fallback?: ItxExpression | null } = {}): MemoryStream {
   const stream = new MemoryStream();
   stream.events.push({
     type: T.created,
     idempotencyKey: `capability-host/created:test:${stream.path}`,
-    payload: { config: {} },
+    payload: { config: {}, fallback: options.fallback ?? null },
     createdAt: new Date().toISOString(),
     offset: 1,
     path: stream.path,
@@ -51,7 +49,7 @@ type Harness = {
 function makeProcessor(options: {
   stream: MemoryStream;
   run?: (code: string) => Promise<unknown>;
-  parent?: ParentCapabilityHost;
+  itx?: unknown;
   typecheckScript?: (input: {
     capabilities: CapabilityDescription[];
     code: string;
@@ -60,10 +58,9 @@ function makeProcessor(options: {
   let runner!: Harness["runner"];
   const processor = new CapabilityHostProcessor({
     stream: options.stream,
-    itx: {} as Project,
+    itx: (options.itx ?? {}) as Project,
     path: "/",
     projectId: null,
-    parent: options.parent,
     scriptExecutionEntrypoint: {
       run: async (code) => {
         const result = await (
@@ -221,8 +218,8 @@ describe("script execution typecheck gate", () => {
     expect(ran).toHaveLength(1);
   });
 
-  it("the checker sees this scope's mounts AND inherited capabilities", async () => {
-    const stream = capabilityHostStream();
+  it("the checker sees this scope's mounts AND the fallback host's capabilities", async () => {
+    const stream = capabilityHostStream({ fallback: ["capabilityHosts", ["get", "/"]] });
     const seen: CapabilityDescription[][] = [];
     const inherited: CapabilityDescription = {
       path: ["tools", "weather"],
@@ -233,9 +230,13 @@ describe("script execution typecheck gate", () => {
     const harness = makeProcessor({
       stream,
       run: async () => null,
-      parent: {
-        invokeCapability: () => Promise.reject(new Error("unused")),
-        describeCapabilities: async () => [inherited],
+      itx: {
+        capabilityHosts: {
+          get: () => ({
+            invokeCapability: () => Promise.reject(new Error("unused")),
+            __describe: async () => ({ capabilities: [inherited] }),
+          }),
+        },
       },
       typecheckScript: async ({ capabilities }) => {
         seen.push(capabilities);

@@ -138,7 +138,8 @@ export class ProjectProcessor extends StreamProcessor<
                 {
                   type: "events.iterate.com/capability-host/created",
                   idempotencyKey: `capability-host/created:${this.deps.itx.projectId}:/`,
-                  payload: { config: {} },
+                  // The root host ends capability resolution: no fallback.
+                  payload: { config: {}, fallback: null },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({

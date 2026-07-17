@@ -149,6 +149,16 @@ describe("agentCreationForPath", () => {
     ).toEqual(["events.iterate.com/agent/created", "events.iterate.com/capability-host/created"]);
   });
 
+  test("journals the one-hop project-root capability fallback in the birth certificate", () => {
+    const birth = defaultsFor("/agents/demo").events.find(
+      (event) => event.type === "events.iterate.com/capability-host/created",
+    );
+    expect(birth?.payload).toEqual({
+      config: {},
+      fallback: ["capabilityHosts", ["get", "/"]],
+    });
+  });
+
   test("installs both universal processor subscriptions in the same batch", () => {
     const subscriptions = defaultsFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",

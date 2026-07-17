@@ -513,8 +513,9 @@ export interface AgentChat {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; on a local miss, reads follow the scope's journaled `fallback`
+ * expression — usually one hop straight to the project root host.
+ * `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -2037,8 +2038,8 @@ export type CapabilityDescription = {
   providedAtOffset?: number;
   /**
    * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).
-   * Set when a scope reports capabilities it inherited from an enclosing scope,
-   * so the reader can tell a local mount from an inherited one. Absent on
+   * Set when a scope reports capabilities its fallback host contributed, so
+   * the reader can tell a local mount from an inherited one. Absent on
    * built-ins (they exist at every scope).
    */
   scope?: string;

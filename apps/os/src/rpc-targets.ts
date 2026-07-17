@@ -269,7 +269,10 @@ import {
   type AgentFileAttachment,
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  PROJECT_ROOT_CAPABILITY_FALLBACK,
+} from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -5192,8 +5195,9 @@ type CapabilityHostRpcTargetProps = {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; on a local miss, reads follow the scope's journaled `fallback`
+ * expression — usually one hop straight to the project root host.
+ * `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -5251,7 +5255,12 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       {
         type: "events.iterate.com/capability-host/created",
         idempotencyKey: `capability-host/created:${this.#props.projectId}:${this.#props.path}`,
-        payload: { config: {} },
+        // The root host ends resolution; every other scope journals a one-hop
+        // fallback straight to it (path is normalized in the constructor).
+        payload: {
+          config: {},
+          fallback: this.#props.path === "/" ? null : PROJECT_ROOT_CAPABILITY_FALLBACK,
+        },
       },
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName,
@@ -5302,7 +5311,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     // (DO method name: describeCapabilities — it returns the raw array; the
     // Description envelope is assembled here, where the scope context lives.)
     return describeNode({
-      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads chain up through enclosing scopes, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
+      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; on a local miss reads follow the scope's journaled fallback (usually the project root host), so \`capabilities\` includes the fallback's mounts tagged with their declaring scope.`,
       children: {
         create:
           "Create this capability host and wait until its processor has processed the birth batch.",
