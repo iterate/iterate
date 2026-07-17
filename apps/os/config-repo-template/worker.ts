@@ -191,6 +191,18 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
   }
 
   const action = webhook.body.action;
+  const appSlug = webhook.appSlug;
+  const author = webhook.associations.author;
+  const mention =
+    typeof appSlug === "string" &&
+    author !== undefined &&
+    author.login.length > 0 &&
+    author.type !== "Bot" &&
+    ["OWNER", "MEMBER", "COLLABORATOR"].includes(author.association) &&
+    webhook.associations.mentionedUsers?.includes(appSlug.toLowerCase()) === true &&
+    ((webhook.delivery.name === "issue_comment" && action === "created") ||
+      (webhook.delivery.name === "pull_request_review" && action === "submitted") ||
+      (webhook.delivery.name === "pull_request_review_comment" && action === "created"));
   const agentPath = `/agents${githubPullRequests.repoPath}/pr/${number}`;
   const agent = itx.agents.get(agentPath);
   const exists =
@@ -200,7 +212,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
         limit: 1,
       })
     ).length > 0;
-  if (!exists && !(webhook.delivery.name === "pull_request" && action === "opened")) {
+  if (!exists && !(webhook.delivery.name === "pull_request" && action === "opened") && !mention) {
     return;
   }
 
@@ -238,7 +250,6 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
 
   const pullRequest = webhook.body.pull_request;
   const headSha = pullRequest?.head?.sha;
-  const appSlug = webhook.appSlug;
   if (
     webhook.delivery.name === "pull_request" &&
     (action === "opened" || action === "ready_for_review" || action === "synchronize") &&
@@ -275,17 +286,6 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
     });
   }
 
-  const author = webhook.associations.author;
-  const mention =
-    typeof appSlug === "string" &&
-    author !== undefined &&
-    author.login.length > 0 &&
-    author.type !== "Bot" &&
-    ["OWNER", "MEMBER", "COLLABORATOR"].includes(author.association) &&
-    webhook.associations.mentionedUsers?.includes(appSlug.toLowerCase()) === true &&
-    ((webhook.delivery.name === "issue_comment" && action === "created") ||
-      (webhook.delivery.name === "pull_request_review" && action === "submitted") ||
-      (webhook.delivery.name === "pull_request_review_comment" && action === "created"));
   if (mention && author !== undefined) {
     agentEvents.push({
       type: "events.iterate.com/agents/context-added",
