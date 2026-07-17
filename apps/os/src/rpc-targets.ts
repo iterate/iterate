@@ -234,6 +234,10 @@ import type {
   AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import {
+  settleByDeadline,
+  type DeadlineOutcome,
+} from "./domains/capability-host/execution-deadline.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
@@ -6457,6 +6461,8 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
   telegramProcessor: PromiseLike<unknown>;
 };
 
+const PROCESSOR_WAIT_REACQUIRE_MS = 10_000;
+
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
  *
@@ -6501,45 +6507,90 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
     return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
   }
 
-  async #callProcessor<Result>(
+  #disposeProcessor(processor: StreamProcessorRpc<State>): void {
+    // A Workers RPC property returning an RpcTarget materializes a remote
+    // stub for every relay call. It is only needed for this one method and
+    // must be released deterministically. In-process targets are real
+    // RpcTargets and remain owned by their host.
+    if (processor instanceof RpcTarget) return;
+    try {
+      (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+    } catch (error) {
+      // Disposal is cleanup, not the authoritative processor outcome. A
+      // stale workerd RPC stub can reject disposal after its backing DO
+      // resets; preserve the success/error/retry already chosen above,
+      // while keeping the cleanup failure observable.
+      console.warn("processor relay transient facade dispose failed", { error });
+    }
+  }
+
+  async #callProcessorOutcome<Result>(
     call: (processor: StreamProcessorRpc<State>) => Promise<Result>,
-  ): Promise<Result> {
+    expiresAt?: number,
+  ): Promise<DeadlineOutcome<Result>> {
+    const settle = <Value>(promise: Promise<Value>): Promise<DeadlineOutcome<Value>> =>
+      expiresAt === undefined
+        ? promise.then<DeadlineOutcome<Value>, DeadlineOutcome<Value>>(
+            (value) => ({ status: "fulfilled", value }),
+            (error: unknown) => ({ status: "rejected", error }),
+          )
+        : settleByDeadline(promise, expiresAt, Date.now);
+
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       let processor: StreamProcessorRpc<State> | undefined;
-      try {
-        processor = await this.#processor();
-        return await call(processor);
-      } catch (error) {
-        if (attempt === 1 && isDurableObjectLifecycleError(error)) {
-          // Deploys and evictions may reset a processor-hosting DO while its
-          // facade property or method call is in flight. A fresh host stub
-          // reaches the replacement incarnation; retry exactly once so this
-          // expected lifecycle transition does not strand a durable birth
-          // frame. App errors are never retried, and a second lifecycle
-          // failure propagates to the caller.
+      const acquisition = this.#processor();
+      const acquired = await settle(acquisition);
+      if (acquired.status === "deadline") {
+        // The acquisition may still materialize a remote facade after this
+        // caller has moved on. Observe both outcomes and release a late stub.
+        void acquisition.then(
+          (lateProcessor) => this.#disposeProcessor(lateProcessor),
+          () => undefined,
+        );
+        return acquired;
+      }
+      if (acquired.status === "rejected") {
+        if (attempt === 1 && isDurableObjectLifecycleError(acquired.error)) {
           console.info("processor relay retrying after Durable Object lifecycle reset");
           continue;
         }
-        throw error;
-      } finally {
-        // A Workers RPC property returning an RpcTarget materializes a remote
-        // stub for every relay call. It is only needed for this one method and
-        // must be released deterministically. In-process targets are real
-        // RpcTargets and remain owned by their host.
-        if (processor !== undefined && !(processor instanceof RpcTarget)) {
-          try {
-            (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
-          } catch (error) {
-            // Disposal is cleanup, not the authoritative processor outcome. A
-            // stale workerd RPC stub can reject disposal after its backing DO
-            // resets; preserve the success/error/retry already chosen above,
-            // while keeping the cleanup failure observable.
-            console.warn("processor relay transient facade dispose failed", { error });
-          }
-        }
+        return acquired;
       }
+
+      processor = acquired.value;
+      let outcome: DeadlineOutcome<Result>;
+      try {
+        outcome = await settle(Promise.resolve().then(() => call(processor!)));
+      } finally {
+        this.#disposeProcessor(processor);
+      }
+      if (
+        outcome.status === "rejected" &&
+        attempt === 1 &&
+        isDurableObjectLifecycleError(outcome.error)
+      ) {
+        // Deploys and evictions may reset a processor-hosting DO while its
+        // facade property or method call is in flight. A fresh host stub
+        // reaches the replacement incarnation; retry exactly once. App errors
+        // are never retried, and a second lifecycle failure propagates.
+        console.info("processor relay retrying after Durable Object lifecycle reset");
+        continue;
+      }
+      return outcome;
     }
-    throw new Error("processor relay exhausted its bounded lifecycle retry");
+    return {
+      status: "rejected",
+      error: new Error("processor relay exhausted its bounded lifecycle retry"),
+    };
+  }
+
+  async #callProcessor<Result>(
+    call: (processor: StreamProcessorRpc<State>) => Promise<Result>,
+  ): Promise<Result> {
+    const outcome = await this.#callProcessorOutcome(call);
+    if (outcome.status === "fulfilled") return outcome.value;
+    if (outcome.status === "rejected") throw outcome.error;
+    throw new Error("processor relay reached an impossible unbounded deadline");
   }
 
   async snapshot() {
@@ -6551,17 +6602,38 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    const deadline = input.timeoutMs === undefined ? undefined : Date.now() + input.timeoutMs;
-    return await this.#callProcessor((processor) => {
-      if (deadline === undefined) return processor.waitUntilProcessed(input);
-      const timeoutMs = deadline - Date.now();
-      if (timeoutMs <= 0) {
-        throw new Error(
-          `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
-        );
-      }
-      return processor.waitUntilProcessed({ ...input, timeoutMs });
-    });
+    if (input.timeoutMs === undefined) {
+      return await this.#callProcessor((processor) => processor.waitUntilProcessed(input));
+    }
+
+    const deadline = Date.now() + input.timeoutMs;
+    const timeoutError = () =>
+      new Error(
+        `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
+      );
+    while (Date.now() < deadline) {
+      // A remote RpcTarget call can be orphaned when its hosting DO is
+      // replaced without workerd rejecting the caller. Bound the LOCAL
+      // acquisition + call as well as the remote runner's timer, then obtain a
+      // fresh facade and re-check durable progress within the one public
+      // deadline. Promise races retain rejection observers, and disposal
+      // cancels/releases the superseded remote waiter.
+      const attemptDeadline = Math.min(deadline, Date.now() + PROCESSOR_WAIT_REACQUIRE_MS);
+      const outcome = await this.#callProcessorOutcome((processor) => {
+        const timeoutMs = deadline - Date.now();
+        return timeoutMs <= 0
+          ? Promise.reject(timeoutError())
+          : processor.waitUntilProcessed({ ...input, timeoutMs });
+      }, attemptDeadline);
+      if (outcome.status === "fulfilled") return outcome.value;
+      if (outcome.status === "rejected") throw outcome.error;
+      if (attemptDeadline >= deadline) break;
+      console.info("processor relay re-acquiring after bounded wait slice", {
+        offset: input.offset,
+        remainingMs: deadline - Date.now(),
+      });
+    }
+    throw timeoutError();
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */

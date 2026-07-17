@@ -235,4 +235,128 @@ describe("ProcessorRelayRpcTarget", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it("re-acquires when a remote processor waiter is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<void>();
+    const disposals: number[] = [];
+    let acquisitions = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        const acquisition = acquisitions;
+        return Promise.resolve({
+          [Symbol.dispose]: () => disposals.push(acquisition),
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => ({ offset: 0, state: {} }),
+          waitUntilProcessed: () =>
+            acquisition === 1 ? firstWait.promise : Promise.resolve(undefined),
+        });
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(acquisitions).toBe(2);
+      await expect(waiting).resolves.toBeUndefined();
+      expect(disposals).toEqual([1, 2]);
+    } finally {
+      firstWait.reject(new Error("late rejection from superseded waiter"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds facade acquisition and releases a facade that arrives late", async () => {
+    vi.useFakeTimers();
+    const disposals: number[] = [];
+    let acquisitions = 0;
+    const processor = (acquisition: number) => ({
+      [Symbol.dispose]: () => disposals.push(acquisition),
+      getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+      snapshot: async () => ({ offset: 0, state: {} }),
+      waitUntilProcessed: async () => undefined,
+    });
+    const firstAcquisition = Promise.withResolvers<ReturnType<typeof processor>>();
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        return acquisitions === 1
+          ? firstAcquisition.promise
+          : Promise.resolve(processor(acquisitions));
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(waiting).resolves.toBeUndefined();
+      expect(acquisitions).toBe(2);
+      expect(disposals).toEqual([2]);
+
+      firstAcquisition.resolve(processor(1));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(disposals).toEqual([2, 1]);
+    } finally {
+      firstAcquisition.resolve(processor(1));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps one public timeout across orphaned wait slices", async () => {
+    vi.useFakeTimers();
+    const disposals: number[] = [];
+    let acquisitions = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        const acquisition = acquisitions;
+        return Promise.resolve({
+          [Symbol.dispose]: () => disposals.push(acquisition),
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => ({ offset: 0, state: {} }),
+          waitUntilProcessed: () => new Promise<void>(() => undefined),
+        });
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    const rejected = expect(waiting).rejects.toThrow(
+      "waitUntilProcessed timed out after 30000ms waiting for offset 3",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(acquisitions).toBe(3);
+      expect(disposals).toEqual([1, 2, 3]);
+    } finally {
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
 });
