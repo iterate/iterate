@@ -1,8 +1,15 @@
 ---
-status: todo
+status: done
 size: medium
-branch: none
+branch: stateful-worker-alarms
 ---
+
+> **Shipped** as option 1 (parent-owned alarm): `setAlarm`/`getAlarm` reserved
+> verbs on the worker capability, `StatefulWorkerDurableObject` persists
+> `{ atMs, ref }` + mirrors its real alarm and replays fires into the facet
+> class's `alarm()` (rethrow = native retry), `statefulWorkerAlarms` in
+> `iterate/sdk` presents the standard `ctx.storage` alarm API, and the
+> template guestbook registers with `{ recovery: true }`.
 
 # Facet alarms: parent-owned alarm proxy so userspace processors get keepalive recovery
 

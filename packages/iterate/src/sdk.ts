@@ -14,10 +14,12 @@
 // `cloudflare:workers` imports) so the embed stays self-contained.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
+  DynamicWorkerCapability,
   DynamicWorkerRef,
   ItxBinding,
   Project,
   ProjectAuthPolicy,
+  StatefulDynamicWorkerRef,
   StreamEvent,
   StreamEventPager,
   StreamPushEventBatch,
@@ -225,6 +227,82 @@ export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream
     },
     at: (siblingPath) => itxProjectStream(env, siblingPath),
   };
+}
+
+/**
+ * Durable alarms for a stateful dynamic worker, presented as the ordinary
+ * `DurableObjectState` alarm API.
+ *
+ * workerd does not implement alarms for facet-hosted Durable Objects — the
+ * hosting model for stateful dynamic workers (workerd#6810; a facet
+ * `setAlarm` even appears to succeed, then poisons the commit path). So the
+ * platform Durable Object that hosts this worker keeps ONE real alarm on its
+ * behalf: the trio here dials `itx.workers.get(ref).setAlarm/getAlarm`
+ * through the worker's own ref, and the parent's fire calls this class's
+ * `alarm(alarmInfo)` method — retried by the platform if it throws, exactly
+ * like a native alarm handler.
+ *
+ * Everything except the three alarm methods is the worker's own `ctx`,
+ * untouched (`storage.kv`, `waitUntil`, WebSocket APIs, …). Code written
+ * against the returned state uses only standard Durable Object concepts, so
+ * if workerd ships facet alarms this shim disappears without a caller
+ * changing. Implement `alarm()` on the class — an armed alarm whose class has
+ * no handler fails its fire and retries, as it would natively. (The fire is
+ * delivered through the worker's `invokeCapability` dispatcher, because
+ * workerd reserves `alarm` as an RPC method name — `IterateDurableObject`
+ * carries that dispatcher, so extending it is all a class needs.)
+ *
+ * ```ts
+ * export class MyApp extends IterateDurableObject {
+ *   #registry = createStreamProcessorRegistry(
+ *     statefulWorkerAlarms(this.ctx, this.env, MY_APP_REF),
+ *     ...
+ *   );
+ *   async alarm(alarmInfo?: AlarmInvocationInfo) {
+ *     await this.#registry.handleAlarm(alarmInfo);
+ *   }
+ * }
+ * ```
+ */
+export function statefulWorkerAlarms(
+  ctx: DurableObjectState,
+  env: IterateEnv,
+  ref: StatefulDynamicWorkerRef,
+): DurableObjectState {
+  const withWorker = async <T>(fn: (worker: DynamicWorkerCapability) => Promise<T>): Promise<T> => {
+    const project = await env.ITX.get();
+    try {
+      return await fn(project.workers.get(ref));
+    } finally {
+      disposeStub(project);
+    }
+  };
+  // Proxies (not spreads or Object.create) because DurableObjectState and
+  // DurableObjectStorage are host objects: their methods must be invoked with
+  // the REAL receiver or workerd throws "Illegal invocation".
+  const storage = new Proxy(ctx.storage, {
+    get(target, prop) {
+      if (prop === "setAlarm") {
+        return (scheduledTime: number | Date) =>
+          withWorker((worker) =>
+            worker.setAlarm(
+              typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime(),
+            ),
+          );
+      }
+      if (prop === "deleteAlarm") return () => withWorker((worker) => worker.setAlarm(null));
+      if (prop === "getAlarm") return () => withWorker((worker) => worker.getAlarm());
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return new Proxy(ctx, {
+    get(target, prop) {
+      if (prop === "storage") return storage;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 /**

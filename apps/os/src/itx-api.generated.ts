@@ -1965,6 +1965,18 @@ export type DynamicWorkerCapability<T extends object = Record<string, unknown>> 
   Disposable & {
     /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
     kill(): Promise<void>;
+    /**
+     * Arm (ms timestamp) — or with null, disarm — the stateful worker's
+     * durable alarm; the fire calls the worker class's own `alarm(alarmInfo)`
+     * method, retried by the platform if it throws. Facets have no native
+     * alarms in workerd, so the hosting Durable Object keeps the real one on
+     * the worker's behalf. Stateless worker refs reject. Inside the worker,
+     * prefer `statefulWorkerAlarms` from `iterate/sdk`, which presents this
+     * as the ordinary `ctx.storage` alarm API.
+     */
+    setAlarm(atMs: number | null): Promise<void>;
+    /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */
+    getAlarm(): Promise<number | null>;
   };
 
 /** One entry of a session's project catalog (`session.projects.list()`). */

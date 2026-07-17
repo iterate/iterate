@@ -1059,7 +1059,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerCapability",
     kind: "typeAlias",
     sourceText:
-      "/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */\nexport type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &\n  Disposable & {\n    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */\n    kill(): Promise<void>;\n  };",
+      "/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */\nexport type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &\n  Disposable & {\n    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */\n    kill(): Promise<void>;\n    /**\n     * Arm (ms timestamp) — or with null, disarm — the stateful worker's\n     * durable alarm; the fire calls the worker class's own `alarm(alarmInfo)`\n     * method, retried by the platform if it throws. Facets have no native\n     * alarms in workerd, so the hosting Durable Object keeps the real one on\n     * the worker's behalf. Stateless worker refs reject. Inside the worker,\n     * prefer `statefulWorkerAlarms` from `iterate/sdk`, which presents this\n     * as the ordinary `ctx.storage` alarm API.\n     */\n    setAlarm(atMs: number | null): Promise<void>;\n    /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */\n    getAlarm(): Promise<number | null>;\n  };",
     summary: "Dynamic worker RPC stub plus platform-owned lifecycle operations.",
     memberSummaries: {},
     referencedTypeNames: [],

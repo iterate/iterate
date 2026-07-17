@@ -254,6 +254,12 @@ What hosting code must do:
 - **Wire `alarm()`** on every DO class that hosts processors:
   `alarm() { return this.#registry.handleAlarm(); }`. A registry without it
   has no revival.
+- **Stateful dynamic workers** (project-userspace DOs, hosted as workerd
+  facets) have no native alarms — build the registry over
+  `statefulWorkerAlarms(this.ctx, this.env, SELF_REF)` from `iterate/sdk`,
+  which routes the standard `ctx.storage` alarm API through the platform
+  Durable Object hosting the worker; its fire calls the class's `alarm()`.
+  The seeded template's guestbook is the reference shape.
 - **Share the alarm through slices** if the DO schedules its own work: state
   desires via the registry's alarm slices; tolerate early fires; re-arm
   inside your handler (see `SchedulerDurableObject`).

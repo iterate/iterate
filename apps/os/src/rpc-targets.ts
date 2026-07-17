@@ -4748,6 +4748,9 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       children: {
         invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
         kill: "Restart the stateful worker's server-side object; stateless worker refs reject.",
+        setAlarm:
+          "Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm; the fire calls the worker class's alarm(). Stateless worker refs reject.",
+        getAlarm: "The stateful worker's armed alarm time (ms) or null.",
       },
       parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
       ref: {
@@ -4794,6 +4797,31 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       throw new Error("Dynamic worker kill() only applies to stateful worker refs.");
     }
     await this.#runner.kill(this.#ref);
+  }
+
+  /**
+   * Arm — or with null, disarm — the stateful worker's durable alarm. Facet
+   * storage has no alarms in workerd, so the hosting Durable Object keeps the
+   * one real alarm on the worker's behalf and the fire calls the worker
+   * class's own `alarm(alarmInfo)` method, with the platform's native retry
+   * on a throwing handler. Stateless worker refs reject: an alarm is a
+   * durable-identity concept. Hosted code normally reaches this through
+   * `iterate/sdk`'s `statefulWorkerAlarms` rather than dialing it directly.
+   */
+  async setAlarm(atMs: number | null): Promise<void> {
+    if (this.#ref.type !== "stateful") {
+      throw new Error("Dynamic worker setAlarm() only applies to stateful worker refs.");
+    }
+    await this.#runner.setAlarm(this.#ref, atMs);
+  }
+
+  /** The stateful worker's armed alarm time (ms since epoch), or null.
+   * Stateless worker refs reject. */
+  async getAlarm(): Promise<number | null> {
+    if (this.#ref.type !== "stateful") {
+      throw new Error("Dynamic worker getAlarm() only applies to stateful worker refs.");
+    }
+    return await this.#runner.getAlarm(this.#ref);
   }
 }
 

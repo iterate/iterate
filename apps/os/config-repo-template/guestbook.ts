@@ -12,6 +12,8 @@
 import { z } from "zod";
 import {
   defineProcessorContract,
+  PLATFORM_STREAM_EVENTS,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   StreamProcessor,
   type StreamEventInput,
 } from "iterate/processors";
@@ -119,10 +121,16 @@ export const GuestbookProcessorContract = defineProcessorContract({
       ],
     },
   },
+  // The platform's keepalive revival fact: the processor registers with
+  // `{ recovery: true }` (see worker.ts), and a recovery-wired contract must
+  // consume it — its wake delivery is the guaranteed at-head turn after a
+  // revival. The reducer ignores it; the delivery is the point.
+  processorDeps: [PLATFORM_STREAM_EVENTS],
   consumes: [
     "events.iterate.com/guestbook/created",
     "events.iterate.com/guestbook/entry-signed",
     "events.iterate.com/guestbook/milestone-reached",
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: ["events.iterate.com/guestbook/milestone-reached"],
 });

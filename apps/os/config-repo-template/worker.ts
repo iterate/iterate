@@ -2,6 +2,7 @@ import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
   itxProjectStream,
+  statefulWorkerAlarms,
   type Project,
   type StreamEvent,
   type StreamEventInput,
@@ -498,29 +499,39 @@ export class GuestbookApp extends IterateDurableObject {
   } {
     if (this.#host === undefined) {
       const stream = itxProjectStream(this.env, guestbookStreamPath);
-      const registry = createStreamProcessorRegistry(this.ctx, {
-        path: guestbookStreamPath,
-        projectId,
-        stream,
-        version: "0",
-      });
+      // statefulWorkerAlarms: this class is hosted as a workerd FACET, and
+      // facet storage has no alarms — the wrapper routes the standard
+      // `ctx.storage` alarm API through the platform Durable Object hosting
+      // this worker, whose alarm fire calls `alarm()` below. Everything else
+      // on the wrapped state is this facet's own ctx.
+      const registry = createStreamProcessorRegistry(
+        statefulWorkerAlarms(this.ctx, this.env, guestbookAppRef),
+        {
+          path: guestbookStreamPath,
+          projectId,
+          stream,
+          version: "0",
+        },
+      );
       const guestbook = registry.register(
-        // NO `{ recovery: true }`: keepalive recovery arms durable alarms,
-        // and workerd does not implement alarms on the facet storage that
-        // hosts stateful dynamic workers ("alarms are not yet implemented
-        // for SQLite-backed Durable Objects") — arming would fail every
-        // delivery. Fine for the guestbook: its only side effect is an
-        // idempotency-keyed at-head append, re-derived on the next delivery,
-        // so nothing is owed across an eviction. Processors with
-        // consequential background obligations need a platform-hosted DO
-        // until facet alarms ship; then this becomes
-        // `registry.register(processor, { recovery: true })` plus an
-        // `alarm()` method routing to `registry.handleAlarm`.
         new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),
+        // Keepalive recovery: if an eviction kills this object while it owes
+        // work, the alarm fires, the keepalive journals a revival fact, and
+        // its wake delivery re-runs the at-head reconcile.
+        { recovery: true },
       );
       this.#host = { guestbook, registry };
     }
     return this.#host;
+  }
+
+  /** The hosting Durable Object's alarm fire, replayed into this class (see
+   * statefulWorkerAlarms above). Route it to the registry: each keepalive
+   * self-gates on its own persisted record, so a stale fire is a no-op. */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    using project = await this.env.ITX.get();
+    const { registry } = this.#ensureHost(await project.projectId);
+    await registry.handleAlarm(alarmInfo);
   }
 
   /** The wake door the stream spine dials — the subscription's persisted
