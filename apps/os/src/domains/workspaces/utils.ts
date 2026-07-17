@@ -59,7 +59,7 @@ export function normalizeWorkspacePath(path: string): string {
  * makes a fresh workspace behave exactly like the old single-parent overlay
  * (reads fall through to the config repo's main, `git.commit` lands there).
  */
-export function defaultWorkspaceMounts(): Record<string, WorkspaceMount> {
+function defaultWorkspaceMounts(): Record<string, WorkspaceMount> {
   return { "/": { policy: "commit-to-main", repoPath: CONFIG_REPO_PATH } };
 }
 

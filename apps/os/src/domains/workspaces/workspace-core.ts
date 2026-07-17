@@ -35,7 +35,7 @@ const DEFAULT_COMMIT_AUTHOR = {
 const READ_DIR_PAGE = 1_000;
 
 /** One directory's complete entries, paged (shell truncates silently otherwise). */
-export async function readDirComplete(
+async function readDirComplete(
   workspace: Workspace,
   dir?: string,
 ): Promise<{ name: string; path: string; type: string }[]> {
