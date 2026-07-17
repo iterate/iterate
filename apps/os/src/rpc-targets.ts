@@ -169,6 +169,7 @@ import type {
   DynamicWorkerDispatchOptions,
   DynamicWorkerRef,
   ProjectWorker,
+  StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
@@ -4709,8 +4710,8 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
  *
  * The returned object is a path proxy: unknown properties become path segments
  * and eventually call `invokeCapability`. Dynamic workers reserve a tiny
- * platform lifecycle surface (`invokeCapability`, `kill`, disposal); everything
- * else belongs to the loaded worker.
+ * platform lifecycle surface (`invokeCapability`, `kill`, `setAlarm`,
+ * `getAlarm`, disposal); everything else belongs to the loaded worker.
  */
 class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
@@ -4780,6 +4781,9 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       children: {
         invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
         kill: "Restart the stateful worker's server-side object; stateless worker refs reject.",
+        setAlarm:
+          "Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm; the fire calls the worker class's alarm(). Stateless worker refs reject.",
+        getAlarm: "The stateful worker's armed alarm time (ms) or null.",
       },
       parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
       ref: {
@@ -4822,10 +4826,30 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
 
   /** Restart the stateful worker's server-side object; stateless worker refs reject. */
   async kill(): Promise<void> {
-    if (this.#ref.type !== "stateful") {
-      throw new Error("Dynamic worker kill() only applies to stateful worker refs.");
+    await this.#runner.kill(this.#statefulRef("kill"));
+  }
+
+  /** Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm —
+   * see {@link DynamicWorkerCapability.setAlarm} for the full contract. */
+  async setAlarm(atMs: number | null): Promise<void> {
+    if (atMs !== null && !Number.isFinite(atMs)) {
+      throw new Error("Dynamic worker setAlarm() requires a finite ms timestamp or null.");
     }
-    await this.#runner.kill(this.#ref);
+    await this.#runner.setAlarm(this.#statefulRef("setAlarm"), atMs);
+  }
+
+  /** The stateful worker's armed alarm time (ms since epoch), or null. */
+  async getAlarm(): Promise<number | null> {
+    return await this.#runner.getAlarm(this.#statefulRef("getAlarm"));
+  }
+
+  /** The lifecycle verbs above are durable-identity concepts: they exist for
+   * stateful refs only, and reject the rest with the verb's name. */
+  #statefulRef(verb: string): StatefulDynamicWorkerRef {
+    if (this.#ref.type !== "stateful") {
+      throw new Error(`Dynamic worker ${verb}() only applies to stateful worker refs.`);
+    }
+    return this.#ref;
   }
 }
 
