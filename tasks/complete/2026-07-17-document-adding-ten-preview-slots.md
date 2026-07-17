@@ -10,8 +10,8 @@ branch: docs/add-ten-preview-slots
 
 Complete. The new runbook covers repository edits, Doppler inheritance,
 Cloudflare provisioning, external apps, deployment, leasing, and per-slot
-acceptance. It records the live drift found during the audit. No infrastructure
-or secret state changed in this PR.
+acceptance. The code now derives preview projections from `envs.ts` and orders
+Streams after Auth. No infrastructure or secret state changed in this PR.
 
 ## Goal
 
@@ -25,8 +25,9 @@ or cannot be cleaned up safely.
 
 ## Assumptions
 
-- This PR documents the expansion; it does not provision Cloudflare resources,
-  create Doppler configs, or create GitHub and Slack apps.
+- This PR documents the expansion and fixes deterministic repository drift. It
+  does not provision Cloudflare resources, create Doppler configs, or create
+  GitHub and Slack apps.
 - The intended target is ten complete slots with the same capabilities as the
   current fleet, not ten OS-only workers.
 - Existing live configuration may disagree with checked-in docs or code. The
@@ -60,6 +61,10 @@ or cannot be cleaned up safely.
   executable code and live configuration metadata. _Recorded the GitHub
   hostname/key/script defects, shared preview-1 App, invalid Slack tokens,
   Dummy Petshop comment drift, and missing Streams dependency._
+- [x] Remove checked-in slot-list drift before documenting the expansion.
+  _`envs.ts` now drives the resource-free app maps, lease inventory, Auth
+  audiences, Auth client targets, and mobile presets; Streams now declares its
+  Auth deploy dependency._
 - [x] Write `docs/adding-preview-slots.md` as a sequenced operator runbook with
   prerequisites, exact edits/commands, checkpoints, rollback or stop
   conditions, and a per-slot completion matrix. _Added the eight-stage runbook
@@ -69,7 +74,7 @@ or cannot be cleaned up safely.
   both environment entry points to the complete expansion guide._
 - [x] Run repository formatting, link/reference checks available locally, and
   focused tests for the scripts whose behavior the guide relies on. _Formatting
-  and local links pass; preview config/inventory tests pass 128/128 and Auth
+  and local links pass; preview config/inventory tests pass 127/127 and Auth
   tests pass 33/33._
 - [x] Move this task to `tasks/complete/` once the guide and PR are ready. _Moved
   on 2026-07-17 after the documentation and focused verification were complete._
@@ -85,3 +90,6 @@ or cannot be cleaned up safely.
 - 2026-07-17: Review replaced the duplicated expansion lists with one `envs.ts`
   source-of-truth design and distinguished one tautological inventory assertion
   from the preview test file's behavioral state-machine coverage.
+- 2026-07-17: Implemented that design in the repository. Auth and mobile builds,
+  focused orchestration/config tests, and the full repository gates verify the
+  shared projection across runtime and script bundlers.

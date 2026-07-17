@@ -9,7 +9,6 @@ import {
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
-  environmentConfigLeaseInventory,
   previewInternals,
 } from "./preview.ts";
 
@@ -68,8 +67,11 @@ describe("preview app dependency expansion", () => {
     expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore", "auth"]);
   });
 
-  test("keeps independent apps as-is", () => {
-    expect(expandPreviewDependencies(["streams-example-app"])).toEqual(["streams-example-app"]);
+  test("expands streams to include its auth dependency", () => {
+    expect(expandPreviewDependencies(["streams-example-app"])).toEqual([
+      "auth",
+      "streams-example-app",
+    ]);
   });
 
   test("deduplicates dependencies", () => {
@@ -89,7 +91,7 @@ test("preview handover erases every app with slot-persistent data", () => {
 });
 
 describe("preview deploy ordering", () => {
-  test("keeps independent apps in the same batch", () => {
+  test("orders only the selected apps without adding dependencies", () => {
     expect(
       orderPreviewDeployBatches([cloudflarePreviewApps.semaphore]).map((batch) =>
         batch.map((app) => app.slug),
@@ -112,12 +114,13 @@ describe("preview deploy ordering", () => {
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
         cloudflarePreviewApps.semaphore,
+        cloudflarePreviewApps["streams-example-app"],
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
     ).toEqual([
       ["auth", "dummy-petshop"],
-      ["os", "semaphore"],
+      ["os", "semaphore", "streams-example-app"],
     ]);
   });
 });
@@ -773,12 +776,9 @@ describe("preview deploy selection", () => {
       "streams-example-app",
       "dummy-petshop",
     ]);
-    // Only the green claims get probed — the failed app is already selected
-    // for retry — and each app is probed on its own readiness path.
-    expect(probedUrls).toEqual([
-      "https://os.iterate-preview-7.com/api/health",
-      "https://auth.iterate-preview-7.com/api/auth/ok",
-    ]);
+    // Only green apps that have not already been selected get probed. Streams
+    // failed, so it and its Auth dependency are already selected for retry.
+    expect(probedUrls).toEqual(["https://os.iterate-preview-7.com/api/health"]);
   });
 
   test("retries failed apps even when the push's diff does not touch them", async () => {
@@ -1027,22 +1027,6 @@ describe("cloudflare preview state helpers", () => {
       environmentConfigLease: null,
       notice: null,
     });
-  });
-});
-
-describe("environmentConfigLeaseInventory", () => {
-  test("matches the currently provisioned preview slot range", () => {
-    expect(environmentConfigLeaseInventory.map((resource) => resource.slug)).toEqual([
-      "preview-1",
-      "preview-2",
-      "preview-3",
-      "preview-4",
-      "preview-5",
-      "preview-6",
-      "preview-7",
-      "preview-8",
-      "preview-9",
-    ]);
   });
 });
 

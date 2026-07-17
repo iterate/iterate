@@ -5,14 +5,16 @@
 // local dev — https://<name>.tunnels.iterate.com) go in the same free-text
 // field and are persisted as recents (storage.ts).
 
+import { deployedPreviewEnvs, envs } from "../../../../envs.ts";
+
 export type ServerPreset = { label: string; baseUrl: string };
 
 export const SERVER_PRESETS: ServerPreset[] = [
-  { label: "Production", baseUrl: "https://os.iterate.com" },
-  ...Array.from({ length: 9 }, (_, i) => ({
-    label: `preview ${i + 1}`,
-    baseUrl: `https://os.iterate-preview-${i + 1}.com`,
+  { label: "Production", baseUrl: envs.prd.baseUrl },
+  ...deployedPreviewEnvs.map((env) => ({
+    label: env.dopplerConfig.replace("_", " "),
+    baseUrl: env.baseUrl,
   })),
 ];
 
-export const DEFAULT_SERVER = SERVER_PRESETS[0]!.baseUrl;
+export const DEFAULT_SERVER = envs.prd.baseUrl;

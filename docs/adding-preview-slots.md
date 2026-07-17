@@ -89,42 +89,39 @@ UNPROVISIONED)`;
 Do not invent IDs and do not copy IDs from another slot. OS and Auth deliberately
 share the slot's Auth D1 ID; Semaphore has its own D1 ID.
 
-The other three maps have no independent per-slot resource IDs. Refactor their
-preview entries instead of adding another ten names by hand:
+The other three maps have no independent per-slot resource IDs. Their preview
+entries already derive from `envs`:
 
-- derive `authEnvs` preview entries from `envs`, with fixed test OTP enabled;
-- derive `dummyPetshopEnvs` preview entries from each OS preview's slot number;
-- derive `streamsExampleEnvs` preview entries from each OS preview's slot
+- `authEnvs` preview entries derive from `envs`, with fixed test OTP enabled;
+- `dummyPetshopEnvs` preview entries derive from each OS preview's slot number;
+- `streamsExampleEnvs` preview entries derive from each OS preview's slot
   number.
 
 Keep their production and Auth `dev_global` entries explicit. Type each derived
 map so a missing or extra deployed environment is a type error.
 
-### Derive every fleet projection
+### Derived fleet projections
 
-Export a preview-only projection from `envs.ts`, derived from the `envs` entries
-or their `dopplerConfig` values. Do not add a second `[1, ..., 19]` constant.
-Use that projection to replace every remaining hard-coded slot list:
+`envs.ts` exports a preview-only projection derived from the `envs` entries and
+their `dopplerConfig` values. The following consumers already use it:
 
-- derive the slot numbers used by Doppler provisioning and Semaphore inventory
+- Doppler provisioning and Semaphore inventory use the projected slot numbers
   in `scripts/preview/preview.ts`;
-- derive the four Auth audience sets in
-  `apps/auth/src/server/oauth-resources.ts` from `envs`, `semaphoreEnvs`, and
+- the four Auth audience sets in `apps/auth/src/server/oauth-resources.ts` use
+  `envs`, `semaphoreEnvs`, and
   `streamsExampleEnvs`;
-- derive `targets` in `apps/os/scripts/sync-auth-clients.ts` from `envs`;
-- derive `SERVER_PRESETS` in `apps/mobile/src/lib/servers.ts` from `envs`.
+- `targets` in `apps/os/scripts/sync-auth-clients.ts` use `envs`;
+- `SERVER_PRESETS` in `apps/mobile/src/lib/servers.ts` use `envs`.
 
-Delete the `environmentConfigLeaseInventory` test that spells out
-`preview-1`–`preview-9`: after the inventory is derived, that assertion only
-repeats its input. Keep the rest of `scripts/preview/preview.test.ts`. It covers
-behavior that deployed-env smoke tests do not isolate: dependency ordering,
-diff selection, retry and force-push handling, inventory add/delete semantics,
-lease ownership, failed cleanup, reclaim, and GC.
+Do not add another numeric slot list or an exact-range unit test. The remaining
+`scripts/preview/preview.test.ts` cases cover behavior that deployed-env smoke
+tests do not isolate: dependency ordering, diff selection, retry and force-push
+handling, inventory add/delete semantics, lease ownership, failed cleanup,
+reclaim, and GC.
 
-Also add `previewDependencies: ["auth"]` to the Streams example app in
-`cloudflarePreviewApps`. Its deploy fetches and bakes Auth's JWKS, but the
-current dependency graph allows it to deploy alongside Auth. That works on an
-old slot and fails during first deployment of a new one.
+The Streams example app declares `previewDependencies: ["auth"]` because its
+deploy fetches and bakes Auth's JWKS. Preserve that dependency: an old slot can
+hide incorrect first-deploy ordering.
 
 Search again before moving on:
 
@@ -431,6 +428,7 @@ cloning an old slot blindly:
 - `apps/dummy-petshop/scripts/deploy.ts` says “workers.dev only, no routes, no
   DNS”; its generated Wrangler config and `ensure-resources` use a custom route
   and proxied DNS.
-- The preview deploy graph omits Streams' real Auth dependency.
+- The audit found Streams' missing Auth dependency; this documentation PR also
+  fixes the deploy graph.
 - Existing environment docs describe nine slots and the generic four-step
   environment bring-up. Neither is a complete fleet-expansion procedure.
