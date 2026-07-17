@@ -2289,17 +2289,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkerBuildOptions",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Build options for a dynamic worker.\n *\n * This mirrors Cloudflare\'s `CreateWorkerOptions` from\n * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the\n * selected {@link WorkerFileSource}) — deliberately not a parallel option\n * language (drift fails typecheck via the assignability pin\n * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the\n * invariant is one OS materialization pipeline, not one bundled output file.\n * When the file map has a `package.json` with dependencies, the bundler\n * installs them from the npm registry at build time.\n */\nexport type WorkerBuildOptions = {\n  /** Entry point file path relative to the source root (e.g. "worker.ts"). */\n  entryPoint?: string;\n  /** Bundle all dependencies into a single output file. Default: true. */\n  bundle?: boolean;\n  /** Modules kept external ("cloudflare:*" always is). */\n  externals?: string[];\n  /** Target environment. Default: "es2022". */\n  target?: string;\n  minify?: boolean;\n  sourcemap?: boolean;\n  /** npm registry URL for dependency installs. */\n  registry?: string;\n  jsx?: "transform" | "preserve" | "automatic";\n  jsxImportSource?: string;\n  define?: Record<string, string>;\n  loader?: Record<string, WorkerBundlerLoader>;\n  conditions?: string[];\n  virtualModules?: Record<string, string>;\n};',
+      "/**\n * Build options for a dynamic worker.\n *\n * Deliberately small: exactly what the build recipe (build-recipe.ts — real\n * `npm install` plus wrangler's canonical bundling pipeline) expresses.\n * When the file map has a `package.json`, dependencies are installed from\n * the npm registry at build time (`--ignore-scripts`, lockfiles honored).\n */\nexport type WorkerBuildOptions = {\n  /** Entry point file path relative to the source root. Default: \"worker.ts\". */\n  entryPoint?: string;\n  /** Bundle to loader-ready output (default: true). `bundle: false` is the\n   * run-script fast path: inline JavaScript that is ALREADY loader-ready\n   * skips the build pipeline entirely. */\n  bundle?: boolean;\n  minify?: boolean;\n  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`\n   * runtime rides in this way). A source's own entry wins over the platform's. */\n  virtualModules?: Record<string, string>;\n};",
     summary: "Build options for a dynamic worker.",
-    memberSummaries: {},
-    referencedTypeNames: ["WorkerBundlerLoader"],
-  },
-  {
-    name: "WorkerBundlerLoader",
-    kind: "typeAlias",
-    sourceText:
-      '/** Loader names accepted by Cloudflare\'s worker bundler `loader` option. */\nexport type WorkerBundlerLoader =\n  | "js"\n  | "jsx"\n  | "ts"\n  | "tsx"\n  | "json"\n  | "css"\n  | "text"\n  | "binary"\n  | "base64"\n  | "dataurl";',
-    summary: "Loader names accepted by Cloudflare's worker bundler `loader` option.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

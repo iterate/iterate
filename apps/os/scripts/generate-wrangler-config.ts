@@ -116,9 +116,9 @@ export function envShapedVars(env: DeployedEnv) {
 
 const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 
-// One compatibility date for the os worker AND the builder sidecar — a bump
-// that misses one would be silent drift. (Deliberately distinct from
-// WORKER_COMPATIBILITY_DATE in worker-loader.ts: dynamic-worker compat is
+// One compatibility date for the os worker AND the typechecker sidecar — a
+// bump that misses one would be silent drift. (Deliberately distinct from
+// WORKER_COMPATIBILITY_DATE in build-recipe.ts: dynamic-worker compat is
 // hashed into build keys and moves on its own schedule.)
 //
 // Policy: stay on the LATEST — keep this at the newest date the pinned workerd
@@ -129,16 +129,9 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 // compatibility_flags below.
 export const COMPATIBILITY_DATE = "2026-07-01";
 
-// The os worker (reader) and the builder (writer) must name the same
-// miniflare namespace in local dev or cache reads never see builds.
 const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
 
-/** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
-function builderWorkerName(osWorkerName: string) {
-  return `${osWorkerName}-builder`;
-}
-
-/** The typechecker sidecar's worker name, derived the same way. */
+/** The typechecker sidecar's worker name, derived — never spelled out in envs.ts. */
 function typecheckerWorkerName(osWorkerName: string) {
   return `${osWorkerName}-typechecker`;
 }
@@ -301,11 +294,6 @@ function workerBindings(input: {
         service: input.authWorkerName,
         ...(input.authRemote ? { remote: true } : {}),
       },
-      // The builder sidecar (src/builder.ts, wrangler.builder.jsonc): the one
-      // script carrying the dynamic-worker bundler toolchain (esbuild-wasm,
-      // ~14MB) so the product script stays small. Bound by name — deploy.ts
-      // deploys the builder first.
-      { binding: "BUILDER", service: builderWorkerName(input.workerName) },
       // The typechecker sidecar (src/typechecker.ts,
       // wrangler.typechecker.jsonc): the one script carrying the TypeScript
       // compiler (tswasm, ~30MB wasm). Same deploy-first rule as the builder.
@@ -505,6 +493,15 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      // Local dev's dynamic-worker build backend: the vite dev server's
+      // host-toolchain endpoint (scripts/worker-build-dev-endpoint.ts).
+      // Deployed envs never set this — they build in the project's builder
+      // sandbox (domains/workers/build-backend.ts).
+      ...(process.env.PORT
+        ? {
+            WORKER_BUILD_DEV_ENDPOINT: `http://localhost:${process.env.PORT}/__dev/worker-build`,
+          }
+        : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.
@@ -587,39 +584,9 @@ export const config = {
 };
 
 /**
- * The builder sidecar's config. The builder is deliberately the minimum
- * possible worker around the bundler toolchain: a pure build function
- * (files in, artifact out) whose only binding is the artifact-cache KV — no
- * DOs, no routes, no secrets, no service bindings. Wrangler bundles
- * src/builder.ts directly (no vite); local dev runs it as an auxiliary
- * worker in the same workerd (vite.config.ts). Slated for deletion when
- * builds move into the sandbox container (tasks/os-sandbox-worker-builds.md).
- */
-function builderEnvBlock(env: DeployedEnv) {
-  return {
-    name: builderWorkerName(env.osWorkerName),
-    account_id: env.cloudflareAccountId,
-    kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: env.resources.workerBuildCacheKvId }],
-    observability: OBSERVABILITY,
-  };
-}
-
-export const builderConfig = {
-  $schema: "node_modules/wrangler/config-schema.json",
-  // Env-less service name — see the note on `config.name` above.
-  name: "os-builder",
-  main: "./src/builder.ts",
-  compatibility_date: COMPATIBILITY_DATE,
-  compatibility_flags: ["nodejs_compat"],
-  kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: LOCAL_DEV_BUILD_CACHE_ID }],
-  observability: OBSERVABILITY,
-  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
-};
-
-/**
- * The typechecker sidecar's config, cut from the builder's pattern: the
- * minimum possible worker around the TypeScript compiler wasm — a pure
- * function (files in, diagnostics out) with NO bindings at all. Wrangler
+ * The typechecker sidecar's config: the minimum possible worker around the
+ * TypeScript compiler wasm — a pure function (files in, diagnostics out)
+ * with NO bindings at all. Wrangler
  * bundles src/typechecker.ts directly (no vite); local dev runs it as an
  * auxiliary worker in the same workerd (vite.config.ts).
  */
@@ -644,11 +611,6 @@ export const typecheckerConfig = {
 
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
-  writeGeneratedWranglerConfig({
-    configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
-    appLabel: "apps/os (builder sidecar)",
-    config: builderConfig,
-  });
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
     appLabel: "apps/os (typechecker sidecar)",

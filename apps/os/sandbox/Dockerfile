@@ -1,6 +1,5 @@
-# The sandbox container image: the STOCK Cloudflare Sandbox runtime, nothing
-# baked in. Wrangler requires a Dockerfile per container class, so this
-# one-liner exists to satisfy it; keep it a one-liner — a lean image is what
+# The sandbox container image: the STOCK Cloudflare Sandbox runtime plus the
+# pinned dynamic-worker build toolchain. Keep it lean — a small image is what
 # keeps sandbox deploys fast and cold-host image pulls short. Sandboxes are
 # pets (see docs/sandboxes.md): anything a workload needs beyond the stock
 # tools (Ubuntu 22.04, Node 20, Bun, git, curl, jq, …) is installed inside the
@@ -9,6 +8,14 @@
 # The tag must stay in lockstep with the @cloudflare/sandbox npm version
 # (apps/os/package.json) or the SDK logs a version-skew warning.
 FROM docker.io/cloudflare/sandbox:0.12.3
+
+# The dynamic-worker build toolchain (esbuild rides INSIDE wrangler — no
+# separate bundler pin). This pin MUST equal WRANGLER_VERSION in
+# src/domains/workers/build-recipe.ts: the version is hashed into every build
+# key, and local dev builds with apps/os's own wrangler devDependency at the
+# same pin — a bump that misses one of the three builds different bytes under
+# one key. build-recipe.test.ts asserts the repo side; grep this file on bump.
+RUN npm install -g wrangler@4.107.0
 
 # The base image already EXPOSEs 3000 (the SDK control-plane port the Durable
 # Object dials for exec/files/etc.); restated for clarity and so miniflare's

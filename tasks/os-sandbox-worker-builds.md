@@ -1,11 +1,25 @@
 ---
-state: todo
+state: in-progress
 priority: high
 size: large
 tags: [os, workers, dynamic-workers, sandboxes, build-pipeline]
 ---
 
 # Build dynamic workers in a sandbox container (kill esbuild-wasm)
+
+> **Progress:** steps 2 + 3 of the sequencing below landed as one clean-break
+> PR — the sandbox build backend (recipe: `npm install --ignore-scripts` +
+> pinned `wrangler deploy --dry-run`, shared verbatim by the container and the
+> local-dev host endpoint), the wasm/builder-sidecar deletion, and the build-key
+> rework. Deviations from the design below, discovered during implementation:
+> the builder sandbox is `/sandboxes/worker-builder` (sandbox names are single
+> path segments — `cloudflare/builder` is not addressable), destroyed names are
+> tombstoned forever so the platform probes name generations
+> (`worker-builder-2`, …), instance types already have per-type DO classes so
+> `basic` applies to the builder only, and runtime artifacts are project-KEYED
+> with a trusted content-only tier reserved for deploy-time seeding.
+> **Remaining:** step 1 — eager-on-commit builds + deploy-time template
+> seeding (now the trusted-tier writer).
 
 Replace the in-workerd bundler (`@cloudflare/worker-bundler`, esbuild-wasm)
 with real `npm install` + a real bundler running inside a **sandbox container

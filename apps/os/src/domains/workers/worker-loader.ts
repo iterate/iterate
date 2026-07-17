@@ -9,19 +9,22 @@ import {
   type WorkerBuildFailure,
   type WorkerLastGoodBuild,
 } from "./artifact-store.ts";
-import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
+import {
+  projectWorkerBuildKey,
+  workerBuildKey,
+  type ResolvedWorkerFileSource,
+} from "./build-key.ts";
+import { executeWorkerBuild } from "./build-backend.ts";
+import { WORKER_COMPATIBILITY_DATE, WORKER_COMPATIBILITY_FLAGS } from "./build-recipe.ts";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 import type { WorkerServeInfo } from "./worker-serve-info.ts";
 import { stableSha256 } from "./utils.ts";
-
-const WORKER_COMPATIBILITY_DATE = "2026-05-01";
-const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 /**
  * The build is real and in flight, but the caller's build budget ran out
  * before it finished. Workers RPC preserves `error.name`, so ingress-side
  * classifiers can turn this into a "building your worker" page instead of a
- * 500 — the build keeps running in the builder worker and the retry hits the
+ * 500 — the build keeps running in the build backend and the retry hits the
  * artifact cache.
  */
 class WorkerBuildInProgressError extends Error {
@@ -69,7 +72,7 @@ export async function resolveWorkerSource({
   waitUntil,
 }: {
   /** Give up on a cold resolve after this long (the build itself keeps
-   * running in the builder worker). Omitted = wait for the build. */
+   * running in the background). Omitted = wait for the build. */
   buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
@@ -105,7 +108,7 @@ export async function resolveWorkerSource({
 }
 
 /** Race a resolution against the caller's budget without cancelling it: the
- * builder finishes into the artifact cache regardless, so the caller's retry
+ * build finishes into the artifact cache regardless, so the caller's retry
  * is a hit. */
 async function withBuildBudget(
   resolution: Promise<ServedWorkerSource>,
@@ -121,9 +124,9 @@ async function withBuildBudget(
         timer = setTimeout(() => {
           // The losing resolution must outlive this request: when the caller
           // returns the building page, the runtime cancels the request's
-          // pending work, and a BUILDER.build RPC that hasn't been dispatched
-          // yet dies with it — every refresh would then restart the cold path
-          // from zero instead of converging on the cached artifact.
+          // pending work, and a build that hasn't finished dies with it —
+          // every refresh would then restart the cold path from zero instead
+          // of converging on the cached artifact.
           waitUntil(resolution.catch(() => {}));
           reject(new WorkerBuildInProgressError("This worker is still building."));
         }, budgetMs);
@@ -136,12 +139,13 @@ async function withBuildBudget(
 
 /**
  * Every bundled dynamic worker build can `import ... from "iterate/sdk"`: the
- * platform supplies the sdk runtime as a virtual module, because resolving it
- * by install cannot work — the bundler's npm installer is registry-semver-only
- * and the seeded devDependency is a pkg.pr.new URL. Injection happens BEFORE
- * the build key is computed, and `options` is hashed into the key wholesale,
- * so an sdk change invalidates cached artifacts instead of serving stale
- * builds. A source that supplies its own `iterate/sdk` virtual module wins.
+ * platform supplies the sdk RUNTIME as a virtual module, pinned to this
+ * deployment — the seeded `iterate` devDependency exists for typechecking and
+ * editors, never as the runtime the platform executes. Injection happens
+ * BEFORE the build key is computed, and `options` is hashed into the key
+ * wholesale, so an sdk change invalidates cached artifacts instead of serving
+ * stale builds. A source that supplies its own `iterate/sdk` virtual module
+ * wins.
  */
 function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
   return {
@@ -174,18 +178,27 @@ async function resolveThroughBuilder(input: {
 }): Promise<ServedWorkerSource> {
   const options = withIterateSdkVirtualModule(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
-  const buildKey = await workerBuildKey({
+  const sharedKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     options,
     source: resolved,
   });
+  // Runtime builds live under the project-scoped key (a project can influence
+  // its own builder sandbox's output, so runtime artifacts are never shared);
+  // the content-only key is the TRUSTED read-first tier, written exclusively
+  // by the deploy-time template seeder — see build-key.ts.
+  const buildKey = await projectWorkerBuildKey(input.projectId, sharedKey);
   const context: ResolveContext = { options, projectId: input.projectId, resolved };
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
 
-  const hit = await resolveCachedArtifact(buildKey);
+  const [trustedHit, projectHit] = await Promise.all([
+    resolveCachedArtifact(sharedKey),
+    resolveCachedArtifact(buildKey),
+  ]);
+  const hit = trustedHit ?? projectHit;
   if (hit !== null) {
-    input.waitUntil(noteLastGoodBuild(store, context, buildKey));
+    input.waitUntil(noteLastGoodBuild(store, context, hit.cacheKey));
     return freshServe(hit, resolved);
   }
 
@@ -217,14 +230,20 @@ async function resolveThroughBuilder(input: {
 }
 
 /**
- * One build-run: an RPC to the builder worker — the only script carrying the
- * bundler toolchain. The file snapshot is resolved HERE and passed by value
- * (this worker owns the REPO binding; the builder is a pure, bindings-free
- * function worker — see builder-entrypoint.ts), sized by the ref's source
- * masks. The builder returns the artifact by value (so this never waits on KV
- * write propagation). A GENUINE build failure (the builder's named error) is
- * recorded so the fetch lane can fall back without re-running it; transport
- * and cancellation errors pass through unrecorded and stay retryable.
+ * One build-run through the build backend (the project's builder sandbox, or
+ * local dev's host-toolchain endpoint — build-backend.ts). The file snapshot
+ * is resolved HERE and passed by value (this worker owns the REPO binding),
+ * sized by the ref's source masks; the artifact is written to the cache by
+ * THIS side (the container never holds KV credentials) and returned by value,
+ * so nothing waits on KV write propagation. A GENUINE build failure (the
+ * backend's named error) is recorded so the fetch lane can fall back without
+ * re-running it — and clears the in-flight marker, so budgeted callers are
+ * never held in "building" by a build that already died; transport and
+ * cancellation errors pass through unrecorded and stay retryable.
+ *
+ * Concurrent cold builds of one key are NOT deduped across isolates: they
+ * converge on one content-addressed, idempotent artifact write — redundant
+ * work, never wrong output.
  */
 async function runBuild(
   store: KvWorkerBuildArtifactStore,
@@ -232,18 +251,36 @@ async function runBuild(
   buildKey: string,
 ): Promise<ResolvedWorkerSource> {
   try {
-    const artifact = await env.BUILDER.build({
+    const files = await resolvedSourceFiles(context.projectId, context.resolved);
+    // Best-effort duplicate suppression for budgeted callers (the building
+    // page's poll loop would otherwise dispatch a fresh build per refresh);
+    // the artifact write below always supersedes it.
+    await store.markBuildInFlight(buildKey).catch(() => {});
+    const built = await executeWorkerBuild({
       buildKey,
-      files: await resolvedSourceFiles(context.projectId, context.resolved),
+      files,
       options: context.options,
+      projectId: context.projectId,
     });
+    const artifact: WorkerBuildArtifact = {
+      buildKey,
+      mainModule: built.mainModule,
+      modules: built.modules,
+    };
+    await store.put(artifact);
     const resolvedSource = memoizeArtifact(artifact);
     await noteLastGoodBuild(store, context, buildKey);
     return resolvedSource;
   } catch (error) {
+    // The build ran in THIS promise chain — a rejection of any kind means no
+    // build is running anymore, so the marker must clear (a stranded marker
+    // holds budgeted callers in "building" until its TTL). Only GENUINE
+    // failures are additionally recorded; transport errors stay retryable.
+    const bookkeeping = [store.clearBuildInFlight(buildKey).catch(() => {})];
     if (isWorkerBuildFailedError(error)) {
-      await recordBuildFailure(store, buildKey, context.resolved, error);
+      bookkeeping.push(recordBuildFailure(store, buildKey, context.resolved, error));
     }
+    await Promise.all(bookkeeping);
     throw error;
   }
 }

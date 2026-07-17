@@ -2,13 +2,13 @@ import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
 import {
-  builderConfig,
   config,
   localDevAuthJwks,
   localAuthServiceBinding,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
   envShapedVars,
+  typecheckerConfig,
 } from "./generate-wrangler-config.ts";
 
 it("does not emit the local forge JWKS into deployed builds", () => {
@@ -45,7 +45,7 @@ it.each([
 // under a fake "dev" service (observed live on os-prd-builder, 2026-07-04).
 it("names the top-level configs by service so cf:service script tags stay env-less", () => {
   expect(config.name).toBe("os");
-  expect(builderConfig.name).toBe("os-builder");
+  expect(typecheckerConfig.name).toBe("os-typechecker");
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {
@@ -53,18 +53,25 @@ it("gives every deployed env its own worker name derived from the service name",
     expect(envBlock.name, envName).toMatch(/^os-/);
     expect(envBlock.name, envName).not.toBe(config.name);
   }
-  for (const [envName, envBlock] of Object.entries(builderConfig.env)) {
-    expect(envBlock.name, envName).toMatch(/^os-.*-builder$/);
-    expect(envBlock.name, envName).not.toBe(builderConfig.name);
+});
+
+it("binds the os worker to its own env's typechecker sidecar", () => {
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const typechecker = envBlock.services.find((service) => service.binding === "TYPECHECKER");
+    expect(typechecker?.service, envName).toBe(`${envBlock.name}-typechecker`);
+    const sidecarNames = Object.values(typecheckerConfig.env).map((sidecar) => sidecar.name);
+    expect(sidecarNames, envName).toContain(typechecker?.service);
   }
 });
 
-it("binds the os worker to its own env's builder sidecar", () => {
+it("never binds the retired builder sidecar", () => {
+  // The esbuild-wasm builder is gone: dynamic workers build in the project's
+  // builder sandbox (deployed) or the dev server's host endpoint (local).
   for (const [envName, envBlock] of Object.entries(config.env)) {
-    const builder = envBlock.services.find((service) => service.binding === "BUILDER");
-    expect(builder?.service, envName).toBe(`${envBlock.name}-builder`);
-    const builderNames = Object.values(builderConfig.env).map((builderEnv) => builderEnv.name);
-    expect(builderNames, envName).toContain(builder?.service);
+    expect(
+      envBlock.services.find((service) => service.binding === "BUILDER"),
+      envName,
+    ).toBeUndefined();
   }
 });
 

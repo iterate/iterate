@@ -216,8 +216,11 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     this.ctx.waitUntil(
       (async () => {
         try {
-          const { resolved } = await this.#workerRunner.loadStatefulClass(ref);
-          const version = statefulWorkerVersion(ref, resolved.cacheKey);
+          // Resolve-only ON PURPOSE: an isolate created in this background
+          // context would be cached by the loader and poison every later
+          // mount — see DynamicWorkerRunner.resolveStatefulSourceCacheKey.
+          const cacheKey = await this.#workerRunner.resolveStatefulSourceCacheKey(ref);
+          const version = statefulWorkerVersion(ref, cacheKey);
           if (version === previousVersion) return;
           this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
           this.ctx.facets.abort(

@@ -1,10 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
-// The serve-side resolve matrix: fresh vs stale fallbacks around the builder.
-// The env is faked at the module seam worker-loader.ts actually uses —
-// builder RPC, repo head/snapshot, and the KV cache — so these tests drive
-// resolveWorkerSource exactly like the runner does.
+// The serve-side resolve matrix: fresh vs stale fallbacks around the build
+// backend. The seams worker-loader.ts actually uses are faked — the build
+// backend module, repo head/snapshot, and the KV cache — so these tests
+// drive resolveWorkerSource exactly like the runner does.
 const h = vi.hoisted(() => {
   class FakeKv {
     readonly data = new Map<string, string>();
@@ -16,6 +16,9 @@ const h = vi.hoisted(() => {
     async put(key: string, value: string): Promise<void> {
       this.data.set(key, value);
     }
+    async delete(key: string): Promise<void> {
+      this.data.delete(key);
+    }
   }
   const kv = new FakeKv();
   const state = {
@@ -25,26 +28,23 @@ const h = vi.hoisted(() => {
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
   };
+  const executeWorkerBuild = async (input: { buildKey: string; files: Record<string, string> }) => {
+    state.buildCalls.push(input.buildKey);
+    if (state.failBuilds) {
+      // Mirror the real backend's classification contract: genuine build
+      // failures carry the NAME (matching is name-based because the real
+      // pipeline's errors may cross RPC hops).
+      const failure = new Error("esbuild exploded");
+      failure.name = "WorkerBuildFailedError";
+      throw failure;
+    }
+    if (state.failTransport) throw new Error("container transport disconnected");
+    return {
+      mainModule: "worker.js",
+      modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
+    };
+  };
   const itxEnv = {
-    BUILDER: {
-      build: async (input: { buildKey: string; files: Record<string, string> }) => {
-        state.buildCalls.push(input.buildKey);
-        if (state.failBuilds) {
-          // Mirror the real builder's classification: a genuine bundler
-          // failure crosses RPC as the NAMED error (name survives, class
-          // identity does not).
-          const failure = new Error("esbuild exploded");
-          failure.name = "WorkerBuildFailedError";
-          throw failure;
-        }
-        if (state.failTransport) throw new Error("RPC receiver disconnected");
-        return {
-          buildKey: input.buildKey,
-          mainModule: "worker.js",
-          modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
-        };
-      },
-    },
     LOADER: { get: () => ({}) },
     REPO: {
       getByName: () => ({
@@ -55,10 +55,11 @@ const h = vi.hoisted(() => {
     WORKER_BUILD_CACHE: kv,
     WORKER_SELF: "os-test",
   };
-  return { itxEnv, kv, state };
+  return { executeWorkerBuild, itxEnv, kv, state };
 });
 
 vi.mock("../../env.ts", () => ({ itxEnv: h.itxEnv }));
+vi.mock("./build-backend.ts", () => ({ executeWorkerBuild: h.executeWorkerBuild }));
 
 const { isWorkerBuildFailedError } = await import("./artifact-store.ts");
 const { resolveWorkerSource } = await import("./worker-loader.ts");
@@ -205,7 +206,7 @@ describe("resolveWorkerSource serve matrix", () => {
         source: repoSource("/repos/f"),
         waitUntil,
       });
-      await expect(blocking).rejects.toThrow("RPC receiver disconnected");
+      await expect(blocking).rejects.toThrow("container transport disconnected");
       await expect(blocking).rejects.not.toSatisfy(isWorkerBuildFailedError);
     } finally {
       h.state.failTransport = false;
@@ -222,6 +223,23 @@ describe("resolveWorkerSource serve matrix", () => {
     });
     expect(recovered.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
     expect(h.state.buildCalls.length).toBe(callsAfterBlip + 1);
+  });
+
+  test("runtime artifacts are project-scoped — one project's build never serves another", async () => {
+    setCommit("c1", "repo-g-v1", "G1");
+    await resolveWorkerSource({ projectId: "prj_g1", source: repoSource("/repos/g"), waitUntil });
+    const callsAfterFirst = h.state.buildCalls.length;
+
+    // Identical source + options, different project: a project-trusted
+    // principal can influence its own builder sandbox's output, so the cache
+    // must NOT answer across projects — prj_g2 pays its own build.
+    const other = await resolveWorkerSource({
+      projectId: "prj_g2",
+      source: repoSource("/repos/g"),
+      waitUntil,
+    });
+    expect(other.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
+    expect(h.state.buildCalls.length).toBe(callsAfterFirst + 1);
   });
 
   test("inline loader-ready sources bypass the pipeline and carry no serve info", async () => {

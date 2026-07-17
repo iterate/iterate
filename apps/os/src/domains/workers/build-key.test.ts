@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { workerBuildKey, WORKER_BUNDLER_VERSION, type WorkerBuildInput } from "./build-key.ts";
+import { projectWorkerBuildKey, workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
+import { WRANGLER_VERSION } from "./build-recipe.ts";
 
 const baseInput: WorkerBuildInput = {
   compatibilityDate: "2026-05-01",
@@ -79,13 +80,31 @@ describe("workerBuildKey", () => {
     );
   });
 
-  it("pins the bundler version constant to the installed dependency", () => {
-    // The version participates in every build key; a silent drift between the
-    // constant and the actual dependency would either fail to invalidate
-    // cached artifacts on upgrade or invalidate them for no reason.
-    const packageJson = JSON.parse(
-      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
-    ) as { dependencies: Record<string, string> };
-    expect(packageJson.dependencies["@cloudflare/worker-bundler"]).toBe(WORKER_BUNDLER_VERSION);
+  it("scopes the project tier by project without losing determinism", async () => {
+    const sharedKey = await workerBuildKey(baseInput);
+    const projectKey = await projectWorkerBuildKey("prj_one", sharedKey);
+    expect(projectKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(await projectWorkerBuildKey("prj_one", sharedKey)).toBe(projectKey);
+    // A project-trusted principal can influence its own builder sandbox's
+    // output — runtime artifacts must never be shared across projects.
+    expect(await projectWorkerBuildKey("prj_two", sharedKey)).not.toBe(projectKey);
+    expect(projectKey).not.toBe(sharedKey);
+  });
+
+  it("pins the wrangler toolchain constant to the repo pin and the sandbox image", () => {
+    // The toolchain version participates in every build key; the three pins
+    // (constant, workspace override backing apps/os's wrangler devDependency,
+    // sandbox image global install) must agree or the host/dev runner and the
+    // container build different bytes under one key.
+    const workspaceYaml = readFileSync(
+      new URL("../../../../../pnpm-workspace.yaml", import.meta.url),
+      "utf8",
+    );
+    expect(workspaceYaml).toMatch(new RegExp(`^  wrangler: ${WRANGLER_VERSION}$`, "m"));
+    const dockerfile = readFileSync(
+      new URL("../../../sandbox/Dockerfile", import.meta.url),
+      "utf8",
+    );
+    expect(dockerfile).toContain(`npm install -g wrangler@${WRANGLER_VERSION}`);
   });
 });

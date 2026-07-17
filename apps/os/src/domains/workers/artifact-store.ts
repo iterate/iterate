@@ -8,7 +8,10 @@
  * key), and `expirationTtl` gives cache expiry without a cleanup worker.
  */
 
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 1;
+// v2: the sandbox/host wrangler pipeline replaced the esbuild-wasm builder —
+// every v1 artifact is from the old toolchain and must be unreachable (the
+// version prefix below does that; KV TTLs clean the orphans up).
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 2;
 
 /** Cache lifetime for build artifacts. Expiry only costs a rebuild on next
  * use. ("Reproducible" is approximate: npm ranges re-resolve at build time,
