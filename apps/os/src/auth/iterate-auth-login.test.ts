@@ -150,12 +150,47 @@ describe("iterate auth login", () => {
 
     expect(doRefresh).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(200);
+    // Served claims are the cookie's old ones — the response says so.
+    expect(response.headers.get("x-iterate-auth-stale-refresh")).toBe("1");
     await expect(response.json()).resolves.toMatchObject({
       authenticated: true,
       user: {
         id: "usr_session",
       },
     });
+  });
+
+  test("flags a forced refresh on a session with no refresh token (minted sessions)", async () => {
+    const signed = await signedTokenSet({
+      accessTokenExpiresAt: Date.now() + 60 * 60 * 1000,
+      refreshToken: undefined,
+    });
+    const doRefresh = vi.fn(async (current: TokenSet) => current);
+    const handler = testAuthHandler(config, {
+      doRefresh,
+      jwks: signed.jwks as never,
+    });
+
+    const forced = await handler(
+      new Request("http://localhost:65455/api/iterate-auth/session?refresh=force", {
+        headers: { cookie: sessionCookie(signed.tokenSet) },
+      }),
+    );
+
+    expect(doRefresh).not.toHaveBeenCalled();
+    expect(forced.status).toBe(200);
+    expect(forced.headers.get("x-iterate-auth-stale-refresh")).toBe("1");
+    await expect(forced.json()).resolves.toMatchObject({ authenticated: true });
+
+    // A plain read is not a refresh request: no flag, no log noise — minted
+    // sessions hit this endpoint constantly.
+    const plain = await handler(
+      new Request("http://localhost:65455/api/iterate-auth/session", {
+        headers: { cookie: sessionCookie(signed.tokenSet) },
+      }),
+    );
+    expect(plain.status).toBe(200);
+    expect(plain.headers.get("x-iterate-auth-stale-refresh")).toBeNull();
   });
 
   test("reports non-fatal refresh failures while returning a valid session", async () => {

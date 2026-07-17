@@ -78,6 +78,16 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
 
     if (!response.ok) return { authenticated: false };
 
+    if (response.headers.get("x-iterate-auth-stale-refresh")) {
+      // The server could not mint fresh tokens and served the cookie's old
+      // claims. Minted sessions (auth:mint) can never refresh — anything
+      // created after mint (organizations, projects) stays invisible until a
+      // real sign-in. The server log carries the exact reason.
+      console.warn(
+        "[iterate-auth] session refresh produced no fresh tokens; claims may be stale. Sign in again to pick up new organizations/projects.",
+      );
+    }
+
     return (await response.json()) as SessionResponse;
   }
 
