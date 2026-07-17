@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
@@ -45,6 +45,10 @@ export function CreateProjectForm({
   const queryClient = useQueryClient();
   const { refresh, session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
+  // Stays true from mutation success until this form unmounts after navigate —
+  // `isPending` alone drops false before router.navigate settles, which would
+  // briefly re-enable sheet dismiss and race the welcome redirect.
+  const [navigatingAway, setNavigatingAway] = useState(false);
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
       // Straight through the itx session: create registers the project with
@@ -71,6 +75,7 @@ export function CreateProjectForm({
       return { id: description.projectId, slug: input.slug };
     },
     onSuccess: (project) => {
+      setNavigatingAway(true);
       // Onto the project home immediately with `welcome` so the creation
       // checklist paints while the bootstrap saga runs. The project route
       // resolves without the refreshed session: create primes the
@@ -130,12 +135,14 @@ export function CreateProjectForm({
     },
   });
 
+  const createPending = createProject.isPending || navigatingAway;
+
   // Host sheet (and any other shell) must not dismiss while create is in
-  // flight: onSuccess navigates into the new project, and a mid-flight
+  // flight or while we are navigating into the new project: a mid-flight
   // close would race that navigation with a /projects bounce.
   useEffect(() => {
-    onPendingChange?.(createProject.isPending);
-  }, [createProject.isPending, onPendingChange]);
+    onPendingChange?.(createPending);
+  }, [createPending, onPendingChange]);
 
   return (
     <form
@@ -197,8 +204,8 @@ export function CreateProjectForm({
       </FieldGroup>
       <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
         {([canSubmit, isSubmitting]) => (
-          <Button type="submit" disabled={!canSubmit || isSubmitting || createProject.isPending}>
-            {isSubmitting || createProject.isPending ? "Creating..." : "Create project"}
+          <Button type="submit" disabled={!canSubmit || isSubmitting || createPending}>
+            {isSubmitting || createPending ? "Creating..." : "Create project"}
           </Button>
         )}
       </form.Subscribe>
