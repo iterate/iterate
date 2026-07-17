@@ -28,6 +28,12 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import {
+  AGENT_BINDING_SET_EVENT_TYPE,
+  AGENT_METADATA_CHANGED_EVENT_TYPE,
+  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
+  AGENT_WAITING_CLEARED_EVENT_TYPE,
+} from "@iterate-com/shared/agent-events";
 import type { LiveUpdate } from "iterate/live-state";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
@@ -50,7 +56,7 @@ import type {
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
 import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
-import { LiveState, type LiveStateSubscription } from "iterate/live-state";
+import { disposeIgnoredRpcResult, LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -66,6 +72,7 @@ import {
   primeProjectDirectory,
   readProjectById,
   resolveProjectIdBySlug,
+  type ProjectIdentity,
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
@@ -74,7 +81,8 @@ import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
-import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import { AgentMetadataPatch } from "./domains/agents/agent-presence.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -169,6 +177,7 @@ import type {
   DynamicWorkerDispatchOptions,
   DynamicWorkerRef,
   ProjectWorker,
+  StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
@@ -267,7 +276,10 @@ import {
   type AgentFileAttachment,
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  capabilityFallbackForScope,
+} from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -326,7 +338,7 @@ import type {
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
-import type { AgentStatusTouchInput } from "./domains/projects/agent-status-database.ts";
+import type { AgentTouchInput } from "./domains/projects/agent-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import {
   SchedulerProcessorContract,
@@ -410,6 +422,14 @@ type FetchOnly = Pick<Fetcher, "fetch">;
 
 const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
+const AGENT_PROJECTION_EVENT_TYPES = new Set([
+  "events.iterate.com/agent/created",
+  AGENT_METADATA_CHANGED_EVENT_TYPE,
+  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
+  AGENT_WAITING_CLEARED_EVENT_TYPE,
+  AGENT_BINDING_SET_EVENT_TYPE,
+]);
+
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 // Public create calls are acknowledgement boundaries, not indefinite leases.
@@ -445,6 +465,25 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 }
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
+
+function detachPlainRpcResult<T>(result: T[]): T[];
+function detachPlainRpcResult<T extends object>(result: T): T;
+function detachPlainRpcResult(result: object): object {
+  try {
+    const detached = Array.isArray(result) ? [...result] : { ...result };
+    Reflect.deleteProperty(detached, Symbol.dispose);
+    return detached;
+  } finally {
+    try {
+      disposeIgnoredRpcResult(result);
+    } catch (error) {
+      // The remote method has already succeeded and its plain data is safely
+      // detached. Cleanup failure must stay observable without rewriting that
+      // authoritative outcome into a product failure.
+      console.warn("stream plain-data RPC result dispose failed", { error });
+    }
+  }
+}
 
 /**
  * Durable event stream capability.
@@ -508,10 +547,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // had to treat it as fatal (the stream-browser double-kill e2e's old CI
   // fixme). Stub-returning methods (readEvents, subscribe) stay bare — a
   // `.catch` would collapse the returned stub — and their data legs already
-  // ride the tagged methods.
+  // ride the tagged methods. Native Workers RPC also makes every object-valued
+  // result disposable: detach its plain data, then release the invocation here
+  // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -526,10 +568,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** One event by offset or idempotencyKey; undefined when it does not exist.
    * Point reads return ephemeral rows too — but those rows are evictable, so
    * an offset that once resolved may later read as undefined. */
-  getEvent(
+  async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    if (result === undefined) return undefined;
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -539,8 +583,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * `afterOffset: events.at(-1).offset`; reading a long stream without paging
    * shows you the beginning, not the head.
    */
-  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+  async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -568,7 +613,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // Preserve the DO's validation error for invalid timeouts instead of
     // manufacturing a deadline from NaN/Infinity/a non-positive duration.
     if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
-      return await this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+      const result = await this.durableObjectStub
+        .waitForEvent(args)
+        .catch(rethrowStreamUnavailable);
+      return detachPlainRpcResult(result);
     }
 
     const deadline = Date.now() + args.timeoutMs;
@@ -617,7 +665,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
             afterOffset: replayAfterOffset,
             timeoutMs: remoteTimeoutMs,
           }),
-        );
+        ).then((result) => detachPlainRpcResult(result));
       } catch (error) {
         rethrowStreamUnavailable(error);
       }
@@ -656,10 +704,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
-  getProcessorRuntimeState(args: {
+  async getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub
+      .getProcessorRuntimeState(args)
+      .catch(rethrowStreamUnavailable);
+    return result === null ? null : detachPlainRpcResult(result);
   }
 
   /**
@@ -673,7 +724,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * throttled mutual-ping round over the live connections (observer-driven
    * sampling), so a polling debug UI sees RTTs populate.
    */
-  runtimeState(): Promise<{
+  async runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, ConnectionRuntimeState>;
@@ -683,7 +734,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -4265,7 +4317,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   constructor(props: AgentRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    normalizeAgentPath(props.capabilityHost.path);
+    parseAgentPath(props.capabilityHost.path);
     this.#props = props;
   }
 
@@ -4326,11 +4378,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   /**
    * Append durable events the Agent processor consumes. The input union and
    * runtime parser both derive from `AgentProcessorContract.consumes`, so the
-   * domain door cannot drift from the processor. This validates shape and
-   * vocabulary, not state-machine order: possession of this handle is the
-   * append authority, and `create()` remains the normal birth path. Use
-   * `stream.append` for an event outside that vocabulary or for an
-   * intentionally ephemeral event.
+   * typed helper cannot drift from the processor. This validates shape and
+   * vocabulary, not state-machine order or provenance, and grants no special
+   * append rights: any project member can append any event through
+   * `stream.append`, with the same reducer meaning for a valid matching event.
+   * `create()` remains the normal birth path. Use `stream.append` for an event
+   * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   async append(...events: AgentEventInput[]): Promise<StreamEvent[]> {
     await this.#assertCreated();
@@ -4449,59 +4502,20 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Update this agent's status record — the title, note, and shortStatus that
-   * project surfaces (the agents list, the Slack thread status) show for it.
-   * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — waiting for a response vs running code)
-   * into the same record on its own. `shortStatus` completes the sentence
-   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
-   * while the agent works — update it as your work moves through phases.
-   * `note` is a one-or-two-sentence description of the agent or its current
-   * focus; `title` names the agent/conversation; `blocked: true` marks a
-   * turn that ended waiting on a human.
+   * Merge human-readable metadata for this agent. Omitted properties remain
+   * unchanged; null clears an optional property; pinned false unpins. Title is
+   * a stable identity, activity is the current-condition sentence updated as
+   * work moves through phases, summary is one or two durable sentences, and
+   * waitingFor declares a semantic dependency once current runtime is zero.
    */
-  async setStatus(input: {
-    title?: string;
-    note?: string;
-    shortStatus?: string;
-    /** Set true when ending a turn to wait on a human (an answer, an
-     * approval, a secret) — surfaces show the agent as blocked instead of
-     * idle. The platform clears it when the next message wakes you. */
-    blocked?: boolean;
-    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
-     * "web") or an https image URL, shown next to this agent on roster
-     * surfaces. */
-    icon?: string;
-  }): Promise<StreamEvent> {
+  async setMetadata(input: AgentMetadataPatch): Promise<StreamEvent> {
     await this.#assertCreated();
-    // Whitespace-only values are dropped, not journaled: a patch of empty
-    // strings would blank titles and notes on every surface.
-    const field = (value: string | undefined) => {
-      const trimmed = value?.trim();
-      return trimmed === undefined || trimmed === "" ? undefined : trimmed;
-    };
-    const patch = {
-      ...(field(input.title) === undefined ? {} : { title: field(input.title) }),
-      ...(field(input.note) === undefined ? {} : { note: field(input.note) }),
-      ...(field(input.shortStatus) === undefined ? {} : { shortStatus: field(input.shortStatus) }),
-      ...(field(input.icon) === undefined ? {} : { icon: field(input.icon) }),
-      ...(input.blocked === undefined ? {} : { blocked: input.blocked }),
-    };
-    if (Object.keys(patch).length === 0) {
-      throw new Error(
-        "agent.setStatus requires at least one non-empty field (title, note, shortStatus, icon, blocked).",
-      );
-    }
+    const patch = AgentMetadataPatch.parse(input);
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agent/status-changed",
+      type: AGENT_METADATA_CHANGED_EVENT_TYPE,
       payload: patch,
     });
     return event;
-  }
-
-  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
-  setTitle(title: string): Promise<StreamEvent> {
-    return this.setStatus({ title });
   }
 
   /**
@@ -4601,9 +4615,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
         create: "Create this agent and wait for its processors to consume the birth batch.",
-        setStatus:
-          'Merge-update this agent\'s title / note / shortStatus (shortStatus completes "<agent> is …" on live surfaces).',
-        setTitle: "Name this agent/conversation (sugar for setStatus({ title })).",
+        setMetadata:
+          "Merge title, activity, summary, waitingFor, or project-global pinned presentation metadata.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
         message:
           "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
@@ -4677,8 +4690,8 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
  *
  * The returned object is a path proxy: unknown properties become path segments
  * and eventually call `invokeCapability`. Dynamic workers reserve a tiny
- * platform lifecycle surface (`invokeCapability`, `kill`, disposal); everything
- * else belongs to the loaded worker.
+ * platform lifecycle surface (`invokeCapability`, `kill`, `setAlarm`,
+ * `getAlarm`, disposal); everything else belongs to the loaded worker.
  */
 class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
@@ -4748,6 +4761,9 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       children: {
         invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
         kill: "Restart the stateful worker's server-side object; stateless worker refs reject.",
+        setAlarm:
+          "Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm; the fire calls the worker class's alarm(). Stateless worker refs reject.",
+        getAlarm: "The stateful worker's armed alarm time (ms) or null.",
       },
       parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
       ref: {
@@ -4790,10 +4806,30 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
 
   /** Restart the stateful worker's server-side object; stateless worker refs reject. */
   async kill(): Promise<void> {
-    if (this.#ref.type !== "stateful") {
-      throw new Error("Dynamic worker kill() only applies to stateful worker refs.");
+    await this.#runner.kill(this.#statefulRef("kill"));
+  }
+
+  /** Arm (ms timestamp) or disarm (null) the stateful worker's durable alarm —
+   * see {@link DynamicWorkerCapability.setAlarm} for the full contract. */
+  async setAlarm(atMs: number | null): Promise<void> {
+    if (atMs !== null && !Number.isFinite(atMs)) {
+      throw new Error("Dynamic worker setAlarm() requires a finite ms timestamp or null.");
     }
-    await this.#runner.kill(this.#ref);
+    await this.#runner.setAlarm(this.#statefulRef("setAlarm"), atMs);
+  }
+
+  /** The stateful worker's armed alarm time (ms since epoch), or null. */
+  async getAlarm(): Promise<number | null> {
+    return await this.#runner.getAlarm(this.#statefulRef("getAlarm"));
+  }
+
+  /** The lifecycle verbs above are durable-identity concepts: they exist for
+   * stateful refs only, and reject the rest with the verb's name. */
+  #statefulRef(verb: string): StatefulDynamicWorkerRef {
+    if (this.#ref.type !== "stateful") {
+      throw new Error(`Dynamic worker ${verb}() only applies to stateful worker refs.`);
+    }
+    return this.#ref;
   }
 }
 
@@ -4852,15 +4888,18 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
 
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — convenient for scripts
-   * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve once the `project/created` birth
-   * certificate has been processed
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
-   * lands). The dashboard uses the fast path to redirect into the project
-   * instantly and play creation progress from pushes.
+   * bootstrap saga has committed `project/ready` — the right shape for
+   * scripts and pipelined chains that use the project immediately.
+   *
+   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
+   * registered, directory primed, birth events appended. The saga keeps
+   * running behind the returned handle — create still drives processor birth
+   * via a post-response nudge, so no caller has to. Progress is ordinary
+   * live state (`state.reduced.ready` flips when bootstrap lands), and
+   * `waitUntilReady()` on the handle is the composable wait. Pipeline
+   * `identity()` through the create call to learn the canonical slug (auth
+   * may normalize it) in the same round trip — the dashboard does exactly
+   * that, then plays the checklist from live pushes.
    */
   async create(args: {
     organizationSlug?: string;
@@ -4931,31 +4970,31 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       path: "/",
       projectId: args.projectId,
     });
-    await timedStep("create-timing", timing, "wait-project-birth", () =>
-      project.processor.waitUntilProcessed({
-        offset: Math.max(created.offset, subscription.offset),
-        // A create must never leave its caller parked behind a wedged
-        // processor indefinitely. One project birth frame has a shared 60s
-        // sibling-barrier deadline; 75s leaves 15s for durable-delivery
-        // backoff and transport redial.
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-      }),
-    );
-    // The project now EXISTS and its birth has been processed. Whether to
-    // also wait for bootstrap readiness is the caller's choice.
-    if (args.waitUntilReady !== false) {
-      await timedStep("create-timing", timing, "wait-project-ready", () =>
-        stream.waitForEvent({
-          afterOffset: created.offset,
-          eventTypes: ["events.iterate.com/project/ready"],
-          // Tight on purpose: the saga should complete in seconds (see
-          // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-          // be fixed, not waited out). Preview CI warms slots before the suites.
-          timeoutMs: 60_000,
+    // Both lanes drive processor birth through the same wait; they differ
+    // only in who pays for it. A create must never leave its caller parked
+    // behind a wedged processor indefinitely: one project birth frame has a
+    // shared 60s sibling-barrier deadline; 75s leaves 15s for
+    // durable-delivery backoff and transport redial.
+    const driveBirth = (step: string) =>
+      timedStep("create-timing", timing, step, () =>
+        project.processor.waitUntilProcessed({
+          offset: Math.max(created.offset, subscription.offset),
+          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
         }),
       );
+    // Fast path: identity + directory + birth events are enough for callers
+    // that watch the saga as live state. Nobody is left waiting, so create
+    // itself must stay the guaranteed birth driver: nudge the processor
+    // after this response instead of parking the caller behind it. A failed
+    // nudge is telemetry, not a create failure — durable delivery retries
+    // and the checklist's stall detector cover the rest.
+    if (args.waitUntilReady === false) {
+      this.props.ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
+      return project;
     }
 
+    await driveBirth("wait-project-birth");
+    await timedStep("create-timing", timing, "wait-project-ready", () => project.waitUntilReady());
     return project;
   }
 
@@ -4967,6 +5006,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * project into the user's claims); the admin lane only needs an id. Admin
    * callers may bring their own id (test fixtures); we never mint prj_ ids
    * locally when the directory is configured.
+   *
+   * EVERY user principal takes the user lane, including platform-admin users
+   * creating from the dashboard. Admin-ness must not reroute a human create
+   * into the fixture lane: that lane mints a bare id with no org-owned
+   * directory row, so the project would never enter the creator's claims
+   * (project list, slug routes) and org members could never find it. The
+   * mint-only lane is for principal-less admin credentials (admin API secret,
+   * trusted-internal) whose fixtures live outside any customer organization.
    */
   async #registerProject(args: {
     organizationSlug?: string;
@@ -4975,7 +5022,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   }): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
     const userPrincipal = userPrincipalOf(this.props.auth);
 
-    if (userPrincipal && !this.props.auth.isAdmin()) {
+    if (userPrincipal) {
       const organizationSlug = resolveOrganizationSlugForCreate(
         userPrincipal,
         args.organizationSlug,
@@ -5124,8 +5171,9 @@ type CapabilityHostRpcTargetProps = {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; on a local miss, reads follow the scope's journaled `fallback`
+ * expression — usually one hop straight to the project root host.
+ * `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -5183,7 +5231,9 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       {
         type: "events.iterate.com/capability-host/created",
         idempotencyKey: `capability-host/created:${this.#props.projectId}:${this.#props.path}`,
-        payload: { config: {} },
+        // The root host ends resolution; every other scope journals a one-hop
+        // fallback straight to it (path is normalized in the constructor).
+        payload: { config: {}, fallback: capabilityFallbackForScope(this.#props.path) },
       },
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName,
@@ -5234,7 +5284,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     // (DO method name: describeCapabilities — it returns the raw array; the
     // Description envelope is assembled here, where the scope context lives.)
     return describeNode({
-      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads chain up through enclosing scopes, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
+      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; on a local miss reads follow the scope's journaled fallback (usually the project root host), so \`capabilities\` includes the fallback's mounts tagged with their declaring scope.`,
       children: {
         create:
           "Create this capability host and wait until its processor has processed the birth batch.",
@@ -5392,7 +5442,8 @@ type ProjectRpcTargetProps = {
  * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
  * in the isolate; only unknown roots fall through the prototype-chain
  * fallback (the registry block at the bottom of this file) to the capability
- * host's dynamic table (which itself chains up to enclosing scopes). So the
+ * host's dynamic table (which follows its journaled fallback host on a
+ * miss). So the
  * common `itx.streams.get(...)` path never makes a round trip
  * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
  * capability can never shadow a built-in name — the built-in always wins
@@ -5407,9 +5458,7 @@ type ProjectRpcTargetProps = {
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
-  touchStreamActivity(input: TouchInput): Promise<void>;
-  touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
-  rebuildAgentStatus(input: AgentStatusTouchInput): Promise<boolean>;
+  indexCommittedBatchFacts(input: { stream: TouchInput; agent?: AgentTouchInput }): Promise<void>;
 };
 
 /**
@@ -5435,6 +5484,58 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** The project this itx is scoped into. */
   get projectId(): string {
     return this.#props.projectId;
+  }
+
+  /**
+   * Canonical identity from the project directory: id, slug (the auth
+   * worker's normalized form — what URLs and ingress hostnames use),
+   * organization, and display name. A directory read only — no project DO
+   * dial — so it is safe pre-birth and cheap to pipeline through
+   * `projects.create()`.
+   */
+  async identity(): Promise<ProjectIdentity> {
+    // readProjectById folds transient KV read errors into null; one retry
+    // keeps a blip from reporting a just-created project as missing.
+    const record =
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId)) ??
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId));
+    if (record == null) {
+      throw new Error(`Project ${this.#props.projectId} is missing from the project directory.`);
+    }
+    return {
+      projectId: record.id,
+      slug: record.slug,
+      organizationId: record.organizationId,
+      name: record.name,
+    };
+  }
+
+  /**
+   * Resolve once the bootstrap saga has committed `project/ready`. Replays
+   * stream history first, so an already-ready project resolves immediately,
+   * and dialing the processor here heals a lost birth wake rather than just
+   * observing. The composable partner of
+   * `projects.create({ waitUntilReady: false })`.
+   */
+  async waitUntilReady(args?: { timeoutMs?: number }): Promise<void> {
+    // snapshot() pulls the journal through the registry's catch-up, so this
+    // wait drives a stalled saga instead of just watching it. Post-response
+    // work (waitUntil), never awaited: a wedged DO dial must not burn the
+    // caller's timeout budget before the timed waiter below even opens.
+    this.#props.ctx.waitUntil(
+      this.processor.snapshot().then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    await rootStream({ auth: this.#props.auth, projectId: this.#props.projectId }).waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/project/ready"],
+      // Tight on purpose: the saga should complete in seconds (see
+      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+      // be fixed, not waited out). Preview CI warms slots before the suites.
+      timeoutMs: args?.timeoutMs ?? 60_000,
+    });
   }
 
   /** @internal */
@@ -5787,14 +5888,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // stream's subscription expression names `["processEventBatch"]` — the
   // INTENT, not the implementation — so envelope evolution happens here in
   // deployment code instead of by patching user repos, and first-party
-  // per-event work (the streams index via #indexStreamActivity; future
-  // policy/metrics feeds) joins the same ordered, checkpointed delivery.
-  // Rule for such steps: idempotent and never-throwing; only the worker
-  // delegation may reject into the spine's retry/park machinery. Same trust
-  // model as worker.processEventBatch itself: any project principal.
+  // per-event work joins the same ordered, checkpointed delivery. Stream and
+  // agent projection writes are awaited: a failed write rejects into the
+  // spine and is retried rather than acknowledging stale live state. Same
+  // access model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
-    this.#indexStreamActivity(batch);
-    this.#indexAgentStatus(batch);
+    await this.#indexCommittedBatchFacts(batch);
     // Search is a derived mirror, so schedule it independently of the user
     // worker outcome: a batch that the delivery spine eventually poison-skips
     // must still be searchable. waitUntil keeps it off the authoritative
@@ -5830,101 +5929,35 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
   }
 
-  /**
-   * Platform step: record the batch's stream in the project's streams index (a
-   * peer slice of `itx.liveState` — see StreamDatabase). Idempotent (`touch`
-   * only advances recency) and MUST NOT throw — a fire-and-forget dial into the
-   * project DO whose failure the next batch self-heals. Only the worker
-   * delegation above may reject into the spine's retry.
-   */
-  #indexStreamActivity(batch: StreamPushEventBatch): void {
+  /** Materialize one committed delivery's stream and agent facts together. */
+  async #indexCommittedBatchFacts(batch: StreamPushEventBatch): Promise<void> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
-    void Promise.resolve(
-      this.#projectDo.touchStreamActivity({
+
+    const events = batch.path.startsWith("/agents/")
+      ? batch.events.flatMap((event) =>
+          AGENT_PROJECTION_EVENT_TYPES.has(event.type)
+            ? [
+                {
+                  type: event.type,
+                  payload: event.payload,
+                  offset: event.offset,
+                  createdAt: event.createdAt,
+                },
+              ]
+            : [],
+        )
+      : [];
+
+    await this.#projectDo.indexCommittedBatchFacts({
+      stream: {
         path: batch.path,
         at: last.createdAt,
         type: last.type,
-        // streamMaxOffset (not events.length) so a redelivered batch is idempotent.
         maxOffset: batch.streamMaxOffset,
-      }),
-    ).catch(() => {
-      // Recency self-heals from the next batch; never surface into worker delivery.
+      },
+      ...(events.length === 0 ? {} : { agent: { path: batch.path, events } }),
     });
-  }
-
-  /**
-   * Platform step: fold an agent batch's status-changed patches into the
-   * project's agents roster (a peer slice of `itx.liveState` — see
-   * AgentStatusDatabase). Same rules as {@link #indexStreamActivity}:
-   * idempotent (event offsets guard redelivery), fire-and-forget, MUST NOT
-   * throw. Unlike recency, a DROPPED patch does not heal on the next one —
-   * these are merge patches, and a later busy patch carries no title with
-   * which to reconstruct a lost rename — so a failed dial falls back to
-   * rebuilding the row from the agent's journal (the authority).
-   */
-  #indexAgentStatus(batch: StreamPushEventBatch): void {
-    if (!batch.path.startsWith("/agents/")) return;
-    const events = batch.events
-      .filter((event) => event.type === "events.iterate.com/agent/status-changed")
-      .map((event) => ({
-        payload: event.payload,
-        offset: event.offset,
-        createdAt: event.createdAt,
-      }));
-    if (events.length === 0) return;
-    void Promise.resolve(this.#projectDo.touchAgentStatus({ path: batch.path, events })).catch(() =>
-      this.#rebuildAgentStatus(batch.path),
-    );
-  }
-
-  /**
-   * Recovery lane for a failed roster dial: re-read the agent journal's FULL
-   * status-changed history and hand it to the DO as a from-scratch rebuild.
-   * The journal read is authoritative at read time; a touch for NEWER events
-   * racing into the gap between read and replace makes the DO REFUSE the
-   * stale snapshot, and the loop re-reads (the newer events are committed to
-   * the journal before their touch could have succeeded, so the next read
-   * has them). Retried with backoff; the terminal failure is logged and the
-   * row stays stale until the agent's next rebuild-triggering drop.
-   */
-  async #rebuildAgentStatus(path: string): Promise<void> {
-    for (const backoffMs of [0, 2_000, 10_000]) {
-      if (backoffMs > 0) await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      try {
-        const stream = new StreamRpcTarget({
-          auth: this.#props.auth,
-          path,
-          projectId: this.projectId,
-        });
-        const events: { payload: unknown; offset: number; createdAt: string }[] = [];
-        let afterOffset = 0;
-        for (;;) {
-          const page = await stream.getEvents({
-            afterOffset,
-            eventTypes: ["events.iterate.com/agent/status-changed"],
-            limit: 500,
-          });
-          for (const event of page) {
-            events.push({
-              payload: event.payload,
-              offset: event.offset,
-              createdAt: event.createdAt,
-            });
-          }
-          if (page.length < 500) break;
-          afterOffset = page.at(-1)!.offset;
-        }
-        const applied = await this.#projectDo.rebuildAgentStatus({ path, events });
-        if (applied) return;
-        console.warn("[agents-roster] rebuild lost a race with a newer touch; re-reading", {
-          path,
-        });
-      } catch (error) {
-        console.warn("[agents-roster] rebuild attempt failed", { path, error });
-      }
-    }
-    console.error("[agents-roster] roster row is stale after failed rebuild", { path });
   }
 
   /**
@@ -6010,11 +6043,10 @@ export function itxForScope(props: {
 
 /**
  * The deployment-global trusted root: what a GLOBAL (`projectId: null`)
- * stream's delivery dial evaluates expressions against (`ItxEntrypoint.get()`
- * with `projectId: null` props). Session-shaped on purpose — deployment-wide
- * repos/streams live on the session — so a global repo stream's wake
- * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
- * walks the same shape a project stream's does.
+ * stream's delivery dial evaluates expressions against. Session-shaped on
+ * purpose — deployment-wide repos/streams live on the session — so a global
+ * repo stream's wake expression (`["repos", ["get", path], "processor",
+ * "wakeStreamSubscriber"]`) walks the same shape a project stream's does.
  */
 export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
   return new SessionRpcTarget(props);
@@ -6490,7 +6522,7 @@ const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.contex
  * the platform's example scripts (most are proven: the test suite runs them
  * unattended against a live project on every change; the rest are marked
  * interactive), the public type surface (the Itx Type Graph), and the
- * capabilities mounted in the caller's scope chain. One door for "how do I
+ * capabilities reachable from the caller's scope. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),

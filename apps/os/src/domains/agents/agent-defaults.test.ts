@@ -97,11 +97,11 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("lets a platform router choose one initial prompt without changing birth", () => {
+  test("lets a routed agent choose one initial prompt without changing birth", () => {
     const creation = agentCreationForPath({
       agentPath: "/agents/slack/test",
       projectId: PROJECT_ID,
-      platformSystemPrompt: {
+      systemPromptPolicy: {
         content: "Slack execution contract",
         id: "slack",
         revision: "7",
@@ -126,7 +126,7 @@ describe("agentCreationForPath", () => {
       agentCreationForPath({
         agentPath: "/agents/routed/test",
         projectId: PROJECT_ID,
-        platformSystemPrompt: { content, id: "routed", revision },
+        systemPromptPolicy: { content, id: "routed", revision },
       }).events.find(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&
@@ -147,6 +147,16 @@ describe("agentCreationForPath", () => {
         .events.slice(0, 2)
         .map((event) => event.type),
     ).toEqual(["events.iterate.com/agent/created", "events.iterate.com/capability-host/created"]);
+  });
+
+  test("journals the one-hop project-root capability fallback in the birth certificate", () => {
+    const birth = defaultsFor("/agents/demo").events.find(
+      (event) => event.type === "events.iterate.com/capability-host/created",
+    );
+    expect(birth?.payload).toEqual({
+      config: {},
+      fallback: ["capabilityHosts", ["get", "/"]],
+    });
   });
 
   test("installs both universal processor subscriptions in the same batch", () => {

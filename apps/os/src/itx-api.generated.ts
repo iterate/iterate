@@ -81,6 +81,22 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
+   * Canonical identity from the project directory: id, slug (the auth
+   * worker's normalized form — what URLs and ingress hostnames use),
+   * organization, and display name. A directory read only — no project DO
+   * dial — so it is safe pre-birth and cheap to pipeline through
+   * `projects.create()`.
+   */
+  identity(): Promise<ProjectIdentity>;
+  /**
+   * Resolve once the bootstrap saga has committed `project/ready`. Replays
+   * stream history first, so an already-ready project resolves immediately,
+   * and dialing the processor here heals a lost birth wake rather than just
+   * observing. The composable partner of
+   * `projects.create({ waitUntilReady: false })`.
+   */
+  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
+  /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
    * capability (built-ins + dynamic mounts), the children map, and the
    * `Project` declaration in `types` (the full surface is one
@@ -213,15 +229,18 @@ export interface ProjectCollection {
   get(idOrSlug: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — convenient for scripts
-   * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve once the `project/created` birth
-   * certificate has been processed
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
-   * lands). The dashboard uses the fast path to redirect into the project
-   * instantly and play creation progress from pushes.
+   * bootstrap saga has committed `project/ready` — the right shape for
+   * scripts and pipelined chains that use the project immediately.
+   *
+   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
+   * registered, directory primed, birth events appended. The saga keeps
+   * running behind the returned handle — create still drives processor birth
+   * via a post-response nudge, so no caller has to. Progress is ordinary
+   * live state (`state.reduced.ready` flips when bootstrap lands), and
+   * `waitUntilReady()` on the handle is the composable wait. Pipeline
+   * `identity()` through the create call to learn the canonical slug (auth
+   * may normalize it) in the same round trip — the dashboard does exactly
+   * that, then plays the checklist from live pushes.
    */
   create(args: {
     organizationSlug?: string;
@@ -364,11 +383,12 @@ export interface Agent {
   /**
    * Append durable events the Agent processor consumes. The input union and
    * runtime parser both derive from `AgentProcessorContract.consumes`, so the
-   * domain door cannot drift from the processor. This validates shape and
-   * vocabulary, not state-machine order: possession of this handle is the
-   * append authority, and `create()` remains the normal birth path. Use
-   * `stream.append` for an event outside that vocabulary or for an
-   * intentionally ephemeral event.
+   * typed helper cannot drift from the processor. This validates shape and
+   * vocabulary, not state-machine order or provenance, and grants no special
+   * append rights: any project member can append any event through
+   * `stream.append`, with the same reducer meaning for a valid matching event.
+   * `create()` remains the normal birth path. Use `stream.append` for an event
+   * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
   /** The agent's web-chat door (what the user sees). */
@@ -400,32 +420,13 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Update this agent's status record — the title, note, and shortStatus that
-   * project surfaces (the agents list, the Slack thread status) show for it.
-   * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — waiting for a response vs running code)
-   * into the same record on its own. `shortStatus` completes the sentence
-   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
-   * while the agent works — update it as your work moves through phases.
-   * `note` is a one-or-two-sentence description of the agent or its current
-   * focus; `title` names the agent/conversation; `blocked: true` marks a
-   * turn that ended waiting on a human.
+   * Merge human-readable metadata for this agent. Omitted properties remain
+   * unchanged; null clears an optional property; pinned false unpins. Title is
+   * a stable identity, activity is the current-condition sentence updated as
+   * work moves through phases, summary is one or two durable sentences, and
+   * waitingFor declares a semantic dependency once current runtime is zero.
    */
-  setStatus(input: {
-    title?: string;
-    note?: string;
-    shortStatus?: string;
-    /** Set true when ending a turn to wait on a human (an answer, an
-     * approval, a secret) — surfaces show the agent as blocked instead of
-     * idle. The platform clears it when the next message wakes you. */
-    blocked?: boolean;
-    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
-     * "web") or an https image URL, shown next to this agent on roster
-     * surfaces. */
-    icon?: string;
-  }): Promise<StreamEvent>;
-  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
-  setTitle(title: string): Promise<StreamEvent>;
+  setMetadata(input: AgentMetadataPatch): Promise<StreamEvent>;
   /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -494,8 +495,9 @@ export interface AgentChat {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; on a local miss, reads follow the scope's journaled `fallback`
+ * expression — usually one hop straight to the project root host.
+ * `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -656,7 +658,7 @@ export interface EmailCapability {
  * the platform's example scripts (most are proven: the test suite runs them
  * unattended against a live project on every change; the rest are marked
  * interactive), the public type surface (the Itx Type Graph), and the
- * capabilities mounted in the caller's scope chain. One door for "how do I
+ * capabilities reachable from the caller's scope. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
@@ -1759,6 +1761,18 @@ export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
 
+/**
+ * What `itx.identity()` returns: the directory's canonical project record,
+ * with the itx surface's `projectId` field name (the surface always says
+ * `projectId`; `id` is the directory/list convention).
+ */
+export type ProjectIdentity = {
+  projectId: string;
+  slug: string;
+  organizationId: string | null;
+  name: string;
+};
+
 /** What a project itx's `__describe()` returns: the Description convention plus identity and the capability inventory. */
 export type ProjectDescription = Description & {
   capabilities: CapabilityDescription[];
@@ -1851,8 +1865,8 @@ export type ProjectProcessorState = {
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
- * - `agents` — the agents roster: every agent stream's merged status record
- *   (busy, title, note, shortStatus), same SQLite home as the streams index.
+ * - `agents` — every agent's metadata, exact runtime facts, external binding,
+ *   and meaningful timestamps, in the same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -1863,8 +1877,8 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
-  /** The agents roster keyed by agent path — each agent's merged status record, folded from its status-changed patches. */
-  agents: Record<string, AgentStatusRow>;
+  /** The complete agent catalog keyed by agent path. */
+  agents: Record<string, AgentRecord>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };
@@ -1960,11 +1974,28 @@ export type StreamPushEventBatch = {
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 
-/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
+/**
+ * Dynamic worker RPC stub plus platform-owned lifecycle operations. The
+ * lifecycle names are platform verbs: a worker method with the same name is
+ * shadowed on this stub (still reachable via
+ * `invokeCapability({ path: [...] })`).
+ */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
   Disposable & {
     /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
     kill(): Promise<void>;
+    /**
+     * Arm (ms timestamp) — or with null, disarm — the stateful worker's
+     * durable alarm; the fire calls the worker class's own `alarm(alarmInfo)`
+     * method, retried by the platform if it throws. Facets have no native
+     * alarms in workerd, so the hosting Durable Object keeps the real one on
+     * the worker's behalf. Stateless worker refs reject. Inside the worker,
+     * `IterateDurableObject` presents this as the ordinary `ctx.storage`
+     * alarm API automatically.
+     */
+    setAlarm(atMs: number | null): Promise<void>;
+    /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */
+    getAlarm(): Promise<number | null>;
   };
 
 /** One entry of a session's project catalog (`session.projects.list()`). */
@@ -1989,8 +2020,8 @@ export type CapabilityDescription = {
   providedAtOffset?: number;
   /**
    * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).
-   * Set when a scope reports capabilities it inherited from an enclosing scope,
-   * so the reader can tell a local mount from an inherited one. Absent on
+   * Set when a scope reports capabilities its fallback host contributed, so
+   * the reader can tell a local mount from an inherited one. Absent on
    * built-ins (they exist at every scope).
    */
   scope?: string;
@@ -2073,18 +2104,70 @@ export type StreamIndexRow = {
   eventCount: number;
 };
 
-/** One row of the agents roster: an agent stream and its merged status record. */
-export type AgentStatusRow = {
+/** The project catalog's complete current projection for one explicitly created agent. */
+export type AgentRecord = {
   path: string;
-  /** The merged status record (mergeAgentStatusPatch over the agent's own
-   * status-changed patches — same fold as the agent processor and the Slack
-   * painter, so every surface agrees). */
-  status: AgentStatusRecord;
-  /** Offset of the last folded status-changed event — redelivered batches
-   * fold to nothing past it. */
-  lastEventOffset: number;
-  /** createdAt of that event. */
-  updatedAt: string;
+  metadata: {
+    title?: string | undefined;
+    summary?: string | undefined;
+    activity?: string | undefined;
+    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+    pinned: boolean;
+  };
+  runtime: {
+    triggers: { pending: number; runnable: number };
+    llmRequests: { scheduled: number; requested: number; started: number };
+    runningScripts: number;
+  };
+  binding?:
+    | {
+        type: "slack_thread";
+        connection: string;
+        channelId: string;
+        threadTs: string;
+        channelName?: string | undefined;
+        url?: string | undefined;
+      }
+    | {
+        type: "telegram_thread";
+        connection: string;
+        chatId: string;
+        messageThreadId?: string | undefined;
+      }
+    | {
+        type: "email_thread";
+        threadId: string;
+        subject?: string | undefined;
+        counterpart?: string | undefined;
+      }
+    | {
+        type: "github_pull_request";
+        connection: string;
+        installationId: string;
+        owner: string;
+        repo: string;
+        number: number;
+        url?: string | undefined;
+      }
+    | {
+        type: "github_check_run";
+        connection: string;
+        installationId: string;
+        owner: string;
+        repo: string;
+        number: number;
+        checkRunId?: number | undefined;
+        headSha?: string | undefined;
+        url?: string | undefined;
+      }
+    | undefined;
+  timestamps: {
+    createdAt: string;
+    lastWorkAt: string;
+    metadataUpdatedAt?: string | undefined;
+    activityUpdatedAt?: string | undefined;
+    runtimeUpdatedAt?: string | undefined;
+  };
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
@@ -2446,21 +2529,35 @@ export type AgentProcessorState = {
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
   activeScriptExecutionIds: string[];
-  status?:
-    | { busy: boolean; phase?: "llm" | "script" | undefined; sinceOffset: number; since: string }
-    | undefined;
-  announcedStatus?:
+  runtimeChange?:
     | {
-        busy?: boolean | undefined;
-        phase?: "llm" | "script" | undefined;
-        sinceOffset?: number | undefined;
-        blocked?: boolean | undefined;
-        title?: string | undefined;
-        note?: string | undefined;
-        shortStatus?: string | undefined;
-        icon?: string | undefined;
+        sinceOffset: number;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        since: string;
       }
     | undefined;
+  announcedRuntime?:
+    | {
+        sinceOffset: number;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+      }
+    | undefined;
+  metadata: {
+    title?: string | undefined;
+    summary?: string | undefined;
+    activity?: string | undefined;
+    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+    pinned: boolean;
+  };
+  waitingForSinceOffset?: number | undefined;
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -2512,16 +2609,24 @@ export type AgentEventInput =
       { maxAutonomousTurns: number; reason: string; triggerOffset: number }
     >
   | TypedConsumedEventInput<
-      "events.iterate.com/agent/status-changed",
+      "events.iterate.com/agent/metadata-changed",
       {
-        busy?: boolean | undefined;
-        phase?: "llm" | "script" | undefined;
-        sinceOffset?: number | undefined;
-        blocked?: boolean | undefined;
-        title?: string | undefined;
-        note?: string | undefined;
-        shortStatus?: string | undefined;
-        icon?: string | undefined;
+        title?: string | null | undefined;
+        summary?: string | null | undefined;
+        activity?: string | null | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+        pinned?: boolean | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/runtime-changed",
+      {
+        sinceOffset: number;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
       }
     >
   | TypedConsumedEventInput<
@@ -2536,6 +2641,7 @@ export type AgentEventInput =
         reasoningOutputTokens?: number | undefined;
       }
     >
+  | TypedConsumedEventInput<"events.iterate.com/agent/waiting-cleared", { throughOffset: number }>
   | TypedConsumedEventInput<
       "events.iterate.com/agents/context-added",
       | {
@@ -2759,6 +2865,15 @@ export type StreamEvent = {
  * `itx.ai.run` output straight into storage.
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+
+/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
+export type AgentMetadataPatch = {
+  title?: string | null | undefined;
+  summary?: string | null | undefined;
+  activity?: string | null | undefined;
+  waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+  pinned?: boolean | undefined;
+};
 
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
@@ -3608,18 +3723,6 @@ export type ProcessorSnapshot<State> = {
 export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
-
-/** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
-export type AgentStatusRecord = {
-  busy?: boolean | undefined;
-  phase?: "llm" | "script" | undefined;
-  sinceOffset?: number | undefined;
-  blocked?: boolean | undefined;
-  title?: string | undefined;
-  note?: string | undefined;
-  shortStatus?: string | undefined;
-  icon?: string | undefined;
-};
 
 /**
  * A durable processor input. Wake processors never receive ephemeral rows, so

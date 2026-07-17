@@ -30,7 +30,6 @@ import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
-import { Button } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   DropdownMenu,
@@ -58,17 +57,21 @@ import {
   SidebarGroupContent,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { useIterateSessionQuery } from "iterate/react";
+import { useIterateSessionQuery, useLiveState } from "iterate/react";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
-import { SidebarRecentAgents } from "./agent-roster.tsx";
+import { sidebarAgentRowsVisible } from "./agents/sidebar-agent-visibility.ts";
+import { SidebarAgents } from "./agents/sidebar-agents.tsx";
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
+import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import type { AppConfig } from "~/config.ts";
+import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -154,16 +157,8 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
             className="min-w-56 rounded-lg"
           >
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="flex items-center justify-between pr-1 text-xs text-muted-foreground">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Projects
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="New project"
-                  render={<Link to="/new-project" />}
-                >
-                  <Plus />
-                </Button>
               </DropdownMenuLabel>
               {projects.length > 0 ? (
                 projects.map((project) => (
@@ -192,6 +187,10 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
+              <DropdownMenuItem render={<Link to="/new-project" />}>
+                <Plus />
+                <span>Create project</span>
+              </DropdownMenuItem>
               <DropdownMenuItem render={<Link to="/projects" />}>
                 <ArrowLeft />
                 <span>View all projects</span>
@@ -514,8 +513,19 @@ function ProjectSidebarGroup({
   appBaseUrl?: string;
 }) {
   const matchRoute = useMatchRoute();
+  const { isMobile, openMobile, state: sidebarState } = useSidebar();
   const routeSearch = useSearch({ strict: false }) as { tasks?: boolean };
-  const isNewChatActive = Boolean(
+  const agents =
+    useLiveState(
+      (itx) => itx.liveState,
+      (state) => state.agents,
+      [projectId],
+      { slug: projectId ?? "", enabled: projectId !== null },
+    ).value ?? {};
+  const agentAttentionCount = Object.values(agents).filter(
+    (agent) => deriveAgentDisplayState(agent.runtime, agent.metadata.waitingFor) !== "idle",
+  ).length;
+  const isNewAgentActive = Boolean(
     matchRoute({
       to: "/projects/$projectSlug/agents/new",
       params: { projectSlug },
@@ -534,6 +544,11 @@ function ProjectSidebarGroup({
     projectHostnameBases,
     appBaseUrl,
   });
+  const showAgentRows = sidebarAgentRowsVisible({
+    isMobile,
+    openMobile,
+    state: sidebarState,
+  });
 
   return (
     <>
@@ -542,11 +557,11 @@ function ProjectSidebarGroup({
           <SidebarMenu>
             <ProjectSidebarMenuItem
               icon={SquarePen}
-              label="New Chat"
+              label="New agent"
               render={
                 <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
               }
-              isActive={isNewChatActive}
+              isActive={isNewAgentActive}
             />
             <ProjectSidebarMenuItem
               icon={Settings2}
@@ -624,11 +639,12 @@ function ProjectSidebarGroup({
                   key={item.label}
                   icon={item.icon}
                   isActive={
-                    item.to === "/projects/$projectSlug/agents" && isNewChatActive
+                    item.to === "/projects/$projectSlug/agents" && isNewAgentActive
                       ? false
                       : itemActive
                   }
                   label={item.label}
+                  badge={item.to === "/projects/$projectSlug/agents" ? agentAttentionCount : 0}
                   projectSlug={projectSlug}
                   streamPath={item.streamPath}
                   to={item.to}
@@ -638,11 +654,11 @@ function ProjectSidebarGroup({
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
-      {/* The live agents roster rides the nav content, so overflow scrolls
-          with the sidebar instead of a pinned footer box. Renders nothing
-          (including its leading divider) until an agent announces status. */}
+      {/* The capped live agent hierarchy shares one project projection. */}
       {projectId === null ? null : (
-        <SidebarRecentAgents projectId={projectId} projectSlug={projectSlug} />
+        <DeferredSurface active={showAgentRows}>
+          <SidebarAgents agents={agents} projectSlug={projectSlug} />
+        </DeferredSurface>
       )}
     </>
   );
@@ -718,6 +734,7 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
 ];
 
 function ProjectStreamNavItem({
+  badge,
   icon: Icon,
   isActive,
   label,
@@ -725,6 +742,7 @@ function ProjectStreamNavItem({
   streamPath,
   to,
 }: {
+  badge: number;
   icon: LucideIcon;
   isActive: boolean;
   label: string;
@@ -742,6 +760,20 @@ function ProjectStreamNavItem({
         <Icon />
         <EventsStreamPathLabel className="text-xs" label={label} path={streamPath} />
       </SidebarMenuButton>
+      {badge > 0 ? (
+        <>
+          <SidebarMenuBadge aria-label={`${badge} agents active or waiting`} role="status">
+            {badge > 99 ? "99+" : badge}
+          </SidebarMenuBadge>
+          <span
+            className="absolute right-0.5 top-0.5 hidden size-3 items-center justify-center rounded-full bg-primary text-[8px] font-semibold leading-none text-primary-foreground tabular-nums group-data-[collapsible=icon]:flex"
+            aria-label={`${badge} agents active or waiting`}
+            role="status"
+          >
+            {badge > 9 ? "9+" : badge}
+          </span>
+        </>
+      ) : null}
     </SidebarMenuItem>
   );
 }

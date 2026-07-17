@@ -97,20 +97,30 @@ the project-controlled repo path:
 
 Only `pull_request:opened` or a trusted explicit mention calls the idempotent,
 zero-argument `agent.create()`. The router then uses `agent.append(...)` for
-the stable policy and status events consumed by the Agent processor. It appends
-the raw webhook copy and its referencing task atomically through
-`agent.stream.append` because the webhook is intentionally outside the Agent
-processor's consumed vocabulary. Other later events require the canonical
-agent birth event, so they cannot create an agent by accident. A valid delivery
-can append four kinds of facts to the PR stream:
+the stable policy and presentation metadata consumed by the Agent processor.
+It appends the GitHub binding, raw webhook copy, and referencing task
+atomically through `agent.stream.append`; the raw API is needed because the
+webhook sits outside the Agent processor's vocabulary, while valid binding and
+context events retain exactly the same reducer meaning through either append
+API. Other later events require the canonical agent birth event, so they cannot
+create an agent by accident. A valid delivery can append the following groups
+of facts to the PR stream:
 
 - a keyed, versioned developer-policy context item;
-- a stable title/icon status;
+- stable presentation metadata and a GitHub pull-request binding;
 - the complete webhook with explicit cross-post provenance; and
-- when appropriate, one developer task that wakes or interrupts the agent.
+- when appropriate, trusted developer instructions and one externally authored
+  request that wakes or interrupts the agent.
 
 The path itself is the association. There is no second association record,
 route plan, rejection protocol, or state reducer.
+
+Context references retain the original stream coordinate for provenance. A
+rendered ref such as `/integrations/github/acme@81` means exactly event offset
+81 on that stream; the agent's system protocol explains the corresponding
+`itx.streams.get(path).getEvent({ offset })` call. The userspace router already
+holds the committed event, however, so it validates and transcribes that event
+directly rather than spending an agent turn fetching the same webhook again.
 
 ## Structural reviews
 
@@ -164,10 +174,18 @@ the nondeterministic reviewer oscillating on an unchanged head.
 
 A newly created PR comment, submitted review, or created review comment can
 wake the agent when it mentions the receiving App slug and GitHub identifies
-its non-bot author as an owner, member, or collaborator. The task then calls
-`repos.checkCollaborator` through the configured Octokit connection before
-following the referenced request. If the PR agent does not exist yet, the
-trusted mention creates it first. GitHub text remains untrusted input.
+its non-bot author as an `OWNER`, `MEMBER`, or `COLLABORATOR`. That
+`author_association` is part of the signed webhook, so userspace performs the
+authorization check before waking the agent; no redundant Octokit access-check
+turn is needed. If the PR agent does not exist yet, the trusted mention creates
+it first.
+
+The router appends a trusted developer item that names the already-authorized
+connection and reply call, followed by the exact GitHub message as externally
+authored user context. Only the latter triggers an LLM request. Straightforward
+requests can therefore be answered by the first script without rereading the
+webhook or checking collaboration, while GitHub text never gains developer
+instruction precedence.
 
 ## Proof-of-concept limits
 

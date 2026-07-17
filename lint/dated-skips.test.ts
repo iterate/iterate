@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
@@ -73,7 +73,12 @@ test("parked skip/fixme/todo markers carry an unexpired `revisit by` date", () =
     maxBuffer: 64 * 1024 * 1024,
   })
     .split("\n")
-    .filter((file) => /\.(test|spec)\.(ts|tsx|mts)$/.test(file) && file !== SELF);
+    .filter(
+      (file) =>
+        /\.(test|spec)\.(ts|tsx|mts)$/.test(file) &&
+        file !== SELF &&
+        existsSync(resolve(repoRoot, file)),
+    );
 
   const today = new Date().toISOString().slice(0, 10);
   const expired: string[] = [];

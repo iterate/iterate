@@ -144,7 +144,7 @@ function ProjectsIndexPage() {
               size="sm"
               render={<Link to="/new-project" />}
             >
-              New project
+              Create project
             </Button>
           ) : null}
         </div>
@@ -172,7 +172,7 @@ function ProjectsIndexPage() {
               size="sm"
               render={<Link to="/new-project" />}
             >
-              Create new project
+              Create project
             </Button>
           </div>
         </div>

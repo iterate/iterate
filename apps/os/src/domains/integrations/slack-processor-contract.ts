@@ -138,6 +138,7 @@ export const SlackProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
   emits: [
     "events.iterate.com/agent/created",
+    "events.iterate.com/agent/binding-set",
     "events.iterate.com/agent/configured",
     "events.iterate.com/agents/context-added",
     "events.iterate.com/capability-host/created",

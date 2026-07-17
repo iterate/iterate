@@ -735,6 +735,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     let tokenSet = getTokenSet(c);
     const forceRefresh = c.req.query("refresh") === "force";
     let refreshed = false;
+    let staleRefreshReason: string | null = null;
     if (
       tokenSet &&
       tokenSet.refreshToken &&
@@ -747,12 +748,18 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
           tokenSet = refreshedTokenSet;
           refreshed = true;
         }
-      } catch {
+      } catch (error) {
         if (accessTokenExpired) {
           deleteCookie(c, SESSION_COOKIE, cookieOpts());
           return c.json({ authenticated: false } satisfies SessionResponse, 401);
         }
+        staleRefreshReason = error instanceof Error ? error.message : String(error);
       }
+    } else if (tokenSet && forceRefresh) {
+      // A session cookie without a refresh token (minted sessions —
+      // scripts/auth/mint-session.ts) can never pick up new claims: whatever
+      // orgs/projects it was minted with is all it will ever carry.
+      staleRefreshReason = "session has no refresh token; claims are frozen at mint time";
     }
 
     if (!tokenSet || !tokenSet.idToken) {
@@ -798,6 +805,22 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
       return c.json({ authenticated: false } satisfies SessionResponse, 401);
     }
 
+    if (staleRefreshReason !== null && !refreshed) {
+      // A refresh that produced no fresh tokens is invisible in the 200 body:
+      // the caller asked for current claims and got the cookie's old ones. Say
+      // so — the header lets fetchSession warn in the browser console, the log
+      // makes frozen-claims incidents greppable (a silent variant of this
+      // presented as "created project missing from the project list",
+      // 2026-07-17 prd).
+      console.warn(
+        "[iterate-auth] session refresh produced no fresh tokens; serving existing claims",
+        {
+          forced: forceRefresh,
+          reason: staleRefreshReason,
+        },
+      );
+      c.header("x-iterate-auth-stale-refresh", "1");
+    }
     writeCookie(c, tokenSet);
     return c.json({
       authenticated: true,
