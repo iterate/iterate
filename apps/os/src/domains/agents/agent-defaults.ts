@@ -7,7 +7,10 @@ import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  capabilityFallbackForScope,
+} from "../capability-host/capability-host-processor-contract.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
@@ -224,7 +227,9 @@ export function agentCreationForPath<
   const capabilityHostBirthCertificate = CapabilityHostProcessorContract.buildEvent({
     type: "events.iterate.com/capability-host/created",
     idempotencyKey: `capability-host/created:${projectId}:${agentPath}`,
-    payload: { config: {} },
+    // A capability miss at the agent's scope re-resolves directly at the
+    // project root host — one hop, journaled at birth, no path walking.
+    payload: { config: {}, fallback: capabilityFallbackForScope(agentPath) },
   });
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per
