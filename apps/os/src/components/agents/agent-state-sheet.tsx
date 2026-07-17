@@ -11,7 +11,6 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { AgentDetailCard, AgentListRow, StateDot } from "./agent.tsx";
 import { patchAgentMetadata } from "./agent-metadata.ts";
 import {
-  agentNodeDisplayState,
   agentTitle,
   buildAgentForest,
   flattenVisibleAgentRows,
@@ -55,7 +54,13 @@ export function AgentStateSheet({
   );
   if (node === undefined) return null;
   const agent = node.agent;
-  const state = AGENT_DISPLAY_STATE_PRESENTATION[agentNodeDisplayState(node)];
+  // The strip speaks for THIS agent (its title and activity are self-only),
+  // so its dot is self state too; subtree awareness lives in the sheet's
+  // subagent summary below.
+  const state =
+    AGENT_DISPLAY_STATE_PRESENTATION[
+      deriveAgentDisplayState(agent.runtime, agent.metadata.waitingFor)
+    ];
   const BindingIcon = bindingIcon(agent.binding);
   const visibleChildRows = childRows.slice(0, VISIBLE_CHILD_LIMIT);
   const descendantCount = node.aggregateAgentCount - 1;

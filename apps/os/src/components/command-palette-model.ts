@@ -9,16 +9,13 @@ import {
 
 export type PaletteTab = "agents" | "tree" | "recent";
 
-type PaletteKeyboardTarget =
-  | { kind: "agent"; path: string; shortcut: boolean }
-  | { kind: "stream"; path: string };
+type PaletteKeyboardTarget = { kind: "agent"; path: string } | { kind: "stream"; path: string };
 
 export type PaletteKeyboardAction = "toggle_pin" | "expand" | "collapse";
 
-/** cmdk identifies rows by value, so a pinned shortcut and its structural row
- * need distinct identities even though both open the same agent path. */
-export function agentCommandValue(path: string, shortcut: boolean): string {
-  return `${shortcut ? "pinned" : "agent"}:${path}`;
+/** cmdk values must not collide with stream paths, so agent rows are prefixed. */
+export function agentCommandValue(path: string): string {
+  return `agent:${path}`;
 }
 
 export function paletteKeyboardTarget(
@@ -26,11 +23,8 @@ export function paletteKeyboardTarget(
   selectedValue: string,
 ): PaletteKeyboardTarget | undefined {
   if (tab === "agents") {
-    if (selectedValue.startsWith("pinned:")) {
-      return { kind: "agent", path: selectedValue.slice("pinned:".length), shortcut: true };
-    }
     if (selectedValue.startsWith("agent:")) {
-      return { kind: "agent", path: selectedValue.slice("agent:".length), shortcut: false };
+      return { kind: "agent", path: selectedValue.slice("agent:".length) };
     }
     return undefined;
   }
@@ -51,7 +45,7 @@ export function paletteKeyboardAction(input: {
   if (input.target.kind === "agent" && input.shiftKey && input.key.toLowerCase() === "p") {
     return "toggle_pin";
   }
-  if (input.query.trim() !== "" || (input.target.kind === "agent" && input.target.shortcut)) {
+  if (input.query.trim() !== "") {
     return undefined;
   }
   if (!input.hasChildren) return undefined;

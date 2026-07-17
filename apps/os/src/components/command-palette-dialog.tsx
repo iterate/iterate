@@ -39,7 +39,6 @@ import { patchAgentMetadata } from "~/components/agents/agent-metadata.ts";
 import {
   buildAgentForest,
   flattenVisibleAgentRows,
-  pinnedAgentShortcuts,
   type AgentTreeNode,
 } from "~/components/agents/agent-tree.ts";
 import { agentCommandAccessibleLabel } from "~/components/agents/agent-presentation.ts";
@@ -48,7 +47,6 @@ import { AdminRemoteStreamTree } from "~/components/admin-remote-stream-tree.tsx
 
 const CLOCK_TICK_MS = 5_000;
 const MAX_AGENT_RESULTS = 100;
-const MAX_PINNED_AGENT_RESULTS = 8;
 const MAX_STREAM_TREE_RESULTS = 200;
 const MAX_RECENT_RESULTS = 50;
 
@@ -293,16 +291,13 @@ function AgentResults({
   onTogglePinned: (agent: AgentRecord) => void | Promise<void>;
 }) {
   const forest = useMemo(() => buildAgentForest(agents), [agents]);
-  const pinned = useMemo(() => pinnedAgentShortcuts(forest), [forest]);
   const rows = useMemo(
     () => flattenVisibleAgentRows(forest, expandedPaths, query),
     [expandedPaths, forest, query],
   );
-  const showingShortcuts = query.trim() === "";
-  const visiblePinned = showingShortcuts ? pinned.slice(0, MAX_PINNED_AGENT_RESULTS) : [];
   const visibleRows = rows.slice(0, MAX_AGENT_RESULTS);
 
-  if (visiblePinned.length === 0 && visibleRows.length === 0) {
+  if (visibleRows.length === 0) {
     return (
       <CommandEmpty>
         {loading
@@ -314,39 +309,20 @@ function AgentResults({
     );
   }
   return (
-    <>
-      {visiblePinned.length > 0 ? (
-        <CommandGroup heading="Pinned">
-          {visiblePinned.map((node) => (
-            <AgentCommandItem
-              key={`pinned:${node.agent.path}`}
-              node={node}
-              nowMs={nowMs}
-              shortcut
-              onOpen={onOpen}
-              onToggleExpanded={onToggleExpanded}
-              onTogglePinned={onTogglePinned}
-            />
-          ))}
-        </CommandGroup>
-      ) : null}
-      {visibleRows.length > 0 ? (
-        <CommandGroup heading={query.trim() === "" ? "Active, waiting, and recent" : "Matches"}>
-          {visibleRows.map(({ node, depth, expanded }) => (
-            <AgentCommandItem
-              key={node.agent.path}
-              node={node}
-              depth={depth}
-              expanded={expanded}
-              nowMs={nowMs}
-              onOpen={onOpen}
-              onToggleExpanded={onToggleExpanded}
-              onTogglePinned={onTogglePinned}
-            />
-          ))}
-        </CommandGroup>
-      ) : null}
-    </>
+    <CommandGroup heading={query.trim() === "" ? "Active, waiting, and recent" : "Matches"}>
+      {visibleRows.map(({ node, depth, expanded }) => (
+        <AgentCommandItem
+          key={node.agent.path}
+          node={node}
+          depth={depth}
+          expanded={expanded}
+          nowMs={nowMs}
+          onOpen={onOpen}
+          onToggleExpanded={onToggleExpanded}
+          onTogglePinned={onTogglePinned}
+        />
+      ))}
+    </CommandGroup>
   );
 }
 
@@ -355,7 +331,6 @@ function AgentCommandItem({
   depth = 0,
   expanded = false,
   nowMs,
-  shortcut = false,
   onOpen,
   onToggleExpanded,
   onTogglePinned,
@@ -364,19 +339,18 @@ function AgentCommandItem({
   depth?: number;
   expanded?: boolean;
   nowMs: number;
-  shortcut?: boolean;
   onOpen: (path: string) => void;
   onToggleExpanded: (path: string) => void;
   onTogglePinned: (agent: AgentRecord) => void | Promise<void>;
 }) {
-  const hasChildren = !shortcut && node.children.length > 0;
+  const hasChildren = node.children.length > 0;
   return (
     <CommandItem
-      value={agentCommandValue(node.agent.path, shortcut)}
+      value={agentCommandValue(node.agent.path)}
       onSelect={() => onOpen(node.agent.path)}
       className="gap-2"
       style={{ marginLeft: `${Math.min(depth, 4) * 12}px` }}
-      aria-label={agentCommandAccessibleLabel(node, expanded, !shortcut)}
+      aria-label={agentCommandAccessibleLabel(node, expanded)}
       aria-expanded={hasChildren ? expanded : undefined}
       aria-keyshortcuts="Shift+P"
       onClickCapture={(event) => {
@@ -392,7 +366,7 @@ function AgentCommandItem({
         }
       }}
     >
-      <AgentCommandPresentation expanded={expanded} node={node} nowMs={nowMs} shortcut={shortcut} />
+      <AgentCommandPresentation expanded={expanded} node={node} nowMs={nowMs} />
     </CommandItem>
   );
 }

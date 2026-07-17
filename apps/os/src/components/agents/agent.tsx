@@ -329,12 +329,10 @@ export function AgentCommandPresentation({
   expanded,
   node,
   nowMs,
-  shortcut = false,
 }: {
   expanded: boolean;
   node: AgentTreeNode;
   nowMs: number;
-  shortcut?: boolean;
 }) {
   const displayState = agentNodeDisplayState(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
@@ -344,7 +342,7 @@ export function AgentCommandPresentation({
   return (
     <>
       <span className="flex size-6 shrink-0 items-center justify-center" aria-hidden>
-        {hasChildren && !shortcut ? (
+        {hasChildren ? (
           <span
             data-agent-disclosure
             className="-m-1 flex size-6 cursor-pointer items-center justify-center rounded hover:bg-muted"
@@ -355,15 +353,11 @@ export function AgentCommandPresentation({
             />
           </span>
         ) : null}
-        <StateDot
-          state={state}
-          className={cn(hasChildren && !shortcut && "-ml-1 ring-2 ring-background")}
-        />
+        <StateDot state={state} className={cn(hasChildren && "-ml-1 ring-2 ring-background")} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-sm font-medium">{agentTitle(node.agent)}</span>
-          {shortcut ? <Star className="size-3 shrink-0 fill-amber-400 text-amber-500" /> : null}
         </span>
         <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className="min-w-0 truncate" title={activity ?? node.agent.path}>

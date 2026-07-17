@@ -60,14 +60,10 @@ export function bindingUrl(binding: AgentBinding): string | undefined {
   }
 }
 
-export function agentCommandAccessibleLabel(
-  node: AgentTreeNode,
-  expanded: boolean,
-  expandable: boolean,
-): string {
+export function agentCommandAccessibleLabel(node: AgentTreeNode, expanded: boolean): string {
   const state = AGENT_DISPLAY_STATE_PRESENTATION[agentNodeDisplayState(node)];
   const childInstruction =
-    !expandable || node.children.length === 0
+    node.children.length === 0
       ? ""
       : expanded
         ? " Child agents expanded; press Left Arrow to collapse."

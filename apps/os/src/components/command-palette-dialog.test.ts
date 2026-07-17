@@ -54,12 +54,8 @@ describe("command palette models", () => {
     });
   });
 
-  test("gives pinned shortcuts and structural agent rows distinct cmdk identities", () => {
-    expect(agentCommandValue("/agents/research", true)).toBe("pinned:/agents/research");
-    expect(agentCommandValue("/agents/research", false)).toBe("agent:/agents/research");
-    expect(agentCommandValue("/agents/research", true)).not.toBe(
-      agentCommandValue("/agents/research", false),
-    );
+  test("prefixes agent cmdk identities so they cannot collide with stream paths", () => {
+    expect(agentCommandValue("/agents/research")).toBe("agent:/agents/research");
   });
 
   test("routes root-level cmdk keys to the selected row", () => {
@@ -92,21 +88,6 @@ describe("command palette models", () => {
         key: "ArrowRight",
         shiftKey: false,
         query: "research",
-        hasChildren: true,
-        expanded: false,
-      }),
-    ).toBeUndefined();
-  });
-
-  test("does not advertise structural expansion for pinned shortcuts", () => {
-    const target = paletteKeyboardTarget("agents", "pinned:/agents/research");
-    if (target === undefined) throw new Error("missing keyboard target");
-    expect(
-      paletteKeyboardAction({
-        target,
-        key: "ArrowRight",
-        shiftKey: false,
-        query: "",
         hasChildren: true,
         expanded: false,
       }),
