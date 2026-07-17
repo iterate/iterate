@@ -70,9 +70,7 @@ testWithProject(
 
     terminal.submit("/use-my-computer");
 
-    await expect(terminal.getByText("shared for this chat", { strict: false })).toBeVisible(
-      visible,
-    );
+    await expect(terminal.getByText("shared itx.", { strict: false })).toBeVisible(visible);
     const view = terminal.serialize().view;
     expect(view).not.toContain("you › /use-my-computer");
   },

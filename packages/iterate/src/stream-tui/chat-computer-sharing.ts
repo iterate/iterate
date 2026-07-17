@@ -166,7 +166,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
         if (event.type === "call-done" && event.method && event.ok === true) {
           publish({
             status: "live",
-            notice: `itx.${input.name} shared for this chat`,
+            notice: `shared itx.${input.name} for this chat`,
           });
           return;
         }
@@ -196,7 +196,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
           }
           publish({
             status: "live",
-            notice: `itx.${input.name} shared for this chat`,
+            notice: `shared itx.${input.name} for this chat`,
           });
         }
       };

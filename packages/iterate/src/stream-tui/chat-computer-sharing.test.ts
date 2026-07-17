@@ -48,7 +48,7 @@ test("starts one provider and reports when the named computer is live", () => {
   expect(launches).toBe(1);
   expect(sharing.snapshot()).toMatchObject({
     status: "live",
-    notice: "itx.joebloggsComputer shared for this chat",
+    notice: "shared itx.joebloggsComputer for this chat",
   });
 });
 
@@ -66,7 +66,7 @@ test("ignores blank lines between provider events", () => {
 
   expect(sharing.snapshot()).toMatchObject({
     status: "live",
-    notice: "itx.joebloggsComputer shared for this chat",
+    notice: "shared itx.joebloggsComputer for this chat",
   });
 });
 
@@ -145,7 +145,7 @@ test("returns to the shared indicator after a successful machine call", () => {
 
   expect(sharing.snapshot()).toMatchObject({
     status: "live",
-    notice: "itx.joebloggsComputer shared for this chat",
+    notice: "shared itx.joebloggsComputer for this chat",
   });
 });
 
