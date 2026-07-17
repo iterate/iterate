@@ -15,10 +15,10 @@ const GITHUB_REVIEWS = {
 };
 
 // The root project worker (default export) routes HTTP and reacts to project
-// events, and the example apps are named exports — a stateless HelloApp and a
-// stateful CounterApp with live WebSocket updates. Review POLICY stays visible
+// events, and the example apps are named exports — stateless HelloApp and
+// InternalApp plus stateful CounterApp. Review POLICY stays visible
 // above; its safety-critical mechanics are isolated in github-reviews.ts so
-// they can be tested. Both apps build from THIS file with a different entry
+// they can be tested. All three apps build from THIS file with a different entry
 // class; split an app into its own file when it earns one.
 //
 // Everything extends the iterate/sdk base classes — IterateWorkerEntrypoint
@@ -43,6 +43,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         type: "stateless",
         path: "/",
         entrypoint: "HelloApp",
+        source: {
+          files: { type: "repo", repoPath: "/repos/config" },
+          options: { entryPoint: "worker.ts" },
+        },
+      });
+    }
+    if (app === "internal") {
+      return this.fetchDynamicWorker(req, {
+        type: "stateless",
+        path: "/",
+        entrypoint: "InternalApp",
         source: {
           files: { type: "repo", repoPath: "/repos/config" },
           options: { entryPoint: "worker.ts" },
@@ -78,6 +89,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               <p>Hello from your Iterate project worker.</p>
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
+                <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
@@ -124,6 +136,37 @@ export class HelloApp extends IterateWorkerEntrypoint {
     } finally {
       // Release the itx stub (see the processEvent comment above); guarded so
       // a throwing dispose can never mask the response.
+      try {
+        project[Symbol.dispose]?.();
+      } catch {}
+    }
+  }
+}
+
+// A project-member-only app. Auth is a partial fetch: return its response when
+// non-null, and continue the app only when it returns null.
+export class InternalApp extends IterateWorkerEntrypoint {
+  async fetch(req: Request): Promise<Response> {
+    const project = await this.env.ITX.get();
+    try {
+      const auth = await project.auth.get({ policy: "project-member" }).fetch(req.clone());
+      if (auth) return auth;
+
+      const snapshot = await project.processor.snapshot();
+      const events = await project.streams.get("/").getEvents({
+        afterOffset: Math.max(0, snapshot.offset - 25),
+        limit: 25,
+      });
+      return new Response(
+        `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Project events</title></head><body><main><h1>Latest project root events</h1><form action="/_iterate/auth/logout" method="post"><button>Sign out</button></form><pre>${escapeHtml(JSON.stringify(events.slice().reverse(), null, 2))}</pre></main></body></html>`,
+        {
+          headers: {
+            "cache-control": "no-store",
+            "content-type": "text/html; charset=utf-8",
+          },
+        },
+      );
+    } finally {
       try {
         project[Symbol.dispose]?.();
       } catch {}
@@ -205,4 +248,12 @@ export class CounterApp extends IterateDurableObject {
   async current(): Promise<number> {
     return this.ctx.storage.kv.get<number>("n") ?? 0;
   }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }

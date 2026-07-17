@@ -41,7 +41,7 @@ overrides:
   wrangler: 4.107.0
   ws: 8.19.0
 
-packageExtensionsChecksum: sha256-N5V8LT5a9y6jX4wQ8xKv5GrV6WtlFoB0HfQg8g4L82o=
+packageExtensionsChecksum: sha256-tE/7jM7E8X1vkP8E14JUnyogbotyNGXbRF+7YyhY65c=
 
 pnpmfileChecksum: sha256-NYwZDqyYRb6nG9kuTlR90d09AzOclRDSF+lgvKeq0To=
 
@@ -409,7 +409,7 @@ importers:
         version: 5.1.31
       lucide-react:
         specifier: 0.546.0
-        version: 0.546.0(react@19.2.7)
+        version: 0.546.0(@types/react@19.2.17)(react@19.2.7)
       next-themes:
         specifier: 0.4.6
         version: 0.4.6(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -729,7 +729,7 @@ importers:
         version: 2.2.3
       lucide-react:
         specifier: ^0.553.0
-        version: 0.553.0(react@19.2.7)
+        version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
       minimatch:
         specifier: ^10.2.4
         version: 10.2.4
@@ -1290,7 +1290,7 @@ importers:
         version: 1.4.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       lucide-react:
         specifier: ^0.553.0
-        version: 0.553.0(react@19.2.7)
+        version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
       nanoid:
         specifier: ^5.1.6
         version: 5.1.6
@@ -1320,7 +1320,7 @@ importers:
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       streamdown:
         specifier: ^1.6.11
-        version: 1.6.11(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.7)
+        version: 1.6.11(@types/mdast@4.0.4)(@types/react@19.2.17)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.7)
       tailwind-merge:
         specifier: ^3.3.1
         version: 3.5.0
@@ -10537,17 +10537,29 @@ packages:
   lucide-react@0.542.0:
     resolution: {integrity: sha512-w3hD8/SQB7+lzU2r4VdFyzzOzKnUjTZIF/MQJGSSvni7Llewni4vuViRppfRAa2guOsY5k4jZyxw/i9DQHv+dw==}
     peerDependencies:
+      '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   lucide-react@0.546.0:
     resolution: {integrity: sha512-Z94u6fKT43lKeYHiVyvyR8fT7pwCzDu7RyMPpTvh054+xahSgj4HFQ+NmflvzdXsoAjYGdCguGaFKYuvq0ThCQ==}
     peerDependencies:
+      '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   lucide-react@0.553.0:
     resolution: {integrity: sha512-BRgX5zrWmNy/lkVAe0dXBgd7XQdZ3HTf+Hwe3c9WK6dqgnj9h+hxV+MDncM88xDWlCq27+TKvHGE70ViODNILw==}
     peerDependencies:
+      '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -12611,7 +12623,11 @@ packages:
   streamdown@1.6.11:
     resolution: {integrity: sha512-Y38fwRx5kCKTluwM+Gf27jbbi9q6Qy+WC9YrC1YbCpMkktT3PsRBJHMWiqYeF8y/JzLpB1IzDoeaB6qkQEDnAA==}
     peerDependencies:
+      '@types/react': '*'
       react: ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   strict-event-emitter@0.5.1:
     resolution: {integrity: sha512-vMgjE/GGEPEFnhFub6pa4FmJBRBVOLpIII2hvCZ8Kzb7K0hlHo7mQv6xYrBvCL2LtAIBwFUK8wvuJgTVSQ5MFQ==}
@@ -25009,17 +25025,23 @@ snapshots:
   lru.min@1.1.4:
     optional: true
 
-  lucide-react@0.542.0(react@19.2.7):
+  lucide-react@0.542.0(@types/react@19.2.17)(react@19.2.7):
     dependencies:
       react: 19.2.7
+    optionalDependencies:
+      '@types/react': 19.2.17
 
-  lucide-react@0.546.0(react@19.2.7):
+  lucide-react@0.546.0(@types/react@19.2.17)(react@19.2.7):
     dependencies:
       react: 19.2.7
+    optionalDependencies:
+      '@types/react': 19.2.17
 
-  lucide-react@0.553.0(react@19.2.7):
+  lucide-react@0.553.0(@types/react@19.2.17)(react@19.2.7):
     dependencies:
       react: 19.2.7
+    optionalDependencies:
+      '@types/react': 19.2.17
 
   magic-string@0.30.21:
     dependencies:
@@ -28140,14 +28162,14 @@ snapshots:
 
   stream-buffers@2.2.0: {}
 
-  streamdown@1.6.11(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.7):
+  streamdown@1.6.11(@types/mdast@4.0.4)(@types/react@19.2.17)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.7):
     dependencies:
       clsx: 2.1.1
       hast: 1.0.0
       hast-util-to-jsx-runtime: 2.3.6
       html-url-attributes: 3.0.1
       katex: 0.16.33
-      lucide-react: 0.542.0(react@19.2.7)
+      lucide-react: 0.542.0(@types/react@19.2.17)(react@19.2.7)
       marked: 16.4.2
       mermaid: 11.12.3
       react: 19.2.7
@@ -28166,6 +28188,8 @@ snapshots:
       tailwind-merge: 3.5.0
       unified: 11.0.5
       unist-util-visit: 5.1.0
+    optionalDependencies:
+      '@types/react': 19.2.17
     transitivePeerDependencies:
       - '@types/mdast'
       - micromark
