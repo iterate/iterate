@@ -1,22 +1,22 @@
 ---
-status: ready
+status: implementation complete, PR evidence pending
 size: medium
 ---
 
 # Mobile browser screenshots
 
-**Status summary:** specified and ready to implement. The existing Expo Go app currently has no web dependencies or browser test lane, so agents cannot render or screenshot it without a phone/Xcode. This task adds an Expo Web + Playwright path and proves it with screenshots; authenticated fixture screens and video remain follow-ups unless they fall out cheaply.
+**Status summary:** about 90% complete. Expo Web, a phone-sized Playwright visual spec, reviewed baselines, accessibility semantics, docs, web export, and local verification are done. Remaining: commit/push, attach both screenshots to PR #2064, and complete its CI/review pass. Authenticated fixture screens and video are scoped follow-ups.
 
 Make the merged `apps/mobile` app renderable and screenshot-able on an ordinary development machine, without Xcode, an iOS simulator, a native rebuild, or an Apple account. Preserve Expo Go as the on-phone runtime; Expo Web is a second development/test target, not a replacement.
 
 ## Acceptance criteria
 
-- [ ] Add the supported Expo Web dependencies/configuration and a documented command that serves the real Expo Router app in a browser — _pending_
-- [ ] Add a Playwright spec that starts the Expo Web server, uses a phone-sized Chromium viewport, exercises a visible interaction, and writes deterministic screenshots — _pending_
-- [ ] Keep the test on public rendered behavior: no component mocks, private storage seeding, Xcode, simulator, native prebuild, or Expo Go device is required — _pending_
+- [x] Add the supported Expo Web dependencies/configuration and a documented command that serves the real Expo Router app in a browser — _`react-dom` + `react-native-web`; `pnpm --dir apps/mobile start:web` serves the real Router entry_
+- [x] Add a Playwright spec that starts the Expo Web server, uses a phone-sized Chromium viewport, exercises a visible interaction, and writes deterministic screenshots — _`apps/mobile/playwright.config.ts` + `e2e/playwright/signed-out.spec.ts`; two 390×844 reviewed baselines_
+- [x] Keep the test on public rendered behavior: no component mocks, private storage seeding, Xcode, simulator, native prebuild, or Expo Go device is required — _the test navigates, locates the rendered buttons/input, switches to preview 3, and pixel-compares screenshots_
 - [ ] Verify the app visually in a browser and attach the resulting screenshots to the pull request — _pending_
-- [ ] Document the relationship between Expo Go, Expo Web screenshot testing, generated artifacts, and the exact local commands — _pending_
-- [ ] Record video capture as a follow-up if adding it would materially expand this PR — _pending_
+- [x] Document the relationship between Expo Go, Expo Web screenshot testing, generated artifacts, and the exact local commands — _`apps/mobile/README.md` now distinguishes fast web visual review from native-integration proof_
+- [x] Record video capture as a follow-up if adding it would materially expand this PR — _follow-up: add opt-in Playwright video/PR upload after authenticated visual fixtures exist; still images fully prove this first lane_
 
 ## Decisions and assumptions
 
@@ -27,3 +27,5 @@ Make the merged `apps/mobile` app renderable and screenshot-able on an ordinary 
 ## Implementation log
 
 - 2026-07-17: researched the current Expo SDK 54 guidance. Expo Router supports web, Expo documents `expo start --web` for development and `expo export --platform web` for production bundles, and the required packages are `react-dom`, `react-native-web`, and `@expo/metro-runtime`. The app already has the Metro runtime but not the first two.
+- 2026-07-17: TDD tracer bullet failed first because there was no `start:web` interface, then reached the rendered UI and exposed missing button semantics on React Native Web. Added `accessibilityRole="button"` to the server presets/sign-in action instead of weakening the semantic Playwright locators.
+- 2026-07-17: visual verification passed twice: the Playwright snapshot lane (production default + preview 3 selected) and an independent isolated headed-browser pass. `expo export --platform web`, mobile typecheck, all 30 mobile unit tests, and root lint are green. Root format check also reports a pre-existing unrelated issue in `tasks/os-custom-domain-provisioning-saga.md`; every file changed here passes targeted `oxfmt --check`.
