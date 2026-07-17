@@ -2,8 +2,8 @@
 // sibling of slack-processor-implementation.ts. Emitted event types, payloads,
 // and idempotency keys are stable wire formats.
 
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { EmittedInput } from "../streams/processor-contracts.ts";
+import { StreamProcessor } from "iterate/processors";
+import type { EmittedInput } from "iterate/processors";
 import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { readRecord, telegramChatStreamPath } from "./utils.ts";

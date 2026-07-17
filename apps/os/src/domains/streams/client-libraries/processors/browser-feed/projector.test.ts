@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
-import type { StreamEvent } from "../../../schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import {
   BROWSER_FEED_SCHEMA_VERSION,
   initialBrowserFeedState,

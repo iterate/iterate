@@ -17,13 +17,13 @@
 // and the durable alarm survive.
 
 import { describe, expect, it } from "vitest";
-import { KEEPALIVE_ALARM_LEAD_MS } from "../streams/stream-processor-keepalive.ts";
-import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
+import { MemoryStreamNetwork } from "iterate/processors/testing";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
-} from "../streams/stream-processor-registry.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+} from "iterate/processors/cloudflare";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { TelegramAgentProcessor } from "./telegram-agent-processor-implementation.ts";
 

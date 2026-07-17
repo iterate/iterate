@@ -201,6 +201,43 @@ describe("bin wrapper", () => {
     }
   });
 
+  test("the PTY harness can force the built artifact while running inside the repo", () => {
+    const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+    const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+    const tempRoot = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
+    const fakePackageRoot = join(tempRoot, "node_modules", "iterate");
+    const fakeBinDir = join(fakePackageRoot, "bin");
+    const fakeDistDir = join(fakePackageRoot, "dist");
+    const fakeBinPath = join(fakeBinDir, "iterate.js");
+
+    try {
+      mkdirSync(fakeBinDir, { recursive: true });
+      mkdirSync(fakeDistDir, { recursive: true });
+      writeFileSync(join(fakePackageRoot, "package.json"), '{"type":"module"}\n');
+      writeFileSync(fakeBinPath, readFileSync(sourceBinPath));
+      writeFileSync(
+        join(fakeDistDir, "index.mjs"),
+        "export async function runCli() { console.log('forced built dist'); }\n",
+      );
+
+      const result = spawnSync(process.execPath, [fakeBinPath], {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ITERATE_FORCE_BUILT_PACKAGE: "1",
+          npm_command: "",
+          npm_lifecycle_event: "",
+        },
+      });
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout.trim()).toBe("forced built dist");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   test("normal installed execution still delegates to repo source", () => {
     const sourceBinPath = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
     const packageRoot = fileURLToPath(new URL("..", import.meta.url));

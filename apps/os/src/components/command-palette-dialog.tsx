@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { Bot, ChevronRight, Clock3, GitBranch, Plus } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -14,23 +20,24 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { connectItx, useLiveState } from "iterate/react";
 import {
   agentCommandValue,
   buildStreamForest,
   defaultPaletteTab,
   flattenStreamRows,
   hasPathDescendant,
+  initialPaletteDialogState,
   isPaletteResultKeyboardTarget,
   normalizeDestination,
   paletteKeyboardAction,
   paletteKeyboardTarget,
-  toggled,
+  reducePaletteDialogState,
   type PaletteTab,
 } from "./command-palette-model.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { normalizePath } from "~/domains/durable-object-names.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
-import { connectItx, useLiveState } from "~/itx/itx-react.tsx";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathAncestors } from "~/lib/stream-links.ts";
@@ -66,15 +73,12 @@ export function CommandPaletteDialog({
   /** Admin has remote operator authority but no project live-state projection. */
   liveIndex?: boolean;
 }) {
-  const [tab, setTab] = useState<PaletteTab>("agents");
-  const [query, setQuery] = useState("");
-  const [selectedValue, setSelectedValue] = useState("");
-  const [expandedAgentPaths, setExpandedAgentPaths] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  const [palette, dispatchPalette] = useReducer(
+    reducePaletteDialogState,
+    undefined,
+    initialPaletteDialogState,
   );
-  const [expandedStreamPaths, setExpandedStreamPaths] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
+  const { tab, query, selectedValue, expandedAgentPaths, expandedStreamPaths } = palette;
   const [nowMs, setNowMs] = useState(() => Date.now());
   const enabled = open && liveIndex;
   const streamsState = useLiveState(
@@ -92,14 +96,14 @@ export function CommandPaletteDialog({
 
   useEffect(() => {
     if (!open) {
-      setQuery("");
-      setSelectedValue("");
+      dispatchPalette({ type: "closed" });
       return;
     }
-    setTab(defaultPaletteTab(currentPath, liveIndex));
-    setSelectedValue("");
-    setExpandedAgentPaths(new Set());
-    setExpandedStreamPaths(new Set(["/", ...streamPathAncestors(currentPath)]));
+    dispatchPalette({
+      type: "opened",
+      tab: defaultPaletteTab(currentPath, liveIndex),
+      expandedStreamPaths: new Set(["/", ...streamPathAncestors(currentPath)]),
+    });
     setNowMs(Date.now());
     const interval = setInterval(() => setNowMs(Date.now()), CLOCK_TICK_MS);
     return () => clearInterval(interval);
@@ -178,9 +182,9 @@ export function CommandPaletteDialog({
       return;
     }
     if (target.kind === "agent") {
-      setExpandedAgentPaths((current) => toggled(current, target.path));
+      dispatchPalette({ type: "agent_toggled", path: target.path });
     } else {
-      setExpandedStreamPaths((current) => toggled(current, target.path));
+      dispatchPalette({ type: "stream_toggled", path: target.path });
     }
   }
 
@@ -196,23 +200,23 @@ export function CommandPaletteDialog({
         shouldFilter={false}
         loop
         value={selectedValue}
-        onValueChange={setSelectedValue}
+        onValueChange={(value) =>
+          dispatchPalette({ type: "selection_changed", selectedValue: value })
+        }
         onKeyDown={handleCommandKeyDown}
         className="min-h-0 flex-1"
       >
         <CommandInput
           value={query}
           onValueChange={(value) => {
-            setQuery(value);
-            setSelectedValue("");
+            dispatchPalette({ type: "query_changed", query: value });
           }}
           placeholder={tab === "agents" ? "Search agents" : "Search streams by path"}
         />
         <Tabs
           value={tab}
           onValueChange={(value) => {
-            setTab(value as PaletteTab);
-            setSelectedValue("");
+            dispatchPalette({ type: "tab_changed", tab: value as PaletteTab });
           }}
           className="min-h-0 flex-1 overflow-hidden"
         >
@@ -235,9 +239,7 @@ export function CommandPaletteDialog({
                 nowMs={nowMs}
                 query={query}
                 onOpen={openStream}
-                onToggleExpanded={(path) =>
-                  setExpandedAgentPaths((current) => toggled(current, path))
-                }
+                onToggleExpanded={(path) => dispatchPalette({ type: "agent_toggled", path })}
                 onTogglePinned={togglePinned}
               />
             ) : tab === "tree" ? (
@@ -247,9 +249,7 @@ export function CommandPaletteDialog({
                 query={query}
                 streams={streams}
                 onOpen={openStream}
-                onToggleExpanded={(path) =>
-                  setExpandedStreamPaths((current) => toggled(current, path))
-                }
+                onToggleExpanded={(path) => dispatchPalette({ type: "stream_toggled", path })}
               />
             ) : (
               <RecentStreamResults

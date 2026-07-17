@@ -19,6 +19,9 @@ catalogs:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
+  # OpenTUI is exact-pinned in its two consumers. Allow deliberate same-day
+  # upgrades without weakening the age gate for the rest of the dependency graph.
+  - '@opentui/*'
   - miniflare
   - wrangler
   - workerd
@@ -45,6 +48,7 @@ minimumReleaseAgeExclude:
   - '@hono/node-server'
   - '@hono/node-ws'
   - captun
+  - '@iterate-com/capnweb'
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
@@ -67,13 +71,13 @@ overrides:
   '@orpc/shared': 1.13.14
   '@orpc/tanstack-query': 1.13.14
   '@orpc/zod': 1.13.14
-  '@tanstack/query-core': 5.91.0
-  '@tanstack/react-query': 5.91.0
+  '@tanstack/query-core': 5.101.2
+  '@tanstack/react-query': 5.101.2
   agents>viem: '-'
   agents>x402: '-'
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
-  capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
+  capnweb: npm:@iterate-com/capnweb@0.10.0
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
@@ -90,4 +94,3 @@ patchedDependencies:
   '@cloudflare/worker-bundler@0.2.1': patches/@cloudflare__worker-bundler@0.2.1.patch
   '@cloudflare/workers-types@4.20260621.1': patches/@cloudflare__workers-types@4.20260621.1.patch
   '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
-  capnweb@0.8.0: patches/capnweb@0.8.0.patch

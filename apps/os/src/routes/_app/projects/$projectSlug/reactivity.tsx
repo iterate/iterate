@@ -3,14 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ActivityIcon, PlusIcon, RadioIcon, TimerIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
-import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 import {
   useItx,
   useItxSubscription,
   useLiveState,
   type ItxSubscriptionStatus,
-} from "~/itx/itx-react.tsx";
+} from "iterate/react";
+import type { StreamEvent } from "iterate/processors";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 // The live-state PLAYGROUND — one primitive from several angles: a DO-backed
 // composite (`itx.liveState`: the project's folded `reduced` state + the streams

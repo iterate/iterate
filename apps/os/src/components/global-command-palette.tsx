@@ -7,8 +7,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
+import { connectItx, connectIterateSession, useIterateSessionQuery } from "iterate/react";
 import { CommandPaletteDialog } from "./command-palette-dialog.tsx";
-import { connectItx, connectIterateSession, useIterateSessionQuery } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";

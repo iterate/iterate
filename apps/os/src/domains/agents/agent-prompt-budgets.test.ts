@@ -17,7 +17,6 @@ import {
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import {
   EMAIL_AGENT_SYSTEM_PROMPT,
-  PR_AGENT_SYSTEM_PROMPT,
   agentCreationForPath,
   slackAgentSystemPrompt,
   telegramAgentSystemPrompt,
@@ -43,7 +42,6 @@ const CHANNEL_PROMPTS: Record<string, string> = {
   mcpServer: inboundMcpServerInstructions({ withAgent: false }),
   mcpServerWithAgent: inboundMcpServerInstructions({ withAgent: true }),
   email: EMAIL_AGENT_SYSTEM_PROMPT,
-  githubPullRequest: PR_AGENT_SYSTEM_PROMPT,
   slack: slackAgentSystemPrompt("main-slack"),
   telegram: telegramAgentSystemPrompt({
     agentPath: "/agents/telegram/main/chat-42",

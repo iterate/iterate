@@ -7,6 +7,7 @@ import {
   SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { connectItx } from "iterate/react";
 import { Agent } from "./agent.tsx";
 import {
   buildAgentForest,
@@ -15,7 +16,6 @@ import {
   sidebarStructuralRoots,
 } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
-import { connectItx } from "~/itx/itx-react.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 

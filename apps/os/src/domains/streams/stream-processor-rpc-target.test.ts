@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StreamEvent } from "iterate/processors";
+import type { ProcessorReads } from "iterate/processors";
 import {
   ProcessorRelayRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
-import type { StreamEvent } from "./schemas.ts";
-import type { ProcessorReads } from "./stream-processor.ts";
 
 describe("StreamRpcTarget", () => {
   it("re-acquires when a remote stream waiter is orphaned", async () => {
@@ -296,6 +296,26 @@ describe("StreamProcessorRpcTarget", () => {
 });
 
 describe("ProcessorRelayRpcTarget", () => {
+  it("resolves an asynchronous host for processor reads and wake delivery", async () => {
+    const wakeStreamSubscriber = vi.fn(async () => ({ accepted: true as const })) as never;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: async () => ({
+        processor: Promise.resolve({
+          getRuntimeState: async () => ({ snapshot: { offset: 4, state: { running: true } } }),
+          snapshot: async () => ({ offset: 4, state: { running: true } }),
+          waitUntilProcessed: async () => undefined,
+        }),
+        wakeStreamSubscriber,
+      }),
+    });
+
+    await expect(relay.snapshot()).resolves.toEqual({ offset: 4, state: { running: true } });
+    const request = { processorSlug: "sandbox", subscriptionKey: "sandbox-test" } as never;
+    await expect(relay.wakeStreamSubscriber(request)).resolves.toEqual({ accepted: true });
+    expect(wakeStreamSubscriber).toHaveBeenCalledWith(request);
+  });
+
   it("disposes the transient remote processor facade after success and failure", async () => {
     const disposals: string[] = [];
     let invocation = 0;

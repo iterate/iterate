@@ -5,9 +5,11 @@ import {
   defaultPaletteTab,
   flattenStreamRows,
   hasPathDescendant,
+  initialPaletteDialogState,
   normalizeDestination,
   paletteKeyboardAction,
   paletteKeyboardTarget,
+  reducePaletteDialogState,
 } from "./command-palette-model.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 
@@ -24,6 +26,34 @@ function stream(path: string): StreamIndexRow {
 }
 
 describe("command palette models", () => {
+  test("resets related palette state atomically when opening and changing tabs", () => {
+    const opened = reducePaletteDialogState(initialPaletteDialogState(), {
+      type: "opened",
+      tab: "recent",
+      expandedStreamPaths: new Set(["/", "/agents"]),
+    });
+    const queried = reducePaletteDialogState(opened, {
+      type: "query_changed",
+      query: "cattle",
+    });
+    const selected = reducePaletteDialogState(queried, {
+      type: "selection_changed",
+      selectedValue: "/agents/research",
+    });
+    const changedTab = reducePaletteDialogState(selected, {
+      type: "tab_changed",
+      tab: "agents",
+    });
+
+    expect(opened.expandedStreamPaths).toEqual(new Set(["/", "/agents"]));
+    expect(queried.query).toBe("cattle");
+    expect(changedTab).toMatchObject({
+      tab: "agents",
+      query: "cattle",
+      selectedValue: "",
+    });
+  });
+
   test("gives pinned shortcuts and structural agent rows distinct cmdk identities", () => {
     expect(agentCommandValue("/agents/research", true)).toBe("pinned:/agents/research");
     expect(agentCommandValue("/agents/research", false)).toBe("agent:/agents/research");
@@ -100,7 +130,7 @@ describe("command palette models", () => {
 
   test("accepts only complete canonical stream destinations", () => {
     expect(normalizeDestination("agents/new_task")).toBe("/agents/new_task");
-    expect(normalizeDestination("/agents/g~abc-123")).toBe("/agents/g~abc-123");
+    expect(normalizeDestination("/agents/g~abc-123")).toBeNull();
     expect(normalizeDestination("/agents/")).toBeNull();
     expect(normalizeDestination("/Agents/Bad")).toBeNull();
     expect(normalizeDestination(`/${"a".repeat(1_024)}`)).toBeNull();

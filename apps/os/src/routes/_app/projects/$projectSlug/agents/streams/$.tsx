@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { connectItx, useLiveState } from "iterate/react";
 import { AgentDetailHeader } from "~/components/agents/agent-detail-header.tsx";
 import { ONBOARDING_AGENT_PATH, onboardingAgentCreateInput } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { connectItx, useLiveState } from "~/itx/itx-react.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,

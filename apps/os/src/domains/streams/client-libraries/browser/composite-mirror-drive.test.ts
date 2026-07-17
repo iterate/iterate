@@ -8,15 +8,15 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineProcessorContract } from "../../processor-contracts.ts";
-import type { StreamEvent } from "../../schemas.ts";
-import { StreamProcessor } from "../../stream-processor.ts";
+import { defineProcessorContract } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
+import { StreamProcessor } from "iterate/processors";
 import {
   StreamProcessorRunner,
   type ProcessorProgress,
   type ProcessorProgressStore,
-} from "../../stream-processor-runner.ts";
-import { MemoryStream } from "../../test-helpers.ts";
+} from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
 import { CompositeMirrorDrive } from "./composite-mirror-drive.ts";
 
 const MEMBER_VERSION = "0.1.0";

@@ -5,7 +5,15 @@
 // skip-not-defer, backoff/park/resume, poison bisection, wake pokes with the
 // observational watermark, and the ephemeral lane.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  StreamEventBatch,
+  StreamPushEventBatch,
+  StreamSubscriberWakeRequest,
+  StreamWebhookDelivery,
+} from "iterate/processors";
+import { StreamReceiverUnavailableError } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
   CoreProcessorState,
@@ -13,14 +21,6 @@ import type {
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
 import { compileEventSelector } from "./event-selector.ts";
-import type {
-  StreamEventBatch,
-  StreamPushEventBatch,
-  StreamSubscriberWakeRequest,
-  StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { StreamReceiverUnavailableError } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {
@@ -1098,6 +1098,35 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.attempt).toBe(0);
   });
 
+  it("classifies a Durable Object lifecycle reset as availability, not a delivery error", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 1);
+    h.append(evt(1, "a"));
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: makeSink().sink });
+    h.subscribers.wake();
+    await h.settle();
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const reset = Object.assign(new Error("kill requested"), { durableObjectReset: true });
+      h.subscribers.onDurableDeliveryError("k", reset);
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({ subscriptionKey: "k", error: reset }),
+      );
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")?.attempt).toBe(1);
+      expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
+  });
+
   it("t. an in-flight push delivery cannot clobber a cursor seek (epoch fence)", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
@@ -1473,6 +1502,27 @@ describe("StreamSubscribers", () => {
       scannedThroughOffset: 4,
       streamMaxOffset: 4,
     });
+  });
+
+  it("z2a. a push subscription can receive ephemeral and durable rows in exact offset order", async () => {
+    const h = makeHarness();
+    h.configure({ ...pushPayload(), includeEphemeral: true }, 0);
+    h.append(
+      evt(1, "durable"),
+      { ...evt(2, "chunk"), ephemeral: true as const },
+      evt(3, "durable-again"),
+    );
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map(({ offset, ephemeral }) => ({ offset, ephemeral }))).toEqual([
+      { offset: 1, ephemeral: undefined },
+      { offset: 2, ephemeral: true },
+      { offset: 3, ephemeral: undefined },
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
   });
 
   it("z2b. a session selector receives an empty scan envelope across non-matches", async () => {

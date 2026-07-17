@@ -2,10 +2,10 @@
 // Slack webhook router (slack-processor-implementation.ts). Emitted event
 // types, payloads, and idempotency keys are stable wire formats.
 
+import { StreamProcessor } from "iterate/processors";
+import type { EmittedInput } from "iterate/processors";
 import { agentCreationForPath, EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
 import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
-import type { EmittedInput } from "../streams/processor-contracts.ts";
-import { StreamProcessor } from "../streams/stream-processor.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
   EmailProcessorContract,

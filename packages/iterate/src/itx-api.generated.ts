@@ -99,6 +99,8 @@ export interface Project {
   liveDemo: LiveDemo;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
+  /** Browser auth for project-host web apps. */
+  auth: ProjectAuth;
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
   browser: CfBrowserCapability;
   /** This scope's agent control handle, when its address is under `/agents/`. */
@@ -296,6 +298,18 @@ export interface Ai {
     documents: CfMarkdownDocument[],
     options?: CfMarkdownConversionOptions,
   ): Promise<CfMarkdownConversionResult[]>;
+}
+
+/** A partial fetch: return its response, or continue the app when it returns null. */
+export interface ProjectAuth {
+  /** Bind a project-member gate to this itx's project. */
+  get(policy: ProjectAuthPolicy): ProjectAuth;
+  /**
+   * Own login, callback, logout, and the host-only cookie. Returns null only
+   * when this request belongs to a current project member. Like any partial
+   * fetch, a null result leaves the request body untouched for the app.
+   */
+  fetch(request: Request): Promise<Response | null>;
 }
 
 /** Cloudflare Browser Run binding exposed through itx. */
@@ -864,6 +878,13 @@ export interface ProjectRepoCollection extends RepoCollection {
  */
 export interface SandboxCollection {
   __describe(): Promise<Description>;
+  /** The sandbox's hosted reducer. Kept on the collection as an isolate-side
+   * relay because `get(path)` deliberately returns the bare SDK stub, and a
+   * Workers RPC property read cannot itself be pipelined through. */
+  processor(path: string): WakeableStreamProcessorRpc<SandboxProcessorState>;
+  /** Push-driven reduced lifecycle state for one sandbox, including a
+   * destroyed sandbox whose command door is no longer usable. */
+  liveState(path: string): LiveStateRpc<SandboxProcessorState>;
   /** Create a sandbox. Strict: an existing or destroyed path is an error.
    * Returns the path to `get`. */
   create(
@@ -1324,8 +1345,7 @@ export interface Stream {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
-   * Session-scoped live event delivery (the "ephemeral" subscription lane —
-   * also the only lane that receives `ephemeral: true` events):
+   * Session-scoped live event delivery (the "ephemeral" subscription lane):
    * `processEventBatch` first receives durable history after
    * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
    * when appended after this exact subscription opens and are never replayed.
@@ -2140,6 +2160,9 @@ export type CfMarkdownConversionResult = {
   error?: string;
 };
 
+/** A declarative access rule for a project-host web app. */
+export type ProjectAuthPolicy = { policy: "project-member" };
+
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,
  * markdown, accessibility snapshot, scraped elements, structured JSON, links,
@@ -2808,6 +2831,19 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
+/** The sandbox processor's reduced lifecycle projection. */
+export type SandboxProcessorState = {
+  birthCertificate: {
+    config: {
+      instanceType: "basic" | "lite" | "standard-1" | "standard-2" | "standard-3" | "standard-4";
+    };
+  } | null;
+  status: "created" | "destroyed" | "running" | "stopped" | null;
+  running: boolean;
+  lastBackupId: string | null;
+  env: Record<string, string>;
+};
+
 /** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
  * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
 export type SandboxCreateInput = {
@@ -2848,9 +2884,9 @@ export type SandboxInstanceType =
  * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
  * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
- * contract re-declares only the everyday command door, `exec` (the rest
- * stays undeclared, same stance as `McpClientRpc`, so new SDK methods need
- * no forwarding code here); https://developers.cloudflare.com/sandbox/api/
+ * contract re-declares lifecycle controls and the everyday command door,
+ * `exec` (the rest stays undeclared, same stance as `McpClientRpc`, so new SDK
+ * methods need no forwarding code here); https://developers.cloudflare.com/sandbox/api/
  * is the authoritative reference. The image is the stock Cloudflare sandbox
  * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
  * you need at runtime.
@@ -2881,6 +2917,14 @@ export type SandboxInstanceType =
  *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object & {
+  /** Boot the container now. */
+  start(): Promise<void>;
+  /** Snapshot `/workspace` and tear the container down. */
+  sleep(): Promise<void>;
+  /** Snapshot, tear down, and boot a fresh container. */
+  restart(): Promise<void>;
+  /** Permanently destroy the sandbox and retire its name. */
+  destroy(): Promise<void>;
   /** Run one shell command to completion and return its captured output —
    * the SDK's `exec`, declared with the data fields that travel over every
    * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —
@@ -3112,7 +3156,13 @@ export type RepoProcessorState = {
   artifactName: string | null;
   ready: boolean;
   defaultBranch: string | null;
-  github: { connection: string; installationId: string; owner: string; repo: string } | null;
+  github: {
+    connection: string;
+    installationId: string;
+    owner: string;
+    repo: string;
+    repositoryId: number;
+  } | null;
   githubImport: {
     branch: string;
     requestId: string;
@@ -3159,7 +3209,7 @@ export type SubscriptionKey = string;
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * never delivered to durable subscribers (wake/push/webhook), and evictable —
+ * excluded from durable delivery unless a push/webhook explicitly opts in, and evictable —
  * for transient signals (LLM streaming chunks) whose durable truth lands as
  * its own event. */
 export type StreamEventInput = {
@@ -3578,6 +3628,8 @@ export type GithubRepoLink = {
   installationId: string;
   owner: string;
   repo: string;
+  /** GitHub's stable database identity for this repository. */
+  repositoryId: number;
 };
 
 /**

@@ -23,12 +23,13 @@ const runtime = (patch: Partial<AgentRuntimeRecord> = {}): AgentRuntimeRecord =>
 
 describe("agent paths", () => {
   it("accepts only canonical routeable agent paths", () => {
-    expect(AgentPath.parse("/agents/research/cattle~uk_1")).toBe("/agents/research/cattle~uk_1");
+    expect(AgentPath.parse("/agents/research/cattle-uk_1")).toBe("/agents/research/cattle-uk_1");
     for (const path of [
       "/agents/Research",
       "/agents/research//cattle",
       "/agents/research/",
       "/agents/research cattle",
+      "/agents/research/has~tilde",
     ]) {
       expect(() => AgentPath.parse(path)).toThrow("agent path must be canonical");
     }

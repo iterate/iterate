@@ -7,11 +7,8 @@
 
 import { z } from "zod";
 import { AgentRuntimeChange } from "@iterate-com/shared/agent-events";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
-import {
-  CoreProcessorContract,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+import { defineProcessorContract, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { AgentMetadata } from "../agents/agent-presence.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
@@ -26,8 +23,8 @@ import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-proc
  * bang-command codemode scripts, and painting active runtime onto Slack's
  * transient assistant status through host-provided dependencies.
  *
- * LLM turns are mention-gated (mirrors github-agent): a human must @mention the
- * bot (or Slack must deliver `app_mention`) before the agent is woken. After
+ * LLM turns are mention-gated: a human must @mention the bot (or Slack must
+ * deliver `app_mention`) before the agent is woken. After
  * that activation, later messages in the same thread also queue turns so
  * multi-turn conversation does not require re-mentioning on every reply.
  * Unmentioned traffic before activation is still transcribed as
@@ -47,8 +44,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     channel: z.string().optional(),
     /**
      * True after this thread has seen an @mention / app_mention of our bot.
-     * Unlocks follow-up turns without re-mentioning (same shape as
-     * github-agent's conversationActive).
+     * Unlocks follow-up turns without re-mentioning.
      */
     conversationActive: z.boolean().default(false),
     /** Message that actually received this bot's transient eyes reaction.

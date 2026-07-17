@@ -1,6 +1,6 @@
 # Agent Presence And Navigation Design
 
-Status: planned
+Status: implemented in this PR
 
 Delivery shape: one clean-break PR
 

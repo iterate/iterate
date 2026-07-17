@@ -7,8 +7,10 @@
 > no longer exist. It is kept because it explains the design lineage the
 > current implementation inherits (describe(), instructions/types, capabilities as
 > stream events). **The current implementation lives at `apps/os/src/`**
-> (`README.md` + `types.ts`). What actually remains in THIS folder is the
-> client-side surface: `itx-react.tsx` (browser hooks), `browser-repl.ts`
+> (`README.md` + `types.ts`), and the browser hooks moved to the `iterate`
+> package (`packages/iterate/src/itx/` — `iterate/client` + `iterate/react`;
+> guide: `docs/frontend-development.md`). What actually remains in THIS folder is
+> `browser-repl.ts`
 > (REPL compiler), `path-proxy.ts`, `examples.ts` (the example catalogue),
 > and `e2e/` (the cross-runtime example matrix).
 

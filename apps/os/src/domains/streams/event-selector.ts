@@ -12,7 +12,7 @@
 
 import jsonata from "@mmkal/jsonata/sync";
 import { z } from "zod";
-import type { StreamEvent } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 
 /**
  * A declarative event filter. Both fields optional; an absent selector (or an

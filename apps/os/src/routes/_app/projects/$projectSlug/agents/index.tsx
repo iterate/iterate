@@ -1,9 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { useItx, useLiveState } from "iterate/react";
 import { AgentCatalog } from "~/components/agents/agent-catalog.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,

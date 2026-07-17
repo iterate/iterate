@@ -26,6 +26,13 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./live-state": "./src/live-state.ts",
+    "./node": "./src/node.ts",
+    "./processors": "./src/processors/index.ts",
+    "./processors/cloudflare": "./src/processors/cloudflare.ts",
+    "./processors/testing": "./src/processors/testing.ts",
+    "./react": "./src/react.ts",
     "./sdk": "./src/sdk.ts",
     "./worker": "./src/worker.ts"
   },
@@ -33,16 +40,54 @@
     "access": "public",
     "exports": {
       ".": {
+        "types": "./dist/index.d.mts",
         "import": "./dist/index.mjs",
-        "types": "./dist/index.d.mts"
+        "default": "./dist/index.mjs"
+      },
+      "./client": {
+        "types": "./dist/client.d.ts",
+        "import": "./dist/client.mjs",
+        "default": "./dist/client.mjs"
+      },
+      "./live-state": {
+        "types": "./dist/live-state.d.ts",
+        "import": "./dist/live-state.mjs",
+        "default": "./dist/live-state.mjs"
+      },
+      "./node": {
+        "types": "./dist/node.d.ts",
+        "import": "./dist/node.mjs",
+        "default": "./dist/node.mjs"
+      },
+      "./processors": {
+        "types": "./dist/processors/index.d.ts",
+        "import": "./dist/processors.mjs",
+        "default": "./dist/processors.mjs"
+      },
+      "./processors/cloudflare": {
+        "types": "./dist/processors/cloudflare.d.ts",
+        "import": "./dist/processors-cloudflare.mjs",
+        "default": "./dist/processors-cloudflare.mjs"
+      },
+      "./processors/testing": {
+        "types": "./dist/processors/testing.d.ts",
+        "import": "./dist/processors-testing.mjs",
+        "default": "./dist/processors-testing.mjs"
+      },
+      "./react": {
+        "types": "./dist/react.d.ts",
+        "import": "./dist/react.mjs",
+        "default": "./dist/react.mjs"
       },
       "./sdk": {
+        "types": "./dist/sdk.d.ts",
         "import": "./dist/sdk.mjs",
-        "types": "./dist/sdk.d.ts"
+        "default": "./dist/sdk.mjs"
       },
       "./worker": {
+        "types": "./dist/worker.d.mts",
         "import": "./dist/worker.mjs",
-        "types": "./dist/worker.d.mts"
+        "default": "./dist/worker.mjs"
       }
     }
   },
@@ -60,21 +105,30 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
-    "@opentui/core": "0.1.102",
-    "@opentui/react": "0.1.102",
+    "@opentui/core": "0.4.5",
+    "@opentui/react": "0.4.5",
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
+    "@tanstack/react-query": "^5.101.2",
     "@types/node": "^22.0.0",
-    "capnweb": "^0.8.0",
+    "@types/ws": "^8.18.1",
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "octokit": "^5.0.5",
     "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
-    "zod": "4.1.12"
+    "zod": "4.3.6"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5",
+    "react": "^19.2.0"
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "27.4.0",
+    "react-dom": "^19.2.7",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
     "vitest": "4.0.15"

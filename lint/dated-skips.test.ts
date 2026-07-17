@@ -45,6 +45,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "Email OTP sign-in is disabled for this deployment",
     note: "env-gated: same OTP gate as signup.spec.ts",
   },
+  {
+    file: "specs/seeded-apps.spec.ts",
+    match: "Email OTP sign-in is disabled for this deployment",
+    note: "env-gated: the authenticated seeded app proof requires a real signup",
+  },
   // -- Grandfathered parked markers (predate the convention, 2026-07-15).
   // Do NOT add entries here — date new parked markers instead. This list
   // only shrinks.

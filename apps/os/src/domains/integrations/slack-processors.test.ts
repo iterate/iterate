@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
-import type { StreamEventInput } from "../streams/schemas.ts";
+import type { StreamEventInput } from "iterate/processors";
+import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
+import { StreamProcessorRunner } from "iterate/processors";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,

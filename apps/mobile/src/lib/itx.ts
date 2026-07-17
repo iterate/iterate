@@ -8,7 +8,7 @@
 // specific to its voice-itx-bridge base. The dial itself moved to itx-core.ts
 // so the live e2e can run it from Node with an injected credential.
 //
-// Lifecycle mirrors the browser client (apps/os/src/itx/itx-react.tsx): one
+// Lifecycle mirrors the browser client (`iterate/client`'s session keeper): one
 // cached session per server, dropped on failure so the next call re-dials.
 // No 401-driven retries mid-RPC — the retry lives at connection setup only.
 

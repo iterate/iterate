@@ -56,7 +56,7 @@ remaining work is _completing_ the model, not undoing a parallel one.
   (`useIterateSession`), slug-addressed `useItx`, and **invisible reconnect**
   (last session kept across a transport gap; only in-flight reads retry). The full
   model — generations, the half-open verifier, the semantic-vs-transport reset —
-  is in `itx-react.tsx`'s header and DECISIONS.md D24.
+  is in `packages/iterate/src/itx/itx-session.ts`'s header and DECISIONS.md D24.
 - **`itx.projects.get(slug)`** — the collection resolves a slug _or_ a `prj_…` id
   (`resolveProjectIdBySlug` in `rpc-targets.ts`), so `useItx("my-slug")` works
   straight from a URL param.
@@ -135,15 +135,15 @@ remaining work is _completing_ the model, not undoing a parallel one.
 
 ## Large (need design)
 
-- **Extract a non-React `BrowserItxClient` core** (codex #6) behind a tiny
-  interface (`getSnapshot`/`subscribe`/`connectSession`/`connectProject`/
-  `resetAuthority`/`reportTransportSuspicion`), split into e.g. `itx/socket.ts`
-  (transport, generations, verification), `itx/live-resource.ts` (shared stores,
-  subscription/revision recovery, watchdogs), `itx/read.ts` (scoped keys + TanStack
-  adapter), and `itx-react.tsx` (contexts + the thin hooks). Move
-  behavior-preservingly, keep the generation/disposal tests, don't combine with a
-  reconnect rewrite. Makes the "very narrow core" literally a testable non-React
-  unit with injected sockets/timers/failures.
+- **Extract a non-React client core** (codex #6) — **DONE**: the keeper
+  (transport, generations, verification, subscription watchdog) now lives
+  framework-free in `packages/iterate/src/itx/itx-session.ts` (`iterate/client`),
+  with the hooks as a thin binding in `itx-react.ts` (`iterate/react`) — moved
+  behavior-preservingly with the full test suite; the chat TUI is the first
+  non-browser consumer (`configureIterateSession` + the same hooks under
+  OpenTUI). Remaining refinement if it ever earns its keep: injected
+  sockets/timers instead of module globals (the field pattern is an instance
+  behind a Provider — see the #2049 PR notes).
 - **Mutable current state live by default** (codex #2): capability-aligned
   `.liveState` projections — `session.projects.liveState`, `project.streams/
 agents/repos/integrations/scheduler.liveState`, per-resource `secrets.get(n)/

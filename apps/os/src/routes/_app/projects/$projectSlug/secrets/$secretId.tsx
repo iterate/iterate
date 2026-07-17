@@ -13,6 +13,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { useItx, useLiveState } from "iterate/react";
 import type { SecretDescription, SecretUpdateInput } from "../../../../../domains/secrets/types.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -22,7 +23,6 @@ import {
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({
   material: z.string(),

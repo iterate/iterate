@@ -1,3 +1,12 @@
+import { expect } from "@playwright/test";
+import { spinnerWaiter } from "middlewright";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import {
+  signUpWithEmailOtp,
+  startEmailOtpSignIn,
+  uniqueSignupEmail,
+} from "./test-support/email-otp-signup.ts";
+import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The seeded config repo's example apps genuinely serve after a project is
@@ -32,6 +41,78 @@ test("the seeded hello and counter apps work after creating a project", async ({
   // the ws broadcast, not the HTTP response.
   await page.getByRole("button", { name: "increment" }).click();
   await page.locator("#n").filter({ hasText: /^1$/ }).waitFor();
+});
+
+// Unlike the public examples above, this proof uses a real Auth-backed user
+// and organization: project-member auth deliberately checks the live Auth
+// directory on every request, not merely the OS access-token claims used by
+// the suite's usual forged-session fixture.
+test("the seeded internal app authenticates a real project member", async ({ baseURL, page }) => {
+  test.skip(
+    !(await startEmailOtpSignIn(page)),
+    "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
+  );
+
+  const slug = uniqueFixtureSlug("internal-app-auth");
+  await signUpWithEmailOtp(page, {
+    email: uniqueSignupEmail("internal-app-auth"),
+    projectSlug: slug,
+  });
+
+  // First-run onboarding creates the Auth directory membership and the
+  // project together. Its destination renders an unmarked skeleton, so wait
+  // for the project route with spinner-waiter disabled, as signup.spec.ts does.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+  });
+
+  // Put a recognizable event on the root stream so the internal app proves
+  // both authorization and post-auth access to this fixture's project data.
+  const marker = `authenticated-internal-app-${crypto.randomUUID()}`;
+  using admin = await connectAdminItx(baseURL!);
+  using project = admin.projects.get(slug);
+  using root = project.streams.get("/");
+  await root.append({
+    type: "events.iterate.test/spec/authenticated-internal-app",
+    payload: { marker },
+  });
+
+  // The project-app origin has no session yet, even though this browser is
+  // already signed in to OS. The auth partial owns the request and renders
+  // the form on the app's own origin.
+  const internalUrl = appUrl("internal", slug, baseURL!);
+  await page.goto(internalUrl);
+  // A named app's first use may still need its own cold worker start. The
+  // platform's building page is visible progress; 120s matches hello above.
+  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 120_000 });
+  await page.getByText("This app is available to project members.").waitFor();
+
+  // This follows app -> OS -> app callback. OS reuses the iterate_session
+  // cookie installed by the signup flow; the callback redeems a fragment token
+  // into an app-host-only HttpOnly cookie before returning to `/`. The click
+  // waits through two origins and three navigations, so give that bounded
+  // protocol work a wider budget than an ordinary in-page action.
+  await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
+  await page
+    .getByRole("heading", { name: "Latest project root events" })
+    .waitFor({ timeout: 30_000 });
+  await page.getByText(marker).waitFor();
+
+  // Partial-fetch fall-through must preserve the original request. Exercise
+  // that contract across the real dynamic-worker + ITX RPC boundary, not just
+  // in the auth helper: the protected app reads this POST body after auth has
+  // returned null.
+  const echoBody = `app-owned-body-${crypto.randomUUID()}`;
+  const echo = await page.evaluate(async (body) => {
+    const response = await fetch("/echo", { body, method: "POST" });
+    return { body: await response.text(), status: response.status };
+  }, echoBody);
+  expect(echo).toEqual({ body: echoBody, status: 200 });
+
+  // Logout is owned by the same partial. It clears the app-host cookie and
+  // the redirected request is gated back to the login form.
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor();
 });
 
 /**

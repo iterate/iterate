@@ -122,11 +122,11 @@ return { appended, count: events.length };
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a second-class event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, durable subscribers — processors and the project worker's processEventBatch feed — never receive it, and the stream may evict the row later. Use it for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; Iterate's ordinary PostHog feed does not. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
-// Transient signal: live subscribers see it; nothing durable ever will.
+// Transient signal: live product subscribers see it; product state never will.
 const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
 const [tick] = await stream.append({
   type: "events.iterate.repl/progress-ticked",
@@ -600,6 +600,33 @@ const response = await itx.egress.fetch(
 const body = await response.text();
 
 return { status: response.status, bodyStart: body.slice(0, 200) };
+`.trim(),
+  },
+  {
+    id: "egress-rules-configured",
+    title: "Hold outbound requests to a host for human approval",
+    description:
+      "Egress rules are project state: append egress-rules-configured with a `hold` rule and any future request to a matching host — itx.egress.fetch, or an agent's own fetch inside its turn, same door either way — parks instead of completing, appending human-approval-requested. A human grants or rejects on the project stream (`iterate approve`, the mobile app's Approvals screen, or a raw grant/reject append) and the held call resolves or refuses. The event REPLACES the project's whole rule list (not a merge) — pass every rule you want kept, not just the new one. Run this once to seed a rule, then trigger a hold with egress-fetch (or just ask an agent to fetch the same host).",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+const host = vars.host ?? "httpbin.org";
+const ruleKey = vars.ruleKey ?? "repl-demo-hold";
+const [appended] = await itx.streams.get("/").append({
+  type: "events.iterate.com/project/egress-rules-configured",
+  payload: {
+    rules: [
+      {
+        ruleKey,
+        description: \`Outbound requests to \${host} need a human\`,
+        match: { hosts: [host] },
+        verdict: "hold",
+        approvalTimeoutMs: vars.approvalTimeoutMs ?? 600_000,
+      },
+    ],
+  },
+});
+return { host, ruleKey, offset: appended.offset };
 `.trim(),
   },
   {

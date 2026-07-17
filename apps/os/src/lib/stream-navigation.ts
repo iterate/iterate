@@ -1,12 +1,12 @@
 // Stream navigation helpers for the platform-wide admin stream explorer.
 
 import { useMemo } from "react";
-import type { ItxLiveSubscriptionHandle } from "~/itx/itx-react.tsx";
+import type { ItxLiveSubscriptionHandle } from "iterate/react";
+import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/react";
 import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
-import { connectItx, connectIterateSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 
 /**
  * Where remote admin tree nodes get state: path → subscribable stream.

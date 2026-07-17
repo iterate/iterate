@@ -19,6 +19,7 @@ import {
   SQLITE_ROW,
 } from "@journeyapps/wa-sqlite/src/sqlite-constants.js";
 import { OPFSCoopSyncVFS } from "@journeyapps/wa-sqlite/src/examples/OPFSCoopSyncVFS.js";
+import { resolveWorkerAssetUrl } from "./worker-asset-url.ts";
 
 // Matches wa-sqlite's SQLiteCompatibleType (blobs surface as Uint8Array or number[]).
 type SqlValue = string | number | bigint | Uint8Array | number[] | null;
@@ -57,14 +58,15 @@ async function open(path: string): Promise<void> {
 }
 
 async function loadSqliteModule() {
-  const response = await fetch(wasmUrl);
+  const resolvedWasmUrl = resolveWorkerAssetUrl(wasmUrl, self.origin);
+  const response = await fetch(resolvedWasmUrl);
   if (!response.ok) {
     throw new Error(
       `Failed to fetch SQLite WASM: ${String(response.status)} ${response.statusText}`,
     );
   }
   return await SQLiteESMFactory({
-    locateFile: () => wasmUrl,
+    locateFile: () => resolvedWasmUrl,
     wasmBinary: await response.arrayBuffer(),
   });
 }

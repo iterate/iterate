@@ -8,8 +8,16 @@ that is only correct while its incarnation stays alive is not correct.
 Companion to [domain objects and stream processors](domain-objects-and-stream-processors.md)
 (explicit birth certificates, fold doctrine, naming). This guide covers the
 half that doctrine document takes for granted: side effects, recovery,
-staleness, and how to test all of it in plain node
-(`apps/os/src/domains/streams/test-helpers.ts`).
+staleness, and how to test all of it in plain node (`iterate/processors/testing`).
+
+The machinery itself — `StreamProcessor`, `defineProcessorContract`, the
+runner, the registry, keepalive/recovery durability — lives in the published
+package (`packages/iterate/src/processors`, imported as `iterate/processors`).
+apps/os hosts its domain processors on it, and a project's own worker can
+host processors on exactly the same code: the platform injects the module
+into every dynamic worker build, and the config-repo template's guestbook
+(`apps/os/config-repo-template/guestbook.ts` + `GuestbookApp` in its
+worker.ts) is the reference for that userspace hosting shape.
 
 ## The model: some processors reconcile obligations
 
@@ -193,7 +201,8 @@ few lines, and it doubles as scenario 4 below:
    **zero** events, and the refolded state equals the live instance's.
 
 References: the "refold: …" tests in `slack-processors.test.ts` (agent
-status/ack + router ack/forwards) and `github-agent.test.ts` (repo creation).
+status/ack + router ack/forwards) and `repo-task-events-processor.test.ts`
+(GitHub push import).
 
 ## What the runner registry gives you for free (and what it demands)
 

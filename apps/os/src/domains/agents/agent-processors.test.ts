@@ -8,12 +8,9 @@ import {
   ZERO_AGENT_RUNTIME,
   isAgentRuntimeZero,
 } from "@iterate-com/shared/agent-events";
-import type { StreamEventInput } from "../streams/schemas.ts";
-import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "../streams/test-helpers.ts";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-} from "../streams/stream-processor-runner.ts";
+import type { StreamEventInput } from "iterate/processors";
+import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "iterate/processors/testing";
+import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,

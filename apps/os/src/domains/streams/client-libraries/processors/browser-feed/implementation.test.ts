@@ -1,9 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
+import type { StreamEvent } from "iterate/processors";
+import { StreamProcessorRunner } from "iterate/processors";
 import type { Stream } from "../../../../../itx-api.generated.ts";
-import type { StreamEvent } from "../../../schemas.ts";
-import { StreamProcessorRunner } from "../../../stream-processor-runner.ts";
 import { CompositeMirrorDrive } from "../../browser/composite-mirror-drive.ts";
 import { browserProcessorProgressStore } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";

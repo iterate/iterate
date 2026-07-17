@@ -7,14 +7,30 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
-import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
-import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
+import type { StreamEventBatch } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
 const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
+const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
+const EXPECTED_POSTHOG_SUBSCRIPTION = {
+  type: "events.iterate.com/stream/subscription-configured",
+  idempotencyKey: "iterate-platform-posthog-subscription-v2",
+  payload: {
+    subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+    description: "Iterate's first-party durable-event PostHog feed",
+    delivery: {
+      mode: "push",
+      expression: ["integrations", "posthog", "processEventBatch"],
+    },
+    deliver: "all",
+    includeEphemeral: false,
+    onPoison: "park",
+  },
+} as const;
 
 type CoreStreamState = {
   eventCount: number;
@@ -82,6 +98,67 @@ test("creates a project and uses project streams through v4 itx", async () => {
   });
 
   await subscription.unsubscribe();
+});
+
+test("project streams are born with the ordinary first-party PostHog subscription", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/posthog-birth/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = itx.projects.create({ slug: `posthog-birth-${RUN_SUFFIX}-${marker}` });
+  await project.__describe();
+  using stream = project.streams.get(streamPath);
+
+  await stream.append({
+    type: "events.iterate.com/e2e/posthog-marker",
+    payload: { marker },
+  });
+
+  const configuration = (await stream.getEvents({ afterOffset: 0 })).find(
+    (event) =>
+      event.type === "events.iterate.com/stream/subscription-configured" &&
+      event.payload?.subscriptionKey === POSTHOG_SUBSCRIPTION_KEY,
+  );
+
+  expect(configuration).toMatchObject({
+    idempotencyKey: EXPECTED_POSTHOG_SUBSCRIPTION.idempotencyKey,
+    payload: EXPECTED_POSTHOG_SUBSCRIPTION.payload,
+    type: EXPECTED_POSTHOG_SUBSCRIPTION.type,
+  });
+});
+
+test("project code cannot forge the PostHog receiver through an impersonated principal", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = itx.projects.create({ slug: `posthog-authority-${RUN_SUFFIX}-${marker}` });
+  const projectId = (await project.__describe()).projectId;
+
+  using impersonatedSession = withItxSession();
+  using impersonatedItx = impersonatedSession.authenticate({
+    type: "impersonate",
+    secret: adminSecret(),
+    token: { type: "admin", principal: "stream-delivery" },
+  });
+  using impersonatedProject = impersonatedItx.projects.get(projectId);
+  const impersonatedPosthog = (
+    impersonatedProject.integrations as unknown as {
+      posthog: { processEventBatch(batch: unknown): Promise<void> };
+    }
+  ).posthog;
+  await expect(
+    impersonatedPosthog.processEventBatch({
+      attempt: 1,
+      deliveryId: `impersonated-forgery:${marker}`,
+      events: [],
+      path: "/",
+      projectId,
+      streamMaxOffset: 0,
+      subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+    }),
+  ).rejects.toThrow("PostHog ingestion is available only to stream delivery");
 });
 
 test("stream getEvents defaults to a bounded page and supports event type filters", async () => {

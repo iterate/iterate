@@ -1,10 +1,24 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
+  StreamPushEventBatch,
   StreamSubscriberPing,
-} from "./rpc-types.ts";
-import { retainWakeHandshakeResponse } from "./subscriber-sinks.ts";
+} from "iterate/processors";
+
+const dialMocks = vi.hoisted(() => ({
+  evaluateItxExpression: vi.fn(),
+  itxLoopbackStub: vi.fn(),
+}));
+
+vi.mock("../../itx/expression.ts", () => ({
+  evaluateItxExpression: dialMocks.evaluateItxExpression,
+}));
+vi.mock("../itx/utils.ts", () => ({
+  itxLoopbackStub: dialMocks.itxLoopbackStub,
+}));
+
+const { createSubscriberDial, retainWakeHandshakeResponse } = await import("./subscriber-sinks.ts");
 
 function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
   const rawDispose = vi.fn();
@@ -18,6 +32,50 @@ function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
   });
   return { duplicateDispose, raw, rawDispose };
 }
+
+describe("push delivery RPC ownership", () => {
+  beforeEach(() => {
+    dialMocks.evaluateItxExpression.mockReset().mockResolvedValue({
+      receiver: undefined,
+      value: undefined,
+    });
+    dialMocks.itxLoopbackStub.mockReset();
+  });
+
+  test("disposes a freshly acquired authority root after each successful batch", async () => {
+    const acquired: Array<{
+      disposeBinding: ReturnType<typeof vi.fn>;
+      disposeRoot: ReturnType<typeof vi.fn>;
+    }> = [];
+    dialMocks.itxLoopbackStub.mockImplementation(() => {
+      const disposeBinding = vi.fn();
+      const disposeRoot = vi.fn();
+      acquired.push({ disposeBinding, disposeRoot });
+      return {
+        get: vi.fn().mockResolvedValue({ [Symbol.dispose]: disposeRoot }),
+        [Symbol.dispose]: disposeBinding,
+      };
+    });
+
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      onDurableDeliveryError: vi.fn(),
+    });
+    const expression = ["worker", "processEventBatch"];
+    const batch = {} as StreamPushEventBatch;
+
+    await dial.push(expression, batch);
+    expect(acquired).toHaveLength(1);
+    expect(acquired[0]!.disposeRoot).toHaveBeenCalledOnce();
+    expect(acquired[0]!.disposeBinding).toHaveBeenCalledOnce();
+
+    await dial.push(expression, batch);
+    expect(acquired).toHaveLength(2);
+    expect(acquired[1]!.disposeRoot).toHaveBeenCalledOnce();
+    expect(acquired[1]!.disposeBinding).toHaveBeenCalledOnce();
+  });
+});
 
 describe("wake-handshake RPC ownership", () => {
   test("retains every returned capability and disposes the original RPC result", async () => {

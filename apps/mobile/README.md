@@ -24,6 +24,32 @@ Before bumping `expo`, check what the store actually ships
 if it's still 54.x, a bump means abandoning Expo Go for dev builds (EAS or
 local Xcode).
 
+## Run and test it in a browser
+
+Expo Web renders the same Expo Router screens through React Native Web, so UI
+work does not need a phone, Xcode, an iOS simulator, or a new native build:
+
+```sh
+pnpm --dir apps/mobile start:web
+```
+
+For a repeatable 390×844 Chromium test, run:
+
+```sh
+pnpm spec --project=mobile
+```
+
+Playwright starts and stops its own Expo Web server, checks the signed-out
+server-picker interaction, and exits. The root `pnpm spec` command runs this
+alongside the `web` project; `pnpm spec --project=web` runs only the dashboard
+specs.
+
+This is a fast browser-test lane, not an iOS emulator:
+platform-native behavior such as the in-app OAuth handoff, Keychain, Face ID,
+and push notifications still needs Expo Go or a native build. Authenticated
+project/chat fixtures are follow-up work; this first lane stays deterministic
+and credential-free at the signed-out entry point.
+
 ## Pointing it at a deployment
 
 The sign-in screen has an editable server field with one-tap presets:
@@ -68,14 +94,28 @@ verifies, just without Secure Enclave hardware isolation. See
 `tasks/mobile-approver-upgrades.md` for the gap and what closing it needs
 (all three items require leaving Expo Go for a dev build).
 
+## Running examples
+
+The Examples screen (per project, from the chat list's header) lists every
+catalogue example that's runnable against a project itx — the same
+catalogue that powers the web REPL's Examples panel
+(`apps/os/src/itx/examples.ts`), filtered to `context: "project"` entries
+whose `runtimes` includes `"run-script"`. Tap Run and it executes via
+`capabilityHost.runScript` — no local JS eval on the phone, the same
+server-side script isolate agents use — and shows the JSON result inline.
+Exists so testing a platform feature never needs a laptop CLI step first:
+every mobile feature here is built by agents, so it needs to be fully
+testable from the phone alone. See `tasks/mobile-examples-runner.md`.
+
 ## Verification
 
 | Lane                                                          | What it proves                                                                                                                                                                                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                                             |
+| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                                       |
 | `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip from Node through the app's own dial: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
 | `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                                           |
-| Expo Go on a phone                                            | The only lane that proves the in-app browser OAuth hop and the rendered UI                                                                                                                                                      |
+| Expo Go on a phone                                            | Native integration: the in-app browser OAuth hop, Keychain/Face ID, and device-specific behavior                                                                                                                                |
 
 ## Layout
 
@@ -88,6 +128,7 @@ verifies, just without Secure Enclave hardware isolation. See
 | `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
 | `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
 | `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
-| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals                |
+| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                      |
+| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals → examples     |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.

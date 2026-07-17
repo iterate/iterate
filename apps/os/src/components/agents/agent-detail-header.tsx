@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { connectItx } from "iterate/react";
 import { Agent } from "./agent.tsx";
 import {
   buildAgentForest,
@@ -12,7 +13,6 @@ import {
   type AgentTreeNode,
 } from "./agent-tree.ts";
 import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
-import { connectItx } from "~/itx/itx-react.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 

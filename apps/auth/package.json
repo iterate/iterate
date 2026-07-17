@@ -36,7 +36,7 @@
     "@iterate-com/ui": "workspace:*",
     "@orpc/server": "^1.13.7",
     "@orpc/tanstack-query": "^1.13.6",
-    "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-query": "^5.101.2",
     "@tanstack/react-router": "1.168.3",
     "@tanstack/react-router-ssr-query": "1.166.2",
     "@tanstack/react-start": "1.167.5",
@@ -49,7 +49,7 @@
     "react-dom": "^19.2.7",
     "sqlfu": "0.1.1",
     "tailwindcss": "^4.3.2",
-    "zod": "^4.3.6"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",

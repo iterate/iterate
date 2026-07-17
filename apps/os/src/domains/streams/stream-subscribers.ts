@@ -39,8 +39,7 @@
 // (stream-subscribers.test.ts). The only streams file that knows RPC exists is
 // subscriber-sinks.ts.
 
-import type { ItxExpression } from "../../itx/expression.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
@@ -50,8 +49,11 @@ import type {
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { isStreamReceiverUnavailableError } from "./rpc-types.ts";
+} from "iterate/processors";
+import { isStreamReceiverUnavailableError } from "iterate/processors";
+import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
+import type { ItxExpression } from "../../itx/expression.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,
@@ -70,7 +72,6 @@ import {
   type RetainedProcessEventBatch,
   type RetainedSubscriberPing,
 } from "./subscriber-sinks.ts";
-import { LatencyRing, pingRoundTrip, type LatencyStats } from "./stream-runtime-metrics.ts";
 import {
   computeBackoffMs,
   deliveryId,
@@ -584,16 +585,16 @@ export class StreamSubscribers {
             sized.map((entry) => [entry.event.offset, entry.byteLength]),
           );
 
-          // Ephemeral events never reach durable receivers — platform law,
-          // enforced as the same skip-not-defer shape selectors use: the raw
-          // read advances the cursor over their offsets, delivery drops them.
-          const durable = sized
-            .filter((entry) => entry.event.ephemeral !== true)
-            .map((entry) => entry.event);
+          // Durable delivery skips ephemeral rows unless the subscription
+          // explicitly opts in. The cursor still advances over skipped rows.
+          const visible =
+            config.includeEphemeral === true
+              ? sized.map((entry) => entry.event)
+              : sized.filter((entry) => entry.event.ephemeral !== true).map((entry) => entry.event);
           const { matched, conditionErrors } = this.#applySelector(
             subscriptionKey,
             config,
-            durable,
+            visible,
           );
           for (const fact of conditionErrors) this.#hooks.appendFact(fact);
 
@@ -1205,10 +1206,16 @@ export class StreamSubscribers {
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    console.error("stream durable sink delivery failed; backing off before re-poke", {
-      subscriptionKey,
-      error,
-    });
+    const details = { subscriptionKey, error };
+    if (isDurableObjectLifecycleError(error)) {
+      // A killed, evicted, deployed, or overloaded subscriber is a modelled
+      // availability transition: the durable cursor stays put and the
+      // bounded backoff below reconnects it. Keep that expected transition
+      // out of the error signal while retaining an observable warning.
+      console.warn("stream durable sink unavailable; backing off before re-poke", details);
+    } else {
+      console.error("stream durable sink delivery failed; backing off before re-poke", details);
+    }
     this.#onDeliveryFailure(subscriptionKey, error);
     connection.close("delivery-failed");
   }

@@ -139,6 +139,67 @@ export function toggled(current: ReadonlySet<string>, path: string): ReadonlySet
   return next;
 }
 
+export type PaletteDialogState = {
+  tab: PaletteTab;
+  query: string;
+  selectedValue: string;
+  expandedAgentPaths: ReadonlySet<string>;
+  expandedStreamPaths: ReadonlySet<string>;
+};
+
+export type PaletteDialogAction =
+  | { type: "closed" }
+  | { type: "opened"; tab: PaletteTab; expandedStreamPaths: ReadonlySet<string> }
+  | { type: "query_changed"; query: string }
+  | { type: "selection_changed"; selectedValue: string }
+  | { type: "tab_changed"; tab: PaletteTab }
+  | { type: "agent_toggled"; path: string }
+  | { type: "stream_toggled"; path: string };
+
+export function initialPaletteDialogState(): PaletteDialogState {
+  return {
+    tab: "agents",
+    query: "",
+    selectedValue: "",
+    expandedAgentPaths: new Set(),
+    expandedStreamPaths: new Set(),
+  };
+}
+
+export function reducePaletteDialogState(
+  state: PaletteDialogState,
+  action: PaletteDialogAction,
+): PaletteDialogState {
+  switch (action.type) {
+    case "closed":
+      return { ...state, query: "", selectedValue: "" };
+    case "opened":
+      return {
+        tab: action.tab,
+        query: "",
+        selectedValue: "",
+        expandedAgentPaths: new Set(),
+        expandedStreamPaths: action.expandedStreamPaths,
+      };
+    case "query_changed":
+      return { ...state, query: action.query, selectedValue: "" };
+    case "selection_changed":
+      return { ...state, selectedValue: action.selectedValue };
+    case "tab_changed":
+      return { ...state, tab: action.tab, selectedValue: "" };
+    case "agent_toggled":
+      return {
+        ...state,
+        expandedAgentPaths: toggled(state.expandedAgentPaths, action.path),
+      };
+    case "stream_toggled":
+      return {
+        ...state,
+        expandedStreamPaths: toggled(state.expandedStreamPaths, action.path),
+      };
+  }
+}
+
 export function normalizeDestination(raw: string): string | null {
   const trimmed = raw.trim();
   if (trimmed === "" || trimmed.endsWith("/")) return null;

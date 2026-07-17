@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
+import { isWorkerBuildFailedError } from "./artifact-store.ts";
+import { isWorkerBuildInProgressError } from "./worker-loader.ts";
+import { OVERLAY_OPT_OUT_HEADER } from "./worker-serve-info.ts";
+import { workerBuildFailedResponse, workerBuildingPageHtml } from "./worker-serve-overlay.ts";
 
 /**
  * The fetch lane: how HTTP (and only HTTP) reaches dynamic workers.
@@ -56,32 +60,33 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
  */
 export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
 
-/** The one cold-build response every fetch-lane hop answers with: an
- * auto-refreshing page for browsers, retry-after + the marker header for
- * programmatic clients. */
+/** The one cold-build response every fetch-lane hop answers with: a polling
+ * page for browsers (meta refresh for no-JS clients), retry-after + the
+ * marker header for programmatic clients. */
 export function workerBuildingResponse(): Response {
-  return new Response(
-    `<!doctype html>
-      <html>
-        <head>
-          <meta http-equiv="refresh" content="3" />
-          <title>Building…</title>
-        </head>
-        <body>
-          <main data-spinner="true">
-            <p>Your worker is building — this page retries automatically.</p>
-          </main>
-        </body>
-      </html>`,
-    {
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "retry-after": "2",
-        [WORKER_BUILDING_HEADER]: "1",
-      },
-      status: 503,
+  return new Response(workerBuildingPageHtml(WORKER_BUILDING_HEADER), {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "retry-after": "2",
+      [WORKER_BUILDING_HEADER]: "1",
+      // Platform chrome, not a worker page — the overlay stays out.
+      [OVERLAY_OPT_OUT_HEADER]: "1",
     },
-  );
+    status: 503,
+  });
+}
+
+/**
+ * The fetch lane's one error classifier: named build-lifecycle errors become
+ * their stand-in pages (they cannot cross a fetch hop the way they cross
+ * RPC), anything else is the caller's to rethrow. Every fetch-lane hop —
+ * ingress, ItxEntrypoint, the stateful worker DO — answers through this so a
+ * new serve-side state is added in exactly one place.
+ */
+export function workerBuildStatusResponse(error: unknown): Response | null {
+  if (isWorkerBuildInProgressError(error)) return workerBuildingResponse();
+  if (isWorkerBuildFailedError(error)) return workerBuildFailedResponse(error);
+  return null;
 }
 
 export function withWorkerFetchDispatchHeader(

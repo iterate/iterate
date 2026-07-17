@@ -10,6 +10,8 @@ import { Redirect, Stack } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { hasSignIn, signIn } from "../lib/auth.ts";
+import { getItxSession } from "../lib/itx.ts";
+import { backfillProjectIfMissing } from "../lib/open-project.ts";
 import { DEFAULT_SERVER, SERVER_PRESETS } from "../lib/servers.ts";
 import {
   addRecentServer,
@@ -28,11 +30,29 @@ export default function SignInScreen() {
     queryFn: async () => {
       const server = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const signedIn = await hasSignIn(server);
+      const lastProject = signedIn ? await getLastProject(server) : null;
+      // The boot redirect below skips the project picker entirely — the
+      // ONLY other place a project gets opened is projects.tsx's own tap
+      // handler, which is exactly where backfillProjectIfMissing lives. A
+      // returning session with a remembered project never goes through
+      // that screen, so it needs its own backfill check here. Best-effort:
+      // a failure here shouldn't block boot — the chat list screen's own
+      // error state still catches it if this silently didn't help.
+      if (signedIn && lastProject) {
+        try {
+          const itx = await getItxSession(server);
+          const entries = await itx.projects.list({ scope: "mine" });
+          const entry = entries.find((candidate) => candidate.id === lastProject.id);
+          if (entry) await backfillProjectIfMissing(itx, entry);
+        } catch {
+          // Non-fatal — see comment above.
+        }
+      }
       return {
         server,
         signedIn,
         recents: await getRecentServers(),
-        lastProject: signedIn ? await getLastProject(server) : null,
+        lastProject,
       };
     },
     staleTime: 0,
@@ -109,6 +129,7 @@ export default function SignInScreen() {
           {serverOptions.map((preset) => (
             <Pressable
               key={preset.baseUrl}
+              accessibilityRole="button"
               onPress={() => setEditedServer(preset.baseUrl)}
               style={[styles.chip, server === preset.baseUrl && styles.chipActive]}
             >
@@ -120,6 +141,7 @@ export default function SignInScreen() {
         </View>
 
         <Pressable
+          accessibilityRole="button"
           onPress={() => login.mutate()}
           disabled={login.isPending}
           style={[styles.signIn, login.isPending && { opacity: 0.6 }]}

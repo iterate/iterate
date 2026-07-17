@@ -8,12 +8,10 @@ import {
   AgentWaitingCleared,
 } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "iterate/processors";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import {
-  CoreProcessorContract,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentBinding, AgentMetadata, AgentMetadataPatch } from "./agent-presence.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";

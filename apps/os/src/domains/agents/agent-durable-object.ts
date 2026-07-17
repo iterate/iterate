@@ -1,11 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
@@ -17,8 +14,6 @@ import {
 import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
 import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
-import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
-import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
@@ -257,90 +252,6 @@ export class AgentDurableObject extends DurableObject<Env> {
             };
           }),
         );
-      },
-    }),
-    { recovery: true },
-  );
-
-  // Registered on every agent host; it wakes on routed PR agent streams
-  // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
-  // linked connection's itx.integrations.github Octokit, called by the agent
-  // itself. The platform supplies one best-effort immediate UI affordance:
-  // a 👀 acknowledgement on a fresh trusted mention. Review automation and
-  // its Check Run lifecycle belong to the project config worker. Registered
-  // WITH recovery (codex review P1): the collaborator verification + message
-  // append are consequential blocking work, and the held cursor alone only
-  // helps while something still dials — a SIMULTANEOUS Agent+Stream DO death
-  // mid-verification at raw head leaves nothing armed to redeliver, and the
-  // mention strands. The alarm's `stream/processor-revived` append cold-boots the
-  // stream; the unacknowledged frame redelivers and the verification + turn
-  // append re-run. The eyes reaction stays cosmetic.
-  readonly githubAgentProcessor = this.#registry.register(
-    new GithubAgentProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      isRepositoryCollaborator: async ({ connection, login, owner, repo }) => {
-        try {
-          await connectionOctokit({
-            connection,
-            projectId: this.#name.projectId,
-          }).rest.repos.checkCollaborator({ owner, repo, username: login });
-          return true;
-        } catch (error) {
-          const status =
-            typeof error === "object" && error !== null && "status" in error
-              ? (error as { status?: unknown }).status
-              : undefined;
-          if (status === 404) return false;
-          console.error("[github-agent] GitHub collaborator check failed", {
-            error,
-            login,
-            owner,
-            path: this.#name.path,
-            repo,
-          });
-          throw error;
-        }
-      },
-      addEyesReaction: async ({ connection, kind, owner, repo, targetId }) => {
-        try {
-          const reactions = connectionOctokit({
-            connection,
-            projectId: this.#name.projectId,
-          }).rest.reactions;
-          if (kind === "issue-comment") {
-            await reactions.createForIssueComment({
-              comment_id: targetId,
-              content: "eyes",
-              owner,
-              repo,
-            });
-          } else if (kind === "pull-request-review-comment") {
-            await reactions.createForPullRequestReviewComment({
-              comment_id: targetId,
-              content: "eyes",
-              owner,
-              repo,
-            });
-          } else {
-            await reactions.createForIssue({
-              content: "eyes",
-              issue_number: targetId,
-              owner,
-              repo,
-            });
-          }
-        } catch (error) {
-          // Acknowledgements are cosmetic. A failure must not prevent the
-          // processor from committing and waking the real agent request.
-          console.error("[github-agent] GitHub eyes reaction failed", {
-            error,
-            kind,
-            path: this.#name.path,
-            targetId,
-          });
-        }
       },
     }),
     { recovery: true },

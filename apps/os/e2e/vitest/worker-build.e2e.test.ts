@@ -95,18 +95,16 @@ test(
       // use rebuilds.
       await project.repo.edit({
         path: "package.json",
-        oldString: '"dependencies": {},',
-        newString: '"dependencies": { "@slack/web-api": "^7.14.1" },',
+        oldString: '"dependencies": {',
+        newString: '"dependencies": {\n    "@slack/web-api": "^7.14.1",',
         message: "Depend on @slack/web-api",
       });
       await project.repo.edit({
         path: "worker.ts",
-        oldString:
-          'import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";',
-        newString: [
-          'import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";',
-          'import { WebClient } from "@slack/web-api";',
-        ].join("\n"),
+        oldString: '} from "iterate/sdk";',
+        newString: ['} from "iterate/sdk";', 'import { WebClient } from "@slack/web-api";'].join(
+          "\n",
+        ),
         message: "Import the Slack SDK",
       });
       await project.repo.edit({

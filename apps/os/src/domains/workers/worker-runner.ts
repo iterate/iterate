@@ -13,11 +13,13 @@ import {
   isWebSocketUpgradeRequest,
   withWorkerFetchDispatchHeader,
 } from "./worker-fetch-dispatch.ts";
+import { stripWorkerServeInfo, withWorkerServeInfo } from "./worker-serve-info.ts";
 import {
   loadResolvedWorker,
   resolveCachedArtifact,
   resolveWorkerSource,
   type ResolvedWorkerSource,
+  type ServedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
 
@@ -64,7 +66,11 @@ export class DynamicWorkerRunner {
      * past the request that gave up on them (see resolveWorkerSource). */
     waitUntil: (promise: Promise<unknown>) => void;
   }) {
-    const itxScope = itxEntrypointProps({ path: props.scopePath, projectId: props.projectId });
+    const itxScope = itxEntrypointProps({
+      path: props.scopePath,
+      projectId: props.projectId,
+      purpose: "userspace",
+    });
     this.#bindings = { ITX: itxEntrypointBinding(props.exports, itxScope) };
     this.#globalOutbound = projectEgressFetcher(props.exports, props.projectId);
     this.#projectId = props.projectId;
@@ -94,7 +100,7 @@ export class DynamicWorkerRunner {
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
+  ): Promise<{ klass: T; resolved: ServedWorkerSource }> {
     const { resolved, worker } = await this.#load(ref, buildBudgetMs);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
@@ -149,14 +155,27 @@ export class DynamicWorkerRunner {
     traceRole?: DynamicWorkerTraceRole;
   }): Promise<Response> {
     return this.#trace(ref, "fetch", traceRole, async (span) => {
-      const response =
-        ref.type === "stateful"
-          ? await (
-              env.WORKER.getByName(
-                statefulWorkerDurableObjectName(this.#projectId, ref),
-              ) as unknown as Fetcher
-            ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }))
-          : await (await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs)).fetch(request);
+      let response: Response;
+      if (ref.type === "stateful") {
+        // Stateful responses only get the header STRIPPED: the outer DO owns
+        // facet versioning, and this hop cannot know which build the facet is
+        // actually running.
+        response = stripWorkerServeInfo(
+          await (
+            env.WORKER.getByName(
+              statefulWorkerDurableObjectName(this.#projectId, ref),
+            ) as unknown as Fetcher
+          ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref })),
+        );
+      } else {
+        const { resolved, worker } = await this.#load(ref, buildBudgetMs);
+        const entrypoint = worker.getEntrypoint(ref.entrypoint, {
+          props: ref.props ?? {},
+        }) as Fetcher;
+        // The serve header is trusted platform output on the fetch lane —
+        // stamped (and any user-set value dropped) at this authority boundary.
+        response = withWorkerServeInfo(await entrypoint.fetch(request), resolved.serveInfo);
+      }
       span.setAttribute("http.response.status_code", response.status);
       return response;
     });
@@ -229,7 +248,7 @@ export class DynamicWorkerRunner {
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
+  ): Promise<{ resolved: ServedWorkerSource; worker: WorkerStub }> {
     const resolved = await resolveWorkerSource({
       buildBudgetMs,
       projectId: this.#projectId,

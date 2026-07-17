@@ -25,8 +25,8 @@ const boundedText = (maximum: number) => z.string().trim().min(1).max(maximum);
 export const AgentPath = z
   .string()
   .max(AGENT_PATH_MAX_LENGTH)
-  .regex(/^\/agents\/[a-z0-9_~-]+(?:\/[a-z0-9_~-]+)*$/, {
-    message: 'agent path must be canonical: "/agents/" followed by lowercase [a-z0-9_~-] segments',
+  .regex(/^\/agents\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/, {
+    message: 'agent path must be canonical: "/agents/" followed by lowercase [a-z0-9_-] segments',
   });
 export type AgentPath = z.infer<typeof AgentPath>;
 

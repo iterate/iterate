@@ -9,6 +9,7 @@ import {
   type AgentUiState,
   type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/react";
 import type { Stream } from "../itx-api.generated.ts";
 import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
@@ -37,7 +38,6 @@ import {
 import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
 import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItx, connectIterateSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 import { useBrowserStreamMetrics, type BrowserStreamMetricsView } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,

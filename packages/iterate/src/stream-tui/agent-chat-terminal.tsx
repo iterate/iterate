@@ -4,108 +4,146 @@
 /**
  * React/OpenTUI terminal chat with one project agent.
  *
- * The data layer is the shared client stack, not a bespoke stream client:
- * `connectItx` (apps/os/src/itx-client.ts) hands us the same `Agent`
- * capability the web app uses, a live `stream.subscribe` pumps events into
- * the shared agent-ui reducer (@iterate-com/ui), and sends go through
- * `agent.message`. This file owns only terminal runtime state and
- * rendering.
+ * The data layer is the SAME client stack the web app renders from: the
+ * one-socket session keeper (`iterate/client`, pointed at the deployment via
+ * `configureIterateSession`) and the shared React hooks (`iterate/react` —
+ * `useItxQuery` seeds durable history and `useItxSubscription` owns reconnect,
+ * watchdog, and re-subscribe recovery), folding stream events through the
+ * shared agent-ui reducer (@iterate-com/ui). Sends use TanStack Query's
+ * mutation lifecycle and `agent.message` on the same socket. This file owns
+ * the app shell and terminal runtime state; the presentational components live
+ * in ./chat-view.tsx. OpenTUI is just another React renderer, so the browser's
+ * query policy and hooks run here unchanged.
  */
-import { StyledText, bg, fg } from "@opentui/core";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { useCallback, useState, useSyncExternalStore } from "react";
-import type {
-  AgentUiActivity,
-  AgentUiItem,
-  AgentUiMessageItem,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { QueryClientProvider, QueryErrorResetBoundary, useMutation } from "@tanstack/react-query";
+import {
+  configureIterateSession,
+  connectItx,
+  createIterateQueryClient,
+  ProjectScope,
+  useItxQuery,
+  useItxSubscription,
+  type Itx,
+} from "../itx/itx-react.ts";
 import {
   ONBOARDING_AGENT_PATH,
   onboardingAgentCreateInput,
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
+import { sendAgentMessage } from "./agent-message-command.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
-import {
-  connectAgentFeed,
-  resolveItxAuth,
-  type AgentConnectionStatus,
-} from "./agent-connection.ts";
-import {
-  formatActivitySummary,
-  formatLiveActivityLabel,
-  formatStepLine,
-  streamingTail,
-} from "./feed-format.ts";
+import { readAgentFeedHistory } from "./agent-feed-query.ts";
+import { resolveItxAuth } from "./itx-auth.ts";
+import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
+import { COLORS } from "./chat-colors.ts";
+import { LoadingTerminal, TerminalErrorBoundary } from "./terminal-shell.tsx";
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
 }
 
-const COLORS = {
-  bg: "#0b0f14",
-  surface: "#27272a",
-  border: "#3f3f46",
-  accent: "#22c55e",
-  warning: "#facc15",
-  danger: "#ef4444",
-  text: "#e5e7eb",
-  textSecondary: "#9ca3af",
-  textBody: "#d1d5db",
-  textMuted: "#6b7280",
-  agent: "#a78bfa",
-} as const;
-
 const args = parseArgs(process.argv.slice(2));
+const historyQueryKey = ["agent-feed-history", args.projectId, args.agentPath] as const;
 
-// ---------------------------------------------------------------------------
-// App state: one feed model + one connection, exposed to React through a tiny
-// external store (the connection callbacks fire outside React).
-// ---------------------------------------------------------------------------
-
-type AppState = {
-  feed: AgentFeedSnapshot;
-  status: AgentConnectionStatus;
-  notice: string;
-};
-
-const model = createAgentFeedModel();
-let appState: AppState = {
-  feed: model.snapshot(),
-  status: { kind: "connecting" },
-  notice: "",
-};
-const listeners = new Set<() => void>();
-
-function patchAppState(patch: Partial<AppState>) {
-  appState = { ...appState, ...patch };
-  for (const listener of listeners) listener();
-}
-
-const connection = connectAgentFeed({
-  auth: resolveItxAuth({ configName: process.env.ITERATE_CONFIG_NAME }),
+// One keeper socket for the whole process — the TUI's equivalent of the
+// browser tab. Everything below (subscription, sends) rides it.
+configureIterateSession({
   baseUrl: args.baseUrl,
-  projectId: args.projectId,
-  agentPath: args.agentPath,
-  createInput:
-    args.agentPath === ONBOARDING_AGENT_PATH ? onboardingAgentCreateInput(args.projectId) : {},
-  replayAfterOffset: () => model.snapshot().lastOffset,
-  onEvents: (events) => {
-    if (model.applyEvents(events)) patchAppState({ feed: model.snapshot() });
-  },
-  onStatus: (status) => patchAppState({ status }),
+  credentials: resolveItxAuth({ configName: process.env.ITERATE_CONFIG_NAME }),
 });
 
 // ---------------------------------------------------------------------------
-// Rendering
+// The app shell
 // ---------------------------------------------------------------------------
 
+async function openAgentFeedSubscription(input: {
+  itx: Itx;
+  model: ReturnType<typeof createAgentFeedModel>;
+  publishFeed: () => void;
+}) {
+  // One agent path stub per (re)subscribe cycle, released once the returned
+  // subscription handle exists. useItxSubscription owns and releases that
+  // handle on dependency changes, reconnect, and unmount.
+  const agent = input.itx.agents.get(args.agentPath);
+  try {
+    const snapshot = await agent.processor.snapshot();
+    if (snapshot.state.birthCertificate === null) {
+      await agent.create(
+        args.agentPath === ONBOARDING_AGENT_PATH ? onboardingAgentCreateInput(args.projectId) : {},
+      );
+    }
+    return await agent.stream.subscribe({
+      processEventBatch: (batch) => {
+        if (input.model.applyEvents(batch.events)) input.publishFeed();
+      },
+      replayAfterOffset: input.model.snapshot().lastOffset,
+      subscriber: { description: "iterate chat TUI" },
+    });
+  } finally {
+    (agent as Partial<Disposable>)[Symbol.dispose]?.();
+  }
+}
+
 function AgentChatApp() {
-  const state = useSyncExternalStore(
-    useCallback((listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }, []),
-    () => appState,
+  // The immutable/durable half is a finite TanStack query, exactly like a
+  // browser route read. The live subscription starts at that query's cursor,
+  // closes the read→subscribe race with replay, then owns the tail.
+  const history = useItxQuery({
+    key: historyQueryKey,
+    query: (itx) => readAgentFeedHistory(itx, args.agentPath),
+  });
+  const [model] = useState(() => {
+    const next = createAgentFeedModel();
+    next.applyEvents(history);
+    return next;
+  });
+  const [feed, setFeed] = useState<AgentFeedSnapshot>(() => model.snapshot());
+  useEffect(() => {
+    if (model.applyEvents(history)) setFeed(model.snapshot());
+  }, [history, model]);
+  const publishFeed = useCallback(() => setFeed(model.snapshot()), [model]);
+
+  /**
+   * Establish the live agent feed on the shared socket: ensure the agent
+   * exists, then subscribe from the query-seeded model's resume cursor. The
+   * onboarding agent is deliberately not born at project bootstrap (a birth
+   * costs a real LLM turn); opening either browser or terminal chat births it
+   * with the same explicit batch. Recovery rereads the current cursor and the
+   * model folds replay overlap out by offset.
+   */
+  const subscribeAgentFeed = useCallback(
+    (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed }),
+    [model, publishFeed],
   );
+  const subscription = useItxSubscription(subscribeAgentFeed, [model], {
+    slug: args.projectId,
+  });
+  // oxlint-disable react-doctor/query-mutation-missing-invalidation -- History is only the startup seed; the replay-capable subscription is the live authority. Writing or refetching the mutation result here can advance the model past delayed events.
+  const {
+    mutate: sendMessage,
+    isPending: messageIsPending,
+    error: messageError,
+  } = useMutation({
+    mutationFn: async (message: string) => {
+      const itx = await connectItx(args.projectId);
+      const agent = itx.agents.get(args.agentPath);
+      try {
+        await sendAgentMessage(agent, message);
+      } finally {
+        (agent as Partial<Disposable>)[Symbol.dispose]?.();
+      }
+    },
+  });
+  // oxlint-enable react-doctor/query-mutation-missing-invalidation
+  const messageNotice = messageIsPending
+    ? "sending…"
+    : messageError != null
+      ? `send failed: ${messageError instanceof Error ? messageError.message : String(messageError)}`
+      : "";
+  const notice = [messageNotice, subscription.status === "error" ? "Ctrl+R to retry" : ""]
+    .filter(Boolean)
+    .join(" · ");
   const [composerValue, setComposerValue] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
 
@@ -116,6 +154,9 @@ function AgentChatApp() {
 
   useKeyboard((key) => {
     if (key.name === "escape") clearComposer();
+    if (key.ctrl && key.name === "r" && subscription.status === "error") {
+      subscription.refresh();
+    }
   });
 
   const submit = useCallback(
@@ -123,22 +164,20 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
       clearComposer();
-      patchAppState({ notice: "sending…" });
-      connection
-        .sendMessage(message)
-        .then(() => patchAppState({ notice: "" }))
-        .catch((error: unknown) => {
-          patchAppState({
-            notice: `send failed: ${error instanceof Error ? error.message : String(error)}`,
-          });
-        });
+      sendMessage(message);
     },
-    [clearComposer],
+    [clearComposer, sendMessage],
   );
 
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={COLORS.bg}>
-      <ChatHeader status={state.status} notice={state.notice} eventCount={state.feed.eventCount} />
+      <ChatHeader
+        title={`${args.projectId} ${args.agentPath}`}
+        status={subscription.status}
+        detail={subscription.error}
+        notice={notice}
+        eventCount={feed.eventCount}
+      />
       <scrollbox
         width="100%"
         flexGrow={1}
@@ -150,15 +189,15 @@ function AgentChatApp() {
         stickyStart="bottom"
         contentOptions={{ flexDirection: "column", paddingLeft: 1, paddingRight: 1, gap: 1 }}
       >
-        {state.feed.items.length === 0 && state.feed.live == null ? (
+        {feed.items.length === 0 && feed.live == null ? (
           <text fg={COLORS.textMuted}>
             No messages yet — say something to {args.agentPath.slice("/agents/".length)}.
           </text>
         ) : null}
-        {state.feed.items.map((item) => (
+        {feed.items.map((item) => (
           <FeedItem key={item.id} item={item} />
         ))}
-        {state.feed.live == null ? null : <LiveActivity activity={state.feed.live} />}
+        {feed.live == null ? null : <LiveActivity activity={feed.live} />}
       </scrollbox>
       <box
         width="100%"
@@ -192,178 +231,6 @@ function AgentChatApp() {
   );
 }
 
-function ChatHeader(props: { status: AgentConnectionStatus; notice: string; eventCount: number }) {
-  const statusLabel =
-    props.status.kind === "live"
-      ? "live"
-      : props.status.kind === "connecting"
-        ? "connecting"
-        : `${props.status.kind} (${props.status.detail})`;
-  const statusColor =
-    props.status.kind === "live"
-      ? COLORS.accent
-      : props.status.kind === "connecting"
-        ? COLORS.warning
-        : COLORS.danger;
-  const meta = [
-    `${props.eventCount} event${props.eventCount === 1 ? "" : "s"}`,
-    statusLabel,
-    props.notice,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <box
-      width="100%"
-      height={3}
-      border
-      borderStyle="single"
-      borderColor={COLORS.border}
-      backgroundColor={COLORS.surface}
-      flexDirection="row"
-      paddingLeft={1}
-      paddingRight={1}
-      gap={1}
-    >
-      <text width={6} content={getBrandMarkText()} />
-      <text flexGrow={1} fg={COLORS.text} content={`${args.projectId} ${args.agentPath}`} />
-      <text fg={COLORS.textSecondary} content={meta} />
-      <text width={2} fg={statusColor}>
-        ●
-      </text>
-    </box>
-  );
-}
-
-function FeedItem(props: { item: AgentUiItem }) {
-  const item = props.item;
-  if (item.kind === "activity") return <SettledActivity activity={item} />;
-  if (item.kind === "user" || item.kind === "assistant") return <Message item={item} />;
-  if (item.kind === "child-stream-created") {
-    return <text fg={COLORS.textMuted}>✦ child stream created: {item.childPath}</text>;
-  }
-  return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
-}
-
-function Message(props: { item: AgentUiMessageItem }) {
-  const isUser = props.item.kind === "user";
-  return (
-    <box flexDirection="column">
-      <text fg={isUser ? COLORS.accent : COLORS.agent}>
-        {isUser ? "you ›" : "agent ›"}
-        <span fg={COLORS.textMuted}> {formatClock(props.item.timestampMs)}</span>
-      </text>
-      <text fg={COLORS.textBody}>{props.item.text}</text>
-    </box>
-  );
-}
-
-function SettledActivity(props: { activity: AgentUiActivity }) {
-  return (
-    <box flexDirection="column">
-      <text fg={COLORS.textMuted}>✦ {formatActivitySummary(props.activity)}</text>
-      {props.activity.steps.map((step) => (
-        <text key={step.id} fg={COLORS.textMuted}>
-          {"  "}· {formatStepLine(step)}
-        </text>
-      ))}
-    </box>
-  );
-}
-
-/** Shared 100ms clock for live "Running code 0.9s" — useSyncExternalStore,
- * not useState+setInterval, so the snapshot is stable between ticks. */
-let liveCodeClockNow = Date.now();
-const liveCodeClockListeners = new Set<() => void>();
-let liveCodeClockTimer: ReturnType<typeof setInterval> | undefined;
-
-function subscribeLiveCodeClock(onStoreChange: () => void) {
-  liveCodeClockListeners.add(onStoreChange);
-  liveCodeClockNow = Date.now();
-  if (liveCodeClockTimer == null) {
-    liveCodeClockTimer = setInterval(() => {
-      liveCodeClockNow = Date.now();
-      for (const listener of liveCodeClockListeners) listener();
-    }, 100);
-  }
-  // Notify after subscribe returns so the first snapshot is current wall time
-  // (updating the scalar alone does not re-render useSyncExternalStore).
-  // Skip if already unsubscribed (Strict Mode remount / codeRunning flip).
-  queueMicrotask(() => {
-    if (liveCodeClockListeners.has(onStoreChange)) onStoreChange();
-  });
-  return () => {
-    liveCodeClockListeners.delete(onStoreChange);
-    if (liveCodeClockListeners.size === 0 && liveCodeClockTimer != null) {
-      clearInterval(liveCodeClockTimer);
-      liveCodeClockTimer = undefined;
-    }
-  };
-}
-
-function getLiveCodeClockSnapshot() {
-  // Idle: refresh only when a full tick has elapsed so remounts aren't stuck
-  // on a stale freeze, but consecutive getSnapshot calls stay Object.is-stable.
-  if (liveCodeClockTimer == null) {
-    const wall = Date.now();
-    if (wall - liveCodeClockNow >= 100) liveCodeClockNow = wall;
-  }
-  return liveCodeClockNow;
-}
-
-function LiveActivity(props: { activity: AgentUiActivity }) {
-  // Tick while code runs so "Running code 0.9s" counts up without waiting
-  // for feed events (script execution often emits nothing mid-run).
-  const codeRunning =
-    props.activity.steps.some((step) => step.kind === "code" && step.status === "running") ||
-    props.activity.phase === "script";
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      if (!codeRunning) return () => {};
-      return subscribeLiveCodeClock(onStoreChange);
-    },
-    [codeRunning],
-  );
-  const nowMs = useSyncExternalStore(subscribe, getLiveCodeClockSnapshot, getLiveCodeClockSnapshot);
-
-  const lastStep = props.activity.steps.findLast((step) => step.status === "running");
-  const thinking = lastStep?.kind === "llm" ? streamingTail(lastStep.thinkingText) : "";
-  const streamed =
-    lastStep?.kind === "llm"
-      ? streamingTail(lastStep.responseText)
-      : lastStep?.kind === "code"
-        ? streamingTail(lastStep.code)
-        : "";
-  return (
-    <box flexDirection="column">
-      <text fg={COLORS.warning}>✦ {formatLiveActivityLabel(props.activity, nowMs)}</text>
-      {props.activity.steps.map((step) => (
-        <text key={step.id} fg={COLORS.textMuted}>
-          {"  "}· {formatStepLine(step)}
-        </text>
-      ))}
-      {thinking === "" ? null : <text fg={COLORS.textMuted}>{thinking}</text>}
-      {streamed === "" ? null : <text fg={COLORS.textSecondary}>{streamed}</text>}
-    </box>
-  );
-}
-
-function getBrandMarkText() {
-  return new StyledText([
-    fg("#000000")(bg(COLORS.surface)("▐")),
-    bg("#000000")(fg("#ffffff")(" 𝑖 ")),
-    fg("#000000")(bg(COLORS.surface)("▌")),
-  ]);
-}
-
-function formatClock(timestampMs: number) {
-  return new Date(timestampMs).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function parseArgs(argv: string[]) {
   const baseUrl = readFlag(argv, "--base-url");
   const projectId = readFlag(argv, "--project-id");
@@ -378,11 +245,7 @@ function parseArgs(argv: string[]) {
     throw new Error(`--agent-path must start with "/agents/", got "${agentPath}".`);
   }
 
-  return {
-    baseUrl: baseUrl.replace(/\/+$/, ""),
-    projectId,
-    agentPath,
-  };
+  return { baseUrl, projectId, agentPath };
 }
 
 function readFlag(argv: string[], flagName: string) {
@@ -401,5 +264,19 @@ const renderer = await createCliRenderer({
   screenMode: "alternate-screen",
   consoleMode: "disabled",
 });
-process.on("exit", () => connection.dispose());
-createRoot(renderer).render(<AgentChatApp />);
+const queryClient = createIterateQueryClient();
+createRoot(renderer).render(
+  <QueryClientProvider client={queryClient}>
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <TerminalErrorBoundary onReset={reset}>
+          <ProjectScope slug={args.projectId}>
+            <Suspense fallback={<LoadingTerminal />}>
+              <AgentChatApp />
+            </Suspense>
+          </ProjectScope>
+        </TerminalErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
+  </QueryClientProvider>,
+);

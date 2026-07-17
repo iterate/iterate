@@ -193,6 +193,140 @@ For an unexpected browser or Worker failure an operator should be able to:
 4. find the corresponding Cloudflare log/trace through shared IDs; and
 5. distinguish the underlying Worker failure from the browser observing it.
 
+## First-party stream event feed
+
+The analytics-event gold path is an automatically appended, ordinary durable
+subscription on every new project stream. It is not a project setting,
+user-provided integration, or optional connection:
+
+```text
+new project stream
+  -> commit stream/created
+  -> commit ordinary project-worker subscription
+  -> commit ordinary PostHog subscription
+  -> normal durable stream cursor
+  -> itx.integrations.posthog.processEventBatch
+  -> PostHog EU public batch capture
+```
+
+The conventional subscription key is `iterate-platform-posthog`. It delivers
+from offset zero, explicitly includes ephemeral rows, parks rather than
+poison-skipping, and uses the fixed expression
+`["integrations", "posthog", "processEventBatch"]`. This is normal stream
+configuration: its key is not protected, and the subscription may be replaced
+or removed through the normal lifecycle. `includeEphemeral` is a generic
+push/webhook option rather than a private platform power.
+`itx.integrations.posthog` is a fixed first-party receiver with deployment
+credentials; projects do not configure their own PostHog connection.
+The subscription itself remains ordinary. The host does, however, mint a
+`stream-delivery` purpose while the delivery spine evaluates its expression;
+the loopback converts that purpose to a private auth-context identity brand,
+and the receiver rejects every unbranded context. No public credential or
+caller-chosen principal string can reproduce it. This is a receiver trust
+boundary, not protected subscription configuration: projects may still
+replace or remove the fact.
+
+Fresh project streams append both platform subscriptions during their ordinary
+first-boot birth sequence, before the first user event can land. Neither the
+project-worker subscription nor the PostHog subscription receives a special
+protection mechanism. There is deliberately no legacy scan, wake-time shim, or
+operator-configurable backfill. Streams created before this invariant exists
+are outside the rollout boundary; every stream created afterwards in an OS
+deployment with its required PostHog credential starts with the ordinary feed.
+There is no recovery import or restoration lane. The shared streams example app
+has neither the OS credential nor the receiver and therefore does not acquire
+this OS-only subscription.
+
+“All events” means one PostHog occurrence for every committed row still owned
+by the stream, without a type selector, sampling, success/error filter,
+ephemeral exclusion, or payload allowlist. Its event name is `stream:append`.
+The complete committed event is sent under `properties.stream_event`,
+including payload, metadata, source/cross-post provenance, idempotency key,
+ephemerality, offset, commit time, type, and raw path. It remains byte-for-byte
+intact through 100 KiB of encoded JSON. Above that explicit boundary, a pure,
+deterministic JSON compactor chops the largest useful nested value and marks
+the lost tail; `stream_event_truncated` and
+`stream_event_original_json_bytes` make the loss queryable. This is size
+bounding, not an event-field allowlist: small siblings and all separately
+indexed coordinates remain, and no event is dropped. The raw stream path is
+also indexed separately as `stream_path`. Event producers own the obligation
+not to append secrets that must not reach our first-party analytics project.
+PostHog asynchronous ingestion warnings remain an operational signal rather
+than a reason to silently filter or sample events.
+
+Each occurrence also contains indexed coordinates:
+
+- deployment worker name and immutable project id;
+- the raw stream path, an opaque stable stream id, and source offset;
+- original commit time, ephemerality, and stream high-water mark;
+- the exact event type, including custom project event types; and
+- a stable UUID derived from an unambiguous JSON tuple of deployment, project,
+  stream path, offset, and commit time, so at-least-once retries submit the
+  same identity without path delimiter collisions or conflating a stream
+  recreated after preview data erasure. PostHog's ingestion-side UUID
+  deduplication is best-effort, not an exactly-once guarantee.
+
+Every occurrence carries PostHog's first-class `$groups: { project: <id> }`.
+The group key is the immutable project id, following PostHog's requirement that
+group keys be unique identifiers rather than display names. An authentic
+root `project/created` birth certificate emits the one `$groupidentify`, with
+both the immutable ID and the creation-time slug (also used as PostHog's
+display `name`), so operators can find one project group by either identifier
+without creating parallel entities. Ordinary `stream/created` rows deliberately
+do not emit redundant ID-only group updates: the authentic root birth
+certificate owns the complete group record. Projects born before this rollout
+remain outside this first-class group-creation path; there is no partial
+compatibility record, lookup, or backfill.
+Project slugs are mutable; synchronizing a later rename needs an authoritative
+directory event and is not falsely claimed by this birth-only feed. The event
+must be first-hand,
+durable, unannotated, on `/`, and carry the `project-created:<id>` idempotency
+key; lookalike or cross-posted events cannot write label properties. No
+directory lookup, mutable alias, or per-batch group update exists. The regular
+stream occurrence still contains the complete project birth payload.
+
+PostHog only links identified events to groups, so every event uses one stable
+synthetic operational identity per deployment/project. This creates no
+identity per stream or end user, while isolating PostHog's per-distinct-id
+limiter: one unusually busy project cannot stall every project's durable feed.
+The `$groups` property, not this synthetic identity, remains the project model.
+Exact retries reuse the occurrence UUID. PostHog may deduplicate repeated UUIDs
+asynchronously, so neither the feed nor this document claims exactly-once
+storage. GeoIP remains disabled.
+
+The receiver calls PostHog's supported EU `/batch/` endpoint directly rather
+than introducing a buffered SDK with a second retry queue. It submits every
+row in the delivered batch, and the stream cursor advances only after the
+public endpoint returns HTTP success. HTTP and network failures reject the
+delivery. There is one eight-second network timeout and no inner retry; the
+stream spine is the single retry owner. Failures back off, then append a
+durable `subscription-parked` fact after the bounded attempt limit. Operators
+recover explicitly with resume/cursor-set; configuration is never silently
+replaced.
+
+The wire shape follows the batch endpoint rather than the single-event capture
+example: `distinct_id` is inside each event's `properties`. This matters
+because a malformed event can receive HTTP success and still be discarded by
+PostHog's asynchronous ingestion pipeline.
+
+That acknowledgement is deliberately described as **HTTP acceptance**, not
+proof of final indexing. PostHog validates and ingests public capture requests
+asynchronously; a 2xx can precede an ingestion warning, quota decision, or
+drop, and its UUID deduplication is not an exactly-once contract. The source
+stream is therefore the durable truth. Preview proves representative events
+arrive and checks the ingestion-warning surface, while ongoing operation must
+monitor PostHog ingestion warnings and compare source submissions with indexed
+events. This PR does not claim an impossible synchronous end-to-end guarantee.
+
+The capture request and custom `posthog.capture_stream_events` span expose only
+bounded project coordinates, an opaque stream id, delivery id, attempt, and
+event count.
+Preview acceptance proof must show: a fresh stream, durable and ephemeral
+custom events in the live PostHog feed under the same
+project group, stable occurrence UUIDs across a forced transport retry, no
+observed ingestion warning for the proof events, and the matching Cloudflare
+custom span. No sampling is permitted.
+
 ### Worker exception ownership
 
 - Use the supported edge/workerd export of `posthog-node`.
@@ -320,6 +454,24 @@ alarm actions. Possible later operation adapters are:
 - [ ] Logging failure cannot alter the product outcome.
 - [ ] Secrets, bodies, scripts, prompts, arguments/results, auth headers, and
       query parameters are absent from logs, exceptions, and replay.
+- [ ] Every fresh project stream receives the ordinary PostHog subscription
+      during its birth sequence; there is no legacy scan, backfill, or
+      compatibility path.
+- [ ] A normal project script cannot call the first-party receiver directly;
+      only the host-minted delivery purpose can resolve it, without protecting
+      the subscription's key or lifecycle.
+- [ ] Every durable and ephemeral row is submitted as one project-grouped
+      occurrence; no type, success/error, or sampling selector exists.
+- [ ] Only public-batch HTTP acceptance gates the durable cursor; transport
+      failures eventually park, and the proof checks PostHog's asynchronous
+      ingestion-warning surface without claiming exactly-once indexing.
+- [ ] Each `stream:append` request contains the complete committed event through
+      100 KiB, including payload, metadata, provenance, idempotency key, and raw
+      stream path. Larger JSON is visibly and deterministically chopped, with
+      original byte size and truncation indexed; no event-field allowlist,
+      sampling, or event drop exists.
+- [ ] Preview proof includes the PostHog live feed and its matching Cloudflare
+      capture span for a fresh stream's durable and ephemeral rows.
 
 ## Primary references
 
@@ -343,3 +495,5 @@ alarm actions. Possible later operation adapters are:
 - PostHog replay privacy:
   https://posthog.com/docs/session-replay/privacy
 - PostHog logs and replay: https://posthog.com/docs/logs/link-session-replay
+- PostHog group analytics: https://posthog.com/docs/product-analytics/group-analytics
+- PostHog Capture API: https://posthog.com/docs/api/capture

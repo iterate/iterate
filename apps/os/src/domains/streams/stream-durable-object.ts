@@ -1,18 +1,20 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import type { Env } from "../../env.ts";
-import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
-} from "./rpc-types.ts";
-import { StreamOffsetConflictError, streamOffsetConflictMessage } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
+} from "iterate/processors";
+import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
+import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
+import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/processors";
+import type { Env } from "../../env.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
@@ -24,7 +26,6 @@ import {
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
-import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import { STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX } from "./stream-unavailable.ts";
 import {
@@ -96,8 +97,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
-          // ephemeral lane delivers them; the durable lanes filter them from
-          // DELIVERY in stream-subscribers.ts.
+          // ephemeral lane delivers them; durable lanes filter them from
+          // DELIVERY unless their ordinary subscription explicitly opts in.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -135,13 +136,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
-    // For project-scoped streams the birth certificate includes the worker
-    // feed: a `subscription-configured` push subscription to the project
-    // worker's `processEventBatch`, appended by the stream TO ITSELF in the
-    // same synchronous turn as `created`. Born-configured means zero wiring
-    // window — the feed is armed before the first user event can land (a
-    // voice stream streams from birth) — while remaining ordinary config:
-    // one registry, one spine, overridable by re-appending the same key.
+    // Project streams are born with their ordinary platform feeds. Declaring
+    // both here means there is no asynchronous wiring window before the first
+    // user event, while the subscription facts remain removable/replaceable
+    // through the same public lifecycle as any other subscription.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
@@ -161,6 +159,10 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "skip",
           } satisfies SubscriptionConfiguredPayload,
         });
+        // The standalone streams playground reuses this DO without OS's
+        // PostHog credential or receiver. Deployed OS environments require
+        // the credential, so its presence is the deployment boundary.
+        if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
     this.append({
