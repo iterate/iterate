@@ -37,8 +37,9 @@ in [docs/testing.md](../../../docs/testing.md).
   deployed preview, including its project MCP route (it derives its project slug from
   `GITHUB_SHA` when set).
 - Stream TUI behavior specs: `tsx ./e2e/tui-test/run.ts` (see `tui-test/README.md`). The script
-  creates a disposable OS project before launching Microsoft TUI Test (disposal is a no-op
-  until itx grows `projects.remove`, like every other test project).
+  builds the published Iterate package, creates a disposable OS project, and launches that built
+  CLI through Microsoft TUI Test. Preview CI runs this lane whenever OS is selected (disposal is a
+  no-op until itx grows `projects.remove`, like every other test project).
 
 ## File names in `e2e/vitest/`
 
