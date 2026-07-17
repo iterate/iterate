@@ -33,13 +33,6 @@ const textEncoder = new TextEncoder();
  * cap with these instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
-export type CommittedStreamEventMetadata = {
-  committedAt: string;
-  eventType: string;
-  offset: number;
-};
-
-const REDACTED_EVENT_TYPE = "redacted";
 
 export class StreamEventLog {
   constructor(
@@ -49,8 +42,8 @@ export class StreamEventLog {
     this.sql.exec(`
       -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
       -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
-      -- ephemeral marks second-class rows: range reads exclude them unless asked, and
-      -- the stream may evict them in the future. Eviction keeps offsets consumed
+      -- ephemeral marks second-class rows: range reads exclude them unless asked.
+      -- Any future eviction must wait for the protected observability cursor. It keeps offsets consumed
       -- (highestAssignedOffset reads AUTOINCREMENT's sqlite_sequence, which survives
       -- row deletion) but forgets their idempotency keys.
       create table if not exists events (
@@ -103,37 +96,6 @@ export class StreamEventLog {
         .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
         .toArray()[0]?.seq ?? 0;
     return Math.max(this.highestOffset(), sequence);
-  }
-
-  /**
-   * Payload-blind cursor read for the alarm-owned PostHog exporter. Only our
-   * bounded event-type alphabet crosses the telemetry boundary. The SQL
-   * expression performs that classification before an arbitrary type can be
-   * materialized in JavaScript or become a high-cardinality property.
-   */
-  getCommitMetadata(afterOffset: number, limit: number): CommittedStreamEventMetadata[] {
-    return this.sql
-      .exec<CommittedStreamEventMetadata>(
-        `
-          select
-            offset,
-            case
-              when type not glob '*[^A-Za-z0-9./_-]*'
-                and length(cast(type as blob)) > 0
-                and length(cast(type as blob)) <= 256
-              then type
-              else '${REDACTED_EVENT_TYPE}'
-            end as eventType,
-            created_at as committedAt
-          from events
-          where offset > ?
-          order by offset asc
-          limit ?
-        `,
-        afterOffset,
-        limit,
-      )
-      .toArray();
   }
 
   /**

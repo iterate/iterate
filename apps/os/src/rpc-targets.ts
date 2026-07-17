@@ -31,9 +31,9 @@ import { RpcTarget } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
+  STREAM_DELIVERY_PRINCIPAL,
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
-  trustedInternalAuthContext,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -110,6 +110,13 @@ import {
 } from "./domains/integrations/github-api.ts";
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
+import {
+  assertPosthogSubscriptionWriteAllowed,
+  assertCanonicalPosthogDelivery,
+  batchContainsCanonicalStreamCreated,
+  capturePosthogStreamEventBatch,
+  posthogSubscriptionEvent,
+} from "./domains/integrations/posthog.ts";
 import {
   connectionSlackClient,
   normalizeSlackError,
@@ -427,7 +434,7 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT product event: live subscribe() connections see it, but default reads and ordinary durable delivery (processors, the project worker feed) do not. First-party observability still acknowledges every row before any future eviction; append the durable product fact separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -482,6 +489,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // ride the tagged methods.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    assertPosthogSubscriptionWriteAllowed(events, {
+      authority:
+        this.props.auth.principal === "admin"
+          ? "admin"
+          : this.props.auth.principal === STREAM_DELIVERY_PRINCIPAL
+            ? "managed"
+            : "userspace",
+      projectId: this.props.projectId,
+    });
     return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
   }
 
@@ -576,8 +592,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /**
-   * Session-scoped live event delivery (the "ephemeral" subscription lane —
-   * also the only lane that receives `ephemeral: true` events):
+   * Session-scoped live event delivery (the public "ephemeral" subscription
+   * lane; a protected platform observability push is the only durable opt-in):
    * `processEventBatch` first receives durable history after
    * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
    * when appended after this exact subscription opens and are never replayed.
@@ -648,7 +664,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // through a push expression evaluated against the project's trusted itx
     // root. A session principal appending copies would bypass provenance
     // stamping.
-    if (this.props.auth.principal !== "trusted-internal") {
+    if (this.props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
       throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
     return Promise.resolve(this.durableObjectStub.acceptCrossPost(batch));
@@ -2985,6 +3001,34 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
   }
 }
 
+/** Iterate-owned receiver behind `itx.integrations.posthog`. */
+class PostHogIntegrationRpcTarget extends RpcTarget {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    if (props.auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
+      throw new Error("PostHog stream ingestion is an Iterate-managed integration");
+    }
+  }
+
+  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+    assertCanonicalPosthogDelivery(batch);
+    if (batch.projectId !== this.props.projectId) {
+      throw new Error("PostHog stream delivery project does not match its itx authority");
+    }
+    const config = parseConfig(env).posthog;
+    if (config === undefined) {
+      throw new StreamReceiverUnavailableError("PostHog is not configured for this deployment");
+    }
+
+    await capturePosthogStreamEventBatch({
+      apiKey: config.apiKey,
+      batch,
+      projectId: this.props.projectId,
+      workerName: env.WORKER_SELF,
+    });
+  }
+}
+
 /**
  * The `itx.integrations` collection.
  *
@@ -3064,6 +3108,14 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     return parallelOpenApiTarget({
       egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
       parent: "a project itx (itx.integrations.parallel)",
+    });
+  }
+
+  /** @internal Iterate-owned sink for the reserved all-stream event feed. */
+  get posthog(): PostHogIntegrationRpcTarget {
+    return new PostHogIntegrationRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
     });
   }
 
@@ -5505,10 +5557,16 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // deployment code instead of by patching user repos, and first-party
   // per-event work (the streams index via #indexStreamActivity; future
   // policy/metrics feeds) joins the same ordered, checkpointed delivery.
-  // Rule for such steps: idempotent and never-throwing; only the worker
-  // delegation may reject into the spine's retry/park machinery. Same trust
-  // model as worker.processEventBatch itself: any project principal.
+  // Platform indexing steps are idempotent and never-throwing. The one setup
+  // step (installing the first-party PostHog feed) may reject, but translates
+  // that rejection into receiver-unavailable so the birth batch is retried
+  // rather than poison-skipped. Setup additionally requires the narrow
+  // stream-delivery principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+    if (batch.projectId !== this.#props.projectId) {
+      throw new Error("stream delivery project does not match its itx authority");
+    }
+    await this.#installPosthogSubscriptionForCreatedStream(batch);
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
     this.#indexStreamSearch(batch);
@@ -5519,8 +5577,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // repo unseeded, or its first build still in flight). That is this
       // receiver being unavailable, not the batch being poison — say so in
       // the delivery contract's vocabulary so the spine backs off and
-      // redelivers instead of skip-confirming real events. (A skipped
-      // A skipped first batch loses real userspace reactions; this exact race
+      // redelivers instead of skip-confirming real events. A skipped first
+      // batch loses real userspace reactions; this exact race
       // previously skipped offset 1 of every fresh project's root stream
       // against the config-repo seed.)
       if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
@@ -5530,6 +5588,31 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         );
       }
       throw error;
+    }
+  }
+
+  /**
+   * Platform lifecycle hook: the project-worker feed's offset-one birth batch
+   * installs the separate first-party PostHog feed on that same stream. The
+   * fixed idempotency key makes source redelivery harmless. There is no scan,
+   * backfill, or compatibility hook for streams created before the rollout
+   * boundary. A setup outage is receiver unavailability, never a poison event
+   * that may be skipped.
+   */
+  async #installPosthogSubscriptionForCreatedStream(batch: StreamPushEventBatch): Promise<void> {
+    if (
+      this.#props.auth.principal !== STREAM_DELIVERY_PRINCIPAL ||
+      !batchContainsCanonicalStreamCreated(batch)
+    ) {
+      return;
+    }
+    try {
+      await this.streams.get(batch.path).append(posthogSubscriptionEvent());
+    } catch (error) {
+      throw new StreamReceiverUnavailableError(
+        "could not install the first-party PostHog subscription",
+        { cause: error },
+      );
     }
   }
 
@@ -5725,8 +5808,8 @@ export function itxForScope(props: {
  * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
  * walks the same shape a project stream's does.
  */
-export function deploymentItxForTrustedInternal(props: { ctx: CfExecutionContext }) {
-  return new SessionRpcTarget({ auth: trustedInternalAuthContext(), ctx: props.ctx });
+export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
+  return new SessionRpcTarget(props);
 }
 
 async function projectProcessorState(projectId: string) {
@@ -6534,7 +6617,7 @@ class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorH
   wakeStreamSubscriber(
     request: StreamSubscriberWakeRequest,
   ): Promise<StreamSubscriberWakeResponse> {
-    if (this.#auth.principal !== "trusted-internal") {
+    if (this.#auth.principal !== STREAM_DELIVERY_PRINCIPAL) {
       throw new Error("wakeStreamSubscriber is dialed by stream delivery spines, not sessions");
     }
     return this.#host().wakeStreamSubscriber(request);

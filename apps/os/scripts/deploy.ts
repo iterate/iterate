@@ -109,39 +109,6 @@ export async function isExactOsProjectMiss(response: Response): Promise<boolean>
   return typeof body === "object" && body !== null && "error" in body && body.error === "not found";
 }
 
-/** Fail before upload when PostHog would accept events under a nonexistent
- * project token. Capture validates only token shape, so its 200 response is
- * not a configuration proof; decide resolves the token to a real project. */
-export async function assertPosthogProjectApiKey(
-  apiKey: string,
-  captureFetch: typeof fetch = fetch,
-): Promise<void> {
-  let response: Response | undefined;
-  try {
-    response = await captureFetch("https://eu.i.posthog.com/decide/?v=3", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        api_key: apiKey,
-        distinct_id: "iterate:deploy-preflight",
-      }),
-      signal: AbortSignal.timeout(5_000),
-    });
-    const body: unknown = await response.json().catch(() => null);
-    if (
-      !response.ok ||
-      body === null ||
-      typeof body !== "object" ||
-      !("token" in body) ||
-      body.token !== apiKey
-    ) {
-      throw new Error(`PostHog project API key preflight failed (HTTP ${response.status}).`);
-    }
-  } finally {
-    await response?.body?.cancel().catch(() => undefined);
-  }
-}
-
 async function smokeAuthRpc(env: DeployedEnv, label: string) {
   const projectHostnameBase = env.projectHostnameBases[0];
   if (!projectHostnameBase) {
@@ -214,8 +181,7 @@ export default async function deploy(
 
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
-      const config = parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
-      if (config.posthog) await assertPosthogProjectApiKey(config.posthog.apiKey);
+      parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
 
       // Wrangler validates queue consumers during deploy, so the queue itself
       // has to exist before uploading a version that binds it. Artifact event

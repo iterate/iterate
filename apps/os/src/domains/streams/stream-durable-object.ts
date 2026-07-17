@@ -4,6 +4,7 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { assertPosthogSubscriptionWriteAllowed } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { DurableObjectAlarm } from "./durable-object-alarm.ts";
 import type {
@@ -36,15 +37,11 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
-import {
-  posthogApiKeyFromStreamEnv,
-  resetStreamEventPostHogForRecovery,
-  StreamEventPostHogExporter,
-} from "./stream-event-posthog.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
+  PROJECT_WORKER_SUBSCRIPTION_KEY,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
@@ -56,13 +53,6 @@ const MAX_GET_EVENTS_LIMIT = 500;
 const RECOVERY_EXPORT_PAGE_BYTE_LIMIT = 1024 * 1024;
 /** Bound CPU per RPC; the client continues the same fixed export window. */
 const RECOVERY_EXPORT_SESSION_PAGE_LIMIT = 32;
-
-/**
- * The subscription key of the birth-certificate worker feed every
- * project-scoped stream configures on itself (see the constructor). Userspace
- * overrides it by re-appending `subscription-configured` with this same key.
- */
-const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -98,19 +88,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     streamId: this.ctx.id.toString(),
   });
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
-  readonly #posthog = (() => {
-    const apiKey = posthogApiKeyFromStreamEnv(this.env);
-    if (apiKey === undefined) return undefined;
-    return new StreamEventPostHogExporter({
-      apiKey,
-      initialOffset: this.#log.highestAssignedOffset(),
-      projectId: this.name.projectId,
-      readEvents: (afterOffset, limit) => this.#log.getCommitMetadata(afterOffset, limit),
-      state: this.ctx.storage.kv,
-      streamId: this.ctx.id.toString(),
-      workerName: this.env.WORKER_SELF,
-    });
-  })();
   /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)
    * because the core-state rebuild path also reconciles these rows against
@@ -132,8 +109,9 @@ export class StreamDurableObject extends DurableObject<Env> {
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
-          // ephemeral lane delivers them; the durable lanes filter them from
-          // DELIVERY in stream-subscribers.ts.
+          // live lanes deliver them; ordinary durable lanes filter them
+          // from DELIVERY, while the protected observability push explicitly
+          // opts in (stream-subscribers.ts).
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -150,8 +128,30 @@ export class StreamDurableObject extends DurableObject<Env> {
         // delivery-path operation that produced it, so failures log.
         try {
           this.append(event);
+          if (event.type === "events.iterate.com/stream/subscription-parked") {
+            console.error({
+              schema: "iterate.stream-subscription.v1",
+              message: "stream_subscription_parked",
+              outcome: "parked",
+              projectId: this.name.projectId,
+              subscriptionKey: event.payload?.subscriptionKey,
+              atOffset: event.payload?.atOffset,
+              attempts: event.payload?.attempts,
+            });
+          }
         } catch (error) {
-          console.error("stream delivery fact append failed", { type: event.type, error });
+          console.error({
+            schema: "iterate.stream-subscription.v1",
+            message: "stream_delivery_fact_append_failed",
+            outcome: "failed",
+            projectId: this.name.projectId,
+            eventType: event.type,
+            errorName: error instanceof Error ? error.name : "NonErrorThrowable",
+          });
+          // Parking is a durable state transition. If its fact did not commit,
+          // the spine must keep its cursor/backoff and retry instead of silently
+          // clearing the only remaining work record.
+          if (event.type === "events.iterate.com/stream/subscription-parked") throw error;
         }
       },
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
@@ -166,17 +166,16 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
     // For project-scoped streams the birth certificate includes the worker
     // feed: a `subscription-configured` push subscription to the project
-    // worker's `processEventBatch`, appended by the stream TO ITSELF in the
-    // same synchronous turn as `created`. Born-configured means zero wiring
-    // window — the feed is armed before the first user event can land (a
-    // voice stream streams from birth) — while remaining ordinary config:
-    // one registry, one spine, overridable by re-appending the same key.
+    // worker's `processEventBatch`, appended by the stream to itself in the
+    // same synchronous turn as `created`. The PostHog feed is installed later
+    // by that processor when it receives this immutable birth event.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
@@ -204,19 +203,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Native alarm root: run due work, then publish the exact remaining deadline. */
-  async alarm(): Promise<void> {
-    this.#alarm.begin();
-    // The constructor's `woken` append already ran `#subscribers.wake()`;
-    // onAlarm retries due durable deliveries.
-    this.#flushCoreProcessorState();
+  /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
+  alarm(): void {
+    // The constructor's `woken` append already ran `#subscribers.wake()` via
+    // post-commit fan-out; this call re-arms the alarm for the next due retry
+    // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
-    await this.#posthog?.flushIfDue(Date.now());
-    // Read after the fetch: append or recovery may have changed the durable
-    // PostHog deadline while the request yielded.
-    await this.#alarm.complete(
-      minimumDeadline(this.#subscribers.nextAttemptAt, this.#posthog?.nextAttemptAt ?? null),
-    );
+    this.#flushCoreProcessorState();
   }
 
   // ===========================================================================
@@ -308,14 +301,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
     }
 
-    if (newEvents.length === 0) {
-      return events;
-    }
+    if (newEvents.length === 0) return events;
 
-    // 2. Commit event rows and the local export obligation atomically. The
-    // PostHog network request remains alarm-owned; this transaction only makes
-    // it impossible to commit a row without also remembering that work exists.
-    // Durable Object SQL storage runs synchronously in the object's thread and
+    // 2. Persist event rows and reduced core state. Durable Object SQL storage
+    // runs synchronously in the object's thread; each sql.exec() is atomic and
     // Output Gates hold responses until writes are durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
@@ -323,10 +312,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // boundary. The KV state checkpoint is DEBOUNCED (see
     // #checkpointCoreProcessorState) — event rows are the durable truth, and
     // boot catch-up folds past a lagging checkpoint by design.
-    const { byteLengths, posthogAlarmAt } = this.ctx.storage.transactionSync(() => ({
-      byteLengths: this.#log.insert(newEvents),
-      posthogAlarmAt: this.#posthog?.requestFlush() ?? null,
-    }));
+    const byteLengths = this.#log.insert(newEvents);
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(newEvents.length);
     this.#metrics.ingress.bump(
@@ -334,9 +320,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.length,
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
-    if (posthogAlarmAt !== null) this.#alarm.armNoLaterThan(posthogAlarmAt);
 
-    // 3. Post-commit product fan-out. One wake covers every lane:
+    // 3. Post-commit fan-out. Core side effects are fire-and-forget where
+    // async, so nothing here can fail the append. One wake covers every lane:
     // live connection pumps re-arm, lagging wake subscribers get poked,
     // lagging push subscriptions drain. The spine triggers on WATERMARK LAG,
     // never on event types — a subscriber-disconnected fact whose teardown
@@ -538,24 +524,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     assertValidStreamRecoveryLog(parsed, this.name);
     const recoveredCoreState = this.#foldRecoveryCoreProcessorState(parsed);
 
-    const posthogRecoveryState = this.ctx.storage.transactionSync(() => {
-      const reset = resetStreamEventPostHogForRecovery(
-        this.ctx.storage.kv,
-        parsed.highestAssignedOffset,
-      );
+    this.ctx.storage.transactionSync(() => {
       this.#log.replaceAll(parsed.events, parsed.highestAssignedOffset);
       this.ctx.storage.sql.exec("delete from subscriptions");
       this.ctx.storage.kv.put("state", recoveredCoreState);
       this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
-      return reset;
     });
     // Do not tear down the live runtime until the atomic storage replacement
     // succeeds. A failed transaction leaves both the old journal and its
     // in-memory delivery machinery usable.
-    this.#posthog?.adoptRecoveryState(posthogRecoveryState);
+    this.#subscribers.resetForRecovery();
     this.#recordCoreProcessorCheckpointWritten();
     this.#coreProcessorState = recoveredCoreState;
-    this.#subscribers.resetForRecovery();
 
     // The imported incarnation's live connections are gone. A fresh woken
     // fact clears their folded roster and reconciles every durable subscriber.
@@ -575,6 +555,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     let next = CoreProcessorContract.stateSchema.parse({});
     for (const event of input.events) {
       try {
+        assertPosthogSubscriptionWriteAllowed([event], {
+          authority: "recovery",
+          projectId: this.name.projectId,
+        });
         if (
           event.source?.crossPostedFrom === undefined &&
           event.type === "events.iterate.com/stream/subscription-configured"
@@ -1102,6 +1086,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       projectId: this.name.projectId,
       path: this.name.path,
     });
+    // A transform is user-controlled and can construct stream control facts.
+    // Protect the platform key at this second append boundary; the public
+    // StreamRpcTarget guard alone cannot see the transformed destination row.
+    assertPosthogSubscriptionWriteAllowed(inputs, {
+      authority: "userspace",
+      projectId: this.name.projectId,
+    });
     if (inputs.length > 0) this.append(...inputs);
   }
 
@@ -1617,12 +1608,4 @@ function idleTeardownMs(env: Env): number {
   const raw = (env as { STREAM_IDLE_TEARDOWN_MS?: string | number }).STREAM_IDLE_TEARDOWN_MS;
   const parsed = typeof raw === "string" ? Number(raw) : raw;
   return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60_000;
-}
-
-function minimumDeadline(...deadlines: (number | null)[]): number | null {
-  let minimum: number | null = null;
-  for (const deadline of deadlines) {
-    if (deadline !== null && (minimum === null || deadline < minimum)) minimum = deadline;
-  }
-  return minimum;
 }

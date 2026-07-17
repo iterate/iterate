@@ -179,6 +179,13 @@ export function trustedInternalAuthContext(): ItxAuthContext {
   return new ItxAuthContext({ isAdmin: true, principal: "trusted-internal" });
 }
 
+/** Authority minted only for the stream spine while evaluating a delivery expression. */
+export const STREAM_DELIVERY_PRINCIPAL = "stream-delivery";
+
+export function streamDeliveryAuthContext(): ItxAuthContext {
+  return new ItxAuthContext({ isAdmin: true, principal: STREAM_DELIVERY_PRINCIPAL });
+}
+
 export function userPrincipalOf(auth: ItxAuth): UserPrincipal | undefined {
   return auth instanceof ItxAuthContext ? auth.userPrincipal : undefined;
 }

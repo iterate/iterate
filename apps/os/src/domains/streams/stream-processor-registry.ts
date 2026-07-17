@@ -544,7 +544,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
 
     async wakeStreamSubscriber(args) {
       // Coordinate fence. A wake is only legitimate from the EXACT stream this
-      // registry hosts, `(projectId, path)`. The poke is a trusted-internal
+      // registry hosts, `(projectId, path)`. The poke is a stream-delivery
       // RPC, but a stale, malformed, hand-configured, or copied subscription
       // can still target this registry's slug from a DIFFERENT coordinate —
       // and the delivery spine would invoke it. Without this fence the mismatch

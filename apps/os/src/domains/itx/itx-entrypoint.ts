@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { trustedInternalAuthContext } from "../../auth.ts";
+import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
-import { deploymentItxForTrustedInternal, itxForScope } from "../../rpc-targets.ts";
+import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
 import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import {
   takeWorkerFetchDispatch,
@@ -23,16 +23,18 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
-    const { path, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { path, projectId, purpose } = scopeFromItxEntrypointProps(this.ctx.props);
+    const auth =
+      purpose === "stream-delivery" ? streamDeliveryAuthContext() : trustedInternalAuthContext();
     if (projectId === null) {
       // The deployment-global scope: what a GLOBAL (projectId: null) stream's
       // delivery dial evaluates expressions against. It is the same root a
-      // trusted-internal session sees — deployment-wide repos/streams — so a
+      // stream-delivery session sees — deployment-wide repos/streams — so a
       // global repo stream's wake expression walks the identical shape a
       // project stream's does.
-      return deploymentItxForTrustedInternal({ ctx: this.ctx });
+      return deploymentItxForInternal({ auth, ctx: this.ctx });
     }
-    return itxForScope({ auth: trustedInternalAuthContext(), ctx: this.ctx, path, projectId });
+    return itxForScope({ auth, ctx: this.ctx, path, projectId });
   }
 
   /**
@@ -59,7 +61,10 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
         { status: 400 },
       );
     }
-    const { projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { projectId, purpose } = scopeFromItxEntrypointProps(this.ctx.props);
+    if (purpose !== "userspace") {
+      return new Response("stream delivery bindings cannot dispatch workers", { status: 403 });
+    }
     if (projectId === null) {
       return new Response("the global itx scope has no workers to dispatch to", { status: 400 });
     }

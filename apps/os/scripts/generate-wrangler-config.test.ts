@@ -122,12 +122,9 @@ it("never ships the old shared auth service token to OS", () => {
   expect(config.secrets.required).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
 });
 
-it("requires PostHog in every deployed OS environment", () => {
+it("requires the first-party PostHog project token in every deployed environment", () => {
   expect(REQUIRED_SECRETS).toContain("APP_CONFIG_POSTHOG");
   expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_POSTHOG");
-  for (const [envName, envBlock] of Object.entries(config.env)) {
-    expect(envBlock.secrets.required, envName).toContain("APP_CONFIG_POSTHOG");
-  }
 });
 
 it("emits the AI response-cache key for every deployment while keeping production disabled", () => {

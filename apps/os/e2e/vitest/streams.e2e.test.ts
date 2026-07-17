@@ -7,6 +7,10 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
+import {
+  POSTHOG_SUBSCRIPTION_KEY,
+  posthogSubscriptionEvent,
+} from "../../src/domains/integrations/posthog.ts";
 import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -82,6 +86,41 @@ test("creates a project and uses project streams through v4 itx", async () => {
   });
 
   await subscription.unsubscribe();
+});
+
+test("stream birth installs the first-party PostHog subscription through itx.processEventBatch", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/posthog-birth/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = itx.projects.create({ slug: `posthog-birth-${RUN_SUFFIX}-${marker}` });
+  await project.__describe();
+  using stream = project.streams.get(streamPath);
+
+  await stream.append({
+    type: "events.iterate.com/e2e/posthog-marker",
+    payload: { marker },
+  });
+
+  let configuration: StreamEvent | undefined;
+  await waitForCondition(
+    async () => {
+      configuration = (await stream.getEvents({ afterOffset: 0 })).find(
+        (event) =>
+          event.type === "events.iterate.com/stream/subscription-configured" &&
+          event.payload?.subscriptionKey === POSTHOG_SUBSCRIPTION_KEY,
+      );
+      return configuration !== undefined;
+    },
+    { description: "project-worker birth delivery to install the PostHog feed" },
+  );
+
+  expect(configuration).toMatchObject({
+    idempotencyKey: posthogSubscriptionEvent().idempotencyKey,
+    payload: posthogSubscriptionEvent().payload,
+    type: posthogSubscriptionEvent().type,
+  });
 });
 
 test("stream getEvents defaults to a bounded page and supports event type filters", async () => {

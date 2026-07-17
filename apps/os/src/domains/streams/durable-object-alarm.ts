@@ -1,10 +1,8 @@
-/** Serializes ordinary alarm arms with the currently running alarm turn. */
+/** Serializes shared Durable Object alarm writes and exposes failures to Cloudflare. */
 export class DurableObjectAlarm {
   readonly #ctx: DurableObjectState;
   readonly #diagnosticContext: { projectId: string | null; streamId: string };
   #chain = Promise.resolve();
-  #generation = 0;
-  #running = false;
 
   constructor(
     ctx: DurableObjectState,
@@ -14,45 +12,19 @@ export class DurableObjectAlarm {
     this.#diagnosticContext = diagnosticContext;
   }
 
-  /** Between alarm turns, move the platform alarm earlier but never later. */
+  /** Move the platform alarm earlier, never later. Concurrent arms run in order. */
   armNoLaterThan(at: number): void {
-    const generation = this.#generation;
-    const armed = this.#enqueue(async () => {
-      if (!this.#mayArm(generation)) return;
+    const armed = this.#chain.then(async () => {
       const current = await this.#ctx.storage.getAlarm();
-      if (!this.#mayArm(generation)) return;
       if (current === null || at < current) await this.#ctx.storage.setAlarm(at);
-    }).catch((error: unknown) => {
-      emitAlarmError(error, this.#diagnosticContext);
-      throw error;
     });
-    this.#ctx.waitUntil(armed);
-  }
-
-  /** Suppress constructor and background arms as the first line of alarm(). */
-  begin(): void {
-    this.#generation += 1;
-    this.#running = true;
-  }
-
-  /** Replace the consumed alarm with the exact deadline derived from durable owner state. */
-  complete(exactAt: number | null): Promise<void> {
-    this.#generation += 1;
-    return this.#enqueue(async () => {
-      if (exactAt === null) await this.#ctx.storage.deleteAlarm();
-      else await this.#ctx.storage.setAlarm(exactAt);
-      this.#running = false;
-    });
-  }
-
-  #mayArm(generation: number): boolean {
-    return generation === this.#generation && !this.#running;
-  }
-
-  #enqueue(work: () => Promise<void>): Promise<void> {
-    const step = this.#chain.then(work);
-    this.#chain = step.catch(() => undefined);
-    return step;
+    this.#chain = armed.catch(() => undefined);
+    this.#ctx.waitUntil(
+      armed.catch((error: unknown) => {
+        emitAlarmError(error, this.#diagnosticContext);
+        throw error;
+      }),
+    );
   }
 }
 

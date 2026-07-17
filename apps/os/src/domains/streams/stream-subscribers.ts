@@ -368,14 +368,10 @@ export class StreamSubscribers {
     this.#freshTail = [];
   }
 
-  /** Retry whatever is due. The caller reads nextAttemptAt after wake-up. */
+  /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
     this.wake();
-  }
-
-  /** Earliest durable retry not parked or already in flight. */
-  get nextAttemptAt(): number | null {
-    return this.#nextAlarmFromStore();
+    this.#armAlarmFromStore();
   }
 
   // ===========================================================================
@@ -625,16 +621,17 @@ export class StreamSubscribers {
             sized.map((entry) => [entry.event.offset, entry.byteLength]),
           );
 
-          // Ephemeral events never reach durable receivers — platform law,
-          // enforced as the same skip-not-defer shape selectors use: the raw
-          // read advances the cursor over their offsets, delivery drops them.
-          const durable = sized
-            .filter((entry) => entry.event.ephemeral !== true)
-            .map((entry) => entry.event);
+          // Ordinary durable receivers never see ephemeral rows. The sole
+          // exception is an explicitly protected first-party observability
+          // feed: it needs the exact committed stream while remaining a
+          // consumer, never a dependency of the product commit path.
+          const visible = config.includeEphemeral
+            ? sized.map((entry) => entry.event)
+            : sized.filter((entry) => entry.event.ephemeral !== true).map((entry) => entry.event);
           const { matched, conditionErrors } = this.#applySelector(
             subscriptionKey,
             config,
-            durable,
+            visible,
           );
           for (const fact of conditionErrors) this.#hooks.appendFact(fact);
 
@@ -723,7 +720,18 @@ export class StreamSubscribers {
           // flight bumped the epoch, and this ack no-ops instead of
           // clobbering it — the next iteration re-reads the row and drains
           // from wherever the seek pointed.
-          this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          try {
+            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          } catch (error) {
+            if (recoveryGeneration === this.#recoveryGeneration) {
+              // The receiver accepted the batch, but the stream has not
+              // durably advanced its cursor. Treat that as the same
+              // at-least-once failure as a rejected receiver call: retain the
+              // cursor, persist bounded backoff, and redeliver the stable ID.
+              this.#onDeliveryFailure(subscriptionKey, error, row.attempt);
+            }
+            return;
+          }
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }
@@ -913,15 +921,22 @@ export class StreamSubscribers {
       return;
     }
     const row = this.#hooks.store.get(subscriptionKey);
-    this.#hooks.appendFact({
-      type: "events.iterate.com/stream/subscription-parked",
-      payload: {
-        subscriptionKey,
-        atOffset: row?.ackedOffset ?? 0,
-        attempts,
-        error: errorMessage(error),
-      },
-    });
+    try {
+      this.#hooks.appendFact({
+        type: "events.iterate.com/stream/subscription-parked",
+        payload: {
+          subscriptionKey,
+          atOffset: row?.ackedOffset ?? 0,
+          attempts,
+          error: errorMessage(error),
+        },
+      });
+    } catch (appendError) {
+      // The stream did not durably enter parked state. Retain the cursor and
+      // schedule another bounded attempt instead of stranding the delivery.
+      this.#backoff(subscriptionKey, attempts, appendError);
+      return;
+    }
     // A parked row must not keep driving the alarm: the park was preceded by
     // a nack whose (now past) next_attempt_at would otherwise be re-armed by
     // every onAlarm forever — a permanent alarm hot loop per parked
@@ -932,7 +947,7 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
   }
 
-  #nextAlarmFromStore(): number | null {
+  #armAlarmFromStore(): void {
     // Not a bare MIN over the rows: parked rows keep their cursor but must
     // not drive the alarm, and a row whose retry is IN FLIGHT this very turn
     // still carries its (past) due time until the attempt settles — re-arming
@@ -946,7 +961,7 @@ export class StreamSubscribers {
       if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
-    return next;
+    if (next !== null) this.#hooks.armAlarm(next);
   }
 
   // ===========================================================================

@@ -3,9 +3,13 @@ import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner, type DynamicWorkerTraceRole } from "./worker-runner.ts";
 
+const { mockItxEntrypointProps } = vi.hoisted(() => ({
+  mockItxEntrypointProps: vi.fn((props: unknown) => props),
+}));
+
 vi.mock("../itx/utils.ts", () => ({
   itxEntrypointBinding: () => ({}),
-  itxEntrypointProps: () => ({}),
+  itxEntrypointProps: mockItxEntrypointProps,
 }));
 
 vi.mock("../projects/utils.ts", () => ({
@@ -47,6 +51,7 @@ const statefulRef = {
 
 beforeEach(() => {
   resetRecordedSpans();
+  mockItxEntrypointProps.mockClear();
 });
 
 describe("dynamic worker spans", () => {
@@ -67,6 +72,12 @@ describe("dynamic worker spans", () => {
       projectId: "prj_private",
       scopePath: `/${privateMarker}`,
       waitUntil: () => undefined,
+    });
+
+    expect(mockItxEntrypointProps).toHaveBeenCalledWith({
+      path: `/${privateMarker}`,
+      projectId: "prj_private",
+      purpose: "userspace",
     });
 
     await expect(

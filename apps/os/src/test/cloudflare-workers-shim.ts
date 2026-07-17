@@ -10,10 +10,10 @@ export class RpcStub {}
 export class RpcPromise {}
 export class RpcProperty {}
 export class ServiceStub {}
-// Base classes VALUE-imported modules extend at load time. WorkerEntrypoint
-// subclasses only need a constructable base. DurableObject additionally
-// assigns the runtime fields exercised by the stream append-boundary tests;
-// platform behavior still needs preview proof in real workerd.
+// Base classes some VALUE-imported modules extend at load time (e.g.
+// rpc-targets.ts pulls in egress.ts's WorkerEntrypoint subclass). Class
+// bodies never run in node tests — the subclasses just need a constructable
+// base so their module can evaluate.
 export class WorkerEntrypoint<Env = unknown, Props = unknown> {
   env!: Env;
   ctx!: {
@@ -22,15 +22,7 @@ export class WorkerEntrypoint<Env = unknown, Props = unknown> {
     waitUntil(promise: Promise<unknown>): void;
   };
 }
-export class DurableObject<Env = unknown> {
-  protected readonly ctx: DurableObjectState;
-  protected readonly env: Env;
-
-  constructor(ctx: DurableObjectState, env: Env) {
-    this.ctx = ctx;
-    this.env = env;
-  }
-}
+export class DurableObject {}
 export const env = {};
 
 export type RecordedSpan = {

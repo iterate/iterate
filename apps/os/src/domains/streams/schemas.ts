@@ -2,6 +2,9 @@ import { z } from "zod";
 
 /** Append input before the stream assigns offset and timestamp. */
 export const StreamEventInput = z.object({
+  // Public operational schema identifier. PostHog indexes this field for all
+  // project stream occurrences, so secrets and user content belong in the
+  // payload (which the first-party feed intentionally never exports), not here.
   type: z.string(),
   payload: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -59,15 +62,18 @@ export const StreamEventInput = z.object({
    * Ephemeral events are second-class rows: committed and offset-ordered like
    * any event, but EXCLUDED from range reads unless explicitly requested
    * (`includeEphemeral: true`; point reads by offset or idempotency key
-   * always return them) and never delivered to the durable subscription
+   * always return them) and excluded from ordinary durable subscription
    * lanes (wake/push/webhook) — so subscription-fed processors cannot fold
-   * them or side-effect on them. Ephemeral subscriptions (`subscribe()`)
+   * them or side-effect on them. A protected first-party observability push
+   * feed may mirror them, but product code cannot configure that opt-in.
+   * Ephemeral subscriptions (`subscribe()`)
    * receive them only when appended after that exact subscription opens;
-   * historical ephemeral rows are never replayed. The stream may EVICT their
-   * rows in the future (memory pressure, DO startup sweeps), so nothing
-   * durable may ever depend on one: use them for transient signals whose
-   * durable truth lands separately — LLM streaming chunks superseded by an
-   * assistant `agents/context-added` item.
+   * historical ephemeral rows are never replayed to product subscribers.
+   * The protected first-party observability cursor must acknowledge a row
+   * before any future eviction may remove it, preserving the all-event feed;
+   * product state must still never depend on one. Use them for transient
+   * signals whose durable truth lands separately — LLM streaming chunks
+   * superseded by an assistant `agents/context-added` item.
    * `z.literal(true)`, not boolean: absent = durable, so committed rows stay
    * self-describing and `ephemeral: false` is a loud input error, not a
    * silent synonym for omitting the flag.
@@ -101,9 +107,9 @@ export const StreamListItem = z.object({
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * never delivered to durable subscribers (wake/push/webhook), and evictable —
- * for transient signals (LLM streaming chunks) whose durable truth lands as
- * its own event. */
+ * excluded from ordinary durable subscribers (wake/push/webhook), and retained
+ * until first-party observability acknowledges them — for transient signals
+ * (LLM streaming chunks) whose durable truth lands as its own event. */
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
 /** One committed event on a durable stream: type, JSON payload, offset,
  * idempotency key, and provenance (processor stamp / cross-post chain), plus

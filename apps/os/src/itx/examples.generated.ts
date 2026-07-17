@@ -122,11 +122,11 @@ return { appended, count: events.length };
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a second-class event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, durable subscribers — processors and the project worker's processEventBatch feed — never receive it, and the stream may evict the row later. Use it for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers — processors and the project worker's processEventBatch feed — never receive it. Iterate's protected observability feed still acknowledges every row before any future eviction. Use it for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
-// Transient signal: live subscribers see it; nothing durable ever will.
+// Transient signal: live product subscribers see it; product state never will.
 const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
 const [tick] = await stream.append({
   type: "events.iterate.repl/progress-ticked",
