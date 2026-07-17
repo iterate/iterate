@@ -23,13 +23,6 @@
 export const STREAM_UNAVAILABLE_MESSAGE_PREFIX = "stream-unavailable: ";
 
 /**
- * Identifies the stream DO's own one-shot waiter timeout across Workers RPC.
- * The public facade uses shorter one-shot waits under one caller deadline, so
- * it must distinguish an exhausted internal slice from a predicate failure.
- */
-export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
-
-/**
  * Whether a Durable Object stub rejection is a DO-lifecycle failure (the
  * incarnation died mid-call / is overloaded) as opposed to an app-level throw
  * from the DO's own code. These property flags are workerd's error contract;
@@ -89,11 +82,6 @@ export function rethrowStreamUnavailable(error: unknown): never {
  */
 export function isStreamUnavailableError(error: unknown): error is Error {
   return error instanceof Error && error.message.includes(STREAM_UNAVAILABLE_MESSAGE_PREFIX);
-}
-
-/** Whether a rejection is the stream DO's explicitly modelled waiter timeout. */
-export function isStreamWaitTimeoutError(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith(STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX);
 }
 
 /**
