@@ -939,6 +939,38 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
+  it("clears a channel acknowledgement when completion is delivered stale", async () => {
+    const { clock, deliver, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliver();
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
+    });
+    await deliver();
+    expect(slackCalls).toEqual([]);
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: false, sinceOffset: 2 },
+    });
+    clock.now += 16 * 60_000;
+    await deliver();
+
+    expect(slackCalls).toEqual([
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
   it("treats an already-absent eyes reaction as an idempotent success", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {

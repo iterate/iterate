@@ -361,6 +361,10 @@ export class SlackAgentProcessor extends StreamProcessor<
    * announcement must still clear what we ourselves put up, while a refold
    * (fresh instance, all facts stale) must repaint nothing at all. */
   #paintedBusyStatus = false;
+  /** Whether THIS incarnation acknowledged a fresh message with eyes. Channel
+   * threads have no Assistant busy UI, but a stale completion must still
+   * remove the acknowledgement this incarnation added. */
+  #paintedEyesReaction = false;
   /** The title this incarnation painted, so repeated repaints of an unchanged
    * title cost no Slack calls. */
   #paintedTitle: string | undefined;
@@ -434,7 +438,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // quiet. The 👀 still comes off — the message was handled — and the
     // next busy flip (the platform clears `blocked` in it) repaints.
     if (status.blocked === true) {
-      if (!fresh && !this.#paintedBusyStatus) return;
+      if (!fresh && !this.#paintedBusyStatus && !this.#paintedEyesReaction) return;
       const text = status.shortStatus ?? "waiting for input";
       if (hasAssistantThreadUi) {
         await this.#callSlackApi(connection, "assistant.threads.setStatus", {
@@ -452,9 +456,10 @@ export class SlackAgentProcessor extends StreamProcessor<
         });
       }
       this.#paintedBusyStatus = hasAssistantThreadUi;
+      this.#paintedEyesReaction = false;
       return;
     }
-    if (!fresh && !this.#paintedBusyStatus) return;
+    if (!fresh && !this.#paintedBusyStatus && !this.#paintedEyesReaction) return;
     await this.#clearStatus({
       channel,
       connection,
@@ -463,6 +468,7 @@ export class SlackAgentProcessor extends StreamProcessor<
       threadTs,
     });
     this.#paintedBusyStatus = false;
+    this.#paintedEyesReaction = false;
   }
 
   async #clearStatus(target: {
@@ -502,6 +508,7 @@ export class SlackAgentProcessor extends StreamProcessor<
       name: "eyes",
       timestamp: target.messageTs,
     });
+    this.#paintedEyesReaction = true;
   }
 
   async #callSlackApi(connection: string, method: string, body: Record<string, unknown>) {
