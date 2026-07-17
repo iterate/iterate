@@ -1,9 +1,16 @@
 import { expect, test } from "@microsoft/tui-test";
-import { SPEC_EXPECT_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-policy";
+import {
+  SPEC_EXPECT_TIMEOUT_MS,
+  TUI_TEST_TIMEOUT_MS,
+} from "@iterate-com/shared/test-support/e2e-policy";
 
 // TUI Test 0.0.4 does not load the config-level expect timeout in its worker,
 // so cold-start assertions need the shared budget at each async matcher.
 const visible = { timeout: SPEC_EXPECT_TIMEOUT_MS };
+// The first render includes launching the built CLI and OpenTUI itself. Keep
+// that cold-start inside the test's bounded watchdog without pretending it is
+// an ordinary in-app assertion.
+const started = { timeout: TUI_TEST_TIMEOUT_MS };
 
 // A fresh agent path per run: the project processor configures the agent
 // subscription on first append, so any /agents/* path is chattable.
@@ -32,7 +39,7 @@ test.use({
 testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({ terminal }) => {
   // Wait for a UI-only marker first. The PTY echoes the launch command before
   // OpenTUI enters alternate-screen mode, and that command contains agentName.
-  await expect(terminal.getByText("Message the agent", { strict: false })).toBeVisible(visible);
+  await expect(terminal.getByText("Message the agent", { strict: false })).toBeVisible(started);
   await expect(terminal.getByText(agentName, { strict: false })).toBeVisible(visible);
 
   // The live subscription round trip completes (capnweb websocket + subscribe).
@@ -54,6 +61,9 @@ testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({
   await expect(terminal.getByText("hello from microsoft tui test", { strict: false })).toBeVisible(
     visible,
   );
+  // Submit remounts the keyed input after clearing it. Wait for that render to
+  // settle before taking the synchronous terminal snapshot below.
+  await expect(terminal.getByText("Message the agent", { strict: false })).toBeVisible(visible);
 
   const view = terminal.serialize().view;
   expect(view).toContain(agentName);
