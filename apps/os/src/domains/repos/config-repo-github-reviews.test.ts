@@ -329,8 +329,8 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
         llmRequestPolicy: { behaviour: "after-current-request" },
