@@ -4,7 +4,9 @@ export const LOCATION_REMINDER_EVENT = {
   armed: "events.iterate.com/location-reminder/armed",
   armingFailed: "events.iterate.com/location-reminder/arming-failed",
   cancelled: "events.iterate.com/location-reminder/cancelled",
+  claimed: "events.iterate.com/location-reminder/claimed",
   delivered: "events.iterate.com/location-reminder/delivered",
+  released: "events.iterate.com/location-reminder/released",
   requested: "events.iterate.com/location-reminder/requested",
 } as const;
 
@@ -46,6 +48,91 @@ export type AllocatedReminderRegion = {
   region: ReminderRegion;
   reminder: LocationReminder;
 };
+
+export type LocationReminderIdentity = { deviceId: string; userId: string };
+
+export type DeviceLocationReminder = LocationReminder & {
+  ownership: "this-device" | "unclaimed";
+};
+
+export function locationReminderRouteFromNotificationData(data: unknown): {
+  params: { path: string; projectId: string };
+  pathname: "/project/[projectId]/chat";
+} | null {
+  if (typeof data !== "object" || data === null) return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.projectId !== "string" || typeof record.sourceAgentPath !== "string") {
+    return null;
+  }
+  return {
+    params: { path: record.sourceAgentPath, projectId: record.projectId },
+    pathname: "/project/[projectId]/chat",
+  };
+}
+
+export function locationReminderReconciliationKey(reminders: LocationReminder[]): string {
+  return JSON.stringify(
+    [...reminders]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map(({ id, message, placeQuery, radiusMeters, sourceAgentPath }) => ({
+        id,
+        message,
+        placeQuery,
+        radiusMeters,
+        sourceAgentPath,
+      })),
+  );
+}
+
+export function reduceLocationRemindersForDevice(
+  events: LocationReminderStreamEvent[],
+  identity: LocationReminderIdentity,
+): DeviceLocationReminder[] {
+  const requested = new Set<string>();
+  const owners = new Map<string, LocationReminderIdentity>();
+  for (const event of events) {
+    if (event.type === LOCATION_REMINDER_EVENT.requested) {
+      requested.add(requireString(event.payload, "id", "location reminder"));
+    }
+    if (event.type === LOCATION_REMINDER_EVENT.claimed) {
+      const id = requireString(event.payload, "id", "location reminder claim");
+      if (!requested.has(id)) {
+        throw new Error(`location reminder "${id}" was claimed before it was requested`);
+      }
+      if (!owners.has(id)) {
+        owners.set(id, {
+          deviceId: requireString(event.payload, "deviceId", `location reminder "${id}" claim`),
+          userId: requireString(event.payload, "userId", `location reminder "${id}" claim`),
+        });
+      }
+    }
+    if (event.type === LOCATION_REMINDER_EVENT.released) {
+      const id = requireString(event.payload, "id", "location reminder release");
+      const owner = owners.get(id);
+      const releasedBy = {
+        deviceId: requireString(event.payload, "deviceId", `location reminder "${id}" release`),
+        userId: requireString(event.payload, "userId", `location reminder "${id}" release`),
+      };
+      if (owner === undefined) {
+        throw new Error(`location reminder "${id}" was released before it was claimed`);
+      }
+      if (owner.deviceId !== releasedBy.deviceId || owner.userId !== releasedBy.userId) {
+        throw new Error(`location reminder "${id}" was released by a device that does not own it`);
+      }
+      owners.delete(id);
+    }
+  }
+
+  const visible: DeviceLocationReminder[] = [];
+  for (const reminder of reduceLocationReminders(events)) {
+    const owner = owners.get(reminder.id);
+    if (owner === undefined) visible.push({ ...reminder, ownership: "unclaimed" });
+    if (owner?.deviceId === identity.deviceId && owner.userId === identity.userId) {
+      visible.push({ ...reminder, ownership: "this-device" });
+    }
+  }
+  return visible;
+}
 
 export function reduceLocationReminders(events: LocationReminderStreamEvent[]): LocationReminder[] {
   const active = new Map<string, LocationReminder>();

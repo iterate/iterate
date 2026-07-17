@@ -51,6 +51,13 @@ physical-device development build completed through the linked
 EAS-managed Apple credentials and registered devices. Install a build from its
 EAS dashboard link on a provisioned phone before starting Metro.
 
+The `development` build is ad-hoc internal distribution: only provisioned
+devices can install it, and it contains the development launcher. `preview`
+is the production-like internal lane without that launcher. TestFlight and App
+Store releases use the `production` profile, store distribution signing, and a
+separate EAS Submit/App Store Connect step; a successful development build is
+not silently treated as a releasable binary.
+
 ## Run and test it in a browser
 
 Expo Web renders the same Expo Router screens through React Native Web, so UI
@@ -144,16 +151,21 @@ stays on the phone; project state records the reminder, arming result, and
 eventual delivery receipt.
 
 The user must open Reminders and grant notification, When In Use, and Always
-location access before a new reminder is armed. Entering a monitored region
-posts a one-shot local notification, removes that reminder's other regions,
-and stores an offline delivery receipt for the next project sync. Cancelling a
-reminder or signing out removes the corresponding device registrations.
+location access before a new reminder is armed. Enabling claims an unclaimed
+project reminder to the authenticated user and this installation, preventing
+other project members' phones from arming it. The app then follows the reminder
+stream live and reconciles registrations on project open, foreground, reminder
+changes, and app restart. Entering a monitored region posts a one-shot local
+notification, removes that reminder's other regions, and stores an offline
+delivery receipt for the next project sync. Cancelling, choosing “Disable on
+this iPhone,” or signing out removes the corresponding device registrations.
 
 Current limitation: candidate places are selected within 25 km of the phone
-when reminders are enabled or refreshed. The app does not yet refresh that
-candidate set after long-distance travel, and cold-start notification routing
-still needs a physical-device pass. The Reminders screen reports unarmed and
-failed states instead of claiming those cases work.
+when reminders are enabled or the app returns to the foreground. A long trip
+while Iterate remains backgrounded does not refresh that candidate set until
+the next foreground reconciliation. Cold-start notification routing is wired
+but still needs a physical-device tap-through pass. The Reminders screen
+reports unarmed and failed states instead of claiming those cases work.
 
 ## Verification
 

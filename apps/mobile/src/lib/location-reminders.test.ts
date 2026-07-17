@@ -2,10 +2,97 @@ import { expect, test } from "vitest";
 import {
   LOCATION_REMINDER_EVENT,
   allocateReminderRegions,
+  locationReminderRouteFromNotificationData,
+  locationReminderReconciliationKey,
+  reduceLocationRemindersForDevice,
   reduceLocationReminders,
   selectReminderRegions,
   type LocationReminderStreamEvent,
 } from "./location-reminders.ts";
+
+test("a phone sees unclaimed reminders and reminders claimed by that user and device", () => {
+  const reminders = reduceLocationRemindersForDevice(
+    [
+      event(1, LOCATION_REMINDER_EVENT.requested, reminderPayload("buy-milk")),
+      event(2, LOCATION_REMINDER_EVENT.claimed, {
+        deviceId: "mishas-iphone",
+        id: "buy-milk",
+        userId: "usr_misha",
+      }),
+      event(3, LOCATION_REMINDER_EVENT.requested, reminderPayload("post-parcel")),
+      event(4, LOCATION_REMINDER_EVENT.claimed, {
+        deviceId: "someone-elses-phone",
+        id: "post-parcel",
+        userId: "usr_someone_else",
+      }),
+      event(5, LOCATION_REMINDER_EVENT.requested, reminderPayload("collect-coffee")),
+    ],
+    { deviceId: "mishas-iphone", userId: "usr_misha" },
+  );
+
+  expect(reminders).toMatchObject([
+    { id: "buy-milk", ownership: "this-device" },
+    { id: "collect-coffee", ownership: "unclaimed" },
+  ]);
+});
+
+test("disabling a claimed reminder releases it for another phone", () => {
+  const reminders = reduceLocationRemindersForDevice(
+    [
+      event(1, LOCATION_REMINDER_EVENT.requested, reminderPayload("buy-milk")),
+      event(2, LOCATION_REMINDER_EVENT.claimed, {
+        deviceId: "mishas-iphone",
+        id: "buy-milk",
+        userId: "usr_misha",
+      }),
+      event(3, LOCATION_REMINDER_EVENT.released, {
+        deviceId: "mishas-iphone",
+        id: "buy-milk",
+        userId: "usr_misha",
+      }),
+    ],
+    { deviceId: "someone-elses-phone", userId: "usr_someone_else" },
+  );
+
+  expect(reminders).toMatchObject([{ id: "buy-milk", ownership: "unclaimed" }]);
+});
+
+test("reconciliation reacts to desired reminder changes but not its own arming facts", () => {
+  const requested = reduceLocationReminders([
+    event(1, LOCATION_REMINDER_EVENT.requested, reminderPayload("buy-milk")),
+  ]);
+  const armed = reduceLocationReminders([
+    event(1, LOCATION_REMINDER_EVENT.requested, reminderPayload("buy-milk")),
+    event(2, LOCATION_REMINDER_EVENT.armed, { id: "buy-milk", regionCount: 4 }),
+  ]);
+  const edited = reduceLocationReminders([
+    event(1, LOCATION_REMINDER_EVENT.requested, reminderPayload("buy-milk")),
+    event(2, LOCATION_REMINDER_EVENT.requested, {
+      ...reminderPayload("buy-milk"),
+      radiusMeters: 500,
+    }),
+  ]);
+
+  expect(locationReminderReconciliationKey(requested)).toBe(
+    locationReminderReconciliationKey(armed),
+  );
+  expect(locationReminderReconciliationKey(edited)).not.toBe(
+    locationReminderReconciliationKey(requested),
+  );
+});
+
+test("a reminder notification routes to its originating project chat", () => {
+  expect(
+    locationReminderRouteFromNotificationData({
+      projectId: "prj_groceries",
+      sourceAgentPath: "/agents/mobile/groceries",
+    }),
+  ).toEqual({
+    params: { path: "/agents/mobile/groceries", projectId: "prj_groceries" },
+    pathname: "/project/[projectId]/chat",
+  });
+  expect(locationReminderRouteFromNotificationData({ projectId: "prj_groceries" })).toBeNull();
+});
 
 test("a requested location reminder is active until it is resolved", () => {
   const reminders = reduceLocationReminders([
@@ -207,5 +294,15 @@ function event(
     offset,
     payload,
     type,
+  };
+}
+
+function reminderPayload(id: string) {
+  return {
+    id,
+    message: id,
+    placeQuery: "supermarket",
+    radiusMeters: 250,
+    sourceAgentPath: "/agents/mobile/errands",
   };
 }

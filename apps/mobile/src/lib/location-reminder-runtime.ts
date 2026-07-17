@@ -7,6 +7,7 @@ import { Platform } from "react-native";
 import { searchNearbyPlaces } from "../../modules/iterate-place-search/index.ts";
 import {
   allocateReminderRegions,
+  locationReminderRouteFromNotificationData,
   type Coordinates,
   type LocationReminder,
   type ReminderPlace,
@@ -54,12 +55,10 @@ if (Platform.OS !== "web") {
   });
 
   Notifications.addNotificationResponseReceivedListener((response) => {
-    const data = response.notification.request.content.data;
-    if (typeof data.projectId !== "string" || typeof data.sourceAgentPath !== "string") return;
-    router.push({
-      pathname: "/project/[projectId]/chat",
-      params: { path: data.sourceAgentPath, projectId: data.projectId },
-    });
+    const route = locationReminderRouteFromNotificationData(
+      response.notification.request.content.data,
+    );
+    if (route) router.push(route);
   });
 
   if (!TaskManager.isTaskDefined(LOCATION_REMINDER_GEOFENCE_TASK)) {
@@ -124,30 +123,48 @@ if (Platform.OS !== "web") {
   }
 }
 
+export async function routeInitialLocationReminderNotification(): Promise<void> {
+  if (Platform.OS === "web") return;
+  const response = await Notifications.getLastNotificationResponseAsync();
+  if (response === null) return;
+  const route = locationReminderRouteFromNotificationData(
+    response.notification.request.content.data,
+  );
+  await Notifications.clearLastNotificationResponseAsync();
+  if (route) router.push(route);
+}
+
 export async function armLocationReminders(
   projectId: string,
   reminders: LocationReminder[],
+  permissionMode: "check" | "request",
 ): Promise<ArmLocationRemindersResult> {
+  if (reminders.length === 0) {
+    await disableProjectLocationReminders(projectId);
+    return { armed: [], failed: [] };
+  }
+
   if (Platform.OS !== "ios") {
     throw new Error("Location reminders currently require the Iterate iOS development build.");
   }
 
-  if (reminders.length === 0) {
-    await stopProjectLocationReminders(projectId);
-    return { armed: [], failed: [] };
-  }
-
-  const foreground = await Location.requestForegroundPermissionsAsync();
+  const foreground = await (permissionMode === "request"
+    ? Location.requestForegroundPermissionsAsync()
+    : Location.getForegroundPermissionsAsync());
   if (foreground.status !== Location.PermissionStatus.GRANTED) {
     throw new Error("Location reminders need While Using the App location access first.");
   }
-  const background = await Location.requestBackgroundPermissionsAsync();
+  const background = await (permissionMode === "request"
+    ? Location.requestBackgroundPermissionsAsync()
+    : Location.getBackgroundPermissionsAsync());
   if (background.status !== Location.PermissionStatus.GRANTED) {
     throw new Error(
       "Location reminders are not armed: set Location to Always for Iterate in iOS Settings.",
     );
   }
-  const notifications = await Notifications.requestPermissionsAsync();
+  const notifications = await (permissionMode === "request"
+    ? Notifications.requestPermissionsAsync()
+    : Notifications.getPermissionsAsync());
   if (notifications.status !== Notifications.PermissionStatus.GRANTED) {
     throw new Error("Location reminders need notification permission to alert you on arrival.");
   }
@@ -252,6 +269,7 @@ export async function removeLocationReminderRegistrations(
     (record) => record.projectId !== projectId || record.reminderId !== reminderId,
   );
   await AsyncStorage.setItem(REGION_RECORDS_KEY, JSON.stringify(remaining));
+  if (Platform.OS !== "ios") return;
   if (remaining.length === 0) {
     if (await Location.hasStartedGeofencingAsync(LOCATION_REMINDER_GEOFENCE_TASK)) {
       await Location.stopGeofencingAsync(LOCATION_REMINDER_GEOFENCE_TASK);
@@ -262,16 +280,20 @@ export async function removeLocationReminderRegistrations(
 }
 
 export async function stopAllLocationReminders(): Promise<void> {
-  if (await Location.hasStartedGeofencingAsync(LOCATION_REMINDER_GEOFENCE_TASK)) {
+  if (
+    Platform.OS === "ios" &&
+    (await Location.hasStartedGeofencingAsync(LOCATION_REMINDER_GEOFENCE_TASK))
+  ) {
     await Location.stopGeofencingAsync(LOCATION_REMINDER_GEOFENCE_TASK);
   }
   await AsyncStorage.removeItem(REGION_RECORDS_KEY);
   await AsyncStorage.removeItem(PENDING_DELIVERIES_KEY);
 }
 
-async function stopProjectLocationReminders(projectId: string): Promise<void> {
+export async function disableProjectLocationReminders(projectId: string): Promise<void> {
   const remaining = (await readRegionRecords()).filter((record) => record.projectId !== projectId);
   await AsyncStorage.setItem(REGION_RECORDS_KEY, JSON.stringify(remaining));
+  if (Platform.OS !== "ios") return;
   if (remaining.length === 0) {
     if (await Location.hasStartedGeofencingAsync(LOCATION_REMINDER_GEOFENCE_TASK)) {
       await Location.stopGeofencingAsync(LOCATION_REMINDER_GEOFENCE_TASK);

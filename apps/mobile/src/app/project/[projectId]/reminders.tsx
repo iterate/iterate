@@ -2,25 +2,15 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import {
-  armLocationReminders,
-  clearPendingLocationReminderDeliveries,
-  readPendingLocationReminderDeliveries,
-  removeLocationReminderRegistrations,
-} from "../../../lib/location-reminder-runtime.ts";
-import {
-  LOCATION_REMINDER_EVENT,
-  LOCATION_REMINDER_STREAM_PATH,
-  reduceLocationReminders,
-  type LocationReminder,
-  type LocationReminderStreamEvent,
-} from "../../../lib/location-reminders.ts";
-import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
+  cancelLocationReminder,
+  claimAndArmLocationReminders,
+  disableLocationRemindersForProject,
+  loadAndFollowLocationReminders,
+} from "../../../lib/location-reminder-sync.ts";
+import type { DeviceLocationReminder } from "../../../lib/location-reminders.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
-
-const REMINDER_EVENT_TYPES = Object.values(LOCATION_REMINDER_EVENT);
-const STREAM_PAGE_SIZE = 500;
 
 export default function LocationRemindersScreen() {
   const { projectId } = useLocalSearchParams<{ projectId: string }>();
@@ -28,87 +18,36 @@ export default function LocationRemindersScreen() {
     queryKey: ["location-reminders", projectId],
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      try {
-        const itx = await getItxSession(baseUrl);
-        const project = await itx.projects.get(projectId);
-        const stream = project.streams.get(LOCATION_REMINDER_STREAM_PATH);
-        const pending = (await readPendingLocationReminderDeliveries()).filter(
-          (delivery) => delivery.projectId === projectId,
-        );
-        if (pending.length > 0) {
-          await stream.append(
-            ...pending.map((delivery) => ({
-              idempotencyKey: `location-reminder-delivered:${delivery.reminderId}:${delivery.deliveredAt}`,
-              payload: {
-                id: delivery.reminderId,
-                regionIdentifier: delivery.regionIdentifier,
-              },
-              type: LOCATION_REMINDER_EVENT.delivered,
-            })),
-          );
-          await clearPendingLocationReminderDeliveries(pending);
-        }
-        const events = [];
-        let afterOffset: number | undefined;
-        while (true) {
-          const page = await stream.getEvents({
-            ...(afterOffset === undefined ? {} : { afterOffset }),
-            eventTypes: REMINDER_EVENT_TYPES,
-          });
-          events.push(...page);
-          if (page.length < STREAM_PAGE_SIZE) break;
-          afterOffset = page[page.length - 1]!.offset;
-        }
-        return reduceLocationReminders(events as LocationReminderStreamEvent[]);
-      } catch (error) {
-        resetItxSession();
-        throw error;
-      }
+      return loadAndFollowLocationReminders(baseUrl, projectId);
     },
   });
 
   const arm = useMutation({
-    mutationFn: async (active: LocationReminder[]) => {
-      const attemptId = new Date().toISOString();
+    mutationFn: async (active: DeviceLocationReminder[]) => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      const itx = await getItxSession(baseUrl);
-      const project = await itx.projects.get(projectId);
-      const stream = project.streams.get(LOCATION_REMINDER_STREAM_PATH);
-      const result = await armLocationReminders(projectId, active);
-      const events = [
-        ...result.armed.map((reminder) => ({
-          idempotencyKey: `location-reminder-armed:${reminder.id}:${attemptId}`,
-          payload: { id: reminder.id, regionCount: reminder.regionCount },
-          type: LOCATION_REMINDER_EVENT.armed,
-        })),
-        ...result.failed.map((reminder) => ({
-          idempotencyKey: `location-reminder-arming-failed:${reminder.id}:${attemptId}`,
-          payload: { id: reminder.id, reason: reminder.reason },
-          type: LOCATION_REMINDER_EVENT.armingFailed,
-        })),
-      ];
-      if (events.length > 0) await stream.append(...events);
+      await claimAndArmLocationReminders(baseUrl, projectId, active);
     },
     onSuccess: () => reminders.refetch(),
   });
 
   const cancel = useMutation({
-    mutationFn: async (input: { cancelled: LocationReminder; remaining: LocationReminder[] }) => {
+    mutationFn: async (reminderId: string) => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      const itx = await getItxSession(baseUrl);
-      const project = await itx.projects.get(projectId);
-      await project.streams.get(LOCATION_REMINDER_STREAM_PATH).append({
-        idempotencyKey: `location-reminder-cancelled:${input.cancelled.id}`,
-        payload: { id: input.cancelled.id },
-        type: LOCATION_REMINDER_EVENT.cancelled,
-      });
-      await removeLocationReminderRegistrations(projectId, input.cancelled.id);
-      await armLocationReminders(projectId, input.remaining);
+      await cancelLocationReminder(baseUrl, projectId, reminderId);
     },
     onSettled: () => reminders.refetch(),
   });
 
-  const active = reminders.data || [];
+  const disable = useMutation({
+    mutationFn: async (active: DeviceLocationReminder[]) => {
+      const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+      await disableLocationRemindersForProject(baseUrl, projectId, active);
+    },
+    onSettled: () => reminders.refetch(),
+  });
+
+  const active = reminders.data?.reminders || [];
+  const hasOwnedReminders = active.some((reminder) => reminder.ownership === "this-device");
 
   return (
     <View style={styles.screen}>
@@ -135,15 +74,28 @@ export default function LocationRemindersScreen() {
           contentContainerStyle={styles.list}
           ListHeaderComponent={
             active.length > 0 ? (
-              <Pressable
-                style={styles.primaryButton}
-                disabled={arm.isPending}
-                onPress={() => arm.mutate(active)}
-              >
-                <Text style={styles.primaryText}>
-                  {arm.isPending ? "Arming…" : "Enable and refresh reminders"}
-                </Text>
-              </Pressable>
+              <View style={styles.actions}>
+                <Pressable
+                  style={styles.primaryButton}
+                  disabled={arm.isPending}
+                  onPress={() => arm.mutate(active)}
+                >
+                  <Text style={styles.primaryText}>
+                    {arm.isPending ? "Arming…" : "Enable and refresh reminders"}
+                  </Text>
+                </Pressable>
+                {hasOwnedReminders ? (
+                  <Pressable
+                    style={styles.secondaryButton}
+                    disabled={disable.isPending}
+                    onPress={() => disable.mutate(active)}
+                  >
+                    <Text style={styles.secondaryText}>
+                      {disable.isPending ? "Disabling…" : "Disable on this iPhone"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
             ) : null
           }
           ListEmptyComponent={
@@ -157,15 +109,7 @@ export default function LocationRemindersScreen() {
               <Text style={styles.message}>{item.message}</Text>
               <Text style={styles.place}>Near: {item.placeQuery}</Text>
               <Text style={styles.status}>{statusText(item)}</Text>
-              <Pressable
-                disabled={cancel.isPending}
-                onPress={() =>
-                  cancel.mutate({
-                    cancelled: item,
-                    remaining: active.filter((candidate) => candidate.id !== item.id),
-                  })
-                }
-              >
+              <Pressable disabled={cancel.isPending} onPress={() => cancel.mutate(item.id)}>
                 <Text style={styles.cancel}>Cancel</Text>
               </Pressable>
             </View>
@@ -174,11 +118,13 @@ export default function LocationRemindersScreen() {
       )}
       {arm.isError ? <Text style={styles.errorBanner}>{arm.error.message}</Text> : null}
       {cancel.isError ? <Text style={styles.errorBanner}>{cancel.error.message}</Text> : null}
+      {disable.isError ? <Text style={styles.errorBanner}>{disable.error.message}</Text> : null}
     </View>
   );
 }
 
-function statusText(reminder: LocationReminder): string {
+function statusText(reminder: DeviceLocationReminder): string {
+  if (reminder.ownership === "unclaimed") return "Ready to enable on this iPhone";
   if (reminder.status === "armed") return `Monitoring ${reminder.regionCount} nearby places`;
   if (reminder.status === "failed") return `Not armed: ${reminder.reason}`;
   return "Waiting to be enabled on this iPhone";
@@ -189,6 +135,7 @@ const styles = StyleSheet.create({
   explanation: { color: colors.textMuted, fontSize: 13, lineHeight: 19, padding: spacing.md },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.md },
   list: { padding: spacing.md, gap: spacing.sm },
+  actions: { gap: spacing.sm },
   card: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
