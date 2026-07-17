@@ -176,6 +176,7 @@ export const EmailProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
   emits: [
     "events.iterate.com/agent/created",
+    "events.iterate.com/agent/binding-set",
     "events.iterate.com/agents/context-added",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",

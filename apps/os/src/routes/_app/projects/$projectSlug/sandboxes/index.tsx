@@ -1,10 +1,9 @@
-import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Copy, ExternalLink, SquareTerminal } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTree } from "~/components/stream-tree.tsx";
+import { StreamIndexTree } from "~/components/stream-index-tree.tsx";
 import {
   buildCloudflareContainersDashboardUrl,
   inferOsDopplerConfigForWorkerName,
@@ -17,7 +16,7 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { useLiveState } from "~/itx/itx-react.tsx";
 
 const SANDBOXES_ROOT = "/sandboxes";
 
@@ -41,8 +40,11 @@ function ProjectSandboxesIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const { project, routeConfig } = Route.useLoaderData();
-  const itx = useItx();
-  const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
+  const streamsState = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.streamsIndex,
+    [],
+  );
 
   return (
     <ProjectStreamView
@@ -58,14 +60,17 @@ function ProjectSandboxesIndexContent() {
                 <code className="font-mono">/sandboxes/&lt;name&gt;</code>.
               </p>
             </div>
-            <StreamTree
-              source={source}
-              rootPath={SANDBOXES_ROOT}
-              scope={project.id}
-              onOpenPath={(streamPath) =>
-                void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
-              }
-            />
+            {streamsState.value === undefined ? (
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">Loading streams…</p>
+            ) : (
+              <StreamIndexTree
+                streams={streamsState.value}
+                rootPath={SANDBOXES_ROOT}
+                onOpenPath={(streamPath) =>
+                  void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
+                }
+              />
+            )}
           </div>
         </>
       }

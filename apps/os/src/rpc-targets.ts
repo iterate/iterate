@@ -28,6 +28,12 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import {
+  AGENT_BINDING_SET_EVENT_TYPE,
+  AGENT_METADATA_CHANGED_EVENT_TYPE,
+  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
+  AGENT_WAITING_CLEARED_EVENT_TYPE,
+} from "@iterate-com/shared/agent-events";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -51,7 +57,8 @@ import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
-import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
+import { AgentMetadataPatch } from "./domains/agents/agent-presence.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -308,7 +315,7 @@ import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.t
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
-import type { AgentStatusTouchInput } from "./domains/projects/agent-status-database.ts";
+import type { AgentTouchInput } from "./domains/projects/agent-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import {
   SchedulerProcessorContract,
@@ -391,6 +398,14 @@ class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
 type FetchOnly = Pick<Fetcher, "fetch">;
 
 const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
+
+const AGENT_PROJECTION_EVENT_TYPES = new Set([
+  "events.iterate.com/agent/created",
+  AGENT_METADATA_CHANGED_EVENT_TYPE,
+  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
+  AGENT_WAITING_CLEARED_EVENT_TYPE,
+  AGENT_BINDING_SET_EVENT_TYPE,
+]);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
@@ -4116,7 +4131,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   constructor(props: AgentRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    normalizeAgentPath(props.capabilityHost.path);
+    parseAgentPath(props.capabilityHost.path);
     this.#props = props;
   }
 
@@ -4278,59 +4293,20 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Update this agent's status record — the title, note, and shortStatus that
-   * project surfaces (the agents list, the Slack thread status) show for it.
-   * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — waiting for a response vs running code)
-   * into the same record on its own. `shortStatus` completes the sentence
-   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
-   * while the agent works — update it as your work moves through phases.
-   * `note` is a one-or-two-sentence description of the agent or its current
-   * focus; `title` names the agent/conversation; `blocked: true` marks a
-   * turn that ended waiting on a human.
+   * Merge human-readable metadata for this agent. Omitted properties remain
+   * unchanged; null clears an optional property; pinned false unpins. Title is
+   * a stable identity, activity is the current-condition sentence updated as
+   * work moves through phases, summary is one or two durable sentences, and
+   * waitingFor declares a semantic dependency once current runtime is zero.
    */
-  async setStatus(input: {
-    title?: string;
-    note?: string;
-    shortStatus?: string;
-    /** Set true when ending a turn to wait on a human (an answer, an
-     * approval, a secret) — surfaces show the agent as blocked instead of
-     * idle. The platform clears it when the next message wakes you. */
-    blocked?: boolean;
-    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
-     * "web") or an https image URL, shown next to this agent on roster
-     * surfaces. */
-    icon?: string;
-  }): Promise<StreamEvent> {
+  async setMetadata(input: AgentMetadataPatch): Promise<StreamEvent> {
     await this.#assertCreated();
-    // Whitespace-only values are dropped, not journaled: a patch of empty
-    // strings would blank titles and notes on every surface.
-    const field = (value: string | undefined) => {
-      const trimmed = value?.trim();
-      return trimmed === undefined || trimmed === "" ? undefined : trimmed;
-    };
-    const patch = {
-      ...(field(input.title) === undefined ? {} : { title: field(input.title) }),
-      ...(field(input.note) === undefined ? {} : { note: field(input.note) }),
-      ...(field(input.shortStatus) === undefined ? {} : { shortStatus: field(input.shortStatus) }),
-      ...(field(input.icon) === undefined ? {} : { icon: field(input.icon) }),
-      ...(input.blocked === undefined ? {} : { blocked: input.blocked }),
-    };
-    if (Object.keys(patch).length === 0) {
-      throw new Error(
-        "agent.setStatus requires at least one non-empty field (title, note, shortStatus, icon, blocked).",
-      );
-    }
+    const patch = AgentMetadataPatch.parse(input);
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agent/status-changed",
+      type: AGENT_METADATA_CHANGED_EVENT_TYPE,
       payload: patch,
     });
     return event;
-  }
-
-  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
-  setTitle(title: string): Promise<StreamEvent> {
-    return this.setStatus({ title });
   }
 
   /**
@@ -4428,9 +4404,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
         create: "Create this agent and wait for its processors to consume the birth batch.",
-        setStatus:
-          'Merge-update this agent\'s title / note / shortStatus (shortStatus completes "<agent> is …" on live surfaces).',
-        setTitle: "Name this agent/conversation (sugar for setStatus({ title })).",
+        setMetadata:
+          "Merge title, activity, summary, waitingFor, or project-global pinned presentation metadata.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
         message:
           "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
@@ -5204,9 +5179,7 @@ type ProjectRpcTargetProps = {
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
-  touchStreamActivity(input: TouchInput): Promise<void>;
-  touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
-  rebuildAgentStatus(input: AgentStatusTouchInput): Promise<boolean>;
+  indexCommittedBatchFacts(input: { stream: TouchInput; agent?: AgentTouchInput }): Promise<void>;
 };
 
 /**
@@ -5576,14 +5549,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // stream's subscription expression names `["processEventBatch"]` — the
   // INTENT, not the implementation — so envelope evolution happens here in
   // deployment code instead of by patching user repos, and first-party
-  // per-event work (the streams index via #indexStreamActivity; future
-  // policy/metrics feeds) joins the same ordered, checkpointed delivery.
-  // Rule for such steps: idempotent and never-throwing; only the worker
-  // delegation may reject into the spine's retry/park machinery. Same trust
-  // model as worker.processEventBatch itself: any project principal.
+  // per-event work joins the same ordered, checkpointed delivery. Stream and
+  // agent projection writes are awaited: a failed write rejects into the
+  // spine and is retried rather than acknowledging stale live state. Same
+  // access model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
-    this.#indexStreamActivity(batch);
-    this.#indexAgentStatus(batch);
+    await this.#indexCommittedBatchFacts(batch);
     // Search is a derived mirror, so schedule it independently of the user
     // worker outcome: a batch that the delivery spine eventually poison-skips
     // must still be searchable. waitUntil keeps it off the authoritative
@@ -5619,101 +5590,35 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
   }
 
-  /**
-   * Platform step: record the batch's stream in the project's streams index (a
-   * peer slice of `itx.liveState` — see StreamDatabase). Idempotent (`touch`
-   * only advances recency) and MUST NOT throw — a fire-and-forget dial into the
-   * project DO whose failure the next batch self-heals. Only the worker
-   * delegation above may reject into the spine's retry.
-   */
-  #indexStreamActivity(batch: StreamPushEventBatch): void {
+  /** Materialize one committed delivery's stream and agent facts together. */
+  async #indexCommittedBatchFacts(batch: StreamPushEventBatch): Promise<void> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
-    void Promise.resolve(
-      this.#projectDo.touchStreamActivity({
+
+    const events = batch.path.startsWith("/agents/")
+      ? batch.events.flatMap((event) =>
+          AGENT_PROJECTION_EVENT_TYPES.has(event.type)
+            ? [
+                {
+                  type: event.type,
+                  payload: event.payload,
+                  offset: event.offset,
+                  createdAt: event.createdAt,
+                },
+              ]
+            : [],
+        )
+      : [];
+
+    await this.#projectDo.indexCommittedBatchFacts({
+      stream: {
         path: batch.path,
         at: last.createdAt,
         type: last.type,
-        // streamMaxOffset (not events.length) so a redelivered batch is idempotent.
         maxOffset: batch.streamMaxOffset,
-      }),
-    ).catch(() => {
-      // Recency self-heals from the next batch; never surface into worker delivery.
+      },
+      ...(events.length === 0 ? {} : { agent: { path: batch.path, events } }),
     });
-  }
-
-  /**
-   * Platform step: fold an agent batch's status-changed patches into the
-   * project's agents roster (a peer slice of `itx.liveState` — see
-   * AgentStatusDatabase). Same rules as {@link #indexStreamActivity}:
-   * idempotent (event offsets guard redelivery), fire-and-forget, MUST NOT
-   * throw. Unlike recency, a DROPPED patch does not heal on the next one —
-   * these are merge patches, and a later busy patch carries no title with
-   * which to reconstruct a lost rename — so a failed dial falls back to
-   * rebuilding the row from the agent's journal (the authority).
-   */
-  #indexAgentStatus(batch: StreamPushEventBatch): void {
-    if (!batch.path.startsWith("/agents/")) return;
-    const events = batch.events
-      .filter((event) => event.type === "events.iterate.com/agent/status-changed")
-      .map((event) => ({
-        payload: event.payload,
-        offset: event.offset,
-        createdAt: event.createdAt,
-      }));
-    if (events.length === 0) return;
-    void Promise.resolve(this.#projectDo.touchAgentStatus({ path: batch.path, events })).catch(() =>
-      this.#rebuildAgentStatus(batch.path),
-    );
-  }
-
-  /**
-   * Recovery lane for a failed roster dial: re-read the agent journal's FULL
-   * status-changed history and hand it to the DO as a from-scratch rebuild.
-   * The journal read is authoritative at read time; a touch for NEWER events
-   * racing into the gap between read and replace makes the DO REFUSE the
-   * stale snapshot, and the loop re-reads (the newer events are committed to
-   * the journal before their touch could have succeeded, so the next read
-   * has them). Retried with backoff; the terminal failure is logged and the
-   * row stays stale until the agent's next rebuild-triggering drop.
-   */
-  async #rebuildAgentStatus(path: string): Promise<void> {
-    for (const backoffMs of [0, 2_000, 10_000]) {
-      if (backoffMs > 0) await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      try {
-        const stream = new StreamRpcTarget({
-          auth: this.#props.auth,
-          path,
-          projectId: this.projectId,
-        });
-        const events: { payload: unknown; offset: number; createdAt: string }[] = [];
-        let afterOffset = 0;
-        for (;;) {
-          const page = await stream.getEvents({
-            afterOffset,
-            eventTypes: ["events.iterate.com/agent/status-changed"],
-            limit: 500,
-          });
-          for (const event of page) {
-            events.push({
-              payload: event.payload,
-              offset: event.offset,
-              createdAt: event.createdAt,
-            });
-          }
-          if (page.length < 500) break;
-          afterOffset = page.at(-1)!.offset;
-        }
-        const applied = await this.#projectDo.rebuildAgentStatus({ path, events });
-        if (applied) return;
-        console.warn("[agents-roster] rebuild lost a race with a newer touch; re-reading", {
-          path,
-        });
-      } catch (error) {
-        console.warn("[agents-roster] rebuild attempt failed", { path, error });
-      }
-    }
-    console.error("[agents-roster] roster row is stale after failed rebuild", { path });
   }
 
   /**

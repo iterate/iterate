@@ -1,5 +1,4 @@
-// Stream navigation helpers backing the ⌘K stream switcher: one-shot state
-// reads for lazy tree-node loading.
+// Stream navigation helpers for the platform-wide admin stream explorer.
 
 import { useMemo } from "react";
 import type { ItxLiveSubscriptionHandle } from "~/itx/itx-react.tsx";
@@ -10,9 +9,7 @@ import {
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 
 /**
- * Where stream-tree nodes get their state: path → subscribable stream handle.
- * Project pages pass `(path) => itx.streams.get(path)`, the admin explorer
- * `(path) => itx.projects.get(projectId).streams.get(path)`.
+ * Where remote admin tree nodes get state: path → subscribable stream.
  */
 export type StreamTreeSource = (streamPath: string) => {
   subscribe(args: {
@@ -22,17 +19,16 @@ export type StreamTreeSource = (streamPath: string) => {
 };
 
 /**
- * Everything the ⌘K stream switcher needs from its host: a live state source
- * (for lazy child loading) and a way to navigate. The switcher replaces both
- * breadcrumbs and the stream tree sidebar.
+ * Navigation plus the optional lazy source required only by the admin explorer.
+ * Project navigation reads the single materialized live-state index instead.
  */
 export type StreamNavigator = {
-  source: StreamTreeSource;
+  remoteTreeSource?: StreamTreeSource;
   onOpenPath: (streamPath: string) => void;
 };
 
 /**
- * Reads one stream's current state via a one-shot subscription: the first
+ * Reads one remote admin stream's state via a one-shot subscription: the first
  * push carries current state (DECISIONS D20), so subscribe → first push →
  * unsubscribe is the cheapest "fetch".
  */

@@ -70,7 +70,7 @@ export function StreamViewHeader({
     reason: string | null;
     setPaused: (paused: boolean) => Promise<void>;
   };
-  streamKill: {
+  streamKill?: {
     kill: () => Promise<void>;
     pending: boolean;
   };
@@ -79,7 +79,7 @@ export function StreamViewHeader({
    * button that opens it (replacing mode tabs and filter, which live inside
    * the sheet instead).
    */
-  eventsToggle?: { eventCount: number };
+  eventsToggle?: { eventCount?: number };
   /** This browser's REAL measured metrics (see useBrowserStreamMetrics) — "—" until samples exist. */
   metrics: BrowserStreamMetricsView;
   presence: readonly AgentUiPresenceEntry[];
@@ -182,9 +182,11 @@ export function StreamViewHeader({
           >
             <HistoryIcon className="size-3.5" />
             <span className="hidden sm:inline">Events</span>
-            <span className="font-mono text-[10px] text-muted-foreground">
-              {eventsToggle.eventCount.toLocaleString()}
-            </span>
+            {eventsToggle.eventCount == null ? null : (
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {eventsToggle.eventCount.toLocaleString()}
+              </span>
+            )}
           </Button>
         ) : (
           <>
@@ -299,7 +301,7 @@ function StreamOverflowMenu({
   connectedPresence: readonly AgentUiPresenceEntry[];
   focusedProcessorKey: string | null;
   isMobile: boolean;
-  kill: {
+  kill?: {
     kill: () => Promise<void>;
     pending: boolean;
   };
@@ -379,7 +381,7 @@ function StreamOverflowMenu({
             )}
           </>
         ) : null}
-        {pause == null ? null : (
+        {pause == null || kill == null ? null : (
           <>
             {isMobile ? <DropdownMenuSeparator /> : null}
             <DropdownMenuGroup>

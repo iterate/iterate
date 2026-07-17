@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
+import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import type {
   AgentUiActivity,
   AgentUiLlmStep,
@@ -54,10 +55,13 @@ function renderActivity(activity: AgentUiActivity, expanded = true): HTMLDivElem
   return container;
 }
 
-function renderLiveActivity(live: AgentUiActivity): HTMLDivElement {
+function renderLiveActivity(
+  live: AgentUiActivity,
+  runtime: AgentRuntime = ZERO_AGENT_RUNTIME,
+): HTMLDivElement {
   const container = document.createElement("div");
   container.innerHTML = renderToStaticMarkup(
-    <AgentLiveActivity live={live} toggledIds={new Set()} onToggle={() => {}} />,
+    <AgentLiveActivity live={live} runtime={runtime} toggledIds={new Set()} onToggle={() => {}} />,
   );
   return container;
 }
@@ -69,8 +73,6 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
   const live = activity({
     status: "running",
     startedAtMs: now - 8_000,
-    phase: "llm",
-    phaseStartedAtMs: now - 3_400,
     steps: [
       {
         kind: "code",
@@ -122,8 +124,6 @@ test("the accumulated line does not claim that the active operation already fini
   const live = activity({
     status: "running",
     startedAtMs: now - 500,
-    phase: "script",
-    phaseStartedAtMs: now - 500,
     steps: [
       {
         kind: "code",
@@ -246,8 +246,6 @@ test("a resumed recovery phase shows its own status without linking to the crash
   const live = activity({
     status: "running",
     startedAtMs: now - 8_000,
-    phase: "llm",
-    phaseStartedAtMs: now - 500,
     steps: [
       {
         kind: "llm",
@@ -264,7 +262,10 @@ test("a resumed recovery phase shows its own status without linking to the crash
     ],
   });
 
-  const container = renderLiveActivity(live);
+  const container = renderLiveActivity(live, {
+    ...ZERO_AGENT_RUNTIME,
+    llmRequests: { scheduled: 0, requested: 1, started: 0 },
+  });
 
   const status = container.querySelector<HTMLButtonElement>('[data-testid="agent-live-status"]');
   expect(status?.disabled).toBe(true);
@@ -280,8 +281,6 @@ test("a running code row stops counting and fails visibly at its absolute deadli
   const live = activity({
     status: "running",
     startedAtMs,
-    phase: "script",
-    phaseStartedAtMs: startedAtMs,
     steps: [
       {
         kind: "code",

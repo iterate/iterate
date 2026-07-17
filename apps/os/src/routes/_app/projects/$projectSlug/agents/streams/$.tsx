@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { AgentDetailHeader } from "~/components/agents/agent-detail-header.tsx";
 import { ONBOARDING_AGENT_PATH, onboardingAgentCreateInput } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { connectItx } from "~/itx/itx-react.tsx";
+import { connectItx, useLiveState } from "~/itx/itx-react.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,
@@ -36,6 +37,12 @@ function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
   const onboardingBirthRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const agents =
+    useLiveState(
+      (itx) => itx.liveState,
+      (state) => state.agents,
+      [],
+    ).value ?? {};
 
   // THE onboarding-agent birth: the agent is deliberately not born during
   // project bootstrap (it costs a real LLM turn), so opening its chat is what
@@ -145,6 +152,14 @@ function ProjectAgentDetailContent() {
       <div className="flex min-h-0 flex-1 flex-col">
         <ProjectStreamView
           autoFocusMessageComposer
+          contextHeader={
+            <AgentDetailHeader
+              agents={agents}
+              path={streamPath}
+              projectId={project.id}
+              projectSlug={project.slug}
+            />
+          }
           emptyLabel="No events on this agent stream yet."
           messageComposer={{
             onInterrupt: interruptAgentMessage,

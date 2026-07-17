@@ -188,7 +188,34 @@ describe("config-repo GitHub reviews", () => {
     expect(h.getAgent).toHaveBeenCalledWith(
       "/agents/repos/route/pull-requests/7/iterate-reviews/100",
     );
-    expect(h.createAgent).toHaveBeenCalledWith({});
+    expect(h.createAgent).toHaveBeenCalledWith({
+      initialEvents: [
+        {
+          type: "events.iterate.com/agent/metadata-changed",
+          idempotencyKey: "metadata-identity:iterate-review:prj_test:42:7:head:head-b",
+          payload: {
+            title: "acme/widgets#7 review",
+            activity: "Reviewing the pull request",
+            summary: "Reviewing pull request #7 in acme/widgets.",
+          },
+        },
+        {
+          type: "events.iterate.com/agent/binding-set",
+          idempotencyKey: "binding:iterate-review:prj_test:42:7:head:head-b",
+          payload: {
+            type: "github_check_run",
+            checkRunId: 100,
+            connection: "install-42",
+            headSha: "head-b",
+            installationId: "42",
+            number: 7,
+            owner: "acme",
+            repo: "widgets",
+            url: "https://github.test/checks/100",
+          },
+        },
+      ],
+    });
     expect(h.snapshotAgent).toHaveBeenCalledOnce();
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({

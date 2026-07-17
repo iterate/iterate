@@ -1,0 +1,132 @@
+import { describe, expect, test } from "vitest";
+import {
+  agentCommandValue,
+  buildStreamForest,
+  defaultPaletteTab,
+  flattenStreamRows,
+  hasPathDescendant,
+  normalizeDestination,
+  paletteKeyboardAction,
+  paletteKeyboardTarget,
+} from "./command-palette-model.ts";
+import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
+
+const createdAt = "2026-07-17T10:00:00.000Z";
+
+function stream(path: string): StreamIndexRow {
+  return {
+    path,
+    createdAt,
+    lastActivityAt: createdAt,
+    lastType: "events.iterate.com/test",
+    eventCount: 1,
+  };
+}
+
+describe("command palette models", () => {
+  test("gives pinned shortcuts and structural agent rows distinct cmdk identities", () => {
+    expect(agentCommandValue("/agents/research", true)).toBe("pinned:/agents/research");
+    expect(agentCommandValue("/agents/research", false)).toBe("agent:/agents/research");
+    expect(agentCommandValue("/agents/research", true)).not.toBe(
+      agentCommandValue("/agents/research", false),
+    );
+  });
+
+  test("routes root-level cmdk keys to the selected row", () => {
+    const target = paletteKeyboardTarget("agents", "agent:/agents/research");
+    if (target === undefined) throw new Error("missing keyboard target");
+
+    expect(
+      paletteKeyboardAction({
+        target,
+        key: "ArrowRight",
+        shiftKey: false,
+        query: "",
+        hasChildren: true,
+        expanded: false,
+      }),
+    ).toBe("expand");
+    expect(
+      paletteKeyboardAction({
+        target,
+        key: "P",
+        shiftKey: true,
+        query: "",
+        hasChildren: true,
+        expanded: false,
+      }),
+    ).toBe("toggle_pin");
+    expect(
+      paletteKeyboardAction({
+        target,
+        key: "ArrowRight",
+        shiftKey: false,
+        query: "research",
+        hasChildren: true,
+        expanded: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  test("does not advertise structural expansion for pinned shortcuts", () => {
+    const target = paletteKeyboardTarget("agents", "pinned:/agents/research");
+    if (target === undefined) throw new Error("missing keyboard target");
+    expect(
+      paletteKeyboardAction({
+        target,
+        key: "ArrowRight",
+        shiftKey: false,
+        query: "",
+        hasChildren: true,
+        expanded: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  test("finds descendants for agent paths and the stream root", () => {
+    expect(
+      hasPathDescendant(["/agents/research", "/agents/research/child"], "/agents/research"),
+    ).toBe(true);
+    expect(hasPathDescendant(["/", "/agents"], "/")).toBe(true);
+    expect(hasPathDescendant(["/agents/research"], "/agents/research")).toBe(false);
+  });
+
+  test("defaults by route and keeps admin in remote tree mode", () => {
+    expect(defaultPaletteTab("/agents", true)).toBe("agents");
+    expect(defaultPaletteTab("/agents/research/child", true)).toBe("agents");
+    expect(defaultPaletteTab("/repos/config", true)).toBe("recent");
+    expect(defaultPaletteTab("/agents", false)).toBe("tree");
+  });
+
+  test("accepts only complete canonical stream destinations", () => {
+    expect(normalizeDestination("agents/new_task")).toBe("/agents/new_task");
+    expect(normalizeDestination("/agents/g~abc-123")).toBe("/agents/g~abc-123");
+    expect(normalizeDestination("/agents/")).toBeNull();
+    expect(normalizeDestination("/Agents/Bad")).toBeNull();
+    expect(normalizeDestination(`/${"a".repeat(1_024)}`)).toBeNull();
+  });
+
+  test("uses the closest real stream ancestor and does not invent path nodes", () => {
+    const rows = [stream("/"), stream("/agents"), stream("/agents/a/deep")];
+    const [root] = buildStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
+
+    expect(root?.row.path).toBe("/");
+    expect(root?.children[0]?.row.path).toBe("/agents");
+    expect(root?.children[0]?.children[0]?.row.path).toBe("/agents/a/deep");
+  });
+
+  test("preserves expansion locally and reveals ancestor context while searching", () => {
+    const rows = [stream("/"), stream("/agents"), stream("/agents/cows")];
+    const forest = buildStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
+
+    expect(flattenStreamRows(forest, new Set(["/"]), "").map(({ node }) => node.row.path)).toEqual([
+      "/",
+      "/agents",
+    ]);
+    expect(flattenStreamRows(forest, new Set(), "cows").map(({ node }) => node.row.path)).toEqual([
+      "/",
+      "/agents",
+      "/agents/cows",
+    ]);
+  });
+});

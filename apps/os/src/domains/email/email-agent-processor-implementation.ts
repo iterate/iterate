@@ -3,8 +3,9 @@
 // wire formats.
 
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
+import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
+import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
 import { emailCounterpart, isOwnProjectMail } from "./utils.ts";
 import {
@@ -95,34 +96,33 @@ export class EmailAgentProcessor extends StreamProcessor<
     if (event === null) return;
     if (event.type === "events.iterate.com/email-agent/created") return;
     if (state.birthCertificate === null) return;
+
+    const identityChanged =
+      previousState.subject !== state.subject || previousState.counterpart !== state.counterpart;
+    const threadId = state.threadId;
+    if (identityChanged && threadId !== undefined) {
+      const subject = normalizeAgentBindingLabel(state.subject);
+      const counterpart = normalizeAgentBindingLabel(state.counterpart);
+      blockProcessorWhile(() =>
+        append({
+          type: "events.iterate.com/agent/binding-set",
+          idempotencyKey: this.idempotencyKey("binding", event),
+          payload: {
+            type: "email_thread",
+            threadId,
+            ...(subject === undefined ? {} : { subject }),
+            ...(counterpart === undefined ? {} : { counterpart }),
+          },
+        }),
+      );
+    }
+
     if (event.type !== "events.iterate.com/email/received") return;
 
     // Never transcribe the project's own mail: a copy of our outbound looping
     // back inbound (e.g. the counterpart auto-forwards to the same inbox)
     // must not wake the agent to talk to itself.
     if (isOwnProjectMail(event.payload)) return;
-
-    // The thread's roster identity, whenever this mail changed it: the email
-    // icon plus the folded subject/counterpart (the agent's own setStatus
-    // patches win later by journal order).
-    if (
-      previousState.subject !== state.subject ||
-      previousState.counterpart !== state.counterpart
-    ) {
-      blockProcessorWhile(() =>
-        append({
-          type: "events.iterate.com/agent/status-changed",
-          idempotencyKey: this.idempotencyKey("status-identity", event),
-          payload: {
-            icon: "email",
-            ...(state.subject === undefined ? {} : { title: state.subject }),
-            ...(state.counterpart === undefined
-              ? {}
-              : { note: `Email thread with ${state.counterpart}` }),
-          },
-        }),
-      );
-    }
 
     // Durable obligation: the agent context item is the message's only path to the
     // LLM, so a failed append must hold the checkpoint and replay.

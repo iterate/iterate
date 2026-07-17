@@ -498,6 +498,7 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-import-failed",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/agent/created",
+    "events.iterate.com/agent/binding-set",
     "events.iterate.com/agents/context-added",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",

@@ -46,6 +46,18 @@ const SLACK_CREDENTIAL_ERRORS = new Set([
 ]);
 
 /**
+ * `conversations.info` cannot name a channel the installed bot can no longer
+ * see. That is an expected terminal lookup outcome: the typed binding keeps
+ * the channel id and simply omits its optional display name. Every other
+ * failure (credentials, scopes, transport, rate limits, and server errors)
+ * must remain retryable and observable.
+ */
+export function isSlackChannelNameUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:^|:\s)channel_not_found(?:$|\s)/.test(message);
+}
+
+/**
  * An Axios adapter that sends WebClient's requests through the project egress
  * door instead of axios's Node transport (which doesn't exist at the edge). The
  * connection-token placeholder WebClient puts in the Authorization header is

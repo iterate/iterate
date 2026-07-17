@@ -2,18 +2,18 @@
 // agent stream (`/agents/slack/<channel>/ts-<threadTs>`).
 //
 // Rewritten new-style for itx from the pre-migration (git history)
-// reference. The processor owns no event types of its own: the assistant
-// status is a pure PAINT of the agent's own status-changed announcements
-// (which carry their debounce at the source), so there is no Slack-side clear
-// obligation left to journal.
+// reference. The processor owns no event types of its own: Slack presentation
+// is a pure paint of the agent's canonical metadata and exact runtime counts.
 
 import { z } from "zod";
+import { AgentRuntimeChange } from "@iterate-com/shared/agent-events";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import {
   CoreProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } from "../streams/core-processor-contract.ts";
-import { AgentProcessorContract, AgentStatusRecord } from "../agents/agent-processor-contract.ts";
+import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { AgentMetadata } from "../agents/agent-presence.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";
 
@@ -23,8 +23,8 @@ import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-proc
  * The upstream `slack` processor has already routed raw Slack webhooks to this
  * stream. This processor owns the Slack-specific in-thread behavior: recording
  * route context, transcribing Slack messages into agent context, generating
- * bang-command codemode scripts, and painting the agent's announced busy/idle
- * status onto the Slack assistant status through host-provided dependencies.
+ * bang-command codemode scripts, and painting active runtime onto Slack's
+ * transient assistant status through host-provided dependencies.
  *
  * LLM turns are mention-gated (mirrors github-agent): a human must @mention the
  * bot (or Slack must deliver `app_mention`) before the agent is woken. After
@@ -36,18 +36,12 @@ import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-proc
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
-  version: "0.5.0",
+  version: "0.7.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     birthCertificate: SlackAgentBirthCertificate.nullable().default(null),
-    /**
-     * The agent's merged status record — what the assistant thread should
-     * show. Folded from agent/status-changed patches with the contract's
-     * shared merge (mergeAgentStatusPatch): busy patches are
-     * sinceOffset-guarded, authored title/note/shortStatus are
-     * last-write-wins.
-     */
-    status: AgentStatusRecord.optional(),
+    metadata: AgentMetadata.prefault({}),
+    runtimeChange: AgentRuntimeChange.optional(),
     botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),
@@ -57,7 +51,10 @@ export const SlackAgentProcessorContract = defineProcessorContract({
      * github-agent's conversationActive).
      */
     conversationActive: z.boolean().default(false),
-    latestMessageTs: z.string().optional(),
+    /** Message that actually received this bot's transient eyes reaction.
+     * Ambient follow-ups must not replace it: settlement removes the reaction
+     * from the message we acknowledged, not merely the newest message seen. */
+    eyesReactionMessageTs: z.string().optional(),
     streamPath: z.string().optional(),
     threadTs: z.string().optional(),
   }),
@@ -74,7 +71,8 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/slack-agent/created",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
-    "events.iterate.com/agent/status-changed",
+    "events.iterate.com/agent/metadata-changed",
+    "events.iterate.com/agent/runtime-changed",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
     // processor; the payload's processorSlug names which). MUST be consumed
     // (the runner throws at construction otherwise): appended when an
@@ -88,7 +86,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   emits: [
     "events.iterate.com/agents/context-added",
     "events.iterate.com/capability-host/script-run-requested",
-    "events.iterate.com/agent/status-changed",
+    "events.iterate.com/agent/binding-set",
   ],
 });
 

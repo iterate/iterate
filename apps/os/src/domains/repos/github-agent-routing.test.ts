@@ -155,6 +155,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     const routed = network.eventsAt(WIDGETS_PR_7);
     expect(routed.map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
+      "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/github-agent/created",
       "events.iterate.com/capability-host/capability-provided",
@@ -164,14 +165,22 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/github/webhook-received",
     ]);
-    expect(routed[2]!.payload).toEqual({
+    expect(routed[1]!.payload).toEqual({
+      type: "github_pull_request",
+      connection: "install-789",
+      installationId: "789",
+      number: 7,
+      owner: "acme",
+      repo: "widgets",
+    });
+    expect(routed[3]!.payload).toEqual({
       config: {
         ...GITHUB_LINK,
         number: 7,
         repoPath: "/repos/config",
       },
     });
-    expect(routed.slice(5, 8).map((event) => event.payload)).toEqual(
+    expect(routed.slice(6, 9).map((event) => event.payload)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           delivery: expect.objectContaining({ processorSlug: "agent" }),
@@ -184,7 +193,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         }),
       ]),
     );
-    expect(routed[8]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
+    expect(routed[9]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
   });
 
   it("routes each PR to its own stream and dedupes the route fact per PR", async () => {
@@ -211,6 +220,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
 
     expect(network.eventsAt(WIDGETS_PR_7).map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
+      "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/github-agent/created",
       "events.iterate.com/capability-host/capability-provided",
@@ -223,6 +233,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     ]);
     expect(network.eventsAt(WIDGETS_PR_8).map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
+      "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/github-agent/created",
       "events.iterate.com/capability-host/capability-provided",
@@ -311,6 +322,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
           .map((event) => event.type),
       ).toEqual([
         "events.iterate.com/agent/created",
+        "events.iterate.com/agent/binding-set",
         "events.iterate.com/capability-host/created",
         "events.iterate.com/github-agent/created",
         "events.iterate.com/capability-host/capability-provided",

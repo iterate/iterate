@@ -150,16 +150,6 @@ export class GithubAgentProcessor extends StreamProcessor<
         const octokit = `itx.integrations.github.get(${JSON.stringify(config.connection)}).octokit`;
         const githubToken = JSON.stringify(githubAccessTokenPlaceholder(config.connection));
         blockProcessorWhile(async () => {
-          // The PR's roster identity: icon + which pull request this agent is.
-          await append({
-            type: "events.iterate.com/agent/status-changed",
-            idempotencyKey: this.idempotencyKey(`status-identity:${routeKey}`),
-            payload: {
-              icon: "github",
-              title: `${config.owner}/${config.repo}#${config.number}`,
-              note: `Pull request #${config.number} in ${config.owner}/${config.repo}`,
-            },
-          });
           await append({
             type: "events.iterate.com/agents/context-added",
             idempotencyKey: this.idempotencyKey(`route-context:${routeKey}`),

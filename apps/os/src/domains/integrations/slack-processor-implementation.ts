@@ -168,6 +168,18 @@ function slackAgentCreationEvents(input: {
   return agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    initialEvents: [
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: `agent/binding:${input.projectId}:${input.path}`,
+        payload: {
+          type: "slack_thread",
+          connection: input.connection,
+          channelId: input.channel,
+          threadTs: input.threadTs,
+        },
+      },
+    ],
     overrides: { systemPrompt: slackAgentSystemPrompt(input.connection) },
     sibling: {
       birthCertificate: SlackAgentProcessorContract.buildEvent({

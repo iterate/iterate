@@ -190,7 +190,34 @@ export async function processGithubReviewEvent(input: {
   const reviewAgentSnapshot = await reviewAgent.processor.snapshot();
   await Promise.all([
     reviewAgentSnapshot.state.birthCertificate === null
-      ? reviewAgent.create({})
+      ? reviewAgent.create({
+          initialEvents: [
+            {
+              type: "events.iterate.com/agent/metadata-changed",
+              idempotencyKey: `metadata-identity:${externalId}`,
+              payload: {
+                title: `${target.fullName}#${target.number} review`,
+                activity: "Reviewing the pull request",
+                summary: `Reviewing pull request #${target.number} in ${target.fullName}.`,
+              },
+            },
+            {
+              type: "events.iterate.com/agent/binding-set",
+              idempotencyKey: `binding:${externalId}`,
+              payload: {
+                type: "github_check_run",
+                connection: target.connection,
+                installationId: target.installationId,
+                owner: target.owner,
+                repo: target.repo,
+                number: target.number,
+                checkRunId: check.id,
+                headSha: target.headSha,
+                ...(check.html_url == null ? {} : { url: check.html_url }),
+              },
+            },
+          ],
+        })
       : Promise.resolve(),
     setGithubReviewDetailsUrl({
       check,
@@ -212,48 +239,34 @@ export async function processGithubReviewEvent(input: {
       }),
     }),
   ]);
-  await reviewAgent.stream.append(
-    {
-      // Roster identity for the sidebar, so review children do not fall back
-      // to a truncated repos/g~… path label.
-      type: "events.iterate.com/agent/status-changed",
-      idempotencyKey: `status-identity:${externalId}`,
-      payload: {
-        icon: "github",
-        title: `${target.fullName}#${target.number}`,
-        note: `Review of PR #${target.number} in ${target.fullName}`,
-        shortStatus: "reviewing the pull request",
-      },
-    },
-    {
-      type: "events.iterate.com/agents/context-added",
-      idempotencyKey: externalId,
-      payload: {
-        role: "developer",
-        key: `github/review-task:${externalId}`,
-        content: githubReviewTask({
-          ...target,
-          checkId: check.id,
-          checkUrl: check.html_url ?? undefined,
-          externalId,
-          rules: rulesFile.content,
-          skipLabel: input.config.skipLabel,
-          sourceOffset: input.event.offset,
+  await reviewAgent.stream.append({
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: externalId,
+    payload: {
+      role: "developer",
+      key: `github/review-task:${externalId}`,
+      content: githubReviewTask({
+        ...target,
+        checkId: check.id,
+        checkUrl: check.html_url ?? undefined,
+        externalId,
+        rules: rulesFile.content,
+        skipLabel: input.config.skipLabel,
+        sourceOffset: input.event.offset,
+        streamPath: input.event.path,
+        timeoutScheduleKey,
+      }),
+      refs: [
+        {
+          type: "event",
           streamPath: input.event.path,
-          timeoutScheduleKey,
-        }),
-        refs: [
-          {
-            type: "event",
-            streamPath: input.event.path,
-            offset: input.event.offset,
-            eventType: input.event.type,
-          },
-        ],
-        llmRequestPolicy: { behaviour: "after-current-request" },
-      },
+          offset: input.event.offset,
+          eventType: input.event.type,
+        },
+      ],
+      llmRequestPolicy: { behaviour: "after-current-request" },
     },
-  );
+  });
   return "queued";
 }
 

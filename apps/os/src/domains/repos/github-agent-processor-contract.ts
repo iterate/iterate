@@ -97,7 +97,6 @@ export const GithubAgentProcessorContract = defineProcessorContract({
   emits: [
     "events.iterate.com/agents/context-added",
     "events.iterate.com/github-agent/repository-collaborator-verified",
-    "events.iterate.com/agent/status-changed",
   ],
 });
 

@@ -19,6 +19,20 @@ export function githubAgentCreationEvents(input: {
   return agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
+    initialEvents: [
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: `agent/binding:${input.projectId}:${input.path}`,
+        payload: {
+          type: "github_pull_request",
+          connection: input.connection,
+          installationId: input.installationId,
+          owner: input.owner,
+          repo: input.repo,
+          number: input.number,
+        },
+      },
+    ],
     overrides: { systemPrompt: PR_AGENT_SYSTEM_PROMPT },
     sibling: {
       birthCertificate: GithubAgentProcessorContract.buildEvent({

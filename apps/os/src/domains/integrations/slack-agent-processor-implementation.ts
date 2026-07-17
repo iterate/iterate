@@ -1,39 +1,32 @@
 // Implements the "slack-agent" processor on itx.
 //
-// Behavioral reference: the pre-migration slack-agent processor (git history).
-// Emitted event types, payloads, and idempotency keys are stable wire formats.
-//
 // Side-effect policy:
 // - Slack Web API calls (status updates, reactions) run inside
 //   `blockProcessorWhile` so the checkpoint only advances once they finished;
 //   sequences like "commit agent context, then add the eyes reaction" keep their
-//   legacy ordering by sharing one blocking closure.
+//   ordering by sharing one blocking closure.
 // - Replay runs the same idempotency-keyed side effects as live delivery. The
 //   processor checkpoint is the guardrail; failed batches replay from the last
 //   fully processed offset.
 // - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
-//   status is repainted once per at-head pass (`processEvent` under
-//   `delivery.caughtUp`) from the latest announced status instead of once per
+//   activity is repainted once per at-head pass (`processEvent` under
+//   `delivery.caughtUp`) from current metadata/runtime instead of once per
 //   event.
 //
-// The "is thinking..." status is a pure PAINT of the agent processor's own
-// `agent/status-changed` announcements. The agent owns the busy/idle
-// derivation (LLM lifecycle, running scripts, queued triggers) AND the
-// trailing idle debounce, so this processor keeps no lifecycle fold and no
-// clear obligation of its own — busy paints the status, idle clears it, and
-// the announcement's sinceOffset guard (see the event's contract) keeps a
-// stale idle from overwriting newer work.
+// Slack's "is thinking..." status is intentionally transient. Non-zero
+// projected runtime paints metadata.activity (or a factual fallback); the
+// debounced zero snapshot clears both status and 👀 even when semantic
+// metadata says the agent is waiting for a user, timer, or external event.
 
+import { ZERO_AGENT_RUNTIME, mergeAgentRuntimeChange } from "@iterate-com/shared/agent-events";
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import {
-  mergeAgentStatusPatch,
-  type AgentFileAttachment,
-} from "../agents/agent-processor-contract.ts";
+import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
+import { applyAgentMetadataPatch, deriveAgentDisplayState } from "../agents/agent-presence.ts";
 import { readRecord, readString, webhookAckIsFresh } from "./utils.ts";
 import {
   SlackAgentProcessorContract,
@@ -52,7 +45,8 @@ export class SlackAgentProcessor extends StreamProcessor<
       method: string;
     }): Promise<void>;
     /** Resolves a channel id to its display name (conversations.info) for the
-     * birth identity patch; null on any failure — the id then stands in. */
+     * typed binding; null only when the channel is definitively unavailable.
+     * Operational failures reject so the processor retries the route fact. */
     fetchSlackChannelName?(input: { channel: string; connection: string }): Promise<string | null>;
     /** Injectable clock for the acknowledgement freshness gates. */
     now?: () => number;
@@ -85,13 +79,13 @@ export class SlackAgentProcessor extends StreamProcessor<
           channel: event.payload.config.channel,
           threadTs: event.payload.config.threadTs,
         };
-      case "events.iterate.com/agent/status-changed": {
-        // The contract's shared merge fold: busy patches carry their
-        // sinceOffset guard, authored title/note/shortStatus patches are
-        // last-write-wins.
-        const status = mergeAgentStatusPatch(state.status, event.payload);
-        if (status === state.status) return state;
-        return { ...state, ...(status === undefined ? {} : { status }) };
+      case "events.iterate.com/agent/metadata-changed": {
+        const metadata = applyAgentMetadataPatch(state.metadata, event.payload);
+        return metadata === state.metadata ? state : { ...state, metadata };
+      }
+      case "events.iterate.com/agent/runtime-changed": {
+        const runtimeChange = mergeAgentRuntimeChange(state.runtimeChange, event.payload);
+        return runtimeChange === state.runtimeChange ? state : { ...state, runtimeChange };
       }
       case "events.iterate.com/slack/thread-route-configured":
         return {
@@ -101,18 +95,28 @@ export class SlackAgentProcessor extends StreamProcessor<
           threadTs: event.payload.threadTs,
         };
       case "events.iterate.com/slack/webhook-received": {
-        const target = slackTargetFromPayload(event.payload);
+        const target = slackAgentTargetFromWebhookPayload(event.payload);
         if (target == null) return state;
         const botUserId = state.botUserId ?? botUserIdFromPayload(event.payload);
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
         const mentioned = slackWebhookMentionsOurBot(event.payload, botUserId);
+        const getsEyesReaction =
+          !target.isBotMessage &&
+          !target.isReactionEvent &&
+          target.messageTs !== undefined &&
+          (mentioned ||
+            slackWebhookCompilesBangCommand(
+              event.payload,
+              state.birthCertificate?.config.connection,
+              target,
+            ));
         return {
           ...state,
           ...(botBotId == null ? {} : { botBotId }),
           ...(botUserId == null ? {} : { botUserId }),
           channel: target.channel,
           conversationActive: state.conversationActive || mentioned,
-          ...(target.messageTs == null ? {} : { latestMessageTs: target.messageTs }),
+          ...(getsEyesReaction ? { eyesReactionMessageTs: target.messageTs } : {}),
           threadTs: target.threadTs,
         };
       }
@@ -128,16 +132,29 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (event !== null && event.type === "events.iterate.com/slack-agent/created") return;
     if (state.birthCertificate === null) return;
     const { birthCertificate } = state;
-    // Status announcements drive the assistant status, which is repainted
-    // once per at-head pass — nothing per event beyond remembering the
-    // LATEST announcement (later events overwrite earlier ones, and the memo
-    // carries across behind-head frames so a lagging fold still paints once
-    // it catches up). The memo is written BEFORE the at-head registration
-    // below: `blockProcessorWhile` may start its closure synchronously, so a
-    // head event's own announcement must already be memoized when the
-    // repaint reads it.
-    if (event !== null && event.type === "events.iterate.com/agent/status-changed") {
-      this.#unpaintedStatusFact = event;
+    // Presence facts paint once from the complete at-head fold. A revival fact
+    // also reconciles the current state so a replacement incarnation clears
+    // or restores presentation left behind by the one that died.
+    if (
+      event !== null &&
+      (event.type === "events.iterate.com/agent/metadata-changed" ||
+        event.type === "events.iterate.com/agent/runtime-changed" ||
+        event.type === "events.iterate.com/stream/processor-revived")
+    ) {
+      this.#unpaintedPresenceFact = event;
+      if (
+        event.type === "events.iterate.com/agent/runtime-changed" ||
+        event.type === "events.iterate.com/stream/processor-revived"
+      ) {
+        this.#unpaintedRuntimeOrRevival = true;
+      }
+      if (
+        event.type === "events.iterate.com/stream/processor-revived" ||
+        (event.type === "events.iterate.com/agent/metadata-changed" &&
+          Object.hasOwn(event.payload, "title"))
+      ) {
+        this.#unpaintedTitleReconcile = true;
+      }
     }
     // AT-HEAD repaint: `delivery.caughtUp` means `args.state` is the whole
     // observed fold. It rides the last consumed event or the runner's
@@ -146,30 +163,28 @@ export class SlackAgentProcessor extends StreamProcessor<
     // fails the frame and the transport replays it (the memo re-accumulates on
     // redelivery).
     if (args.delivery.caughtUp) {
-      args.blockProcessorWhileCaughtUp(() => this.#reconcileStatus(args));
+      args.blockProcessorWhileCaughtUp(() => this.#reconcilePresence(args));
     }
     // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
     if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured": {
-        // Route context (channel/thread_ts/streamPath) is captured in
-        // reduce(). The route additionally stamps the thread's roster
-        // identity ONCE: the slack icon and a "#channel" title/note (the
-        // agent's own setStatus patches win later by journal order).
+        // Route context is captured in reduce(). The integration contributes
+        // only the typed external fact; title, activity, and summary belong to
+        // the agent/human-authored metadata API.
         const channel = event.payload.channel;
         const connection = birthCertificate.config.connection;
         blockProcessorWhile(async () => {
-          const name =
-            (await this.deps.fetchSlackChannelName?.({ channel, connection }).catch(() => null)) ??
-            null;
-          const label = name === null ? channel : `#${name}`;
+          const name = (await this.deps.fetchSlackChannelName?.({ channel, connection })) ?? null;
           await append({
-            type: "events.iterate.com/agent/status-changed",
-            idempotencyKey: this.idempotencyKey("status-identity"),
+            type: "events.iterate.com/agent/binding-set",
+            idempotencyKey: this.idempotencyKey("binding"),
             payload: {
-              icon: "slack",
-              title: `${label} thread`,
-              note: `Slack thread in ${label}`,
+              type: "slack_thread",
+              connection,
+              channelId: channel,
+              threadTs: event.payload.threadTs,
+              ...(name === null ? {} : { channelName: name }),
             },
           });
         });
@@ -279,10 +294,11 @@ export class SlackAgentProcessor extends StreamProcessor<
                 expiresAt: (this.deps.now ?? Date.now)() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
               },
             });
-            await this.#addEyesReactionForMessageTarget(
+            await this.#replaceEyesReactionForMessageTarget(
               birthCertificate.config.connection,
               target,
               event,
+              args.previousState.eyesReactionMessageTs,
             );
           });
           return;
@@ -335,16 +351,17 @@ export class SlackAgentProcessor extends StreamProcessor<
               : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
           });
           if (mentioned) {
-            await this.#addEyesReactionForMessageTarget(
+            await this.#replaceEyesReactionForMessageTarget(
               birthCertificate.config.connection,
               target,
               event,
+              args.previousState.eyesReactionMessageTs,
             );
           }
         });
         return;
       }
-      // Status announcements were memoized above the switch; the revival
+      // Presence facts were memoized above the switch; the revival
       // fact needs no per-event handling (its delivery only guarantees the
       // at-head repaint pass).
       default:
@@ -352,116 +369,106 @@ export class SlackAgentProcessor extends StreamProcessor<
     }
   }
 
-  /** Latest status announcement deferred until an at-head repaint. */
-  #unpaintedStatusFact: { createdAt: string; type: string } | undefined;
-  /** Whether THIS incarnation painted a busy status: a stale idle
-   * announcement must still clear what we ourselves put up, while a refold
-   * (fresh instance, all facts stale) must repaint nothing at all. */
-  #paintedBusyStatus = false;
+  /** Latest presence or revival fact deferred until an at-head repaint. */
+  #unpaintedPresenceFact: { createdAt: string; type: string } | undefined;
+  /** A runtime or revival fact occurred somewhere in the pending batch. Kept
+   * separately from the latest fact because a following metadata patch must
+   * not hide the obligation to clear a dead incarnation's Slack status. */
+  #unpaintedRuntimeOrRevival = false;
+  /** A title patch or revival requires an at-head title reconciliation even
+   * when the current title is absent: Slack clears a thread title by receiving
+   * the same setTitle call with an empty title. */
+  #unpaintedTitleReconcile = false;
+  /** Exact transient status this incarnation painted. Written only after a
+   * successful Slack call so failed frames retry, and used to dedupe runtime
+   * count transitions that leave the human-readable activity unchanged. */
+  #paintedActivityText: string | undefined;
   /** The title this incarnation painted, so repeated repaints of an unchanged
    * title cost no Slack calls. */
   #paintedTitle: string | undefined;
 
   /**
-   * Paint the agent's announced status onto the assistant thread, once per
-   * at-head pass (never per event, so a refold cannot replay historical
-   * flips). Invoked from `processEvent` under `delivery.caughtUp` inside ONE
-   * `blockProcessorWhile` closure, so every Slack call below is awaited —
-   * sequentially, title before status — as the head event's own blocking
-   * work. The latest announcement accumulates in `#unpaintedStatusFact`
-   * per event, so a fact delivered in a behind-head frame still paints
-   * exactly once when the cursor reaches head. Both directions are
-   * freshness-gated like every other acknowledgement — a refold's months-old
-   * announcements must not burst Slack calls across every historical thread —
-   * with one exception: a stale idle still clears a busy status this
-   * incarnation painted. Recovery's `stream/processor-revived` delivery lands here
-   * too: a fresh incarnation's caught-up pass repaints from the fold.
+   * Paint current metadata/runtime once per at-head pass. Freshness gates only
+   * additive transient status; durable title reconciliation and accepted-zero
+   * cleanup also run after delayed delivery or refold. Runtime settlement
+   * always clears Slack presentation—semantic waiting belongs to Iterate's
+   * agent UI, not Slack's typing indicator.
    */
-  async #reconcileStatus(
+  async #reconcilePresence(
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
-    const latest = this.#unpaintedStatusFact;
-    this.#unpaintedStatusFact = undefined;
+    const latest = this.#unpaintedPresenceFact;
+    const runtimeOrRevival = this.#unpaintedRuntimeOrRevival;
+    const titleReconcile = this.#unpaintedTitleReconcile;
+    this.#unpaintedPresenceFact = undefined;
+    this.#unpaintedRuntimeOrRevival = false;
+    this.#unpaintedTitleReconcile = false;
     if (latest == null) return;
     if (args.state.birthCertificate === null) return;
     const connection = args.state.birthCertificate.config.connection;
-    const { channel, latestMessageTs, status, threadTs } = args.state;
+    const { channel, eyesReactionMessageTs, metadata, threadTs } = args.state;
     if (channel == null || threadTs == null) return;
     const fresh = webhookAckIsFresh(latest, (this.deps.now ?? Date.now)());
 
-    // The agent-authored title paints whenever the folded title differs from
-    // what this incarnation painted — freshness-gated with everything else,
-    // so a refold never replays historical renames. The painted-title record
-    // is written only AFTER the call succeeds: a rejected call fails the
-    // frame, and the redelivered frame must retry the rename instead of
-    // seeing it as already painted.
-    const title = args.state.status?.title;
-    if (fresh && title !== undefined && title !== this.#paintedTitle) {
+    // A title is durable current-state paint, unlike Slack's transient status.
+    // Reconcile once from the complete at-head fold, including explicit clear
+    // patches and revival. The painted-title record is written only AFTER the
+    // call succeeds: a rejected call fails the frame, and redelivery retries.
+    const title = metadata.title;
+    const slackTitle = title ?? "";
+    if (
+      slackTitle !== this.#paintedTitle &&
+      (title !== undefined || titleReconcile || this.#paintedTitle !== undefined)
+    ) {
       await this.#callSlackApi(connection, "assistant.threads.setTitle", {
         channel_id: channel,
         thread_ts: threadTs,
-        title,
+        title: slackTitle,
       });
-      this.#paintedTitle = title;
+      this.#paintedTitle = slackTitle;
     }
 
-    if (status?.busy) {
+    const displayState = deriveAgentDisplayState(
+      args.state.runtimeChange?.runtime ?? ZERO_AGENT_RUNTIME,
+    );
+    const fallbackActivity =
+      displayState === "running_code"
+        ? "Running code"
+        : displayState === "waiting_for_model"
+          ? "Waiting for the model"
+          : displayState === "queued"
+            ? "Preparing the next step"
+            : undefined;
+
+    if (fallbackActivity !== undefined) {
       if (!fresh) return;
-      // The agent's own words win; otherwise the platform-derived phase says
-      // what it is doing ("making an LLM request" / "running a script").
-      const text =
-        status.shortStatus ??
-        (status.phase === "script" ? "running a script" : "making an LLM request");
+      const text = metadata.activity ?? fallbackActivity;
+      const paintedText = `${text}…`;
+      if (paintedText === this.#paintedActivityText) return;
       await this.#callSlackApi(connection, "assistant.threads.setStatus", {
         channel_id: channel,
         thread_ts: threadTs,
-        status: `is ${text}...`,
-        loading_messages: [`${text}...`],
+        status: paintedText,
+        loading_messages: [paintedText],
       });
-      this.#paintedBusyStatus = true;
+      this.#paintedActivityText = paintedText;
       return;
     }
-    // Only an EXPLICIT idle clears. An authored-only record (title/note/
-    // shortStatus with busy never announced) says nothing about work, and
-    // clearing on it would strip the 👀 ack for a message the agent has not
-    // even picked up yet.
-    if (status?.busy !== false) return;
-    // A blocked turn ended WAITING on the human: say so instead of going
-    // quiet. The 👀 still comes off — the message was handled — and the
-    // next busy flip (the platform clears `blocked` in it) repaints.
-    if (status.blocked === true) {
-      if (!fresh && !this.#paintedBusyStatus) return;
-      const text = status.shortStatus ?? "waiting for input";
-      await this.#callSlackApi(connection, "assistant.threads.setStatus", {
-        channel_id: channel,
-        thread_ts: threadTs,
-        status: `is ${text}...`,
-        loading_messages: [`${text}...`],
-      });
-      if (latestMessageTs != null) {
-        await this.#callSlackApi(connection, "reactions.remove", {
-          channel,
-          name: "eyes",
-          timestamp: latestMessageTs,
-        });
-      }
-      this.#paintedBusyStatus = true;
-      return;
-    }
-    if (!fresh && !this.#paintedBusyStatus) return;
+
+    if (!runtimeOrRevival && this.#paintedActivityText === undefined) return;
     await this.#clearStatus({
       channel,
       connection,
-      ...(latestMessageTs == null ? {} : { latestMessageTs }),
+      ...(eyesReactionMessageTs == null ? {} : { eyesReactionMessageTs }),
       threadTs,
     });
-    this.#paintedBusyStatus = false;
+    this.#paintedActivityText = undefined;
   }
 
   async #clearStatus(target: {
     channel: string;
     connection: string;
-    latestMessageTs?: string;
+    eyesReactionMessageTs?: string;
     threadTs: string;
   }) {
     await this.#callSlackApi(target.connection, "assistant.threads.setStatus", {
@@ -469,23 +476,42 @@ export class SlackAgentProcessor extends StreamProcessor<
       thread_ts: target.threadTs,
       status: "",
     });
-    if (target.latestMessageTs != null) {
+    if (target.eyesReactionMessageTs != null) {
       await this.#callSlackApi(target.connection, "reactions.remove", {
         channel: target.channel,
         name: "eyes",
-        timestamp: target.latestMessageTs,
+        timestamp: target.eyesReactionMessageTs,
       });
     }
   }
 
-  /** The 👀 ack means "your message was just picked up" — only fresh webhooks
-   * qualify (see WEBHOOK_ACK_FRESHNESS_MS for why stale ones must not). */
-  async #addEyesReactionForMessageTarget(
+  /** Keep at most one outstanding 👀 per thread. The router may already have
+   * fast-acked the new mention, so removing the previous target and adding the
+   * new one are both deliberately idempotent. */
+  async #replaceEyesReactionForMessageTarget(
     connection: string,
     target: SlackAgentTarget | null,
     event: { createdAt: string },
+    previousMessageTs: string | undefined,
   ) {
-    if (target == null || target.isBotMessage || target.isReactionEvent) return;
+    if (
+      target == null ||
+      target.isBotMessage ||
+      target.isReactionEvent ||
+      target.messageTs == null
+    ) {
+      return;
+    }
+    if (previousMessageTs != null && previousMessageTs !== target.messageTs) {
+      await this.#callSlackApi(connection, "reactions.remove", {
+        channel: target.channel,
+        name: "eyes",
+        timestamp: previousMessageTs,
+      });
+    }
+    // The 👀 ack means "your message was just picked up" — only fresh
+    // webhooks qualify for a new reaction. A stale replacement still removes
+    // the old ack so it cannot survive forever.
     if (!webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) return;
     await this.#callSlackApi(connection, "reactions.add", {
       channel: target.channel,
@@ -757,20 +783,6 @@ type SlackAgentTarget = {
   threadTs: string;
 };
 
-function slackTargetFromPayload(payload: unknown): {
-  channel: string;
-  messageTs?: string;
-  threadTs: string;
-} | null {
-  const target = slackAgentTargetFromWebhookPayload(payload);
-  if (target == null) return null;
-  return {
-    channel: target.channel,
-    ...(target.messageTs == null ? {} : { messageTs: target.messageTs }),
-    threadTs: target.threadTs,
-  };
-}
-
 function botUserIdFromPayload(payload: unknown): string | undefined {
   const body = readRecord(readRecord(payload)?.body);
   const authorizations = body?.authorizations;
@@ -798,6 +810,26 @@ function slackWebhookMentionsOurBot(payload: unknown, botUserId: string | undefi
   if (slackEvent == null) return false;
   if (readString(slackEvent.type) === "app_mention") return true;
   return slackTextMentionsBot(readString(slackEvent.text), botUserId);
+}
+
+function slackWebhookCompilesBangCommand(
+  payload: unknown,
+  connection: string | null | undefined,
+  target: SlackAgentTarget,
+): boolean {
+  const body = readRecord(readRecord(payload)?.body);
+  const slackEvent = readRecord(body?.event);
+  if (slackEvent == null) return false;
+  const eventType = readString(slackEvent.type);
+  if (eventType !== "message" && eventType !== "app_mention") return false;
+  return (
+    compileBangCommand({
+      channel: target.channel,
+      connection,
+      message: readString(slackEvent.text)?.trim(),
+      threadTs: target.threadTs,
+    }) !== null
+  );
 }
 
 function botBotIdFromPayload(payload: unknown): string | undefined {
@@ -844,7 +876,7 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
 /**
  * Payload-only gate for the integration-level fast acknowledgement: the 👀
  * reaction added at the routing hop, before the routed thread stream and its
- * slack-agent host even exist. Mirrors `#addEyesReactionForMessageTarget`'s
+ * slack-agent host even exist. Mirrors `#replaceEyesReactionForMessageTarget`'s
  * gating using only what the webhook itself carries — bot-authored messages,
  * reaction events, actions performed by the authorized bot user, and messages
  * that do not @mention our bot are skipped. 👀 is a "we heard you" signal for

@@ -1,9 +1,9 @@
-import { useMemo } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { buttonVariants } from "@iterate-com/ui/components/button";
-import { AgentRosterList } from "~/components/agent-roster.tsx";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { toast } from "@iterate-com/ui/components/sonner";
+import { AgentCatalog } from "~/components/agents/agent-catalog.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTree } from "~/components/stream-tree.tsx";
+import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
+import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,
@@ -11,16 +11,11 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx } from "~/itx/itx-react.tsx";
 
 const AGENTS_ROOT = "/agents";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
   staticData: streamPageStaticData(),
-  // Agents ARE streams: this page is the /agents catalogue stream's view, with
-  // the live agent tree in the side panel. useItx never SSRs (it throws on the
-  // server), and the tree paints from its own live subscriptions once the
-  // socket connects.
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context }) =>
@@ -33,43 +28,38 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
 
 function ProjectAgentsIndexContent() {
   const params = Route.useParams();
-  const navigate = useNavigate();
   const { project } = Route.useLoaderData();
+  const navigate = useNavigate();
   const itx = useItx();
-  const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
+  const agents =
+    useLiveState(
+      (projectItx) => projectItx.liveState,
+      (state) => state.agents,
+      [],
+    ).value ?? {};
 
-  const panel = (
-    <>
-      <Link
-        to="/projects/$projectSlug/agents/new"
-        params={{ projectSlug: params.projectSlug }}
-        search={{}}
-        className={buttonVariants({ size: "sm" })}
-      >
-        New agent
-      </Link>
-      {/* Every agent's live status record (busy dot, title, what it's doing),
-          newest activity first — fed by the project's agents roster slice. */}
-      <AgentRosterList projectId={project.id} projectSlug={params.projectSlug} />
-      {/* Anything under /agents is an agent and opens the chat view —
-          linkOptionsForStreamPath encodes that. */}
-      <StreamTree
-        source={source}
-        rootPath={AGENTS_ROOT}
-        scope={project.id}
-        onOpenPath={(streamPath) =>
-          void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
-        }
-      />
-    </>
-  );
+  async function togglePinned(agent: AgentRecord): Promise<void> {
+    try {
+      await itx.agents.get(agent.path).setMetadata({ pinned: !agent.metadata.pinned });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update pin.");
+    }
+  }
 
   return (
     <ProjectStreamView
-      panel={panel}
+      layout="fullPanel"
+      panel={
+        <AgentCatalog
+          agents={agents}
+          projectSlug={params.projectSlug}
+          onOpen={(path) => void navigate(linkOptionsForStreamPath(params.projectSlug, path))}
+          onTogglePinned={togglePinned}
+        />
+      }
       projectId={project.id}
       streamPath={AGENTS_ROOT}
-      emptyLabel="No events on the agents catalogue stream yet."
+      emptyLabel="No events on the agents catalog stream yet."
     />
   );
 }

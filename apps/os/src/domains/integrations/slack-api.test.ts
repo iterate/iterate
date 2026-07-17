@@ -36,8 +36,13 @@ vi.mock("./integration-streams.ts", () => ({
   }),
 }));
 
-const { callProjectSlackWebApi, connectionSlackClient, normalizeSlackError, SLACK_CALL_GRAMMAR } =
-  await import("./slack-api.ts");
+const {
+  callProjectSlackWebApi,
+  connectionSlackClient,
+  isSlackChannelNameUnavailableError,
+  normalizeSlackError,
+  SLACK_CALL_GRAMMAR,
+} = await import("./slack-api.ts");
 
 describe("connectionSlackClient", () => {
   beforeEach(() => {
@@ -201,5 +206,16 @@ describe("normalizeSlackError", () => {
     for (const needle of expectedContains ?? []) {
       expect(err.message).toContain(needle);
     }
+  });
+});
+
+describe("isSlackChannelNameUnavailableError", () => {
+  test.each([
+    [new Error("Slack Web API conversations.info failed: channel_not_found"), true],
+    [new Error("channel_not_found"), true],
+    [new Error("Slack Web API conversations.info failed: missing_scope"), false],
+    [new Error("network timeout"), false],
+  ])("classifies only terminal channel visibility failures", (error, expected) => {
+    expect(isSlackChannelNameUnavailableError(error)).toBe(expected);
   });
 });
