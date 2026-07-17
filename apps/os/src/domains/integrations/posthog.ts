@@ -5,10 +5,6 @@ import type { SubscriptionConfiguredPayload } from "../streams/core-processor-co
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 
-const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
-const POSTHOG_STREAM_EVENT = "iterate stream event committed";
-
-const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/batch/";
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
 const ProjectGroupBirthPayload = z.object({
   config: z.object({
@@ -26,7 +22,7 @@ export function posthogSubscriptionEvent() {
     type: "events.iterate.com/stream/subscription-configured",
     idempotencyKey: "iterate-platform-posthog-subscription-v1",
     payload: {
-      subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+      subscriptionKey: "iterate-platform-posthog",
       description: "Iterate's first-party, all-event PostHog feed",
       delivery: {
         mode: "push",
@@ -162,7 +158,7 @@ function posthogEvents(args: {
       offset: event.offset,
     });
     return {
-      event: POSTHOG_STREAM_EVENT,
+      event: "iterate stream event committed",
       properties: {
         $geoip_disable: true,
         $groups: { project: projectId },
@@ -214,7 +210,9 @@ export async function capturePosthogStreamEventBatch(
   },
   deps: { fetch?: typeof fetch } = {},
 ): Promise<void> {
-  if (args.batch.events.length === 0) return;
+  if (args.batch.events.length === 0) {
+    throw new Error("PostHog stream delivery batch must contain an event");
+  }
   const events = posthogEvents(args);
   await tracing.enterSpan("posthog.capture_stream_events", async (span) => {
     const streamId = posthogUuid(["stream-v1", args.workerName, args.projectId, args.batch.path]);
@@ -224,7 +222,7 @@ export async function capturePosthogStreamEventBatch(
     span.setAttribute("iterate.stream.delivery_id", args.batch.deliveryId);
     span.setAttribute("iterate.stream.delivery_attempt", args.batch.attempt);
 
-    const response = await (deps.fetch ?? fetch)(POSTHOG_CAPTURE_URL, {
+    const response = await (deps.fetch ?? fetch)("https://eu.i.posthog.com/batch/", {
       // Deliberately omit optional `sent_at`: these are server-authoritative
       // source timestamps, so network timing must not skew them on retry.
       body: JSON.stringify({ api_key: args.apiKey, batch: events }),

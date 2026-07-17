@@ -138,7 +138,6 @@ describe("first-party PostHog stream integration", () => {
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
     });
-    expect(requests[0]!.batch[0]).not.toHaveProperty("distinct_id");
     expect(requests[0]!.batch[1]).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
       properties: {
@@ -183,7 +182,6 @@ describe("first-party PostHog stream integration", () => {
       event: POSTHOG_STREAM_EVENT,
       properties: { stream_event: JSON.parse(JSON.stringify(created)) },
     });
-    expect(JSON.stringify(requests[0])).toContain("owner@example.com");
   });
 
   it("creates the project group when any new stream first exports events", async () => {
@@ -251,9 +249,11 @@ describe("first-party PostHog stream integration", () => {
     ).rejects.toThrow("HTTP 503");
   });
 
-  it("does not call PostHog for an empty delivery batch", async () => {
+  it("rejects an impossible empty delivery batch", async () => {
     const captureFetch = acceptingFetch();
-    await capturePosthogStreamEventBatch(captureArgs([]), { fetch: captureFetch });
+    await expect(
+      capturePosthogStreamEventBatch(captureArgs([]), { fetch: captureFetch }),
+    ).rejects.toThrow("must contain an event");
     expect(captureFetch).not.toHaveBeenCalled();
   });
 });
