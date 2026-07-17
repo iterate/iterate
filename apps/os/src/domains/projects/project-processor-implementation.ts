@@ -6,7 +6,10 @@ import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  capabilityFallbackForScope,
+} from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -139,7 +142,7 @@ export class ProjectProcessor extends StreamProcessor<
                   type: "events.iterate.com/capability-host/created",
                   idempotencyKey: `capability-host/created:${this.deps.itx.projectId}:/`,
                   // The root host ends capability resolution: no fallback.
-                  payload: { config: {}, fallback: null },
+                  payload: { config: {}, fallback: capabilityFallbackForScope("/") },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({

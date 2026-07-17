@@ -271,7 +271,7 @@ import {
 } from "./domains/agents/agent-processor-contract.ts";
 import {
   CapabilityHostProcessorContract,
-  PROJECT_ROOT_CAPABILITY_FALLBACK,
+  capabilityFallbackForScope,
 } from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
   settleByDeadline,
@@ -5257,10 +5257,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         idempotencyKey: `capability-host/created:${this.#props.projectId}:${this.#props.path}`,
         // The root host ends resolution; every other scope journals a one-hop
         // fallback straight to it (path is normalized in the constructor).
-        payload: {
-          config: {},
-          fallback: this.#props.path === "/" ? null : PROJECT_ROOT_CAPABILITY_FALLBACK,
-        },
+        payload: { config: {}, fallback: capabilityFallbackForScope(this.#props.path) },
       },
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName,
@@ -5469,7 +5466,8 @@ type ProjectRpcTargetProps = {
  * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
  * in the isolate; only unknown roots fall through the prototype-chain
  * fallback (the registry block at the bottom of this file) to the capability
- * host's dynamic table (which itself chains up to enclosing scopes). So the
+ * host's dynamic table (which follows its journaled fallback host on a
+ * miss). So the
  * common `itx.streams.get(...)` path never makes a round trip
  * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
  * capability can never shadow a built-in name — the built-in always wins
@@ -6618,7 +6616,7 @@ const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.contex
  * the platform's example scripts (most are proven: the test suite runs them
  * unattended against a live project on every change; the rest are marked
  * interactive), the public type surface (the Itx Type Graph), and the
- * capabilities mounted in the caller's scope chain. One door for "how do I
+ * capabilities reachable from the caller's scope. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),

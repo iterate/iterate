@@ -50,6 +50,7 @@ function makeProcessor(options: {
   stream: MemoryStream;
   run?: (code: string) => Promise<unknown>;
   itx?: unknown;
+  path?: string;
   typecheckScript?: (input: {
     capabilities: CapabilityDescription[];
     code: string;
@@ -59,7 +60,7 @@ function makeProcessor(options: {
   const processor = new CapabilityHostProcessor({
     stream: options.stream,
     itx: (options.itx ?? {}) as Project,
-    path: "/",
+    path: options.path ?? "/",
     projectId: null,
     scriptExecutionEntrypoint: {
       run: async (code) => {
@@ -230,6 +231,9 @@ describe("script execution typecheck gate", () => {
     const harness = makeProcessor({
       stream,
       run: async () => null,
+      // A non-root scope, as in production: only non-root hosts journal a
+      // fallback, and the self-fallback guard rejects a root that points home.
+      path: "/agents/demo",
       itx: {
         capabilityHosts: {
           get: () => ({

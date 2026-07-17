@@ -126,6 +126,11 @@ type FallbackCapabilityHost = {
   path?: string;
 };
 
+function isFallbackCapabilityHost(value: unknown): value is FallbackCapabilityHost {
+  const host = value as Partial<FallbackCapabilityHost> | null | undefined;
+  return typeof host?.invokeCapability === "function" && typeof host.__describe === "function";
+}
+
 /**
  * RUNNER-backed reads of the committed fold. Under registry drive the runner
  * owns both cursors and the processor instance's internal checkpoint never
@@ -657,15 +662,16 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * scope's own itx into the host reads fall back to — or null when the
    * certificate ends resolution here (the project root, and every unborn or
    * pre-fallback host). Evaluated per read: the journal stores the NAME of
-   * the fallback, never a captured handle.
+   * the fallback, never a captured handle. Platform-written expressions
+   * evaluate to an in-process RpcTarget (never a disposable client stub), so
+   * the hop holds nothing that needs disposal.
    */
   async #fallbackHost(
     fallback: ItxExpression | null | undefined,
   ): Promise<FallbackCapabilityHost | null> {
     if (!fallback) return null;
     const { value } = await evaluateItxExpression(this.#itx, fallback);
-    const host = value as Partial<FallbackCapabilityHost> | null | undefined;
-    if (typeof host?.invokeCapability !== "function" || typeof host.__describe !== "function") {
+    if (!isFallbackCapabilityHost(value)) {
       throw new Error(
         `capability fallback expression for scope ${this.#path} did not evaluate to a capability host`,
       );
@@ -673,10 +679,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // Platform-written fallbacks always point at "/", but the field is journal
     // data: reject the one trivially-expressible cycle instead of letting a
     // self-pointing scope recurse through DO dials to the subrequest limit.
-    if (typeof host.path === "string" && normalizePath(host.path) === this.#path) {
+    if (typeof value.path === "string" && normalizePath(value.path) === this.#path) {
       throw new Error(`capability fallback for scope ${this.#path} points at itself`);
     }
-    return host as FallbackCapabilityHost;
+    return value;
   }
 
   // Reports everything reachable at this scope: this scope's own mounts plus
@@ -687,6 +693,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   // and where it lives.
   async describeCapabilities(): Promise<CapabilityDescription[]> {
     const { state } = await this.#reads.snapshot();
+    // Deliberately no #assertCreated: describing an unborn scope reports []
+    // (discovery stays safe everywhere), while invoking one throws above.
     return await this.#describeCapabilitiesFrom(
       state.capabilities,
       state.birthCertificate?.fallback ?? null,
@@ -828,7 +836,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       };
     } catch (error) {
       // The gate must never fail a script for the checker's own failure — an
-      // unreachable sidecar or a parent-scope dial error means unchecked.
+      // unreachable sidecar or a fallback-host dial error means unchecked.
       console.warn("[capability-host] script typecheck skipped", { error });
       return { rejection: null };
     }

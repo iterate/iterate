@@ -1,9 +1,10 @@
-// The `types` metadata lifecycle at provide time: authored declarations must
-// compile before they enter the journal (loud rejection, nothing appended),
-// and an itx-expression mount provided WITHOUT types asks the capability's
-// __describe once and keeps what it reports — connect-time auto-typing.
-// The validator here is a stub; the real one (typechecker sidecar + tswasm)
-// is exercised in domains/typecheck/virtual-project.test.ts.
+// Capability-table behavior at the processor level: birth-certificate
+// handling, fallback resolution on a local miss, and the `types` metadata
+// lifecycle at provide time (authored declarations must compile before they
+// enter the journal; an itx-expression mount provided WITHOUT types asks the
+// capability's __describe once and keeps what it reports — connect-time
+// auto-typing). The validator here is a stub; the real one (typechecker
+// sidecar + tswasm) is exercised in domains/typecheck/virtual-project.test.ts.
 
 import { describe, expect, it, vi } from "vitest";
 import { StreamProcessorRunner } from "iterate/processors";

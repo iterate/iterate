@@ -9,7 +9,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import {
   CapabilityHostProcessorContract,
-  PROJECT_ROOT_CAPABILITY_FALLBACK,
+  capabilityFallbackForScope,
 } from "../capability-host/capability-host-processor-contract.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -229,7 +229,7 @@ export function agentCreationForPath<
     idempotencyKey: `capability-host/created:${projectId}:${agentPath}`,
     // A capability miss at the agent's scope re-resolves directly at the
     // project root host — one hop, journaled at birth, no path walking.
-    payload: { config: {}, fallback: PROJECT_ROOT_CAPABILITY_FALLBACK },
+    payload: { config: {}, fallback: capabilityFallbackForScope(agentPath) },
   });
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per

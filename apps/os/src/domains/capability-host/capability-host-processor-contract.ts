@@ -66,10 +66,10 @@ const CapabilityHostBirthCertificate = z.strictObject({
    * other host — usually `["capabilityHosts", ["get", "/"]]`, the project
    * root — or null, which ends resolution here. Journaled at birth and
    * re-evaluated against this scope's own itx on every fallback read, so the
-   * expression is a durable name, never captured authority. Optional only so
+   * expression is a durable name, never captured authority. Nullish only so
    * pre-fallback birth certificates still parse; absent means null.
    */
-  fallback: ItxExpression.nullable().optional(),
+  fallback: ItxExpression.nullish(),
 });
 
 /**
@@ -78,7 +78,12 @@ const CapabilityHostBirthCertificate = z.strictObject({
  * scope walking — a scope that wants different inheritance journals a
  * different expression at birth.
  */
-export const PROJECT_ROOT_CAPABILITY_FALLBACK: ItxExpression = ["capabilityHosts", ["get", "/"]];
+const PROJECT_ROOT_CAPABILITY_FALLBACK: ItxExpression = ["capabilityHosts", ["get", "/"]];
+
+/** The one platform rule for what a new host at `path` journals as its fallback. */
+export function capabilityFallbackForScope(path: string): ItxExpression | null {
+  return path === "/" ? null : PROJECT_ROOT_CAPABILITY_FALLBACK;
+}
 
 /**
  * Absolute lifetime of a script-run-requested obligation. Recovery can
