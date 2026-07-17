@@ -262,6 +262,74 @@ describe("script execution reconciliation", () => {
     });
   });
 
+  it("preserves a replacement incarnation's settlement when the old executor finishes late", async () => {
+    const h = makeHarness();
+    const executionFinished = Promise.withResolvers<unknown>();
+    h.run.impl = () => executionFinished.promise;
+
+    // Match production's strict idempotency contract for this race: the same
+    // completion key may dedupe only an identical event. MemoryStream is
+    // deliberately looser for generic processor tests.
+    const append = h.stream.append.bind(h.stream);
+    let conflicts = 0;
+    h.stream.append = async (...inputs) => {
+      for (const input of inputs) {
+        const existing =
+          input.idempotencyKey === undefined
+            ? undefined
+            : h.stream.events.find((event) => event.idempotencyKey === input.idempotencyKey);
+        if (
+          existing !== undefined &&
+          JSON.stringify(existing.payload) !== JSON.stringify(input.payload)
+        ) {
+          conflicts += 1;
+          throw new Error(
+            `idempotency key "${input.idempotencyKey}" already names a different event at offset ${existing.offset}`,
+          );
+        }
+      }
+      return await append(...inputs);
+    };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await h.stream.append({
+        type: T.requested,
+        payload: {
+          code: "async () => 'late success'",
+          executionId: "exec-late",
+          expiresAt: h.clock.now + 60_000,
+        },
+      });
+      await h.deliverPending();
+      await vi.waitFor(() => {
+        expect(h.stream.events.some((event) => event.type === T.started)).toBe(true);
+      });
+
+      h.crash();
+      await h.deliverPending();
+      await vi.waitFor(() => {
+        expect(h.stream.events.find((event) => event.type === T.completed)?.payload).toMatchObject({
+          executionId: "exec-late",
+          settlement: { failureKind: "orphaned", status: "failed" },
+        });
+      });
+
+      executionFinished.resolve({ status: "succeeded", result: "too late" });
+      await vi.waitFor(() => expect(conflicts).toBe(1));
+      await h.settle();
+
+      expect(consoleError).not.toHaveBeenCalledWith(
+        "stream processor runner background work failed",
+        expect.anything(),
+      );
+      expect(h.stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
+    } finally {
+      executionFinished.resolve({ status: "succeeded", result: "too late" });
+      consoleError.mockRestore();
+    }
+  });
+
   it("recovers a request whose incarnation died BEFORE any attempt started (provably never ran → runs it)", async () => {
     const h = makeHarness();
     // The dead incarnation appended the request but never a started fact.

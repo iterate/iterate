@@ -142,7 +142,9 @@ import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/st
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
   isDurableObjectLifecycleError,
+  isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import {
   isObjectSchema,
@@ -424,6 +426,8 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
   );
 }
 
+const STREAM_WAIT_REACQUIRE_MS = 10_000;
+
 /**
  * Durable event stream capability.
  *
@@ -537,13 +541,69 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * `ephemeral: true` event appended after this wait opens, but historical
    * ephemeral rows are never replayed.
    */
-  waitForEvent(args: {
+  async waitForEvent(args: {
     afterOffset?: number;
     eventTypes?: readonly string[];
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+    // Preserve the DO's validation error for invalid timeouts instead of
+    // manufacturing a deadline from NaN/Infinity/a non-positive duration.
+    if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+      return await this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+    }
+
+    const deadline = Date.now() + args.timeoutMs;
+    const terminal = Promise.withResolvers<StreamEvent>();
+    let lifecycleRetries = 0;
+
+    while (Date.now() < deadline) {
+      const attemptDeadline = Math.min(deadline, Date.now() + STREAM_WAIT_REACQUIRE_MS);
+      const sliceTimeoutMs = Math.max(1, attemptDeadline - Date.now());
+      let wait: Promise<StreamEvent>;
+      try {
+        wait = Promise.resolve(
+          this.durableObjectStub.waitForEvent({ ...args, timeoutMs: sliceTimeoutMs }),
+        );
+      } catch (error) {
+        if (lifecycleRetries === 0 && isDurableObjectLifecycleError(error)) {
+          lifecycleRetries += 1;
+          continue;
+        }
+        rethrowStreamUnavailable(error);
+      }
+
+      // A superseded call can still report an ephemeral match that a fresh
+      // subscription cannot replay. Let that success win. Likewise, retain a
+      // late predicate/application failure as the terminal result; only the
+      // explicitly modelled slice timeout and lifecycle-reset outcomes are
+      // safe to replace with a fresh durable replay.
+      void wait.then(terminal.resolve, (error: unknown) => {
+        if (!isStreamWaitTimeoutError(error) && !isDurableObjectLifecycleError(error)) {
+          terminal.reject(error);
+        }
+      });
+
+      const outcome = await settleByDeadline(
+        Promise.race([wait, terminal.promise]),
+        attemptDeadline,
+        Date.now,
+      );
+      if (outcome.status === "fulfilled") return outcome.value;
+      if (outcome.status === "rejected") {
+        if (isStreamWaitTimeoutError(outcome.error)) continue;
+        if (lifecycleRetries === 0 && isDurableObjectLifecycleError(outcome.error)) {
+          lifecycleRetries += 1;
+          continue;
+        }
+        rethrowStreamUnavailable(outcome.error);
+      }
+    }
+
+    throw new Error(
+      `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
+        "(the public deadline expired while recovery re-armed one-shot waits).",
+    );
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */

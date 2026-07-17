@@ -934,7 +934,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return this.#appendCompletionsWithin([{ ...input, expiresAt: obligationExpiresAt }]);
   }
 
-  #appendCompletionsWithin(
+  async #appendCompletionsWithin(
     inputs: {
       executionId: string;
       expiresAt: number;
@@ -952,13 +952,59 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // blocking the processor forever. A batch uses its earliest member's
     // deadline so batching cannot extend any individual obligation.
     const appendDeadline = settlementAppendDeadline(inputs, now);
-    return this.#awaitJournalAppend(
-      this.append(...inputs.map((input) => this.#completionInput(input))),
-      appendDeadline,
-      inputs.length === 1
-        ? `record the settlement of script execution "${inputs[0]!.executionId}"`
-        : `record ${inputs.length} script execution settlements`,
-    );
+    const completions = inputs.map((input) => this.#completionInput(input));
+    try {
+      await this.#awaitJournalAppend(
+        this.append(...completions),
+        appendDeadline,
+        inputs.length === 1
+          ? `record the settlement of script execution "${inputs[0]!.executionId}"`
+          : `record ${inputs.length} script execution settlements`,
+      );
+    } catch (appendError) {
+      let durableSettlements: ScriptExecutionSettlementValue[];
+      try {
+        durableSettlements = await this.#awaitJournalAppend(
+          Promise.all(
+            completions.map(async (completion, index) => {
+              const event = await this.stream.getEvent({
+                idempotencyKey: completion.idempotencyKey,
+              });
+              const settlement = settlementFromCompletionEvent(event, inputs[index]!.executionId);
+              if (settlement === undefined) throw appendError;
+              return settlement;
+            }),
+          ),
+          settlementAppendDeadline(inputs, (this.#now ?? Date.now)()),
+          "verify the durable script settlement after its append failed",
+        );
+      } catch (verificationError) {
+        if (verificationError === appendError) throw appendError;
+        throw new AggregateError(
+          [appendError, verificationError],
+          "script settlement append failed and its durable outcome could not be verified",
+        );
+      }
+
+      // A replacement incarnation may conservatively classify an execution
+      // as orphaned while the old external worker is still returning. The
+      // first settlement is authoritative. A failed append is successful
+      // reconciliation only after reading back a valid completion for every
+      // exact execution/idempotency key; the late result is then an expected,
+      // explicitly observed loser rather than error telemetry.
+      inputs.forEach((input, index) => {
+        const durableSettlement = durableSettlements[index]!;
+        console.info("[capability-host] late script settlement superseded by durable outcome", {
+          attemptedFailureKind:
+            input.settlement.status === "failed" ? input.settlement.failureKind : undefined,
+          attemptedStatus: input.settlement.status,
+          durableFailureKind:
+            durableSettlement.status === "failed" ? durableSettlement.failureKind : undefined,
+          durableStatus: durableSettlement.status,
+          executionId: input.executionId,
+        });
+      });
+    }
   }
 
   /** The one durable outcome of a script execution. The reconciler's settle
@@ -971,6 +1017,20 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       settlement: input.settlement,
     });
   }
+}
+
+function settlementFromCompletionEvent(
+  event: StreamEvent | undefined,
+  executionId: string,
+): ScriptExecutionSettlementValue | undefined {
+  if (
+    event?.type !== "events.iterate.com/capability-host/script-run-settled" ||
+    event.payload?.executionId !== executionId
+  ) {
+    return undefined;
+  }
+  const parsed = ScriptExecutionSettlement.safeParse(event.payload.settlement);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function assertExpressionDoesNotReferenceOwnMount(

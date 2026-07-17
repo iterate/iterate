@@ -1,6 +1,152 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProcessorRelayRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import {
+  ProcessorRelayRpcTarget,
+  StreamProcessorRpcTarget,
+  StreamRpcTarget,
+} from "../../rpc-targets.ts";
+import type { StreamEvent } from "./schemas.ts";
 import type { ProcessorReads } from "./stream-processor.ts";
+
+describe("StreamRpcTarget", () => {
+  it("re-acquires when a remote stream waiter is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<StreamEvent>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/agents/onboarding",
+      type: "events.iterate.com/test/recovered",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          waitForEvent: () => (acquisitions === 1 ? firstWait.promise : Promise.resolve(event)),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/agents/onboarding",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      afterOffset: 8,
+      eventTypes: [event.type],
+      timeoutMs: 30_000,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(acquisitions).toBe(2);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstWait.reject(new Error("late rejection from superseded stream waiter"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a late ephemeral match from a superseded waiter", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<StreamEvent>();
+    const secondWait = Promise.withResolvers<StreamEvent>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      ephemeral: true,
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/ephemeral",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          waitForEvent: () => (acquisitions === 1 ? firstWait.promise : secondWait.promise),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      afterOffset: 8,
+      eventTypes: [event.type],
+      timeoutMs: 30_000,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(acquisitions).toBe(2);
+
+      firstWait.resolve(event);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstWait.resolve(event);
+      secondWait.reject(new Error("late rejection after the ephemeral match"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates stream predicate failures without retrying", async () => {
+    const predicateError = new Error("predicate failed");
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => Promise.reject(predicateError) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.waitForEvent({ predicate: () => true, timeoutMs: 30_000 })).rejects.toBe(
+      predicateError,
+    );
+    expect(acquisitions).toBe(1);
+  });
+
+  it("keeps one public timeout across orphaned stream waiters", async () => {
+    vi.useFakeTimers();
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => new Promise<StreamEvent>(() => undefined) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      eventTypes: ["events.iterate.com/test/absent"],
+      timeoutMs: 30_000,
+    });
+    const rejected = expect(waiting).rejects.toThrow(
+      "stream-wait-timeout: Timed out waiting for stream event after 30000ms",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(acquisitions).toBe(3);
+    } finally {
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("StreamProcessorRpcTarget", () => {
   it("lets the runner waiter own the complete waitUntilProcessed timeout", async () => {
