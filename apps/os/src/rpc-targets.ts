@@ -6558,9 +6558,17 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       }
 
       processor = acquired.value;
+      if (expiresAt !== undefined && Date.now() >= expiresAt) {
+        // Acquisition won the promise race but consumed the complete slice.
+        // Do not schedule a call on a facade that cleanup must now release.
+        this.#disposeProcessor(processor);
+        return { status: "deadline" };
+      }
       let outcome: DeadlineOutcome<Result>;
       try {
-        outcome = await settle(Promise.resolve().then(() => call(processor!)));
+        outcome = await settle(call(processor));
+      } catch (error) {
+        outcome = { status: "rejected", error };
       } finally {
         this.#disposeProcessor(processor);
       }

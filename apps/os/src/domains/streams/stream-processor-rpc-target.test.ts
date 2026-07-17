@@ -321,6 +321,42 @@ describe("ProcessorRelayRpcTarget", () => {
     }
   });
 
+  it("does not start a processor call when acquisition consumes the wait slice", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const waitUntilProcessed = vi.fn(async () => undefined);
+    const dispose = vi.fn();
+    const processor = {
+      [Symbol.dispose]: dispose,
+      getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+      snapshot: async () => ({ offset: 0, state: {} }),
+      waitUntilProcessed,
+    };
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: async () => {
+        now = 1_100;
+        return processor;
+      },
+    });
+
+    try {
+      await expect(relay.waitUntilProcessed({ offset: 3, timeoutMs: 100 })).rejects.toThrow(
+        "waitUntilProcessed timed out after 100ms waiting for offset 3",
+      );
+      expect(waitUntilProcessed).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("keeps one public timeout across orphaned wait slices", async () => {
     vi.useFakeTimers();
     const disposals: number[] = [];
