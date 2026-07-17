@@ -316,6 +316,11 @@ import type {
   ConnectionRuntimeState,
   SubscriptionRuntimeState,
 } from "./domains/streams/stream-subscribers.ts";
+import type {
+  StreamFeedLiveState,
+  StreamFeedPage,
+  StreamFeedReadInput,
+} from "./domains/streams/feed/types.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -449,7 +454,7 @@ const STREAM_WAIT_REACQUIRE_MS = 10_000;
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT product event: live subscribe() connections see it, while default reads and durable subscribers exclude it unless a push/webhook explicitly opts in; the row may be evicted later, so append durable product truth separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), getFeedItems(), liveState, waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT product event: live subscribe() connections see it, while default reads and durable subscribers exclude it unless a push/webhook explicitly opts in; the row may be evicted later, so append durable product truth separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -457,7 +462,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           "Copy matching events onto another stream (optionally JSONata-transformed). Cross-post subscriptions do not opt into ephemeral rows; a selector matching only ephemeral types delivers nothing.",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
+        getFeedItems: "Experimental: read one finite page of the rendered-feed prototype.",
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
+        liveState: "Experimental: subscribe to bounded recent feed state and the agent tail.",
         readEvents: "Create a pager for bounded event pages.",
         removeCrossPost: "Remove a cross-post configured by crossPostTo.",
         subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
@@ -534,6 +541,18 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+  }
+
+  /** Experimental prototype: read one finite page of the rendered-feed projection. */
+  getFeedItems(args?: StreamFeedReadInput): Promise<StreamFeedPage> {
+    return this.durableObjectStub.getFeedItems(args).catch(rethrowStreamUnavailable);
+  }
+
+  /** Experimental prototype: bounded recent feed plus the live reduced agent state. */
+  get liveState(): LiveStateRpc<StreamFeedLiveState> {
+    return new LiveStateRelayRpcTarget<StreamFeedLiveState>(
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<StreamFeedLiveState>,
+    );
   }
 
   /**

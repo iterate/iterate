@@ -1,11 +1,45 @@
-# Collapsing the browser stream mirror into itx live-state
+# Proposal: collapse the browser stream mirror into itx live-state
 
-The design for retiring the browser-hosted stream database/processor host so a
+An exploratory design for retiring the browser-hosted stream database/processor host so a
 stream feed is just `useLiveState` + `useItxQuery` like every other screen.
 Reviewed against the code 2026-07-16; companion to
 [`docs/frontend-development.md`](../../../docs/frontend-development.md) (which
 documents the seam) and the
 [roadmap](itx-frontend-model-roadmap.md) (which sequences it).
+
+> **Decision gate (2026-07-17): this is not an accepted migration plan.**
+> [`tasks/stream-mirror-collapse-vs-move.md`](../../../tasks/stream-mirror-collapse-vs-move.md)
+> records the unresolved product/architecture choice: collapse the mirror into
+> the Stream Durable Object, or move the portable mirror/feed plumbing into
+> `packages/iterate`. The accompanying implementation is deliberately only a
+> Phase-B prototype. It adds a lazy, bounded server feed read model but keeps
+> every browser mirror consumer and code path intact. No UI consumes the new
+> API, and the prototype is not evidence that server ownership is correct.
+>
+> Since PR #2073, the processor contracts, runner, stream handle, and testing
+> machinery already live in `iterate/processors`. That removes the largest
+> stated cost of the move-first option. The decision task must be reevaluated
+> against that new baseline before this proposal advances.
+
+Before any cutover, the proposal must answer these gaps rather than treating
+`getEvents` as a drop-in replacement:
+
+- The raw inspector needs the previous/next event around one offset; the
+  current ascending `getEvents` window cannot efficiently ask for the latest
+  event before an offset.
+- The LLM inspector reconstructs a request from history through the request
+  plus request-scoped response chunks which arrive later. That is not one
+  ordinary finite page.
+- The script inspector finds events by `payload.executionId`, which the public
+  stream read contract cannot query.
+- Server ownership duplicates a potentially large materialized feed beside
+  every durable journal and moves backfill CPU/storage into the Stream DO. The
+  operational cost and the loss of reusable package-level plumbing need
+  measurements, not assumptions.
+
+The prototype exists to make those trade-offs reviewable. It must not be used
+to delete or bypass the browser mirror until the decision task is resolved and
+the chosen read contracts cover every existing consumer.
 
 ## The problem
 

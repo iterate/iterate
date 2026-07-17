@@ -7,8 +7,9 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
-import type { StreamEventBatch } from "iterate/processors";
-import type { StreamEvent } from "iterate/processors";
+import { applyPatch, type LiveUpdate } from "iterate/live-state";
+import type { StreamEvent, StreamEventBatch } from "iterate/processors";
+import type { StreamFeedLiveState } from "../../src/domains/streams/feed/types.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -205,6 +206,94 @@ test("stream getEvents defaults to a bounded page and supports event type filter
   expect(selectedEvents).toHaveLength(253);
   expect(selectedEvents.every((event) => event.type === selectedType)).toBe(true);
   await expect(stream.getEvents({ limit: 501 })).rejects.toThrow("getEvents limit");
+});
+
+test("stream exposes the rendered-feed prototype through itx", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/os-port/feed/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `os-stream-feed-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(streamPath);
+
+  const [appended] = await stream.append({
+    type: `${STREAM_EVENT_TYPE}/feed`,
+    payload: { marker },
+  });
+
+  const page = await stream.getFeedItems({ limit: 100 });
+  expect(page).toMatchObject({
+    items: expect.arrayContaining([
+      expect.objectContaining({
+        firstOffset: appended!.offset,
+        lastOffset: appended!.offset,
+        kind: "raw.group",
+        eventCount: 1,
+      }),
+    ]),
+    projection: {
+      acknowledgedThroughOffset: expect.any(Number),
+      caughtUp: true,
+      streamMaxOffset: appended!.offset,
+    },
+  });
+  expect(page.projection.acknowledgedThroughOffset).toBeGreaterThanOrEqual(appended!.offset);
+
+  const live = await stream.liveState.get();
+  expect(live).toMatchObject({
+    projection: page.projection,
+    recentItems: expect.arrayContaining([
+      expect.objectContaining({
+        firstOffset: appended!.offset,
+        lastOffset: appended!.offset,
+      }),
+    ]),
+  });
+  expect(live.agent.eventCount).toBeGreaterThanOrEqual(1);
+
+  const filtered = await stream.getFeedItems({
+    limit: 10,
+    filter: {
+      agent: null,
+      raw: {
+        eventTypes: [`${STREAM_EVENT_TYPE}/feed`],
+        components: null,
+        searchQuery: null,
+        offsetFrom: null,
+        offsetTo: null,
+      },
+    },
+  });
+  expect(filtered).toMatchObject({
+    total: 1,
+    items: [
+      expect.objectContaining({
+        firstOffset: appended!.offset,
+        lastOffset: appended!.offset,
+        kind: "raw.group",
+      }),
+    ],
+  });
+  const tracked = trackLiveState<StreamFeedLiveState>();
+  using liveSubscription = await stream.liveState.subscribe(tracked.onUpdate);
+  await waitFor(
+    () => tracked.state()?.projection.caughtUp === true,
+    () => `feed live snapshot; saw ${JSON.stringify(tracked.state()?.projection)}`,
+  );
+  const [second] = await stream.append({
+    type: `${STREAM_EVENT_TYPE}/feed`,
+    payload: { marker, sequence: 2 },
+  });
+  await waitFor(
+    () => (tracked.state()?.projection.acknowledgedThroughOffset ?? 0) >= second!.offset,
+    () => `feed live append; saw ${JSON.stringify(tracked.state()?.projection)}`,
+  );
+  expect(tracked.patchCount()).toBeGreaterThan(0);
+  expect(await liveSubscription.ping()).toBe(true);
 });
 
 test("stream subscribe replays history, tails live appends, and unsubscribes", async () => {
@@ -797,4 +886,25 @@ function waitFor(
   timeoutMs = 10_000,
 ) {
   return waitForCondition(predicate, { description: describe, intervalMs: 100, timeoutMs });
+}
+
+/** Reassemble Stream.liveState exactly like the iterate React hook. */
+function trackLiveState<State>(): {
+  onUpdate: (update: LiveUpdate<State>) => void;
+  state: () => State | undefined;
+  patchCount: () => number;
+} {
+  let state: State | undefined;
+  let patches = 0;
+  return {
+    onUpdate: (update) => {
+      if (update.type === "snapshot") state = update.state;
+      else {
+        patches += 1;
+        state = applyPatch(state as State, update.patch);
+      }
+    },
+    state: () => state,
+    patchCount: () => patches,
+  };
 }

@@ -713,7 +713,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Stream",
     kind: "interface",
     sourceText:
-      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Durable rows after `afterOffset` are replayed. It can also match an\n   * `ephemeral: true` event appended after this wait opens, but historical\n   * ephemeral rows are never replayed.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling), so a polling debug UI sees RTTs populate.\n   */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, ConnectionRuntimeState>;\n      subscriptions: Record<string, SubscriptionRuntimeState>;\n      metrics: StreamThroughputMetrics;\n      /** SQLite database size in bytes (event log + spine rows + chunks). */\n      storageSizeBytes: number;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane):\n   * `processEventBatch` first receives durable history after\n   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only\n   * when appended after this exact subscription opens and are never replayed.\n   * Returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /**\n     * Atomically bind this open to the stream identity observed during\n     * catch-up. `null` means the caller observed a stream with no committed\n     * creation fact yet. A mismatch rejects before replacing any connection.\n     */\n    expectedIncarnation?: string | null;\n    /**\n     * Atomically reject instead of opening when the current raw-log head is\n     * more than this many offsets beyond `replayAfterOffset`.\n     */\n    maxReplayOffsetGap?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    /**\n     * Human-readable note for operators and the stream state panel (why this\n     * cross-post exists). Optional on the API; platform call sites always set it.\n     */\n    description?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
+      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /** Experimental prototype: read one finite page of the rendered-feed projection. */\n  getFeedItems(args?: StreamFeedReadInput): Promise<StreamFeedPage>;\n  /** Experimental prototype: bounded recent feed plus the live reduced agent state. */\n  liveState: LiveStateRpc<StreamFeedLiveState>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Durable rows after `afterOffset` are replayed. It can also match an\n   * `ephemeral: true` event appended after this wait opens, but historical\n   * ephemeral rows are never replayed.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling), so a polling debug UI sees RTTs populate.\n   */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, ConnectionRuntimeState>;\n      subscriptions: Record<string, SubscriptionRuntimeState>;\n      metrics: StreamThroughputMetrics;\n      /** SQLite database size in bytes (event log + spine rows + chunks). */\n      storageSizeBytes: number;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane):\n   * `processEventBatch` first receives durable history after\n   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only\n   * when appended after this exact subscription opens and are never replayed.\n   * Returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /**\n     * Atomically bind this open to the stream identity observed during\n     * catch-up. `null` means the caller observed a stream with no committed\n     * creation fact yet. A mismatch rejects before replacing any connection.\n     */\n    expectedIncarnation?: string | null;\n    /**\n     * Atomically reject instead of opening when the current raw-log head is\n     * more than this many offsets beyond `replayAfterOffset`.\n     */\n    maxReplayOffsetGap?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    /**\n     * Human-readable note for operators and the stream state panel (why this\n     * cross-post exists). Optional on the API; platform call sites always set it.\n     */\n    description?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
     summary: "Durable event stream capability.",
     memberSummaries: {
       append: "Commit events; resolves with the same events carrying offsets and timestamps.",
@@ -721,6 +721,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       getEvent: "One event by offset or idempotencyKey; undefined when it does not exist.",
       getEvents:
         "Read one bounded page of committed events (default from the stream's start; filter with `eventTypes`, page forward with `afterOffset`).",
+      getFeedItems: "Experimental prototype: read one finite page of the rendered-feed projection.",
+      liveState: "Experimental prototype: bounded recent feed plus the live reduced agent state.",
       readEvents:
         'A stateful pager over a read window: repeated `next()` calls walk forward through pages, `[]` means "caught up for now".',
       waitForEvent:
@@ -744,6 +746,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamEventInput",
       "StreamEvent",
       "StreamEventReadInput",
+      "StreamFeedReadInput",
+      "StreamFeedPage",
+      "LiveStateRpc",
+      "StreamFeedLiveState",
       "StreamEventPager",
       "ProcessorRuntimeState",
       "ConnectionRuntimeState",
@@ -1726,6 +1732,33 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "StreamFeedReadInput",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * A finite materialized-feed read. `offset` addresses a dense position in the\n * filtered collection (for virtualization); `beforeLocalIndex` pages backward\n * by stable row identity. They are mutually exclusive.\n */\nexport type StreamFeedReadInput = {\n  offset?: number;\n  beforeLocalIndex?: number;\n  limit?: number;\n  filter?: StreamFeedFilter;\n};",
+    summary: "A finite materialized-feed read.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedFilter"],
+  },
+  {
+    name: "StreamFeedPage",
+    kind: "typeAlias",
+    sourceText:
+      "/** One finite page from the materialized rendered feed. */\nexport type StreamFeedPage = {\n  items: StreamFeedItem[];\n  /** Count in the filtered collection, not the unfiltered feed table. */\n  total: number;\n  projection: StreamFeedProjectionStatus;\n};",
+    summary: "One finite page from the materialized rendered feed.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedItem", "StreamFeedProjectionStatus"],
+  },
+  {
+    name: "StreamFeedLiveState",
+    kind: "typeAlias",
+    sourceText:
+      "/** Bounded state pushed by `Stream.liveState`; older rows use getFeedItems. */\nexport type StreamFeedLiveState = {\n  agent: StreamFeedAgentState;\n  recentItems: StreamFeedItem[];\n  /** Total settled rows in the unfiltered materialized feed. */\n  itemCount: number;\n  paused: { paused: boolean; reason: string | null };\n  projection: StreamFeedProjectionStatus;\n};",
+    summary: "Bounded state pushed by `Stream.liveState`; older rows use getFeedItems.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedAgentState", "StreamFeedItem", "StreamFeedProjectionStatus"],
+  },
+  {
     name: "ProcessorRuntimeState",
     kind: "typeAlias",
     sourceText:
@@ -2035,6 +2068,47 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "StreamFeedFilter",
+    kind: "typeAlias",
+    sourceText:
+      "/** The two row families a stream-view mode selects from the one feed order. */\nexport type StreamFeedFilter = {\n  agent: { showDebug: boolean; searchQuery: string | null } | null;\n  raw: StreamFeedRawFilter | null;\n};",
+    summary: "The two row families a stream-view mode selects from the one feed order.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedRawFilter"],
+  },
+  {
+    name: "StreamFeedItem",
+    kind: "typeAlias",
+    sourceText:
+      "/** One settled row in the rendered feed. */\nexport type StreamFeedItem = {\n  localIndex: number;\n  kind: string;\n  firstOffset: number;\n  lastOffset: number;\n  eventCount: number;\n  data: StreamFeedAgentItem | RawFeedItemData;\n};",
+    summary: "One settled row in the rendered feed.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedAgentItem", "RawFeedItemData"],
+  },
+  {
+    name: "StreamFeedProjectionStatus",
+    kind: "typeAlias",
+    sourceText:
+      "/** The durable projection cursor relative to the source stream. */\nexport type StreamFeedProjectionStatus = {\n  acknowledgedThroughOffset: number;\n  streamMaxOffset: number;\n  caughtUp: boolean;\n};",
+    summary: "The durable projection cursor relative to the source stream.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamFeedAgentState",
+    kind: "typeAlias",
+    sourceText:
+      "/** The agent reducer state exposed by the feed live view. */\nexport type StreamFeedAgentState = {\n  live: StreamFeedAgentActivity | null;\n  deferredAssistantMessages: StreamFeedAgentMessageItem[];\n  queuedUserMessages: StreamFeedAgentMessageItem[];\n  eventCount: number;\n  presence: StreamFeedAgentPresenceEntry[];\n  tokenUsage: StreamFeedAgentTokenUsage;\n  statusSinceOffset: number | null;\n  provisionalActivities: Record<string, StreamFeedAgentActivity>;\n};",
+    summary: "The agent reducer state exposed by the feed live view.",
+    memberSummaries: {},
+    referencedTypeNames: [
+      "StreamFeedAgentActivity",
+      "StreamFeedAgentMessageItem",
+      "StreamFeedAgentPresenceEntry",
+      "StreamFeedAgentTokenUsage",
+    ],
+  },
+  {
     name: "StreamSubscriptionType",
     kind: "typeAlias",
     sourceText:
@@ -2190,6 +2264,75 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "StreamFeedRawFilter",
+    kind: "typeAlias",
+    sourceText:
+      "/** Raw-feed filtering criteria for finite feed reads. */\nexport type StreamFeedRawFilter = {\n  eventTypes: readonly string[] | null;\n  components: readonly string[] | null;\n  searchQuery: string | null;\n  offsetFrom: number | null;\n  offsetTo: number | null;\n};",
+    summary: "Raw-feed filtering criteria for finite feed reads.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamFeedAgentItem",
+    kind: "typeAlias",
+    sourceText:
+      "/** Any settled agent-facing item represented in the stream feed. */\nexport type StreamFeedAgentItem =\n  | StreamFeedAgentMessageItem\n  | StreamFeedAgentActivity\n  | StreamFeedAgentStreamWakeItem\n  | StreamFeedAgentChildStreamItem\n  | StreamFeedAgentStreamPauseItem;",
+    summary: "Any settled agent-facing item represented in the stream feed.",
+    memberSummaries: {},
+    referencedTypeNames: [
+      "StreamFeedAgentMessageItem",
+      "StreamFeedAgentActivity",
+      "StreamFeedAgentStreamWakeItem",
+      "StreamFeedAgentChildStreamItem",
+      "StreamFeedAgentStreamPauseItem",
+    ],
+  },
+  {
+    name: "RawFeedItemData",
+    kind: "typeAlias",
+    sourceText:
+      "/** What a `raw.*` feed_items row stores in `data`. `agent.*` rows store the AgentUiItem. */\nexport type RawFeedItemData = RawGroupData | RawSingletonData;",
+    summary: "What a `raw.*` feed_items row stores in `data`.",
+    memberSummaries: {},
+    referencedTypeNames: ["RawGroupData", "RawSingletonData"],
+  },
+  {
+    name: "StreamFeedAgentActivity",
+    kind: "typeAlias",
+    sourceText:
+      '/** A rendered agent activity and its ordered execution steps. */\nexport type StreamFeedAgentActivity = {\n  kind: "activity";\n  id: string;\n  status: "running" | "done";\n  steps: StreamFeedAgentStep[];\n  startedAtMs: number;\n  endedAtMs?: number;\n  phase?: "llm" | "script";\n  phaseStartedAtMs?: number;\n};',
+    summary: "A rendered agent activity and its ordered execution steps.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedAgentStep"],
+  },
+  {
+    name: "StreamFeedAgentMessageItem",
+    kind: "typeAlias",
+    sourceText:
+      '/** A rendered user or assistant message in the stream feed. */\nexport type StreamFeedAgentMessageItem = {\n  kind: "user" | "assistant";\n  id: string;\n  text: string;\n  timestampMs: number;\n  files?: StreamFeedAgentFileAttachment[];\n  via?: StreamFeedAgentMessageVia;\n};',
+    summary: "A rendered user or assistant message in the stream feed.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedAgentFileAttachment", "StreamFeedAgentMessageVia"],
+  },
+  {
+    name: "StreamFeedAgentPresenceEntry",
+    kind: "typeAlias",
+    sourceText:
+      '/** One inbound or outbound processor presence entry. */\nexport type StreamFeedAgentPresenceEntry = {\n  subscriptionKey: string;\n  direction: "inbound" | "outbound";\n  connected: boolean;\n  description?: string;\n  processor?: StreamFeedAgentProcessorAnnouncement;\n};',
+    summary: "One inbound or outbound processor presence entry.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedAgentProcessorAnnouncement"],
+  },
+  {
+    name: "StreamFeedAgentTokenUsage",
+    kind: "typeAlias",
+    sourceText:
+      "/** Accumulated agent token usage plus the latest model report. */\nexport type StreamFeedAgentTokenUsage = {\n  totalInputTokens: number;\n  totalOutputTokens: number;\n  totalCachedInputTokens: number;\n  totalReasoningOutputTokens: number;\n  lastReport: {\n    model: string;\n    maxContextTokens: number;\n    inputTokens: number;\n    outputTokens: number;\n  } | null;\n};",
+    summary: "Accumulated agent token usage plus the latest model report.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "MinuteWindow",
     kind: "typeAlias",
     sourceText:
@@ -2277,6 +2420,87 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["WorkerFileSource", "WorkerBuildOptions"],
   },
   {
+    name: "StreamFeedAgentStreamWakeItem",
+    kind: "typeAlias",
+    sourceText:
+      '/** A rendered marker indicating that a stream woke. */\nexport type StreamFeedAgentStreamWakeItem = {\n  kind: "stream-woken";\n  id: string;\n  text: string;\n  timestampMs: number;\n};',
+    summary: "A rendered marker indicating that a stream woke.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamFeedAgentChildStreamItem",
+    kind: "typeAlias",
+    sourceText:
+      '/** A rendered marker announcing a newly created child stream. */\nexport type StreamFeedAgentChildStreamItem = {\n  kind: "child-stream-created";\n  id: string;\n  childPath: string;\n  timestampMs: number;\n};',
+    summary: "A rendered marker announcing a newly created child stream.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamFeedAgentStreamPauseItem",
+    kind: "typeAlias",
+    sourceText:
+      '/** A rendered marker indicating that a stream paused or resumed. */\nexport type StreamFeedAgentStreamPauseItem = {\n  kind: "stream-paused" | "stream-resumed";\n  id: string;\n  text: string;\n  reason?: string;\n  timestampMs: number;\n};',
+    summary: "A rendered marker indicating that a stream paused or resumed.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "RawGroupData",
+    kind: "typeAlias",
+    sourceText:
+      "/** The persisted payload for a grouped sequence of raw events. */\nexport type RawGroupData = {\n  eventType: string;\n  events: StreamEvent[];\n};",
+    summary: "The persisted payload for a grouped sequence of raw events.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamEvent"],
+  },
+  {
+    name: "RawSingletonData",
+    kind: "typeAlias",
+    sourceText:
+      "/** The persisted payload for a raw event with a dedicated renderer. */\nexport type RawSingletonData = {\n  events: StreamEvent[];\n};",
+    summary: "The persisted payload for a raw event with a dedicated renderer.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamEvent"],
+  },
+  {
+    name: "StreamFeedAgentStep",
+    kind: "typeAlias",
+    sourceText:
+      "/** One executable step within an agent activity. */\nexport type StreamFeedAgentStep = StreamFeedAgentLlmStep | StreamFeedAgentCodeStep;",
+    summary: "One executable step within an agent activity.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamFeedAgentLlmStep", "StreamFeedAgentCodeStep"],
+  },
+  {
+    name: "StreamFeedAgentFileAttachment",
+    kind: "typeAlias",
+    sourceText:
+      "/** A file attached to a rendered agent message. */\nexport type StreamFeedAgentFileAttachment = {\n  contentType: string;\n  filename: string;\n  path: string;\n  size: number;\n  url: string;\n};",
+    summary: "A file attached to a rendered agent message.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamFeedAgentMessageVia",
+    kind: "typeAlias",
+    sourceText:
+      '/** The external service and optional sender that supplied an agent message. */\nexport type StreamFeedAgentMessageVia = {\n  service: "slack" | "telegram" | "agent" | "email" | "github";\n  sender?: string;\n};',
+    summary: "The external service and optional sender that supplied an agent message.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamFeedAgentProcessorAnnouncement",
+    kind: "typeAlias",
+    sourceText:
+      "/** Public metadata announced by an agent processor. */\nexport type StreamFeedAgentProcessorAnnouncement = {\n  slug: string;\n  version: string;\n  description: string;\n  consumes: string[];\n  emits: string[];\n  ownedEvents: Array<{ type: string; description?: string }>;\n};",
+    summary: "Public metadata announced by an agent processor.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "WorkerFileSource",
     kind: "typeAlias",
     sourceText:
@@ -2293,6 +2517,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "Build options for a dynamic worker.",
     memberSummaries: {},
     referencedTypeNames: ["WorkerBundlerLoader"],
+  },
+  {
+    name: "StreamFeedAgentLlmStep",
+    kind: "typeAlias",
+    sourceText:
+      '/** One language-model step represented in the rendered stream feed. */\nexport type StreamFeedAgentLlmStep = {\n  kind: "llm";\n  id: string;\n  llmRequestOffset: number;\n  status: "running" | "done";\n  model?: string;\n  thinkingText: string;\n  responseText: string;\n  inputTokens?: number;\n  outputTokens?: number;\n  durationMs?: number;\n  outcome?: "completed" | "failed" | "cancelled";\n  cancelReason?: "interrupted-by-user-input" | "durable-object-crashed";\n  errorMessage?: string;\n  startedAtMs: number;\n};',
+    summary: "One language-model step represented in the rendered stream feed.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamFeedAgentCodeStep",
+    kind: "typeAlias",
+    sourceText:
+      '/** One code-execution step represented in the rendered stream feed. */\nexport type StreamFeedAgentCodeStep = {\n  kind: "code";\n  id: string;\n  executionId: string;\n  status: "running" | "done";\n  code: string;\n  result?: unknown;\n  errorMessage?: string;\n  durationMs?: number;\n  success?: boolean;\n  outcomeSource?: "durable" | "inferred";\n  startedAtMs: number;\n  expiresAtMs: number;\n};',
+    summary: "One code-execution step represented in the rendered stream feed.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "WorkerBundlerLoader",

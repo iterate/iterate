@@ -19,6 +19,13 @@ browser hosts processors via the same runner the DOs use) — while
 OPPOSITE: server-owned feed live view + cursor-paged history, then DELETE
 ~4,850 LOC of the mirror. Moving code that is slated for deletion is churn.
 
+Update (2026-07-17): PR #2073 has now moved the processor contract, runner,
+stream handle, Cloudflare host helpers, and test machinery into
+`iterate/processors`. Move-first no longer incurs the largest relocation cost
+described above. The remaining decision is where the feed projection, SQLite
+storage, and browser host belong; reevaluate it against the current package
+boundary rather than the pre-#2073 one.
+
 This task is the DECISION, not the work: pick collapse-first (Phases A–D in
 the design doc, then move what survives) or move-first (accept the runner
 family relocating), and spawn the real tasks from the choice. Inputs:

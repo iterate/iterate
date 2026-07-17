@@ -2,6 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import type {
   ProcessorRuntimeState,
+  ProcessorStream,
+  StreamEventReadInput,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "iterate/processors";
@@ -11,7 +13,7 @@ import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/processors";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
+import { LiveStateRpcTarget, StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
@@ -27,6 +29,8 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
+import { StreamFeedHost } from "./feed/host.ts";
+import type { StreamFeedPage, StreamFeedReadInput } from "./feed/types.ts";
 import { STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX } from "./stream-unavailable.ts";
 import {
   CORE_STATE_VERSION,
@@ -127,10 +131,32 @@ export class StreamDurableObject extends DurableObject<Env> {
     },
   });
   #coreProcessorState: CoreProcessorState;
+  readonly #feed: StreamFeedHost;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+    this.#feed = new StreamFeedHost({
+      storage: this.ctx.storage,
+      sql: this.ctx.storage.sql,
+      stream: localStreamCapability({
+        append: (...events) => this.append(...events),
+        get: (input) => this.getEvent(input),
+        read: (input) => this.getEvents(input),
+      }),
+      path: this.name.path,
+      projectId: this.name.projectId,
+      readRaw: ({ afterOffset, limit }) =>
+        this.#log.getRange({
+          afterOffset,
+          beforeOffset: Number.MAX_SAFE_INTEGER,
+          limit,
+          includeEphemeral: true,
+        }),
+      getCoreState: () => this.#coreProcessorState,
+      armAlarm: (atMs) => this.#armAlarmNoLaterThan(atMs),
+      keepAlive: (work) => this.ctx.waitUntil(work()),
+    });
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
@@ -172,13 +198,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
-  alarm(): void {
+  async alarm(): Promise<void> {
     this.#alarmArmedForMs = null;
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
     this.#flushCoreProcessorState();
+    await this.#feed.onAlarm();
   }
 
   /**
@@ -323,6 +350,22 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#subscribers.wake(
       newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
     );
+    const scannedAfterOffset = newEvents[0]!.offset - 1;
+    const scannedThroughOffset = newEvents.at(-1)!.offset;
+    this.#runInBackground(async () => {
+      try {
+        await this.#feed.onAppended({
+          events: newEvents,
+          scannedAfterOffset,
+          scannedThroughOffset,
+        });
+      } catch (error) {
+        // A failed projection turn stays behind its runner checkpoint and gets
+        // a durable retry even if this stream goes quiet after the append.
+        await this.#armAlarmNoLaterThan(Date.now() + 1_000);
+        throw error;
+      }
+    });
 
     // Re-arm (or clear) the idle timer against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
@@ -374,6 +417,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
       includeEphemeral: args.includeEphemeral,
     });
+  }
+
+  /** Experimental rendered-feed prototype: finite reads over local SQLite. */
+  getFeedItems(input?: StreamFeedReadInput): Promise<StreamFeedPage> {
+    return this.#feed.getFeedItems(input);
+  }
+
+  /** Experimental rendered-feed prototype: bounded state plus the agent tail. */
+  get liveState() {
+    return new LiveStateRpcTarget(this.#feed);
   }
 
   /** The committed head used to pin a recoverable public wait's replay cursor. */
@@ -1380,6 +1433,50 @@ function immediateChildPath(parentPath: string, announcedPath: string): string |
   const [firstSegment] = announcedPath.slice(parentPrefix.length).split("/").filter(Boolean);
   if (firstSegment === undefined) return null;
   return parentPath === "/" ? `/${firstSegment}` : `${parentPath}/${firstSegment}`;
+}
+
+/**
+ * In-process `ProcessorStream` for a runner co-located with the Stream DO.
+ * The processor capability remains async; underneath it, reads and appends
+ * stay on the DO's synchronous commit/storage path without an RPC round trip.
+ */
+function localStreamCapability(args: {
+  append: (...events: StreamEventInput[]) => StreamEvent[];
+  get: (input: Parameters<ProcessorStream["getEvent"]>[0]) => StreamEvent | undefined;
+  read: (input?: StreamEventReadInput) => StreamEvent[];
+}): ProcessorStream {
+  return {
+    async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+      return args.append(...events);
+    },
+    at(): ProcessorStream {
+      throw new Error("the local feed prototype does not append to sibling streams");
+    },
+    async getEvent(
+      input: Parameters<ProcessorStream["getEvent"]>[0],
+    ): Promise<StreamEvent | undefined> {
+      return args.get(input);
+    },
+    async getEvents(input?: StreamEventReadInput): Promise<StreamEvent[]> {
+      return args.read(input);
+    },
+    readEvents(input: StreamEventReadInput = {}) {
+      const { afterOffset = 0, ...window } = input;
+      let cursor = afterOffset;
+      let disposed = false;
+      return {
+        async next(): Promise<StreamEvent[]> {
+          if (disposed) throw new Error("stream event pager is disposed.");
+          const page = args.read({ ...window, afterOffset: cursor });
+          cursor = page.at(-1)?.offset ?? cursor;
+          return page;
+        },
+        [Symbol.dispose](): void {
+          disposed = true;
+        },
+      };
+    },
+  };
 }
 
 /** How long a stream may hold idle configured delivery connections before severing them. */
