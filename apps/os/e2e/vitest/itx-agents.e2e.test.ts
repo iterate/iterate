@@ -569,8 +569,8 @@ test('An agent scope provides a capability to the whole project via capabilityHo
         path: ["crossScopeProbe"],
         capability: { ping: () => "pong-from-agent-mount" },
       });
-      // Visible on the root host itself, and through the agent scope's own
-      // inheritance chain (local miss -> parent -> root).
+      // Visible on the root host itself, and through the agent scope's
+      // journaled fallback (local miss -> one hop to the root host).
       const viaRoot = await host.invokeCapability({
         path: ["crossScopeProbe", "ping"],
         args: [],

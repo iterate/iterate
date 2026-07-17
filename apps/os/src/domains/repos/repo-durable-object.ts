@@ -1333,11 +1333,17 @@ export class RepoDurableObject extends DurableObject<Env> {
   private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
-    await timedStep("create-timing", timing, "artifact-get-or-create", () =>
+    const { lastPushAt } = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
       this.getOrCreateArtifact(artifactName),
     );
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
+
+    // A prior push is authoritative evidence that an existing Artifact is
+    // already seeded. Recovery only needs to journal repo/ready; cloning the
+    // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
+    if (lastPushAt !== null) return { artifactName, defaultBranch, remote };
+
     const token = await timedStep("create-timing", timing, "artifact-token", () =>
       artifactToken(this.requireArtifacts(), artifactName),
     );
@@ -1396,19 +1402,21 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  private async getOrCreateArtifact(name: string): Promise<{ created: boolean }> {
+  private async getOrCreateArtifact(
+    name: string,
+  ): Promise<{ created: boolean; lastPushAt: string | null }> {
     try {
       await this.requireArtifacts().create(name, {
         setDefaultBranch: REPO_DEFAULT_BRANCH,
       });
-      return { created: true };
+      return { created: true, lastPushAt: null };
     } catch (error) {
       // Only the race we mean to tolerate. The old blind catch masked real
       // failures (an INTERNAL_ERROR here fell through to get(), which then
       // reported a misleading NOT_FOUND).
       if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
-      await this.requireArtifacts().get(name);
-      return { created: false };
+      const existing = await this.requireArtifacts().get(name);
+      return { created: false, lastPushAt: existing.lastPushAt };
     }
   }
 

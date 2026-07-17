@@ -113,8 +113,9 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    * native runtime's, inherited rather than reimplemented: consume on
    * success, retry with backoff on a throwing handler (this handler
    * rethrows), and getAlarm()'s during-a-fire view. `iterate/sdk`'s
-   * `withStatefulWorkerAlarms` presents this as the standard
-   * `setAlarm`/`getAlarm`/`deleteAlarm` storage API.
+   * `IterateDurableObject` presents this as the standard `ctx.storage` alarm
+   * API, self-addressed through the ref this host delivers on first contact
+   * (see `#facet`'s identity delivery).
    */
   async setAlarm({ atMs, ref }: { atMs: number | null; ref: StatefulDynamicWorkerRef }) {
     this.#assertRefMatchesName(ref);
@@ -175,7 +176,46 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
+  /** The (build version, ref) whose identity this incarnation already
+   * delivered — re-delivered when either changes, so a stashed inline recipe
+   * converges on current source and a rebuilt class that newly accepts
+   * identity gets it without waiting for an eviction. */
+  #identityDelivered: string | undefined;
+
   async #facet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
+    const facet = await this.#resolveFacet(ref, buildBudgetMs);
+    // A facet cannot learn its own identity (ctx.facets.get has no props
+    // channel, worker env is per-isolate) — deliver its ref before any
+    // traffic, once per incarnation per ref AND BUILD. The stash is what
+    // lets the worker's own code address itself (the SDK's alarm shim dials
+    // `itx.workers.get(ref)`, which resolves back to this DO). Marked
+    // delivered only on success (or on a class that structurally cannot
+    // accept identity), so a TRANSIENT failure retries on the next call
+    // instead of silently disabling self-alarms for the incarnation. The
+    // version marker in the key is what makes a "cannot accept" verdict
+    // expire with the build that earned it: a repo-backed ref's JSON never
+    // changes, but a rebuilt source that newly extends IterateDurableObject
+    // must get its identity without waiting for this DO's eviction.
+    const identity = `${this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) ?? ""}\n${JSON.stringify(ref)}`;
+    if (this.#identityDelivered !== identity) {
+      try {
+        await invokeFlattenedPath({ args: [ref], path: ["__stashSelfRef"], target: facet });
+        this.#identityDelivered = identity;
+      } catch (error) {
+        // No dispatcher (plain DurableObject class) or no door (an
+        // invokeCapability that doesn't expose __stashSelfRef): this class
+        // can never accept identity — stop offering, and never fail the
+        // caller's actual invocation over it.
+        const cannotAcceptIdentity =
+          isMissingInvokeCapabilityError(error) ||
+          (error instanceof Error && error.message.includes('"__stashSelfRef" is not a method'));
+        if (cannotAcceptIdentity) this.#identityDelivered = identity;
+      }
+    }
+    return facet;
+  }
+
+  async #resolveFacet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
     this.#assertRefMatchesName(ref);
 
     if (ref.updatePolicy === "stale-while-rebuild") {

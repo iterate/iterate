@@ -275,7 +275,10 @@ import {
   type AgentFileAttachment,
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  capabilityFallbackForScope,
+} from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -5247,8 +5250,9 @@ type CapabilityHostRpcTargetProps = {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; on a local miss, reads follow the scope's journaled `fallback`
+ * expression — usually one hop straight to the project root host.
+ * `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -5306,7 +5310,9 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       {
         type: "events.iterate.com/capability-host/created",
         idempotencyKey: `capability-host/created:${this.#props.projectId}:${this.#props.path}`,
-        payload: { config: {} },
+        // The root host ends resolution; every other scope journals a one-hop
+        // fallback straight to it (path is normalized in the constructor).
+        payload: { config: {}, fallback: capabilityFallbackForScope(this.#props.path) },
       },
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName,
@@ -5357,7 +5363,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     // (DO method name: describeCapabilities — it returns the raw array; the
     // Description envelope is assembled here, where the scope context lives.)
     return describeNode({
-      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads chain up through enclosing scopes, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
+      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; on a local miss reads follow the scope's journaled fallback (usually the project root host), so \`capabilities\` includes the fallback's mounts tagged with their declaring scope.`,
       children: {
         create:
           "Create this capability host and wait until its processor has processed the birth batch.",
@@ -5515,7 +5521,8 @@ type ProjectRpcTargetProps = {
  * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
  * in the isolate; only unknown roots fall through the prototype-chain
  * fallback (the registry block at the bottom of this file) to the capability
- * host's dynamic table (which itself chains up to enclosing scopes). So the
+ * host's dynamic table (which follows its journaled fallback host on a
+ * miss). So the
  * common `itx.streams.get(...)` path never makes a round trip
  * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
  * capability can never shadow a built-in name — the built-in always wins
@@ -6664,7 +6671,7 @@ const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.contex
  * the platform's example scripts (most are proven: the test suite runs them
  * unattended against a live project on every change; the rest are marked
  * interactive), the public type surface (the Itx Type Graph), and the
- * capabilities mounted in the caller's scope chain. One door for "how do I
+ * capabilities reachable from the caller's scope. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
