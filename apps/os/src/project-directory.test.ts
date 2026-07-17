@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import { primeProjectDirectory, type ProjectDirectoryRecord } from "./project-directory.ts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  primeProjectDirectory,
+  readProjectBySlug,
+  type ProjectDirectoryRecord,
+} from "./project-directory.ts";
+
+const auth = vi.hoisted(() => ({ getProjectBySlug: vi.fn() }));
+vi.mock("./env.ts", () => ({ itxEnv: { AUTH: auth } }));
 
 const record: ProjectDirectoryRecord = {
   id: "prj_alpha",
@@ -13,6 +20,8 @@ function directoryWithPut(put: ReturnType<typeof vi.fn>): KVNamespace {
 }
 
 describe("primeProjectDirectory", () => {
+  beforeEach(() => auth.getProjectBySlug.mockReset());
+
   it("writes both durable lookup keys", async () => {
     const put = vi.fn().mockResolvedValue(undefined);
 
@@ -92,6 +101,37 @@ describe("primeProjectDirectory", () => {
 
       await rejected;
       expect(put).toHaveBeenCalledTimes(4);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("readProjectBySlug", () => {
+  beforeEach(() => auth.getProjectBySlug.mockReset());
+
+  it("returns the authoritative auth result when its optional cache fill times out", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const authRecord = { ...record, id: "prj_auth", slug: "auth-only" };
+      auth.getProjectBySlug.mockResolvedValue(authRecord);
+      const directory = {
+        get: vi.fn().mockResolvedValue(null),
+        put: vi.fn(() => new Promise<void>(() => {})),
+      } as unknown as KVNamespace;
+      const reading = readProjectBySlug(directory, authRecord.slug);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(reading).resolves.toEqual(authRecord);
+      expect(directory.get).toHaveBeenCalledWith("slug:auth-only", "json");
+      expect(auth.getProjectBySlug).toHaveBeenCalledWith({ projectSlug: "auth-only" });
+      expect(warn).toHaveBeenCalledWith(
+        "[project-directory] cache fill failed; using auth result",
+        expect.objectContaining({ reason: expect.stringContaining("timed out after 1000ms") }),
+      );
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

@@ -25,8 +25,9 @@ export type ProjectDirectoryRecord = {
 const MEMO_TTL_MS = 15_000;
 // These writes are exact and idempotent. One retry absorbs a transient KV
 // stall while two short windows keep this required create step bounded.
-const WRITE_ATTEMPT_TIMEOUT_MS = 10_000;
-const WRITE_MAX_ATTEMPTS = 2;
+const REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS = 10_000;
+const REQUIRED_WRITE_MAX_ATTEMPTS = 2;
+const CACHE_FILL_TIMEOUT_MS = 1_000;
 
 const slugMemo = new Map<string, { expiresAt: number; record: ProjectDirectoryRecord | null }>();
 
@@ -76,7 +77,20 @@ export async function readProjectBySlug(
       }
     : null;
   memoize(slug, record);
-  if (record) await writeThrough(directory, record);
+  if (record) {
+    try {
+      await writeThrough(directory, record, {
+        attemptTimeoutMs: CACHE_FILL_TIMEOUT_MS,
+        maxAttempts: 1,
+      });
+    } catch (error) {
+      // Auth is authoritative for this lane. A cache-fill failure is a
+      // bounded, observable degradation, not a reason to discard its answer.
+      console.warn("[project-directory] cache fill failed; using auth result", {
+        reason: errorMessage(error),
+      });
+    }
+  }
   return record;
 }
 
@@ -124,7 +138,10 @@ export async function primeProjectDirectory(
   directory: KVNamespace,
   record: ProjectDirectoryRecord,
 ): Promise<void> {
-  await writeThrough(directory, record);
+  await writeThrough(directory, record, {
+    attemptTimeoutMs: REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS,
+    maxAttempts: REQUIRED_WRITE_MAX_ATTEMPTS,
+  });
   memoize(record.slug, record);
 }
 
@@ -132,23 +149,27 @@ function memoize(slug: string, record: ProjectDirectoryRecord | null) {
   slugMemo.set(slug, { expiresAt: Date.now() + MEMO_TTL_MS, record });
 }
 
-async function writeThrough(directory: KVNamespace, record: ProjectDirectoryRecord) {
+async function writeThrough(
+  directory: KVNamespace,
+  record: ProjectDirectoryRecord,
+  policy: { attemptTimeoutMs: number; maxAttempts: number },
+) {
   // No expiration: slugs are immutable and `projects.create` overwrites the
   // keys it primes, so entries never go stale — and admin-lane projects
   // (auth mints only an id, no directory row) have NO auth fallback, so an
   // expiring cache would break their slug ingress after the TTL.
   const body = JSON.stringify(record);
   let lastError: unknown;
-  for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
     try {
-      await writeDirectoryRecord(directory, record, body);
+      await writeDirectoryRecord(directory, record, body, policy.attemptTimeoutMs);
       return;
     } catch (error) {
       lastError = error;
-      if (attempt < WRITE_MAX_ATTEMPTS) {
+      if (attempt < policy.maxAttempts) {
         console.warn("[project-directory] write failed; retrying", {
           attempt,
-          maxAttempts: WRITE_MAX_ATTEMPTS,
+          maxAttempts: policy.maxAttempts,
           reason: errorMessage(error),
         });
       }
@@ -156,7 +177,7 @@ async function writeThrough(directory: KVNamespace, record: ProjectDirectoryReco
   }
 
   throw new Error(
-    `Project directory write failed after ${WRITE_MAX_ATTEMPTS} attempts: ${errorMessage(lastError)}`,
+    `Project directory write failed after ${policy.maxAttempts} attempts: ${errorMessage(lastError)}`,
     { cause: lastError },
   );
 }
@@ -165,6 +186,7 @@ async function writeDirectoryRecord(
   directory: KVNamespace,
   record: ProjectDirectoryRecord,
   body: string,
+  timeoutMs: number,
 ): Promise<void> {
   const write = Promise.all([
     directory.put(slugKey(record.slug), body),
@@ -176,11 +198,8 @@ async function writeDirectoryRecord(
       write,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
-          () =>
-            reject(
-              new Error(`Project directory KV write timed out after ${WRITE_ATTEMPT_TIMEOUT_MS}ms`),
-            ),
-          WRITE_ATTEMPT_TIMEOUT_MS,
+          () => reject(new Error(`Project directory KV write timed out after ${timeoutMs}ms`)),
+          timeoutMs,
         );
       }),
     ]);
