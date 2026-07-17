@@ -30,7 +30,6 @@ import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
-import { Button } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   DropdownMenu,
@@ -154,16 +153,8 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
             className="min-w-56 rounded-lg"
           >
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="flex items-center justify-between pr-1 text-xs text-muted-foreground">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Projects
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="New project"
-                  render={<Link to="/new-project" />}
-                >
-                  <Plus />
-                </Button>
               </DropdownMenuLabel>
               {projects.length > 0 ? (
                 projects.map((project) => (
@@ -192,6 +183,10 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
+              <DropdownMenuItem render={<Link to="/new-project" />}>
+                <Plus />
+                <span>Create project</span>
+              </DropdownMenuItem>
               <DropdownMenuItem render={<Link to="/projects" />}>
                 <ArrowLeft />
                 <span>View all projects</span>
