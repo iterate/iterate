@@ -216,7 +216,11 @@ const SandboxStatus = z.enum(["created", "running", "stopped", "destroyed"]);
  */
 export const SandboxProcessorContract = defineProcessorContract({
   slug: "sandbox",
-  version: "0.4.0",
+  // Force a reduce-only refold after the production stream namespace was
+  // recreated while hosted sandbox checkpoints survived. This repairs the
+  // terminal state from the durable journal without rerunning effects (this
+  // processor has none).
+  version: "0.4.1",
   description:
     "Sandbox lifecycle: explicit create/start/sleep/destroy commands and their completions, workspace snapshot/restore persistence, and configuration changes.",
   stateSchema: z.object({
