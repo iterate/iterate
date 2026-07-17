@@ -3,7 +3,6 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Copy, ExternalLink, SquareTerminal } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import {
@@ -35,16 +34,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
       routeConfig: await getPublicRouteConfig(),
       streamBreadcrumb: streamBreadcrumb(context.project, SANDBOXES_ROOT),
     }),
-  component: ProjectSandboxesIndexPage,
+  component: ProjectSandboxesIndexContent,
 });
-
-function ProjectSandboxesIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectSandboxesIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectSandboxesIndexContent() {
   const params = Route.useParams();

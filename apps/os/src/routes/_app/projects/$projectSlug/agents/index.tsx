@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { AgentRosterList } from "~/components/agent-roster.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import {
@@ -29,16 +28,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, AGENTS_ROOT),
     }),
-  component: ProjectAgentsIndexPage,
+  component: ProjectAgentsIndexContent,
 });
-
-function ProjectAgentsIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectAgentsIndexContent />
-    </ItxBoundary>
-  );
-}
 
 function ProjectAgentsIndexContent() {
   const params = Route.useParams();

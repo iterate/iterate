@@ -42,6 +42,7 @@ import {
   listProjectDirectory,
   primeProjectDirectory,
   readProjectById,
+  resolveProjectIdBySlug,
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
@@ -4535,10 +4536,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Project catalog: get("prj_...") and create({ slug }) vend a project itx; list() enriches with deployment status.',
+        'Project catalog: get("prj_..." or a slug) and create({ slug }) vend a project itx; list() enriches with deployment status.',
       children: {
         create: "Create a project; returns its itx.",
-        get: "The itx for a project id.",
+        get: "The itx for a project id or slug.",
         list: "The session's projects with deployment status.",
       },
       parent: "session.projects",
@@ -4549,25 +4550,35 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     super();
   }
 
-  /** The itx at the project root for a `prj_…` id. */
-  async get(projectId: string): Promise<ProjectRpcTarget> {
-    // Guard the id shape: itx state is namespaced by whatever string lands
-    // here, so an unvalidated slug (e.g. `cli itx run --context <slug>`) would
-    // silently manufacture a phantom project namespace instead of failing.
-    if (!projectId.startsWith("prj_")) {
-      throw new Error(
-        `"${projectId}" is not a project id (expected "prj_..."). Resolve slugs to ids first.`,
-      );
+  /**
+   * The itx at the project root, addressable by `prj_…` id OR by URL slug — the
+   * browser passes `params.projectSlug` straight through, no client-side
+   * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution
+   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},
+   * which passes `prj_` ids through untouched and resolves slugs); slugs are
+   * immutable, so a slug handle can't silently repoint. Confinement stays keyed
+   * on the resolved id — the access check runs on the id, never the raw input.
+   */
+  async get(idOrSlug: string): Promise<ProjectRpcTarget> {
+    const projectId = await resolveProjectIdBySlug({
+      directory: env.PROJECT_DIRECTORY,
+      identifier: idOrSlug,
+    });
+    // A miss is genuine (garbage, or a slug with no directory row): fail loudly
+    // rather than manufacture a phantom namespace — itx state is namespaced by
+    // whatever string lands as the project id.
+    if (projectId === null) {
+      throw new Error(`no project "${idOrSlug}" (unknown project id or slug)`);
     }
     // Claims can lag right after a create; the auth context may consult the
-    // project directory and widen itself before the synchronous constructor
-    // assert runs. Cap'n Web pipelines through the returned promise.
+    // project directory and widen itself before access is granted. Cap'n Web
+    // pipelines through the returned promise.
     await this.props.auth.ensureCanAccessProject?.(projectId);
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
       path: "/",
-      projectId: projectId,
+      projectId,
     });
   }
 

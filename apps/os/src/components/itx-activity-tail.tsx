@@ -4,8 +4,9 @@
 // "filtered stream view" — friendly per-event-type renderers, raw mode shows
 // the same events unfiltered (filtering is client-side by design). Rides useItx (suspends until connected — give it a Suspense
 // boundary) with one kernel subscribe from "start": full replay + live tail.
-// If the socket dies, useItx re-suspends and hands back a fresh handle; the
-// effect re-subscribes from "start" again and dedupes the replay by offset.
+// If the socket dies, the subscription re-runs on the fresh generation and
+// re-subscribes from "start" again, deduping the replay by offset — no
+// re-suspend (the last session stays visible across the reconnect).
 
 import { useState } from "react";
 import { Badge } from "@iterate-com/ui/components/badge";
@@ -31,10 +32,9 @@ const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => s
   "events.iterate.com/capability-host/context-created": (p) => `context created: ${p.name ?? ""}`,
 };
 
-export function ItxActivityTail(_props: { projectId: string }) {
-  // The project layout route wraps this in <ItxProvider projectId={slug}>, so
-  // the subscription's injected handle is THIS project's shared socket — the
-  // projectId prop is no longer needed to address the connection.
+export function ItxActivityTail() {
+  // Renders under a <ProjectScope>, so the subscription resolves the ambient
+  // project's itx off the one shared socket — no projectId prop needed.
   const [raw, setRaw] = useState(false);
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
 
