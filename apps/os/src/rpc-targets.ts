@@ -29,6 +29,28 @@
  */
 import { RpcTarget } from "cloudflare:workers";
 import type { LiveUpdate } from "iterate/live-state";
+import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
+import type { ProcessorReads } from "iterate/processors";
+import type {
+  GetProcessorRuntimeState,
+  LiveStateRpc,
+  LiveStateSubscriptionHandle,
+  ProcessEventBatch,
+  StreamPushEventBatch,
+  ProcessorRuntimeState,
+  ProcessorSnapshot,
+  StreamEventReadInput,
+  StreamProcessorRpc,
+  StreamSubscriberPing,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+  StreamSubscriptionHandle,
+  WakeableStreamProcessorRpc,
+} from "iterate/processors";
+import { StreamReceiverUnavailableError } from "iterate/processors";
+import type { StreamThroughputMetrics } from "iterate/processors";
+import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
+import { LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -100,8 +122,13 @@ import {
 import {
   BUILTIN_INTEGRATION_SLUGS,
   googleConnectionSecretPath,
+  integrationConnectionStreamPath,
   isBuiltinIntegrationSlug,
 } from "./domains/integrations/utils.ts";
+import {
+  TelegramAllowedUserIds,
+  type TelegramProcessorState,
+} from "./domains/integrations/telegram-processor-contract.ts";
 import {
   connectionOctokit,
   GITHUB_CALL_GRAMMAR,
@@ -143,7 +170,6 @@ import type {
   DynamicWorkerRef,
   ProjectWorker,
 } from "./domains/workers/schemas.ts";
-import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
   isDurableObjectLifecycleError,
@@ -175,7 +201,6 @@ import {
   openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
-import type { ProcessorReads } from "./domains/streams/stream-processor.ts";
 import type {
   CapabilityDescription,
   Description,
@@ -236,9 +261,11 @@ import type {
   SearchQueryResult,
   SearchResultChunk,
 } from "./domains/search/search-corpus.ts";
-import type {
-  AgentFileAttachment,
-  AgentProcessorState,
+import {
+  AgentProcessorContract,
+  type AgentEventInput,
+  type AgentFileAttachment,
+  type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
@@ -293,29 +320,9 @@ import type {
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
 import type {
-  GetProcessorRuntimeState,
-  LiveStateRpc,
-  LiveStateSubscriptionHandle,
-  ProcessEventBatch,
-  StreamPushEventBatch,
-  ProcessorRuntimeState,
-  ProcessorSnapshot,
-  StreamEventReadInput,
-  StreamProcessorRpc,
-  StreamSubscriberPing,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-  StreamSubscriptionHandle,
-  WakeableStreamProcessorRpc,
-} from "./domains/streams/rpc-types.ts";
-import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
-import type {
   ConnectionRuntimeState,
   SubscriptionRuntimeState,
 } from "./domains/streams/stream-subscribers.ts";
-import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
-import type { StreamProcessorRegistry } from "./domains/streams/stream-processor-registry.ts";
-import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -359,7 +366,7 @@ import {
   EmailProcessorContract,
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
-import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
+import { agentCreationForPath } from "./domains/agents/agent-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -3164,6 +3171,22 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
+  #telegramProcessor(
+    connection: string,
+  ): ProcessorRelayRpcTarget<TelegramProcessorState, ProjectRouterProcessorHostStub> {
+    return new ProcessorRelayRpcTarget<TelegramProcessorState, ProjectRouterProcessorHostStub>({
+      auth: this.props.auth,
+      host: () =>
+        env.PROJECT.getByName(
+          DurableObjectNameCodec.stringify({
+            path: integrationConnectionStreamPath("telegram", connection),
+            projectId: this.props.projectId,
+          }),
+        ) as unknown as ProjectRouterProcessorHostStub,
+      processorFacade: (host) => host.telegramProcessor,
+    });
+  }
+
   /** Slack WebClient connections. `get()` selects the first connected workspace. */
   get slack(): IntegrationFamily<SlackConnection> {
     return this.#family("slack") as unknown as IntegrationFamily<SlackConnection>;
@@ -3410,17 +3433,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // It is what the connect flow's wake subscription persists
       // (["integrations", "telegram", ["get", <connection>], "processor", ...]).
       if (method[0] === "processor") {
-        const relay = new ProcessorRelayRpcTarget({
-          auth: this.props.auth,
-          host: () =>
-            env.PROJECT.getByName(
-              DurableObjectNameCodec.stringify({
-                path: `/integrations/telegram/${connection}`,
-                projectId: this.props.projectId,
-              }),
-            ) as unknown as ProjectRouterProcessorHostStub,
-          processorFacade: (host) => host.telegramProcessor,
-        });
+        const relay = this.#telegramProcessor(connection);
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
       }
@@ -3605,6 +3618,53 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       projectId: this.props.projectId,
       provider: input.provider,
     });
+  }
+
+  /** The immutable Telegram user ids currently authorized for one bot. Empty
+   * means deny-all, including on connections created before this policy was
+   * introduced. */
+  async getTelegramAccess(input: { connection: string }): Promise<{ allowedUserIds: string[] }> {
+    await this.#assertConnectedTelegram(input.connection);
+    const { state } = await this.#telegramProcessor(input.connection).snapshot();
+    return { allowedUserIds: state.allowedUserIds };
+  }
+
+  /** Replace one Telegram bot's complete user allowlist and wait until the
+   * ingress router has folded it, so the successful response is the access
+   * boundary taking effect—not merely an event being queued. */
+  async setTelegramAccess(input: {
+    allowedUserIds: string[];
+    connection: string;
+  }): Promise<{ allowedUserIds: string[] }> {
+    await this.#assertConnectedTelegram(input.connection);
+    const allowedUserIds = TelegramAllowedUserIds.parse(input.allowedUserIds);
+    const configuredEvents = await new StreamRpcTarget({
+      auth: this.props.auth,
+      path: integrationConnectionStreamPath("telegram", input.connection),
+      projectId: this.props.projectId,
+    }).append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds },
+    });
+    const configured = configuredEvents[0];
+    if (configured === undefined) {
+      throw new Error("Telegram access policy append returned no configured event.");
+    }
+    await this.#telegramProcessor(input.connection).waitUntilProcessed({
+      offset: configured.offset,
+    });
+    return { allowedUserIds };
+  }
+
+  async #assertConnectedTelegram(connection: string): Promise<void> {
+    const status = await getConnectionStatus({
+      connection,
+      projectId: this.props.projectId,
+      provider: "telegram",
+    });
+    if (!status.connected) {
+      throw new Error(`Telegram connection ${JSON.stringify(connection)} is not connected.`);
+    }
   }
 
   /**
@@ -4263,6 +4323,21 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
+  /**
+   * Append durable events the Agent processor consumes. The input union and
+   * runtime parser both derive from `AgentProcessorContract.consumes`, so the
+   * domain door cannot drift from the processor. This validates shape and
+   * vocabulary, not state-machine order: possession of this handle is the
+   * append authority, and `create()` remains the normal birth path. Use
+   * `stream.append` for an event outside that vocabulary or for an
+   * intentionally ephemeral event.
+   */
+  async append(...events: AgentEventInput[]): Promise<StreamEvent[]> {
+    await this.#assertCreated();
+    const parsed = events.map((event) => AgentProcessorContract.parseConsumedInput(event));
+    return await this.stream.append(...parsed);
+  }
+
   /** The agent's web-chat door (what the user sees). */
   get chat(): AgentChatRpcTarget {
     return new AgentChatRpcTarget({
@@ -4273,27 +4348,34 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Create the agent on this stream. The birth certificate contains only the
-   * processor-owned config; this method also creates the universally paired
-   * capability host, installs both subscriptions, appends any durable
-   * `initialEvents` in the same batch, and returns only after both processors
-   * have durably processed the complete batch.
+   * Create the generic agent machinery on this stream and wait until both
+   * processors have consumed the birth batch. Configuration, context, and
+   * tasks are separate events: append processor-consumed events through
+   * `agent.append()` or use a typed helper such as `message()` after creation.
    */
-  async create(input: AgentCreateInput = {}): Promise<void> {
-    const initialEvents: StreamEventInput[] = input.initialEvents ?? [];
-    if (initialEvents.some((event) => event.idempotencyKey === undefined)) {
-      throw new Error("agent create initialEvents must have idempotency keys");
+  async create(): Promise<void> {
+    if (arguments.length !== 0) {
+      throw new Error(
+        "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
+      );
     }
-    if (initialEvents.some((event) => event.ephemeral === true)) {
-      throw new Error("agent create initialEvents must be durable");
+    const snapshot = await this.processor.snapshot();
+    if (snapshot.state.birthCertificate !== null) {
+      // Creation is one atomic stream append. The agent snapshot proves its
+      // processor has folded that append; wait the paired capability host
+      // through the same observed head before returning from this barrier.
+      await this.capabilityHost.processor.waitUntilProcessed({
+        offset: snapshot.offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      });
+      return;
     }
     const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
       ...(await agentBootProjectFacts(this.#props.projectId)),
-      overrides: { model: input.model, systemPrompt: input.systemPrompt },
     });
-    const committed = await this.stream.append(...creation.events, ...initialEvents);
+    const committed = await this.stream.append(...creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum
@@ -4512,6 +4594,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
+        append:
+          "Append durable Agent-consumed events; the accepted union comes directly from the Agent processor contract.",
         ask: "Send a message and wait for the agent's next chat reply.",
         capabilityHost:
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",

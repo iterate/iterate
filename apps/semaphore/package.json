@@ -50,7 +50,7 @@
     "sqlfu": "0.1.1",
     "tailwindcss": "^4.3.2",
     "trpc-cli": "0.15.1",
-    "zod": "^4.3.6"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",

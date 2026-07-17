@@ -6,6 +6,14 @@
 // observational watermark, and the ephemeral lane.
 
 import { describe, expect, it, vi } from "vitest";
+import type {
+  StreamEventBatch,
+  StreamPushEventBatch,
+  StreamSubscriberWakeRequest,
+  StreamWebhookDelivery,
+} from "iterate/processors";
+import { StreamReceiverUnavailableError } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
   CoreProcessorState,
@@ -13,14 +21,6 @@ import type {
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
 import { compileEventSelector } from "./event-selector.ts";
-import type {
-  StreamEventBatch,
-  StreamPushEventBatch,
-  StreamSubscriberWakeRequest,
-  StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { StreamReceiverUnavailableError } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {

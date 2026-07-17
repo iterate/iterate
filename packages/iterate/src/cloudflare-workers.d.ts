@@ -11,6 +11,13 @@ declare module "cloudflare:workers" {
     protected ctx: unknown;
     constructor(ctx: unknown, env: Env);
   }
+  /** Structural stub of workerd's tracing API (the processor registry wraps
+   * alarm fires in a span). Real spans exist only inside workerd; this keeps
+   * the package program checking, and apps/os re-checks the same source
+   * against the real types. */
+  export const tracing: {
+    enterSpan<T>(name: string, fn: (span: TracingSpanStub) => T): T;
+  };
 }
 
 // Minimal ambient stand-ins for @cloudflare/workers-types globals referenced
@@ -18,6 +25,30 @@ declare module "cloudflare:workers" {
 // package runs in node/bun, so structural stubs are enough for typechecking.
 interface Fetcher {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+}
+
+interface TracingSpanStub {
+  setAttribute(key: string, value: unknown): void;
+}
+
+interface DurableObjectStorage {
+  kv: {
+    get<T = unknown>(key: string): T | undefined;
+    put(key: string, value: unknown): void;
+  };
+  getAlarm(): Promise<number | null>;
+  setAlarm(scheduledTime: number): Promise<void>;
+  deleteAlarm(): Promise<void>;
+}
+
+interface DurableObjectState {
+  storage: DurableObjectStorage;
+  waitUntil(promise: Promise<unknown>): void;
+}
+
+interface AlarmInvocationInfo {
+  isRetry: boolean;
+  retryCount: number;
 }
 
 interface ExecutionContext {

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,

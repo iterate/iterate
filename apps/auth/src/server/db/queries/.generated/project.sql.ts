@@ -84,6 +84,46 @@ export namespace getProjectById {
   };
 }
 
+const getProjectAccessForUserSql = `
+SELECT u.role AS userRole,
+  CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS hasMembership
+FROM project p
+JOIN user u ON u.id = ?
+LEFT JOIN member m ON m.organizationId = p.organization_id
+  AND m.userId = u.id
+WHERE p.id = ?
+LIMIT 1;
+`.trim();
+const getProjectAccessForUserQuery = (params: getProjectAccessForUser.Params) => ({
+  name: "getProjectAccessForUser",
+  sql: getProjectAccessForUserSql,
+  args: [params.userId, params.projectId],
+});
+
+export const getProjectAccessForUser = Object.assign(
+  async function getProjectAccessForUser(
+    client: Client,
+    params: getProjectAccessForUser.Params,
+  ): Promise<getProjectAccessForUser.Result | null> {
+    const rows = await client.all<getProjectAccessForUser.Result>(
+      getProjectAccessForUserQuery(params),
+    );
+    return rows.length > 0 ? rows[0] : null;
+  },
+  { sql: getProjectAccessForUserSql, query: getProjectAccessForUserQuery },
+);
+
+export namespace getProjectAccessForUser {
+  export type Params = {
+    userId: string;
+    projectId: string;
+  };
+  export type Result = {
+    userRole?: string;
+    hasMembership: number;
+  };
+}
+
 const getProjectWithOrganizationBySlugSql = `
 SELECT p.id,
   p.organization_id AS organizationId,

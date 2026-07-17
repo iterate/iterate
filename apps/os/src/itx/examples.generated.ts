@@ -842,7 +842,7 @@ return { record }; // ["capability-provided", "capability-revoked"]
     code: `
 const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 const snapshot = await agent.processor.snapshot();
-if (snapshot.state.birthCertificate === null) await agent.create({});
+if (snapshot.state.birthCertificate === null) await agent.create();
 // The returned value is the committed stream event — the durable record
 // the agent loop reduces into its context projection.
 const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
@@ -1762,7 +1762,7 @@ const view = await itx.scheduler.set({
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
     const agent = itx.agents.get("/agents/checkin");
     const snapshot = await agent.processor.snapshot();
-    if (snapshot.state.birthCertificate === null) await agent.create({});
+    if (snapshot.state.birthCertificate === null) await agent.create();
     await agent.message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );

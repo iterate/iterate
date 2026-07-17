@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
-import type { StreamEventInput } from "../streams/schemas.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { StreamEventInput } from "iterate/processors";
+import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
+import { StreamProcessorRunner } from "iterate/processors";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
@@ -50,6 +50,7 @@ function connectedEvent() {
 
 function humanMessageWebhookPayload(input: {
   channel?: string;
+  channelType?: "channel" | "im" | "mpim";
   eventId?: string;
   /** When true (default), the message @mentions the authorized bot so the
    * mention-gate wakes the LLM. Pass false for ambient channel traffic. */
@@ -74,6 +75,7 @@ function humanMessageWebhookPayload(input: {
       event: {
         type: "message",
         channel: input.channel ?? "C123",
+        channel_type: input.channelType ?? "channel",
         user: "UHUMAN",
         text: input.text ?? defaultText,
         ts: input.ts ?? "111.222",
@@ -82,6 +84,16 @@ function humanMessageWebhookPayload(input: {
       },
     },
   };
+}
+
+function assistantMessageWebhookPayload(
+  input: Parameters<typeof humanMessageWebhookPayload>[0] = {},
+) {
+  return humanMessageWebhookPayload({
+    ...input,
+    channel: input.channel ?? "D123",
+    channelType: "im",
+  });
 }
 
 function botMessageWebhookPayload() {
@@ -147,6 +159,19 @@ describe("SlackProcessor (webhook router)", () => {
     expect(
       routed.filter((event) => event.type === "events.iterate.com/stream/subscription-configured"),
     ).toHaveLength(3);
+    expect(
+      routed.find(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          event.payload?.key === "agent/system-prompt",
+      ),
+    ).toMatchObject({
+      payload: {
+        content: slackAgentSystemPrompt(CONNECTION),
+        key: "agent/system-prompt",
+        role: "system",
+      },
+    });
     expect(routed.slice(-2).map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
       "events.iterate.com/slack/webhook-received",
@@ -837,7 +862,7 @@ describe("SlackAgentProcessor", () => {
     // Establish thread context first.
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     slackCalls.length = 0;
@@ -851,7 +876,7 @@ describe("SlackAgentProcessor", () => {
       {
         method: "assistant.threads.setStatus",
         body: {
-          channel_id: "C123",
+          channel_id: "D123",
           thread_ts: "111.222",
           status: "is making an LLM request...",
           loading_messages: ["making an LLM request..."],
@@ -868,8 +893,45 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
-        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
       },
+      {
+        method: "reactions.remove",
+        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
+  it("keeps Slack Assistant thread APIs out of ordinary channel threads", async () => {
+    const { deliver, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliver();
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: {
+        busy: true,
+        shortStatus: "investigating",
+        sinceOffset: 1,
+        title: "Production incident",
+      },
+    });
+    await deliver();
+
+    expect(slackCalls).toEqual([]);
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: false, sinceOffset: 2 },
+    });
+    await deliver();
+
+    expect(slackCalls).toEqual([
       {
         method: "reactions.remove",
         body: { channel: "C123", name: "eyes", timestamp: "111.222" },
@@ -877,12 +939,80 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
+  it("clears a channel acknowledgement when completion is delivered stale", async () => {
+    const { clock, deliver, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliver();
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
+    });
+    await deliver();
+    expect(slackCalls).toEqual([]);
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: false, sinceOffset: 2 },
+    });
+    clock.now += 16 * 60_000;
+    await deliver();
+
+    expect(slackCalls).toEqual([
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
+  it("treats an already-absent eyes reaction as an idempotent success", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { deliver, slackCalls, stream } = setup({
+        callSlackApi: async ({ method }) => {
+          if (method === "reactions.remove") {
+            throw new Error("Slack Web API reactions.remove failed: no_reaction");
+          }
+        },
+      });
+
+      await stream.append({
+        type: "events.iterate.com/slack/webhook-received",
+        payload: humanMessageWebhookPayload({}),
+      });
+      await deliver();
+      slackCalls.length = 0;
+
+      await stream.append({
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 1 },
+      });
+      await deliver();
+
+      expect(slackCalls).toEqual([
+        {
+          method: "reactions.remove",
+          body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+        },
+      ]);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("repaints the status once per batch — the latest announcement wins", async () => {
     const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     slackCalls.length = 0;
@@ -904,11 +1034,11 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
-        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
       },
       {
         method: "reactions.remove",
-        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
       },
     ]);
   });
@@ -918,7 +1048,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     slackCalls.length = 0;
@@ -940,12 +1070,12 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setTitle",
-        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+        body: { channel_id: "D123", thread_ts: "111.222", title: "Trip planning" },
       },
       {
         method: "assistant.threads.setStatus",
         body: {
-          channel_id: "C123",
+          channel_id: "D123",
           thread_ts: "111.222",
           status: "is comparing flights...",
           loading_messages: ["comparing flights..."],
@@ -964,7 +1094,7 @@ describe("SlackAgentProcessor", () => {
       {
         method: "assistant.threads.setStatus",
         body: {
-          channel_id: "C123",
+          channel_id: "D123",
           thread_ts: "111.222",
           status: "is booking the winner...",
           loading_messages: ["booking the winner..."],
@@ -973,42 +1103,46 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("retries a failed title paint on batch redelivery", async () => {
-    let failNext = true;
-    const { deliver, slackCalls, stream } = setup({
-      callSlackApi: async ({ method }) => {
-        if (method !== "assistant.threads.setTitle" || !failNext) return;
-        failNext = false;
-        throw new Error("slack blew up");
-      },
-    });
+  it("reports an unexpected title-paint failure once without wedging the checkpoint", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { deliver, runner, slackCalls, stream } = setup({
+        callSlackApi: async ({ method }) => {
+          if (method === "assistant.threads.setTitle") throw new Error("slack blew up");
+        },
+      });
 
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
-    });
-    await deliver();
-    slackCalls.length = 0;
+      await stream.append({
+        type: "events.iterate.com/slack/webhook-received",
+        payload: assistantMessageWebhookPayload(),
+      });
+      await deliver();
+      slackCalls.length = 0;
 
-    await stream.append({
-      type: "events.iterate.com/agent/status-changed",
-      payload: { title: "Trip planning" },
-    });
-    // The failed call fails the frame (cursor held) — the painted-title
-    // record must NOT be written, or the redelivered frame would see the
-    // rename as already painted and skip it forever.
-    await expect(deliver()).rejects.toThrow("slack blew up");
+      await stream.append({
+        type: "events.iterate.com/agent/status-changed",
+        payload: { title: "Trip planning" },
+      });
+      await deliver();
 
-    slackCalls.length = 0;
-    // The runner's cursor never advanced past the failed frame; the next
-    // catch-up redelivers exactly the unacknowledged patch.
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setTitle",
-        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
-      },
-    ]);
+      expect(slackCalls).toEqual([
+        {
+          method: "assistant.threads.setTitle",
+          body: { channel_id: "D123", thread_ts: "111.222", title: "Trip planning" },
+        },
+      ]);
+      expect(runner.currentState.status).toMatchObject({ title: "Trip planning" });
+      expect(error).toHaveBeenCalledWith(
+        "[slack-agent] Slack side effect failed",
+        expect.objectContaining({ method: "assistant.threads.setTitle" }),
+      );
+
+      slackCalls.length = 0;
+      await deliver();
+      expect(slackCalls).toEqual([]);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it("paints the script phase and a blocked wait in the agent's own words", async () => {
@@ -1016,7 +1150,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     slackCalls.length = 0;
@@ -1030,7 +1164,7 @@ describe("SlackAgentProcessor", () => {
       {
         method: "assistant.threads.setStatus",
         body: {
-          channel_id: "C123",
+          channel_id: "D123",
           thread_ts: "111.222",
           status: "is running a script...",
           loading_messages: ["running a script..."],
@@ -1056,7 +1190,7 @@ describe("SlackAgentProcessor", () => {
       {
         method: "assistant.threads.setStatus",
         body: {
-          channel_id: "C123",
+          channel_id: "D123",
           thread_ts: "111.222",
           status: "is waiting for your Acme API key...",
           loading_messages: ["waiting for your Acme API key..."],
@@ -1064,7 +1198,7 @@ describe("SlackAgentProcessor", () => {
       },
       {
         method: "reactions.remove",
-        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
       },
     ]);
   });
@@ -1074,7 +1208,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     slackCalls.length = 0;
@@ -1090,7 +1224,7 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setTitle",
-        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+        body: { channel_id: "D123", thread_ts: "111.222", title: "Trip planning" },
       },
     ]);
   });
@@ -1100,7 +1234,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     slackCalls.length = 0;
@@ -1127,7 +1261,7 @@ describe("SlackAgentProcessor", () => {
       {
         method: "assistant.threads.setStatus",
         body: {
-          channel_id: "C123",
+          channel_id: "D123",
           thread_ts: "111.222",
           status: "is making an LLM request...",
           loading_messages: ["making an LLM request..."],
@@ -1151,7 +1285,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     slackCalls.length = 0;
@@ -1172,11 +1306,11 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
-        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
       },
       {
         method: "reactions.remove",
-        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
       },
     ]);
   });
@@ -1186,7 +1320,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     await stream.append({
@@ -1209,11 +1343,11 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
-        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
       },
       {
         method: "reactions.remove",
-        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
       },
     ]);
   });
@@ -1246,7 +1380,7 @@ describe("SlackAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
+      payload: assistantMessageWebhookPayload(),
     });
     await deliver();
     await stream.append({

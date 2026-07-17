@@ -10,17 +10,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
-import type { Stream } from "../../itx-api.generated.ts";
-import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { MemoryStream, MemoryStreamNetwork } from "iterate/processors/testing";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
-} from "../streams/stream-processor-registry.ts";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-} from "../streams/stream-processor-runner.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+} from "iterate/processors/cloudflare";
+import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import type { Stream } from "../../itx-api.generated.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
@@ -40,22 +37,40 @@ const T = {
   revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
-const birthCertificate = {
-  config: {
-    llm: { model: DEFAULT_AGENT_MODEL },
-    systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
-  },
-};
+const birthCertificate = {};
+const initialConfig = { llm: { model: DEFAULT_AGENT_MODEL } };
 
 function seedAgentBirth(stream: MemoryStream): void {
-  stream.events.push({
-    type: T.created,
-    idempotencyKey: `agent/created:test:${stream.path}`,
-    payload: birthCertificate,
-    createdAt: new Date(stream.now()).toISOString(),
-    offset: 1,
-    path: stream.path,
-  });
+  stream.events.push(
+    {
+      type: T.created,
+      idempotencyKey: `agent/created:test:${stream.path}`,
+      payload: {},
+      createdAt: new Date(stream.now()).toISOString(),
+      offset: 1,
+      path: stream.path,
+    },
+    {
+      type: "events.iterate.com/agent/configured",
+      idempotencyKey: `agent/model-configured:test:${stream.path}`,
+      payload: { config: { llm: { model: DEFAULT_AGENT_MODEL } } },
+      createdAt: new Date(stream.now() + 1).toISOString(),
+      offset: 2,
+      path: stream.path,
+    },
+    {
+      type: T.context,
+      idempotencyKey: `agent/system-prompt:test:${stream.path}`,
+      payload: {
+        role: "system",
+        key: "agent/system-prompt",
+        content: DEFAULT_AGENT_SYSTEM_PROMPT,
+      },
+      createdAt: new Date(stream.now() + 2).toISOString(),
+      offset: 3,
+      path: stream.path,
+    },
+  );
 }
 
 function createdAgentStream(): MemoryStream {
@@ -507,14 +522,18 @@ describe("staleness policy (only-settle-past-expiry)", () => {
   it("the agent's backstop settles a request that never completed", async () => {
     const stream = createdAgentStream();
     const now = Date.now();
+    const [requested] = await stream.append({
+      type: T.requested,
+      payload: { model: "m", requestId: "r" },
+    });
     // Reached-by-lifecycle state, seeded as durable progress: a request
     // accepted long ago whose LLM attempt never finished.
     const stuck = AgentProcessorContract.stateSchema.parse({
       birthCertificate,
-      config: birthCertificate.config,
+      config: initialConfig,
       currentRequest: {
         phase: "requested",
-        llmRequestOffset: 2,
+        llmRequestOffset: requested!.offset,
         requestedAt: now - AGENT_LLM_REQUEST_BACKSTOP_MS - 1,
       },
     });
@@ -524,10 +543,11 @@ describe("staleness policy (only-settle-past-expiry)", () => {
       projectId: null,
       now: () => now,
     });
-    // The progress sits at offset 2; give the journal that history so the
-    // nudge lands past it instead of being filtered as already-processed.
-    await stream.append({ type: T.requested, payload: { model: "m", requestId: "r" } });
-    const runner = agentRunner(agent, stream, { seeded: { offset: 2, state: stuck } });
+    // Seed through the accepted request so the nudge lands past it instead of
+    // being filtered as already processed.
+    const runner = agentRunner(agent, stream, {
+      seeded: { offset: requested!.offset, state: stuck },
+    });
     await stream.append({
       type: T.context,
       payload: {
@@ -540,9 +560,9 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     await runner.catchUp();
 
     const backstop = stream.events.find((event) => event.type === T.completed);
-    expect(backstop?.idempotencyKey).toBe("agent/llm-request-completed@2");
+    expect(backstop?.idempotencyKey).toBe(`agent/llm-request-completed@${requested!.offset}`);
     expect(backstop?.payload).toMatchObject({
-      llmRequestOffset: 2,
+      llmRequestOffset: requested!.offset,
       result: { status: "failure", error: { message: expect.stringContaining("backstop") } },
     });
   });

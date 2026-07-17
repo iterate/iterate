@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
-import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { StreamProcessorRunner } from "iterate/processors";
+import { MemoryStream, MemoryStreamNetwork } from "iterate/processors/testing";
 import type { RepoCommittedFileChange } from "./repo-task-events.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 

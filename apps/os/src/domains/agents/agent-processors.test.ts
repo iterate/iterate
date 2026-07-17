@@ -1,11 +1,8 @@
 import { describe, expect, it, test, vi } from "vitest";
 import type { z } from "zod";
-import type { StreamEventInput } from "../streams/schemas.ts";
-import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "../streams/test-helpers.ts";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-} from "../streams/stream-processor-runner.ts";
+import type { StreamEventInput } from "iterate/processors";
+import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "iterate/processors/testing";
+import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,
@@ -135,19 +132,36 @@ const userContext = (
 });
 
 function seedAgentBirth(stream: MemoryStream): void {
-  stream.events.push({
-    type: "events.iterate.com/agent/created",
-    idempotencyKey: `agent/created:test:${stream.path}`,
-    payload: {
-      config: {
-        llm: { model: DEFAULT_AGENT_MODEL },
-        systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
-      },
+  stream.events.push(
+    {
+      type: "events.iterate.com/agent/created",
+      idempotencyKey: `agent/created:test:${stream.path}`,
+      payload: {},
+      createdAt: "2026-07-09T00:00:00.000Z",
+      offset: 1,
+      path: stream.path,
     },
-    createdAt: "2026-07-09T00:00:00.000Z",
-    offset: 1,
-    path: stream.path,
-  });
+    {
+      type: "events.iterate.com/agent/configured",
+      idempotencyKey: `agent/model-configured:test:${stream.path}`,
+      payload: { config: { llm: { model: DEFAULT_AGENT_MODEL } } },
+      createdAt: "2026-07-09T00:00:00.001Z",
+      offset: 2,
+      path: stream.path,
+    },
+    {
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: `agent/system-prompt:test:${stream.path}`,
+      payload: {
+        role: "system",
+        key: "agent/system-prompt",
+        content: DEFAULT_AGENT_SYSTEM_PROMPT,
+      },
+      createdAt: "2026-07-09T00:00:00.002Z",
+      offset: 3,
+      path: stream.path,
+    },
+  );
 }
 
 function agentStream(): MemoryStream {
@@ -472,18 +486,18 @@ describe("minimal web-chat agent processors", () => {
 
   it("stops the agent loop instead of scheduling past the autonomous turn limit", async () => {
     const stream = agentStream();
-    await stream.append({
+    const [existingWake] = await stream.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: "existing" },
     });
     const state = AgentProcessorContract.stateSchema.parse({
       ...reduceAgentEvents(stream.events),
       autonomousTurnCount: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
-      pendingTriggerOffset: 2,
+      pendingTriggerOffset: existingWake!.offset,
       pendingTriggerSource: "agent-loop",
     });
     const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
-    const runner = agentRunner(agent, stream, { seeded: { offset: 2, state } });
+    const runner = agentRunner(agent, stream, { seeded: { offset: existingWake!.offset, state } });
 
     await stream.append({
       type: "events.iterate.com/stream/woken",
@@ -497,7 +511,7 @@ describe("minimal web-chat agent processors", () => {
     expect(stopped?.payload).toMatchObject({
       maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
       reason: expect.stringContaining(`${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS}`),
-      triggerOffset: 2,
+      triggerOffset: existingWake!.offset,
     });
     expect(stream.events.some((event) => event.type === "events.iterate.com/stream/paused")).toBe(
       false,
@@ -570,9 +584,9 @@ describe("minimal web-chat agent processors", () => {
         }),
         {
           role: "system",
-          content: `@2 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
+          content: `@4 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
         },
-        { role: "user", content: "@3 actor=user:web\nhello" },
+        { role: "user", content: "@5 actor=user:web\nhello" },
         // The trailing clock stamp (prompt-cache-safe tail position).
         expect.objectContaining({
           role: "system",
@@ -753,9 +767,7 @@ describe("minimal web-chat agent processors", () => {
     await runner.catchUp();
 
     // The user context folds straight into projected history.
-    const events = stream.events.filter(
-      (event) => event.type !== "events.iterate.com/agent/created",
-    );
+    const events = stream.events.filter((event) => event.offset > 3);
     expect(events.map((event) => event.type)).toEqual([
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agents/context-added",
@@ -784,15 +796,14 @@ describe("minimal web-chat agent processors", () => {
       ),
     ).toBe(false);
 
-    const [birth] = await stream.append({
-      type: "events.iterate.com/agent/created",
-      payload: {
-        config: {
-          llm: { model: DEFAULT_AGENT_MODEL },
-          systemPrompt: "Project-specific instructions.",
-        },
+    await stream.append(
+      { type: "events.iterate.com/agent/created", payload: {} },
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: DEFAULT_AGENT_MODEL } } },
       },
-    });
+      systemContext("Project-specific instructions."),
+    );
     await deliver();
 
     const state = reduceAgentEvents(stream.events);
@@ -801,7 +812,7 @@ describe("minimal web-chat agent processors", () => {
         role: "system",
         key: "agent/system-prompt",
         content: "Project-specific instructions.",
-        offset: birth!.offset,
+        offset: 4,
       },
     ]);
     expect(state.context.history).toMatchObject([
@@ -821,38 +832,81 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append({
       type: "events.iterate.com/agent/created",
-      payload: {
-        config: {
-          llm: { model: "anthropic/claude-sonnet-4-5" },
-          systemPrompt: "A conflicting second birth.",
-        },
-      },
+      payload: {},
     });
 
     await expect(runner.catchUp()).rejects.toThrow("agent received more than one created event");
   });
 
-  it("deep-merges configuration without rewriting its birth certificate", async () => {
+  it("keeps model and prompt policy out of the birth wire format", () => {
+    expect(() =>
+      AgentProcessorContract.parseEventInput("events.iterate.com/agent/created", {
+        type: "events.iterate.com/agent/created",
+        payload: { config: { llm: { model: DEFAULT_AGENT_MODEL } } },
+      }),
+    ).toThrow(/Unrecognized key/);
+    expect(() =>
+      AgentProcessorContract.parseEventInput("events.iterate.com/agent/configured", {
+        type: "events.iterate.com/agent/configured",
+        payload: {
+          config: {
+            llm: { model: DEFAULT_AGENT_MODEL },
+            systemPrompt: "must be a keyed context event",
+          },
+        },
+      }),
+    ).toThrow(/Unrecognized key/);
+  });
+
+  it("uses later model configuration without rewriting its birth certificate", async () => {
     const stream = agentStream();
     const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
+    const model = "anthropic/claude-sonnet-4-5";
 
     await stream.append({
       type: "events.iterate.com/agent/configured",
-      payload: { config: { llm: { model: "anthropic/claude-sonnet-4-5" } } },
+      payload: { config: { llm: { model } } },
     });
     await runner.catchUp();
 
-    expect(runner.currentState.config).toEqual({
-      llm: { model: "anthropic/claude-sonnet-4-5" },
-      systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
-    });
-    expect(runner.currentState.birthCertificate).toEqual({
-      config: {
-        llm: { model: DEFAULT_AGENT_MODEL },
-        systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+    expect(runner.currentState.config).toEqual({ llm: { model } });
+    expect(runner.currentState.birthCertificate).toEqual({});
+
+    await stream.append(userContext("Use the newly configured model."));
+    await runner.catchUp();
+    expect(
+      stream.events.findLast(
+        (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+      )?.payload,
+    ).toMatchObject({ model });
+  });
+
+  it("supersedes only matching context keys, including an explicit revert", async () => {
+    const stream = agentStream();
+    await stream.append(
+      systemContext("temporary execution policy"),
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "system",
+          key: "project/research-policy",
+          content: "Cite primary sources.",
+        },
       },
-    });
+      systemContext(DEFAULT_AGENT_SYSTEM_PROMPT),
+    );
+
+    const system = reduceAgentEvents(stream.events).context.system;
+    expect(system.filter((item) => item.key === "agent/system-prompt")).toEqual([
+      expect.objectContaining({ content: DEFAULT_AGENT_SYSTEM_PROMPT }),
+    ]);
+    expect(system).toContainEqual(
+      expect.objectContaining({
+        key: "project/research-policy",
+        content: "Cite primary sources.",
+      }),
+    );
   });
 
   it("coalesces multiple triggering inputs delivered in one batch into one LLM request", async () => {
@@ -987,7 +1041,7 @@ describe("minimal web-chat agent processors", () => {
     const firstCall = aiCalls[0] as { messages: Array<{ role: string; content: string }> };
     expect(firstCall.messages.map((m) => m.content)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/^@3 actor=user:web\nmessage one$/),
+        expect.stringMatching(/^@\d+ actor=user:web\nmessage one$/),
         expect.stringMatching(/^@\d+ actor=user:web\nmessage two$/),
       ]),
     );
@@ -1362,32 +1416,34 @@ describe("minimal web-chat agent processors", () => {
   });
 
   it("resets the consecutive failure counter after a successful request", async () => {
-    const failureTurn = (base: number, result: unknown): StreamEventInput[] => [
-      {
-        type: "events.iterate.com/agent/llm-request-scheduled",
-        payload: {
-          debounceMs: 0,
-          model: "gpt-5.5",
-          requestId: `llm-request:${base}`,
-        },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-5.5", requestId: `llm-request:${base}` },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 1, llmRequestOffset: base + 2, result },
-      },
-    ];
     const stream = agentStream();
-    await stream.append(
-      ...failureTurn(1, { status: "failure", error: { message: "boom" } }),
-      ...failureTurn(4, { status: "failure", error: { message: "boom again" } }),
-    );
+    const appendTurn = async (requestId: string, result: unknown) => {
+      const [, requested] = await stream.append(
+        {
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          payload: { debounceMs: 0, model: "gpt-5.5", requestId },
+        },
+        {
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: { model: "gpt-5.5", requestId },
+        },
+      );
+      await stream.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: { durationMs: 1, llmRequestOffset: requested!.offset, result },
+      });
+    };
+    await appendTurn("llm-request:failure-1", {
+      status: "failure",
+      error: { message: "boom" },
+    });
+    await appendTurn("llm-request:failure-2", {
+      status: "failure",
+      error: { message: "boom again" },
+    });
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 2 });
 
-    await stream.append(...failureTurn(7, { status: "success" }));
+    await appendTurn("llm-request:success", { status: "success" });
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
   });
 
@@ -1396,26 +1452,29 @@ describe("minimal web-chat agent processors", () => {
     // burned the retry budget, and the user's NEXT message ("hi?") inherited
     // the stale counter — one attempt, then "retries stopped". A user trigger
     // is a fresh turn and must get the full retry budget.
-    const failure = (base: number): StreamEventInput[] => [
-      {
-        type: "events.iterate.com/agent/llm-request-scheduled",
-        payload: { debounceMs: 0, model: "gpt-5.5", requestId: `llm-request:${base}` },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-5.5", requestId: `llm-request:${base}` },
-      },
-      {
+    const stream = agentStream();
+    const appendFailure = async (requestId: string) => {
+      const [, requested] = await stream.append(
+        {
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          payload: { debounceMs: 0, model: "gpt-5.5", requestId },
+        },
+        {
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: { model: "gpt-5.5", requestId },
+        },
+      );
+      await stream.append({
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
           durationMs: 1,
-          llmRequestOffset: base + 2,
+          llmRequestOffset: requested!.offset,
           result: { status: "failure", error: { message: "boom" } },
         },
-      },
-    ];
-    const stream = agentStream();
-    await stream.append(...failure(1), ...failure(4));
+      });
+    };
+    await appendFailure("llm-request:failure-1");
+    await appendFailure("llm-request:failure-2");
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 2 });
 
     // A loop-generated input (a rendered failure notice) keeps the counter.
@@ -1767,7 +1826,7 @@ describe("provider-neutral context projection", () => {
     expect(state.pendingTriggerSource).toBeNull();
   });
 
-  test("rejects unknown context fields and legacy checkpoint shapes", () => {
+  test("rejects unknown context and state fields", () => {
     expect(
       AgentContextAddedPayload.safeParse({
         role: "system",
@@ -1777,8 +1836,7 @@ describe("provider-neutral context projection", () => {
     ).toBe(false);
     expect(
       AgentProcessorContract.stateSchema.safeParse({
-        systemPrompt: "legacy prompt",
-        history: [],
+        unexpected: true,
       }).success,
     ).toBe(false);
   });
@@ -1806,7 +1864,7 @@ describe("provider-neutral context projection", () => {
         role: "developer",
         key: "integration/github/status",
         content: "status 10",
-        offset: 12,
+        offset: 14,
       },
     ]);
     expect(state.context.history[0]!.updatesOffset).toBeUndefined();
@@ -1821,15 +1879,15 @@ describe("provider-neutral context projection", () => {
     await stream.append(keyedStatus("status 11"));
     state = reduceAgentEvents(stream.events);
     expect(state.context.history).toMatchObject([
-      { content: "status 10", offset: 12 },
-      { content: "status 11", offset: 14, updatesOffset: 12 },
+      { content: "status 10", offset: 14 },
+      { content: "status 11", offset: 16, updatesOffset: 14 },
     ]);
 
     await stream.append(keyedStatus("status 12"), keyedStatus("status 13"));
     state = reduceAgentEvents(stream.events);
     expect(state.context.history).toMatchObject([
-      { content: "status 10", offset: 12 },
-      { content: "status 13", offset: 16, updatesOffset: 12 },
+      { content: "status 10", offset: 14 },
+      { content: "status 13", offset: 18, updatesOffset: 14 },
     ]);
 
     expect(
@@ -1839,14 +1897,14 @@ describe("provider-neutral context projection", () => {
         role: "system",
         content: expect.stringContaining("append-only event stream"),
       }),
-      { role: "system", content: '@2 key="agent/system-prompt"\nStay concise.' },
+      { role: "system", content: '@4 key="agent/system-prompt"\nStay concise.' },
       {
         role: "developer",
-        content: '@12 key="integration/github/status"\nstatus 10',
+        content: '@14 key="integration/github/status"\nstatus 10',
       },
       {
         role: "developer",
-        content: '@16 key="integration/github/status" updates=@12\nstatus 13',
+        content: '@18 key="integration/github/status" updates=@14\nstatus 13',
       },
     ]);
   });
@@ -1864,7 +1922,7 @@ describe("provider-neutral context projection", () => {
     });
 
     expect(reduceAgentEvents(stream.events).context.history).toMatchObject([
-      { role: "user", content: "keep me", offset: 2 },
+      { role: "user", content: "keep me", offset: 4 },
     ]);
   });
 });
@@ -1969,10 +2027,10 @@ describe("file attachments in the LLM request", () => {
       },
     );
 
-    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestOffset: 5 });
+    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestOffset: 7 });
     const userMessage = body.messages.find((message) => message.role === "user");
     expect(userMessage).toMatchObject({
-      content: "@3 actor=user:web\n[File attached: cat.png (image/png)]",
+      content: "@5 actor=user:web\n[File attached: cat.png (image/png)]",
       files: [attachment],
     });
   });
@@ -2005,7 +2063,7 @@ describe("file attachments in the LLM request", () => {
     );
     expect(reflectedMessage).toMatchObject({
       content: expect.stringMatching(
-        /^@3\nThe assistant sent this visible web-chat message: Here is your cat!$/,
+        /^@5\nThe assistant sent this visible web-chat message: Here is your cat!$/,
       ),
       files: [attachment],
     });
@@ -2612,9 +2670,9 @@ describe("token usage and history compaction", () => {
       { role: "system", content: expect.stringContaining("append-only event stream") },
       {
         role: "system",
-        content: `@2 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
+        content: `@4 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
       },
-      { role: "user", content: "@3 actor=user:web\nremember: I like teal" },
+      { role: "user", content: "@5 actor=user:web\nremember: I like teal" },
       { role: "system", content: expect.stringContaining("Current date and time (UTC):") },
       { role: "system", content: expect.stringContaining("output only the summary") },
     ]);
@@ -2836,7 +2894,7 @@ describe("token usage and history compaction", () => {
         payload: { model: DEFAULT_AGENT_MODEL, requestId: "llm-request:compact" },
       },
     );
-    const input = { events: stream.events, llmRequestOffset: 5 };
+    const input = { events: stream.events, llmRequestOffset: 7 };
     const body = buildAgentCompactionRequestBody(input);
     const normalRequest = buildAgentLlmRequestBody(input);
     // The cached-prefix property includes every byte of the original request,
@@ -2844,9 +2902,9 @@ describe("token usage and history compaction", () => {
     expect(body.messages.slice(0, -1)).toEqual(normalRequest.messages);
     expect(normalRequest.messages).toMatchObject([
       { role: "system", content: expect.stringContaining("append-only event stream") },
-      { role: "system", content: '@2 key="agent/system-prompt"\nYou are terse.' },
-      { role: "user", content: "@3 actor=user:web\nremember: I like teal" },
-      { role: "assistant", content: "@4\nnoted!" },
+      { role: "system", content: '@4 key="agent/system-prompt"\nYou are terse.' },
+      { role: "user", content: "@5 actor=user:web\nremember: I like teal" },
+      { role: "assistant", content: "@6\nnoted!" },
       { role: "developer", content: expect.stringContaining("Current date and time (UTC):") },
     ]);
     expect(body.messages.at(-1)).toMatchObject({
@@ -2987,7 +3045,11 @@ describe("token usage and history compaction", () => {
     await agentRunner(agent, stream).catchUp();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(
-      stream.events.some((event) => event.type === "events.iterate.com/agents/context-added"),
+      stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          event.payload?.compaction !== undefined,
+      ),
     ).toBe(false);
   });
 });
@@ -3273,12 +3335,12 @@ describe("busy/idle status announcements", () => {
         type: "events.iterate.com/agent/llm-request-requested",
         // The key the replayed scheduled event's re-armed debounce timer will
         // re-derive, so its append dedupes into this seeded event.
-        idempotencyKey: "agent/llm-request-requested@3",
+        idempotencyKey: "agent/llm-request-requested@5",
         payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 10, llmRequestOffset: 4, result: { status: "success" } },
+        payload: { durationMs: 10, llmRequestOffset: 6, result: { status: "success" } },
       },
     );
     const agent = makeAgentProcessor({
@@ -3313,12 +3375,12 @@ describe("busy/idle status announcements", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: "agent/llm-request-requested@4",
+        idempotencyKey: "agent/llm-request-requested@6",
         payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 10, llmRequestOffset: 5, result: { status: "success" } },
+        payload: { durationMs: 10, llmRequestOffset: 7, result: { status: "success" } },
       },
     );
     const agent = makeAgentProcessor({

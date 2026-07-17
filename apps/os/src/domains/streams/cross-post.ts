@@ -24,8 +24,8 @@
 //   never wedges the subscription (the parse-poison posture from #1714).
 
 import { z } from "zod";
-import type { StreamPushEventBatch } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamPushEventBatch } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { compileJsonataExpression } from "./event-selector.ts";
 
 type CrossPostProvenanceChain = NonNullable<NonNullable<StreamEvent["source"]>["crossPostedFrom"]>;

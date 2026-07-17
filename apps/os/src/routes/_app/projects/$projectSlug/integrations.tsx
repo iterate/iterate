@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -32,6 +32,7 @@ import {
   FieldLabel,
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { Textarea } from "@iterate-com/ui/components/textarea";
 import {
   Sheet,
   SheetContent,
@@ -42,6 +43,7 @@ import {
   SheetTrigger,
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Skeleton } from "@iterate-com/ui/components/skeleton";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
   Activity,
@@ -57,6 +59,7 @@ import {
   Plus,
   Search as SearchIcon,
   Send,
+  UserRoundCheck,
   type LucideIcon,
   Unplug,
 } from "lucide-react";
@@ -85,6 +88,9 @@ const Search = StreamViewSearch.extend({
   /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
    * flow on mount, then clears itself so a refresh never re-triggers. */
   connect: z.string().optional(),
+  /** Opens one connected Telegram bot's user-access editor. Denial messages
+   * deep-link here so an owner can paste the supplied numeric id. */
+  telegramAccess: z.string().optional(),
 });
 
 const BUILTIN_API_INTEGRATIONS = [
@@ -168,6 +174,17 @@ function ProjectIntegrationsContent() {
   const telegramConnections = builtinConnections.filter(
     (entry) => entry.integration === "telegram",
   );
+  const telegramAccessConnection =
+    telegramConnections.find(
+      (entry) => entry.connection === search.telegramAccess && entry.status?.connected,
+    )?.connection || null;
+  const setTelegramAccessSheetOpen = (open: boolean) => {
+    if (open) return;
+    void navigate({
+      replace: true,
+      search: (previous) => ({ ...previous, telegramAccess: undefined }),
+    });
+  };
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
@@ -325,6 +342,7 @@ function ProjectIntegrationsContent() {
             icon={MessageSquare}
             name="Slack"
             onDisconnect={(connection) => disconnectSlack.mutate(connection)}
+            onConfigureAccess={null}
             onOpenFeed={openStream}
             provider="slack"
             connectControl={
@@ -342,6 +360,7 @@ function ProjectIntegrationsContent() {
             icon={Mail}
             name="Google"
             onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
+            onConfigureAccess={null}
             onOpenFeed={openStream}
             provider="google"
             connectControl={
@@ -363,6 +382,7 @@ function ProjectIntegrationsContent() {
             icon={Github}
             name="GitHub"
             onDisconnect={(connection) => disconnectGithub.mutate(connection)}
+            onConfigureAccess={null}
             onOpenFeed={openStream}
             provider="github"
             connectControl={
@@ -384,6 +404,11 @@ function ProjectIntegrationsContent() {
             icon={Send}
             name="Telegram"
             onDisconnect={(connection) => disconnectTelegram.mutate(connection)}
+            onConfigureAccess={(connection) => {
+              void navigate({
+                search: (previous) => ({ ...previous, telegramAccess: connection }),
+              });
+            }}
             onOpenFeed={openStream}
             provider="telegram"
             connectControl={
@@ -396,6 +421,17 @@ function ProjectIntegrationsContent() {
           />
           <AccountConnectionsItem />
         </ItemGroup>
+        {telegramAccessConnection === null ? null : (
+          <Suspense
+            fallback={<TelegramAccessSheetLoading onOpenChange={setTelegramAccessSheetOpen} />}
+          >
+            <TelegramAccessSheet
+              connection={telegramAccessConnection}
+              onOpenChange={setTelegramAccessSheetOpen}
+              projectSlug={project.slug}
+            />
+          </Suspense>
+        )}
       </section>
 
       {providedConnections.length > 0 ? (
@@ -495,6 +531,7 @@ function ConnectableIntegrationCard({
   disconnecting,
   icon: Icon,
   name,
+  onConfigureAccess,
   onDisconnect,
   onOpenFeed,
   provider,
@@ -508,6 +545,7 @@ function ConnectableIntegrationCard({
   disconnecting: boolean;
   icon: LucideIcon;
   name: string;
+  onConfigureAccess: ((connection: string) => void) | null;
   onDisconnect: (connection: string) => void;
   onOpenFeed: (streamPath: string) => void;
   provider: "github" | "google" | "slack" | "telegram";
@@ -537,6 +575,9 @@ function ConnectableIntegrationCard({
                 key={entry.path}
                 disconnecting={disconnecting}
                 entry={entry}
+                onConfigureAccess={
+                  onConfigureAccess === null ? null : () => onConfigureAccess(entry.connection)
+                }
                 onDisconnect={() => onDisconnect(entry.connection)}
                 onOpenFeed={() => onOpenFeed(entry.path)}
                 provider={provider}
@@ -591,12 +632,14 @@ function ProvidedIntegrationCard({
 function ConnectionRow({
   disconnecting,
   entry,
+  onConfigureAccess,
   onDisconnect,
   onOpenFeed,
   provider,
 }: {
   disconnecting: boolean;
   entry: ConnectionEntry;
+  onConfigureAccess: (() => void) | null;
   onDisconnect: () => void;
   onOpenFeed: () => void;
   provider: "github" | "google" | "slack" | "telegram";
@@ -609,6 +652,16 @@ function ConnectionRow({
         <IntegrationMetadata connection={entry.status ?? undefined} provider={provider} />
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
+        {entry.status?.connected && onConfigureAccess !== null ? (
+          <Button
+            size="icon-sm"
+            variant="outline"
+            aria-label={`Configure ${entry.connection} user access`}
+            onClick={onConfigureAccess}
+          >
+            <UserRoundCheck data-icon="inline-start" />
+          </Button>
+        ) : null}
         <Button
           size="icon-sm"
           variant="outline"
@@ -680,6 +733,105 @@ function IntegrationMetadataRow({
       <span className="shrink-0 text-muted-foreground/80">{label}</span>
       <span className="truncate text-foreground">{value}</span>
     </div>
+  );
+}
+
+function TelegramAccessSheet({
+  connection,
+  onOpenChange,
+  projectSlug,
+}: {
+  connection: string;
+  onOpenChange: (open: boolean) => void;
+  projectSlug: string;
+}) {
+  const itx = useItx();
+  const queryClient = useQueryClient();
+  const access = useItxQuery({
+    key: ["telegram-access", projectSlug, connection],
+    query: (itx) => itx.integrations.getTelegramAccess({ connection }),
+  });
+  const saveAccess = useMutation({
+    mutationFn: async (allowedUserIds: string[]) =>
+      await itx.integrations.setTelegramAccess({ allowedUserIds, connection }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "telegram-access", projectSlug, connection],
+      });
+      toast.success("Telegram user access updated");
+      onOpenChange(false);
+    },
+    onError: (error) => toast.error(`Failed to update Telegram access: ${error.message}`),
+  });
+
+  return (
+    <Sheet open onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="overflow-y-auto">
+        <form
+          className="flex h-full flex-col"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const value = String(new FormData(event.currentTarget).get("allowedUserIds") || "");
+            saveAccess.mutate(value.split(/[\s,]+/).filter(Boolean));
+          }}
+        >
+          <SheetHeader>
+            <SheetTitle>Telegram user access</SheetTitle>
+            <SheetDescription>
+              Only listed Telegram accounts can ask this bot to use project capabilities.
+            </SheetDescription>
+          </SheetHeader>
+          <FieldGroup className="flex flex-1 flex-col gap-4 p-4">
+            {access === undefined ? (
+              <Skeleton className="h-40 w-full" />
+            ) : (
+              <Field data-invalid={saveAccess.isError}>
+                <FieldLabel htmlFor="telegram-allowed-user-ids">
+                  Allowed Telegram user IDs
+                </FieldLabel>
+                <Textarea
+                  id="telegram-allowed-user-ids"
+                  name="allowedUserIds"
+                  aria-invalid={saveAccess.isError}
+                  autoComplete="off"
+                  defaultValue={access.allowedUserIds.join("\n")}
+                  placeholder="123456789"
+                  rows={8}
+                />
+                <FieldDescription>
+                  Enter one numeric user ID per line. Usernames are not accepted because they can
+                  change owners. To find an ID, message the bot while unauthorized—the reply
+                  includes the exact ID and a link back here.
+                </FieldDescription>
+                {saveAccess.error ? <FieldError>{saveAccess.error.message}</FieldError> : null}
+              </Field>
+            )}
+          </FieldGroup>
+          <SheetFooter>
+            <Button type="submit" disabled={access === undefined || saveAccess.isPending}>
+              {saveAccess.isPending ? <Spinner /> : null}
+              {saveAccess.isPending ? "Saving..." : "Save access"}
+            </Button>
+          </SheetFooter>
+        </form>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function TelegramAccessSheetLoading({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
+  return (
+    <Sheet open onOpenChange={onOpenChange}>
+      <SheetContent side="right">
+        <SheetHeader>
+          <SheetTitle>Telegram user access</SheetTitle>
+          <SheetDescription>Loading this bot's access policy…</SheetDescription>
+        </SheetHeader>
+        <div className="p-4">
+          <Skeleton className="h-40 w-full" />
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 

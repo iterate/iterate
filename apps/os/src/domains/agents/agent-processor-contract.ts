@@ -1,11 +1,13 @@
 import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
-  CoreProcessorContract,
+  defineProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+  type ConsumedInput,
+  type ProcessorState,
+} from "iterate/processors";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -14,16 +16,14 @@ export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
 export const AGENT_SYSTEM_PROMPT_CONTEXT_KEY = "agent/system-prompt";
 
 export const AgentConfig = z.strictObject({
-  systemPrompt: z.string(),
   llm: z.strictObject({ model: z.string().min(1) }),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
 const AgentConfigPatch = z.strictObject({
-  systemPrompt: z.string().optional(),
   llm: z.strictObject({ model: z.string().min(1).optional() }).optional(),
 });
-const AgentBirthCertificate = z.strictObject({ config: AgentConfig });
+const AgentBirthCertificate = z.strictObject({});
 
 /**
  * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
@@ -120,10 +120,10 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Platform context for this agent\" carries your project id, agent path, and pointers for this scope.",
   "",
   'THE CONFIG REPO — the code that governs this project, at "/repos/config":',
-  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create({ systemPrompt?, model? }); a path or folder alone is not an agent. AGENTS.md is durable notes: read it early and write stable project knowledge back. package.json dependencies install at build time; multi-file TypeScript works.",
+  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. Configure one with agent.append(...) after creation. AGENTS.md is durable notes: read it early and write stable project knowledge back. package.json dependencies install at build time; multi-file TypeScript works.",
   "- Every commit lands on MAIN and the project worker/website redeploys automatically — no branches, no push, nothing else to do.",
   "- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` for one small file; your private workspace (`itx.workspace`, a live overlay of latest main — readFile/writeFile/edit/glob) to read and change several files, shipped as ONE commit with `await itx.workspace.git.commit({ message })`. ALWAYS read a file before editing it.",
-  '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route a named-export class; HelloApp and CounterApp show both shapes. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = change the relevant `agents.get(path).create({ systemPrompt, model })` call or capability mounts. You can rewrite your own birth instructions and add tools: each worker getter becomes an `itx.worker.<name>` capability, so an npm SDK can become a plugin.',
+  '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route a named-export class; HelloApp and CounterApp show both shapes. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so an npm SDK can become a plugin.',
   "",
   'TWO SEARCHES, ONE RULE. `itx.docs.search` finds HOW: working example scripts (most PROVEN — run unattended by the test suite), type declarations, mounted capabilities; word-overlap matching, so pass MANY related words. `itx.search.query` finds WHAT: every conversation, webhook, stream event, file, and repo file is indexed (semantic — ask plainly); hits carry a ref that fetches the exact source. "Who said / when did / what did we decide" = search first, never page streams.',
   "",
@@ -168,13 +168,13 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // to YOU, never delegate further (subagent trees fan out into runaway cost).",
   "  // Create explicitly, then message; the message must carry ALL context:",
   '  const researcher = itx.agents.get("research-pricing");',
-  "  await researcher.create({});",
+  "  await researcher.create();",
   '  await researcher.message("Deep-dive competitor pricing. Context: ...");',
   "  // now END YOUR TURN — the report arrives as your input.",
   "  // Standing agents are project infrastructure — e.g. a shared friction collector:",
   '  const bugs = itx.agents.get("/agents/bugs");',
   "  const bugsSnapshot = await bugs.processor.snapshot();",
-  "  if (bugsSnapshot.state.birthCertificate === null) await bugs.create({});",
+  "  if (bugsSnapshot.state.birthCertificate === null) await bugs.create();",
   '  await bugs.message("docs.search returned nothing for query X");',
   "",
   "  // CONNECT AN API — MCP servers and OpenAPI specs become callable in one expression:",
@@ -215,7 +215,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  await itx.scheduler.set({",
   '    key: "daily-report",',
   '    recurrence: { cron: "0 9 * * *", timezone: "Europe/London" },',
-  "    script: \"async (itx) => { const agent = itx.agents.get('/agents/daily-report'); const snapshot = await agent.processor.snapshot(); if (snapshot.state.birthCertificate === null) await agent.create({}); await agent.message('Write the daily report.'); }\",",
+  "    script: \"async (itx) => { const agent = itx.agents.get('/agents/daily-report'); const snapshot = await agent.processor.snapshot(); if (snapshot.state.birthCertificate === null) await agent.create(); await agent.message('Write the daily report.'); }\",",
   "  });",
   "",
   "  // SHARE A FILE — attach it; never paste base64 into message text:",
@@ -233,7 +233,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.",
   "",
   "OTHER AGENTS — the semantics behind the tour's delegation calls:",
-  '- A relative name (`itx.agents.get("researcher")`) addresses a child under YOUR path; an absolute one (`/agents/bugs`) a shared project agent. Call `create({ systemPrompt?, model? })` before messaging it. Creating folders or appending ordinary events never implies an agent.',
+  '- A relative name (`itx.agents.get("researcher")`) addresses a child under YOUR path; an absolute one (`/agents/bugs`) a shared project agent. Call zero-argument `create()` before messaging it. Creating folders or appending ordinary events never implies an agent.',
   "- The receiver cannot see your conversation; its report arrives as your input, labeled with the sender's path and how to reply. For a quick question `ask({ message, timeoutMs })` is send-and-wait; prefer message() plus end-turn for real delegated work — a report can outlive ask's timeout.",
   "",
   "FILES:",
@@ -576,7 +576,7 @@ export function deriveAgentBusy(
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "1.1.0",
+  version: "2.0.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z
@@ -744,17 +744,13 @@ export const AgentProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/agent/created": {
-      description: "Creates an agent processor on this stream.",
+      description:
+        "Records that an agent exists on this stream. Runtime policy is supplied by separate configuration and context events.",
       payloadSchema: AgentBirthCertificate,
       examples: [
         {
-          description: "A general-purpose agent is born with its initial prompt and model.",
-          payload: {
-            config: {
-              systemPrompt: "You are a release manager for this project.",
-              llm: { model: DEFAULT_AGENT_MODEL },
-            },
-          },
+          description: "An agent existence fact has no caller-selected configuration.",
+          payload: {},
         },
       ],
     },
@@ -764,7 +760,7 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.strictObject({ config: AgentConfigPatch }),
       examples: [
         {
-          description: "Only the nested model changes; the existing system prompt is retained.",
+          description: "Select the model used for subsequent requests.",
           payload: { config: { llm: { model: "openai/gpt-5.6-sol" } } },
         },
       ],
@@ -1126,6 +1122,9 @@ export const AgentProcessorContract = defineProcessorContract({
  * `ConsumedEvent<AgentProcessorContract>`.
  */
 export type AgentProcessorContract = typeof AgentProcessorContract;
+
+/** Append input accepted by the Agent processor, derived from its `consumes` contract. */
+export type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 /**
  * The agent processor's reduced state, inferred from the contract's

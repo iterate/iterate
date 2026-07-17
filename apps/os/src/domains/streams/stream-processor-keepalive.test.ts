@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { StreamEventInput } from "./schemas.ts";
+import type { StreamEventInput } from "iterate/processors";
 import {
   KEEPALIVE_ALARM_LEAD_MS,
   MAX_CONSECUTIVE_BUSY_REFIRES,
@@ -7,7 +7,7 @@ import {
   REVIVAL_BACKOFF_PLATEAU_MS,
   revivalBackoffMs,
   type KeepaliveRecord,
-} from "./stream-processor-keepalive.ts";
+} from "iterate/processors";
 
 const T0 = Date.parse("2026-07-09T12:00:00Z");
 

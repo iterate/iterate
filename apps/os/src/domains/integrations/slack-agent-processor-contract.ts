@@ -8,11 +8,9 @@
 // obligation left to journal.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
-import {
-  CoreProcessorContract,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+import { defineProcessorContract } from "iterate/processors";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract, AgentStatusRecord } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";
@@ -36,7 +34,7 @@ import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-proc
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
-  version: "0.5.0",
+  version: "0.6.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     birthCertificate: SlackAgentBirthCertificate.nullable().default(null),
@@ -51,6 +49,9 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),
+    /** Slack's conversation type from the routed message webhook. Assistant
+     * thread UI methods are valid for app DMs (`im`), not channel mentions. */
+    channelType: z.string().optional(),
     /**
      * True after this thread has seen an @mention / app_mention of our bot.
      * Unlocks follow-up turns without re-mentioning.
