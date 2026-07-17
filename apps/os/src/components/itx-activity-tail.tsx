@@ -12,7 +12,7 @@ import { useState } from "react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { useItxSubscription } from "iterate/react";
-import type { StreamEvent } from "../domains/streams/schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 
 const MAX_BUFFERED_EVENTS = 500;
 

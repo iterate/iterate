@@ -1,12 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
-import { workerVersion, type Env } from "../../env.ts";
-import { trustedInternalAuthContext } from "../../auth.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type {
   ProcessorSnapshot,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
+} from "iterate/processors";
+import { workerVersion, type Env } from "../../env.ts";
+import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ScheduleView } from "./types.ts";

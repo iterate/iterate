@@ -5,7 +5,7 @@
  * (slack) can hold many connections (main-slack, support-slack).
  */
 
-import type { WakeableStreamProcessorRpc } from "../streams/rpc-types.ts";
+import type { WakeableStreamProcessorRpc } from "iterate/processors";
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */

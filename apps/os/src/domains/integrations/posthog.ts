@@ -1,9 +1,9 @@
 import { tracing } from "cloudflare:workers";
 import { v5 as uuidv5 } from "uuid";
 import { z } from "zod";
+import type { StreamPushEventBatch } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
-import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { truncateJsonToBytes } from "./truncate-json.ts";
 
 export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
