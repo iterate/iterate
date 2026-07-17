@@ -4,6 +4,9 @@ import { z } from "zod";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
+import { truncateJsonToBytes } from "./truncate-json.ts";
+
+export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
 
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
 const ProjectGroupBirthPayload = z.object({
@@ -73,10 +76,9 @@ function projectGroupIdentifyEvent(args: {
   workerName: string;
 }) {
   const { batch, distinctId, projectId, workerName } = args;
-  // Only the root birth certificate owns group creation. An ID-only update on
-  // every stream birth would replace PostHog's current group property map and
-  // erase this event's name/slug; pre-rollout projects get no compatibility
-  // record here.
+  // Only the authentic root birth certificate owns the complete first-class
+  // project group record. Pre-rollout projects intentionally get no partial
+  // compatibility record or mutable directory lookup here.
   const projectBirth = batch.events.find((event) => {
     if (
       batch.path !== "/" ||
@@ -137,12 +139,13 @@ function posthogEvents(args: {
   const streamId = posthogUuid(["stream-v1", workerName, projectId, batch.path]);
   const occurrences = batch.events.map((event) => {
     const createdAt = normalizeEventTimestamp(event.createdAt);
+    const streamEvent = truncateJsonToBytes(event, POSTHOG_STREAM_EVENT_MAX_JSON_BYTES);
     const eventUuid = eventIdentity(workerName, projectId, batch.path, {
       createdAt,
       offset: event.offset,
     });
     return {
-      event: "iterate stream event committed",
+      event: "stream:append",
       properties: {
         $geoip_disable: true,
         $groups: { project: projectId },
@@ -157,9 +160,12 @@ function posthogEvents(args: {
         stream_event_offset: event.offset,
         stream_event_type: event.type,
         stream_event_uuid: eventUuid,
-        // The complete committed event is intentional. This first-party feed
-        // is an event mirror, not an allowlisted operational projection.
-        stream_event: event,
+        // This first-party feed mirrors the committed event rather than an
+        // allowlist. Only an event above the explicit JSON byte boundary is
+        // deterministically chopped, with that loss indexed alongside it.
+        stream_event: streamEvent.value,
+        stream_event_original_json_bytes: streamEvent.originalBytes,
+        stream_event_truncated: streamEvent.truncated,
         stream_max_offset: batch.streamMaxOffset,
         stream_id: streamId,
         stream_path: batch.path,

@@ -239,16 +239,20 @@ this OS-only subscription.
 
 “All events” means one PostHog occurrence for every committed row still owned
 by the stream, without a type selector, sampling, success/error filter,
-ephemeral exclusion, or payload allowlist. The complete committed event is
-sent verbatim under `properties.stream_event`, including payload, metadata,
-source/cross-post provenance, idempotency key, ephemerality, offset, commit
-time, type, and raw path. The raw stream path is also indexed separately as
-`stream_path`. This is intentionally a second searchable event copy in
-PostHog, not a bounded operational projection. Event producers therefore own
-the obligation not to append secrets that must not reach our first-party
-analytics project. PostHog request-size and asynchronous ingestion warnings
-must be treated as observable delivery constraints, not reasons to silently
-filter fields.
+ephemeral exclusion, or payload allowlist. Its event name is `stream:append`.
+The complete committed event is sent under `properties.stream_event`,
+including payload, metadata, source/cross-post provenance, idempotency key,
+ephemerality, offset, commit time, type, and raw path. It remains byte-for-byte
+intact through 100 KiB of encoded JSON. Above that explicit boundary, a pure,
+deterministic JSON compactor chops the largest useful nested value and marks
+the lost tail; `stream_event_truncated` and
+`stream_event_original_json_bytes` make the loss queryable. This is size
+bounding, not an event-field allowlist: small siblings and all separately
+indexed coordinates remain, and no event is dropped. The raw stream path is
+also indexed separately as `stream_path`. Event producers own the obligation
+not to append secrets that must not reach our first-party analytics project.
+PostHog asynchronous ingestion warnings remain an operational signal rather
+than a reason to silently filter or sample events.
 
 Each occurrence also contains indexed coordinates:
 
@@ -269,10 +273,10 @@ root `project/created` birth certificate emits the one `$groupidentify`, with
 both the immutable ID and the creation-time slug (also used as PostHog's
 display `name`), so operators can find one project group by either identifier
 without creating parallel entities. Ordinary `stream/created` rows deliberately
-do not emit ID-only group updates: a later PostHog group payload becomes the
-current property map and would erase the root record's `name` and `slug`.
-Projects born before this rollout remain outside this first-class group-creation
-path; there is no partial compatibility record, lookup, or backfill.
+do not emit redundant ID-only group updates: the authentic root birth
+certificate owns the complete group record. Projects born before this rollout
+remain outside this first-class group-creation path; there is no partial
+compatibility record, lookup, or backfill.
 Project slugs are mutable; synchronizing a later rename needs an authoritative
 directory event and is not falsely claimed by this birth-only feed. The event
 must be first-hand,
@@ -461,9 +465,11 @@ alarm actions. Possible later operation adapters are:
 - [ ] Only public-batch HTTP acceptance gates the durable cursor; transport
       failures eventually park, and the proof checks PostHog's asynchronous
       ingestion-warning surface without claiming exactly-once indexing.
-- [ ] The Capture request contains the complete committed event, including
-      payload, metadata, provenance, idempotency key, and raw stream path, with
-      no event-field allowlist or filtering.
+- [ ] Each `stream:append` request contains the complete committed event through
+      100 KiB, including payload, metadata, provenance, idempotency key, and raw
+      stream path. Larger JSON is visibly and deterministically chopped, with
+      original byte size and truncation indexed; no event-field allowlist,
+      sampling, or event drop exists.
 - [ ] Preview proof includes the PostHog live feed and its matching Cloudflare
       capture span for a fresh stream's durable and ephemeral rows.
 

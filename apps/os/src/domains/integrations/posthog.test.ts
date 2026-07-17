@@ -2,10 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
-import { capturePosthogStreamEventBatch, posthogSubscriptionEvent } from "./posthog.ts";
+import {
+  capturePosthogStreamEventBatch,
+  POSTHOG_STREAM_EVENT_MAX_JSON_BYTES,
+  posthogSubscriptionEvent,
+} from "./posthog.ts";
 
-const POSTHOG_STREAM_EVENT = "iterate stream event committed";
+const POSTHOG_STREAM_EVENT = "stream:append";
 const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
 function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
   return {
@@ -134,6 +139,8 @@ describe("first-party PostHog stream integration", () => {
         project_id: "prj_123",
         stream_path: "/agents/ada",
         stream_event: durable,
+        stream_event_original_json_bytes: jsonBytes(durable),
+        stream_event_truncated: false,
         stream_event_type: durable.type,
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
@@ -144,6 +151,38 @@ describe("first-party PostHog stream integration", () => {
         stream_event: ephemeral,
         stream_event_ephemeral: true,
       },
+    });
+  });
+
+  it("bounds an oversized committed event without filtering its indexed coordinates", async () => {
+    const oversized = streamEvent({
+      payload: {
+        answer: 42,
+        transcript: "x".repeat(POSTHOG_STREAM_EVENT_MAX_JSON_BYTES * 2),
+      },
+    });
+    const requests: CapturedRequest[] = [];
+
+    await capturePosthogStreamEventBatch(captureArgs([oversized]), {
+      fetch: acceptingFetch(requests),
+    });
+
+    const occurrence = requests[0]!.batch[0]!;
+    const properties = occurrence.properties as Record<string, unknown>;
+    expect(occurrence.event).toBe(POSTHOG_STREAM_EVENT);
+    expect(properties).toMatchObject({
+      project_id: "prj_123",
+      stream_event_original_json_bytes: jsonBytes(oversized),
+      stream_event_truncated: true,
+      stream_event_type: oversized.type,
+      stream_path: "/agents/ada",
+    });
+    expect(
+      new TextEncoder().encode(JSON.stringify(properties.stream_event)).byteLength,
+    ).toBeLessThanOrEqual(POSTHOG_STREAM_EVENT_MAX_JSON_BYTES);
+    expect(properties.stream_event).toMatchObject({
+      payload: { answer: 42 },
+      type: oversized.type,
     });
   });
 
