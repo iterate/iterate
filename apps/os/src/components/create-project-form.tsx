@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
@@ -34,7 +35,12 @@ const CreateProjectInput = z.object({
   organizationSlug: z.string(),
 });
 
-export function CreateProjectForm() {
+export function CreateProjectForm({
+  onPendingChange,
+}: {
+  /** Fired when create submit starts/ends so a host sheet can block dismiss. */
+  onPendingChange?: (pending: boolean) => void;
+} = {}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { refresh, session } = useAuthClient();
@@ -123,6 +129,13 @@ export function CreateProjectForm() {
       form.reset();
     },
   });
+
+  // Host sheet (and any other shell) must not dismiss while create is in
+  // flight: onSuccess navigates into the new project, and a mid-flight
+  // close would race that navigation with a /projects bounce.
+  useEffect(() => {
+    onPendingChange?.(createProject.isPending);
+  }, [createProject.isPending, onPendingChange]);
 
   return (
     <form
