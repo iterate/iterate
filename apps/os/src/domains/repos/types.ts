@@ -108,6 +108,8 @@ export type GithubRepoLink = {
   installationId: string;
   owner: string;
   repo: string;
+  /** GitHub's stable database identity for this repository. */
+  repositoryId: number;
 };
 
 /** What `repo.linkGithub` returns: the recorded link, whether the GitHub

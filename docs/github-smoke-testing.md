@@ -2,8 +2,9 @@
 
 Use this after a planned production recreation to prove the `iterate` project's
 GitHub connection, config-repo synchronization, webhook assignment, and PR
-routing. It creates one temporary draft PR in `iterate/config`; do not put
-`@iterate` in its title or body, so it cannot wake an LLM turn.
+routing. It creates one temporary draft PR in `iterate/config`; do not mention
+the production GitHub App login in its title or body, so it cannot wake an LLM
+turn.
 
 Run OS commands from `apps/os`. Resolve the production project ID rather than
 hard-coding it:
@@ -77,8 +78,8 @@ gh pr create --repo iterate/config --base main --head "$BRANCH" --draft \
   --body "Temporary post-recreation webhook-routing smoke. No review requested."
 ```
 
-Record the PR number. Then compute its deterministic routed stream from the
-restored config-repo link and inspect the raw delivery:
+Record the PR number. Then inspect both the original connection fact and the
+userspace path derived from the internal repo address:
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \
@@ -88,42 +89,60 @@ doppler run --config prd -- pnpm cli itx run \
     const snapshot = await itx.repo.processor.snapshot();
     const github = snapshot.state.github;
     if (github === null) throw new Error("config repo is not linked to GitHub");
-    const identity = JSON.stringify([
-      "/repos/config",
-      github.installationId,
-      github.owner,
-      github.repo,
+    const connectionPath = `/integrations/github/${github.connection}`;
+    const agentPath = `/agents/repos/config/pr/${vars.pullRequest}`;
+    const readAll = async (stream, eventTypes) => {
+      const events = [];
+      let afterOffset = 0;
+      for (;;) {
+        const page = await stream.getEvents({ afterOffset, eventTypes, limit: 500 });
+        events.push(...page);
+        if (page.length < 500) return events;
+        afterOffset = page.at(-1).offset;
+      }
+    };
+    const [connectionEvents, agentEvents] = await Promise.all([
+      readAll(itx.streams.get(connectionPath), [
+        "events.iterate.com/github/webhook-received",
+      ]),
+      readAll(itx.streams.get(agentPath)),
     ]);
-    const digest = new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity)),
-    );
-    const fingerprint = [...digest]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-    const path = `/agents/repos/g~${fingerprint}/pull-requests/${vars.pullRequest}`;
-    const events = await itx.streams.get(path).getEvents({
-      eventTypes: ["events.iterate.com/github/webhook-received"],
-      limit: 500,
-    });
     return {
-      path,
-      deliveries: events
-        .filter((event) => event.payload?.body?.action === "opened")
+      agentPath,
+      connectionPath,
+      originalDeliveries: connectionEvents
+        .filter((event) =>
+          event.payload?.associations?.pullRequests?.some(
+            (pullRequest) => pullRequest.number === vars.pullRequest,
+          ),
+        )
         .map((event) => ({
           offset: event.offset,
-          connection: event.payload?.connection,
           installationId: event.payload?.installationId,
-          repository: event.payload?.body?.repository?.full_name,
-          pullRequest: event.payload?.body?.pull_request?.number,
+          delivery: event.payload?.delivery,
+          associations: event.payload?.associations,
         })),
+      agentAssociation: agentEvents.find(
+        (event) => event.type === "events.iterate.com/github/pull-request-associated",
+      ),
+      copiedDeliveries: agentEvents.filter(
+        (event) => event.type === "events.iterate.com/github/webhook-received",
+      ),
+      processorSubscriptions: agentEvents
+        .filter((event) => event.type === "events.iterate.com/stream/subscription-configured")
+        .map((event) => event.payload?.delivery?.processorSlug),
     };
   '
 ```
 
 Webhook delivery is asynchronous; retry the read for up to a minute. Require one
-`opened` delivery for the smoke PR, `iterate/config`, and the recorded connection
-and installation. This proves the global GitHub directory claim assigned the
-webhook to the Iterate project and the restored repo link routed it.
+original `opened` delivery whose repository ID and installation match the
+link, the same complete delivery copied to the agent stream, and one
+`pull-request-associated` fact for `/repos/config`, the repository ID, and the
+recorded PR. The processor subscriptions must contain `agent` and must not
+contain the removed `github-agent`. This proves the global directory assigned
+the webhook to the right connection and the current userspace config worker
+routed it without historical platform state.
 
 Close the PR and delete its branch after recording evidence:
 

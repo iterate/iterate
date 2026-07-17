@@ -217,7 +217,12 @@ GitHub connects as a **GitHub App installation** (deep-link to
   DO mints the installation token on first use and re-mints on 401 — trusted
   DO code signing the App JWT, no worker, no jail.
 - **Inbound App webhooks** land on the door, verify `x-hub-signature-256`
-  with plain WebCrypto, and route on `installation_id`.
+  with plain WebCrypto, and route on `installation_id`. Each delivery is
+  appended once to `/integrations/github/<connection>` with its complete
+  decoded JSON payload plus small, runtime-checked associations: stable repository ID,
+  pull-request numbers, webhook actor, content author, and mentioned users.
+  The integration does not create agents or decide what a webhook means to a
+  project.
 - **`gh` in sandboxes** works automatically, with no byte handoff: ALL
   container egress (HTTPS included, MITM'd with the container CA) routes
   through the project egress door, so a sandbox holds only a placeholder
@@ -237,9 +242,12 @@ The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
 on the project host's own worker).
 
-Linked repositories also route pull-request deliveries into durable
-per-PR agent streams, with bounded LLM context, automatic review policy, and
-label controls. See [GitHub pull-request agents](./github-agents.md).
+A linked repo cross-posts only matching push deliveries to its repo stream so
+the repo processor can import its default branch. Pull-request automation is
+instead ordinary userspace code: the config-repo template shows a project
+worker consuming first-hand connection-stream facts and forwarding them to
+`/agents<repo-path>/pr/<number>`. See
+[GitHub pull-request agents](./github-agents.md).
 
 ## Telegram: the fourth builtin
 

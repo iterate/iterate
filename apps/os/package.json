@@ -94,6 +94,7 @@
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@microsoft/tui-test": "0.0.4",
+    "@octokit/webhooks": "^14.2.0",
     "@tailwindcss/vite": "^4.3.2",
     "@tanstack/devtools-vite": "0.6.0",
     "@tanstack/router-generator": "1.167.17",

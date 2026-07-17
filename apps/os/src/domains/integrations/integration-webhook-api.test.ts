@@ -48,17 +48,23 @@ function bareConfig() {
   });
 }
 
-function githubRequest(body: string, signature?: string) {
+function githubRequest(
+  body: string,
+  signature?: string,
+  eventName: string | null = "push",
+  delivery: string | null = "delivery-1",
+) {
   const sig =
     signature ?? `sha256=${createHmac("sha256", GITHUB_WEBHOOK_SECRET).update(body).digest("hex")}`;
+  const headers = new Headers({
+    "content-type": "application/json",
+    "x-hub-signature-256": sig,
+  });
+  if (delivery !== null) headers.set("x-github-delivery", delivery);
+  if (eventName !== null) headers.set("x-github-event", eventName);
   return new Request("https://os.example.test/api/integrations/github/webhook", {
     body,
-    headers: {
-      "content-type": "application/json",
-      "x-github-delivery": "delivery-1",
-      "x-github-event": "push",
-      "x-hub-signature-256": sig,
-    },
+    headers,
     method: "POST",
   });
 }
@@ -83,7 +89,14 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
   test.for([
     {
       name: "valid signature + claimed installation → routes on (github, installation_id) and 200",
-      body: JSON.stringify({ action: "opened", installation: { id: 42 } }),
+      body: JSON.stringify({
+        action: "opened",
+        installation: { id: 42 },
+        pull_request: { number: 7 },
+        repository: { full_name: "acme/widgets", id: 101, node_id: "R_101" },
+        sender: { id: 44, login: "jonas", node_id: "U_44", type: "User" },
+      }),
+      eventName: "pull_request",
       mockRoute: { connection: "install-42", ok: true, projectId: "prj_1" },
       expectedStatus: 200,
       expectedJson: { ok: true },
@@ -93,7 +106,18 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
         event: {
           type: "events.iterate.com/github/webhook-received",
           idempotencyKey: "github-webhook:delivery-1",
-          payload: { appSlug: "iterate-test", installationId: "42" },
+          payload: {
+            appSlug: "iterate-test",
+            associations: {
+              actor: { id: 44, login: "jonas", nodeId: "U_44", type: "User" },
+              mentionedUsers: [],
+              problems: [],
+              pullRequests: [{ basis: "subject", number: 7, repositoryId: 101 }],
+              repository: { fullName: "acme/widgets", id: 101, nodeId: "R_101" },
+            },
+            delivery: { action: "opened", id: "delivery-1", name: "pull_request" },
+            installationId: "42",
+          },
         },
       },
     },
@@ -103,6 +127,20 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
       signature: "sha256=deadbeef",
       expectedStatus: 401,
       expectedJson: { error: "Invalid GitHub signature." },
+    },
+    {
+      name: "valid signature without a delivery ID → explicit 400",
+      body: JSON.stringify({ installation: { id: 42 } }),
+      delivery: null,
+      expectedStatus: 400,
+      expectedJson: { error: "Missing required GitHub webhook delivery headers." },
+    },
+    {
+      name: "valid signature without an event name → explicit 400",
+      body: JSON.stringify({ installation: { id: 42 } }),
+      eventName: null,
+      expectedStatus: 400,
+      expectedJson: { error: "Missing required GitHub webhook delivery headers." },
     },
     {
       name: "no webhook secret configured → 503",
@@ -127,12 +165,22 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
     },
   ])(
     "$name",
-    async ({ bare, body, expectedCall, expectedJson, expectedStatus, mockRoute, signature }) => {
+    async ({
+      bare,
+      body,
+      delivery,
+      eventName,
+      expectedCall,
+      expectedJson,
+      expectedStatus,
+      mockRoute,
+      signature,
+    }) => {
       if (mockRoute !== undefined) routeIntegrationWebhook.mockResolvedValue(mockRoute);
 
       const response = await handleIntegrationWebhookApiRequest({
         config: bare === true ? bareConfig() : config(),
-        request: githubRequest(body, signature),
+        request: githubRequest(body, signature, eventName, delivery),
       });
 
       expect(response?.status).toBe(expectedStatus);
@@ -142,6 +190,11 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
       } else {
         expect(routeIntegrationWebhook).toHaveBeenCalledTimes(1);
         expect(routeIntegrationWebhook.mock.calls[0]![0]).toMatchObject(expectedCall);
+        if ("event" in expectedCall) {
+          expect(routeIntegrationWebhook.mock.calls[0]![0].event.payload.body).toEqual(
+            JSON.parse(body),
+          );
+        }
       }
     },
   );

@@ -37,24 +37,31 @@ type RepoArtifactPush = {
 };
 
 /** Recognize a GitHub push webhook without treating it as a commit fact. */
-export function repoGithubPushFromWebhookPayload(
-  payload: unknown,
-): { afterCommitOid: string; branch: string } | null {
+export function repoGithubPushFromWebhookPayload(payload: unknown): {
+  afterCommitOid: string;
+  branch: string;
+  installationId: string;
+  repositoryId: number;
+} | null {
   const captured = record(payload);
-  const headers = record(captured?.headers);
-  if (headers?.githubEvent !== "push") return null;
+  const delivery = record(captured?.delivery);
+  if (delivery?.name !== "push") return null;
+  const installationId = string(captured?.installationId);
+  const repositoryId = positiveInteger(record(record(captured?.associations)?.repository)?.id);
   const body = record(captured?.body);
   const ref = string(body?.ref);
   const afterCommitOid = string(body?.after);
   if (
     ref === null ||
     afterCommitOid === null ||
+    installationId === null ||
+    repositoryId === null ||
     afterCommitOid === ZERO_COMMIT_OID ||
     !ref.startsWith("refs/heads/")
   )
     return null;
   const branch = ref.slice("refs/heads/".length);
-  return branch === "" ? null : { afterCommitOid, branch };
+  return branch === "" ? null : { afterCommitOid, branch, installationId, repositoryId };
 }
 
 /** Markdown files below any directory segment named `tasks` are repo tasks. */
@@ -90,4 +97,8 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function string(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }

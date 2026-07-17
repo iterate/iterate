@@ -18,6 +18,7 @@ const network = await vi.hoisted(async () => {
     githubLink: null as Record<string, unknown> | null,
     /** What the fake GitHub API answers: repo exists / missing / create fails. */
     githubRepoExists: true,
+    githubRepositoryId: 101,
     githubCreateStatus: 201,
     pushShouldFail: false,
     configureLinkShouldFail: false,
@@ -42,6 +43,7 @@ const network = await vi.hoisted(async () => {
       repoCalls.length = 0;
       state.githubLink = null;
       state.githubRepoExists = true;
+      state.githubRepositoryId = 101;
       state.githubCreateStatus = 201;
       state.pushShouldFail = false;
       state.configureLinkShouldFail = false;
@@ -59,7 +61,11 @@ const network = await vi.hoisted(async () => {
             const url = new URL(request.url);
             if (request.method === "GET" && /^\/repos\/[^/]+\/[^/]+$/.test(url.pathname)) {
               if (state.githubRepoExists) {
-                return Response.json({ default_branch: "main", full_name: "acme/widgets" });
+                return Response.json({
+                  default_branch: "main",
+                  full_name: "acme/widgets",
+                  id: state.githubRepositoryId,
+                });
               }
               return Response.json({ message: "Not Found" }, { status: 404 });
             }
@@ -88,7 +94,10 @@ const network = await vi.hoisted(async () => {
                   { status: state.githubCreateStatus },
                 );
               }
-              return Response.json({ full_name: "acme/widgets", private: true }, { status: 201 });
+              return Response.json(
+                { full_name: "acme/widgets", id: state.githubRepositoryId, private: true },
+                { status: 201 },
+              );
             }
             return Response.json(
               { message: `unexpected ${request.method} ${url.pathname}` },
@@ -193,6 +202,7 @@ describe("linkRepoToGithub", () => {
       installationId: "789",
       owner: "acme",
       repo: "widgets",
+      repositoryId: 101,
     });
 
     // The Repo DO recorded the link before the initial push ran.
@@ -210,9 +220,9 @@ describe("linkRepoToGithub", () => {
     expect(subscription?.payload).toEqual({
       subscriptionKey: "github-repo:/repos/project",
       description:
-        "Copies GitHub webhooks for acme/widgets onto this repo's stream so the repo processor can react to them.",
+        "Copies GitHub webhooks for acme/widgets onto this repo's stream so default-branch pushes can be imported.",
       selector: {
-        condition: 'payload.body.repository.full_name = "acme/widgets"',
+        condition: 'payload.delivery.name = "push" and payload.associations.repository.id = 101',
         eventTypes: ["events.iterate.com/github/webhook-received"],
       },
       delivery: {
@@ -386,7 +396,38 @@ describe("linkRepoToGithub", () => {
     expect(lastSubscriptionFact?.type).toBe("events.iterate.com/stream/subscription-configured");
     expect(lastSubscriptionFact?.payload).toMatchObject({
       subscriptionKey: "github-repo:/repos/project",
-      selector: { condition: 'payload.body.repository.full_name = "acme/widgets"' },
+      selector: {
+        condition: 'payload.delivery.name = "push" and payload.associations.repository.id = 101',
+      },
+    });
+  });
+
+  test("a failed same-connection re-link restores the previous repository subscription", async () => {
+    seedConnectedFact();
+    await linkRepoToGithub(linkInput());
+
+    network.state.githubRepositoryId = 202;
+    network.state.configureLinkShouldFail = true;
+    await expect(linkRepoToGithub({ ...linkInput(), repo: "other" })).rejects.toThrow(
+      /link write exploded/,
+    );
+
+    expect(network.state.githubLink).toMatchObject({ repo: "widgets", repositoryId: 101 });
+    const connectionEvents = network.streams.get(CONNECTION_STREAM) ?? [];
+    const lastSubscriptionFact = [...connectionEvents]
+      .reverse()
+      .find(
+        (event) =>
+          event.type === "events.iterate.com/stream/subscription-configured" ||
+          event.type === "events.iterate.com/stream/subscription-removed",
+      );
+    expect(lastSubscriptionFact).toMatchObject({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        selector: {
+          condition: 'payload.delivery.name = "push" and payload.associations.repository.id = 101',
+        },
+      },
     });
   });
 });

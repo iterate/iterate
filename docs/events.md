@@ -86,55 +86,29 @@ which vendors we integrate with, so collisions are unlikely. If this becomes a
 concern, we can introduce an `/external/` prefix later.
 
 ```text
-events.iterate.com/github/pull-request/opened
-events.iterate.com/github/push/received
-events.iterate.com/github/issue/commented
+events.iterate.com/github/webhook-received
 events.iterate.com/slack/message/posted
 events.iterate.com/stripe/invoice/paid
 events.iterate.com/stripe/subscription/cancelled
 ```
 
-The webhook handler that receives an external event is responsible for:
+Each integration defines the smallest durable envelope its consumers need.
+Provider payloads remain decoded JSON data, never trusted instructions.
 
-1. Emitting a raw `webhook-received` event that preserves the original payload
-   for replay and debugging.
-2. Emitting a specific typed event, normalized to our schema, when domain
-   consumers need it.
+GitHub appends exactly one `events.iterate.com/github/webhook-received` fact per
+delivery to the connection stream. Its payload contains the complete decoded
+GitHub JSON body, delivery identity, installation ID, and a small
+runtime-checked `associations` projection (repository, pull requests, actor,
+content author, and mentions). Userspace consumers can segment the journal by
+those associations while retaining the original provider shape for replay and
+debugging; the integration does not also invent normalized pull-request event
+types or decide which agents should exist.
 
-A GitHub webhook arriving with `X-GitHub-Event: pull_request` and
-`action: opened` should produce both:
-
-```text
-events.iterate.com/github/webhook-received     -> raw payload, for audit/replay
-events.iterate.com/github/pull-request/opened  -> normalized, for consumers
-```
-
-### The two-tier approach
-
-Raw webhook events, for example `github/webhook-received`,
-`slack/webhook-received`, and `stripe/webhook-received`:
-
-- Store the original payload as-is from the third party.
-- Support debugging, replay, and auditing.
-- Are infrastructure events; domain consumers should generally not subscribe to
-  them directly.
-- Are one per vendor, not one per webhook type.
-
-Specific typed events, for example `github/pull-request/opened`,
-`slack/message/posted`, and `stripe/invoice/paid`:
-
-- Normalize to our schema with the fields domain logic cares about.
-- Are the events domain consumers subscribe to.
-- Enable routing and filtering without parsing vendor payloads everywhere.
-- Make logs and traces self-describing.
-
-This separation keeps the raw audit trail while ensuring domain consumers work
-with clean, typed events.
-
-Event types are explicitly defined in our codebase, not auto-generated from
-vendor payloads. Raw `webhook-received` events keep cardinality low and avoid
-type explosion from arbitrary third-party action strings. Specific typed events
-are added only when domain logic requires them.
+Other integrations may emit a narrower typed event when that is their public
+contract. Event types are explicit codebase contracts, not values generated
+from arbitrary vendor action strings. Add a second normalized fact only when a
+real consumer requires one and the duplicate durable representation is worth
+its cost.
 
 ### Normalizing vendor event names
 
@@ -222,20 +196,20 @@ exactly what the consumer does.
 Kebab-case for event names because they are URL path segments. Consumer names
 and payload keys are camelCase because they are JavaScript identifiers.
 
-Third-party vendor events use different conventions. Normalize to our
-`/{entity}/{verb}` path convention with kebab-case segments at the ingestion
-boundary:
+Third-party vendor adapters choose one of two explicit contracts:
 
-| Vendor format                | Our event type                                  |
-| ---------------------------- | ----------------------------------------------- |
-| GitHub `pull_request.opened` | `events.iterate.com/github/pull-request/opened` |
-| GitHub `push`                | `events.iterate.com/github/push/received`       |
-| Stripe `invoice.paid`        | `events.iterate.com/stripe/invoice/paid`        |
-| Slack `message`              | `events.iterate.com/slack/message/posted`       |
+- translate a vendor notification into a product-domain fact whose type follows
+  the `/{entity}/{verb}` convention; or
+- preserve the complete decoded notification as one stable receipt fact and put
+  the vendor's event name in its payload.
 
-The vendor's event name maps to `{entity}/{verb}`. When the vendor name is
-already past-tense or a bare noun, like GitHub's `push`, use `received` as the
-verb.
+GitHub uses the second contract. Every accepted delivery is
+`events.iterate.com/github/webhook-received`; `payload.delivery.name` retains
+names such as `pull_request` or `push`, and `payload.delivery.action` retains
+actions such as `opened`. Consumers can therefore interpret new GitHub webhook
+variants without the integration inventing a parallel event-type hierarchy.
+Slack and other adapters may emit narrower domain facts when that is their
+documented contract. Do not mix both representations for the same delivery.
 
 ## Versioning
 
@@ -258,8 +232,8 @@ applies, that is a new event type, not a new version:
 
 1. Events are past-tense facts: `machine/activated`, not `machine/activate`.
 2. Every event type is a URI: `events.iterate.com/{app}/{entity}/{verb}`.
-3. Third-party webhooks emit raw `webhook-received` events for audit/replay,
-   then specific typed events only when domain consumers need them.
+3. Third-party ingress preserves its decoded provider payload in an explicit
+   event contract; add normalized facts only when real consumers need them.
 4. Consumer names describe the side effect: `deleteProviderSandbox`, not
    `handleMachineArchived`.
 5. Kebab-case for event URIs, camelCase for consumers and payloads.

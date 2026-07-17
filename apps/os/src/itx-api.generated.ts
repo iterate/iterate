@@ -3055,7 +3055,13 @@ export type RepoProcessorState = {
   artifactName: string | null;
   ready: boolean;
   defaultBranch: string | null;
-  github: { connection: string; installationId: string; owner: string; repo: string } | null;
+  github: {
+    connection: string;
+    installationId: string;
+    owner: string;
+    repo: string;
+    repositoryId: number;
+  } | null;
   githubImport: {
     branch: string;
     requestId: string;
@@ -3533,6 +3539,8 @@ export type GithubRepoLink = {
   installationId: string;
   owner: string;
   repo: string;
+  /** GitHub's stable database identity for this repository. */
+  repositoryId: number;
 };
 
 /**
