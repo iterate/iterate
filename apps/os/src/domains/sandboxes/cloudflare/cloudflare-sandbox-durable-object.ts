@@ -615,6 +615,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       payload: {},
     });
     await this.#ensureWorkspaceCurrent();
+    // onStart cannot wait for the processor while it is inside the SDK's
+    // blockConcurrencyWhile budget. The ordinary command boundary can: do
+    // not return a successful start while the live controls still see the
+    // pre-start `running` projection.
+    await this.#catchUpLifecycleCompletion(this.#lastStartedOffset);
   }
 
   /** Recreate the running container while preserving `/workspace`. */
@@ -656,6 +661,9 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     }
     await super.destroy(); // container-level: the onStop hook appends `stopped`
     this.#invalidateWorkspaceMemo();
+    // Match start(): the lifecycle hook only makes `stopped` durable, while
+    // this unconstrained command boundary waits for its reduced projection.
+    await this.#catchUpLifecycleCompletion(this.#lastStoppedOffset);
   }
 
   /**
@@ -831,6 +839,8 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   #workspaceReady: Promise<void> | undefined;
+  #lastStartedOffset: number | undefined;
+  #lastStoppedOffset: number | undefined;
   // Whether the CURRENT container's workspace was fully provisioned (snapshot
   // restored, env applied). Gates the idle-time backup: snapshotting a
   // half-provisioned workspace would overwrite the pointer to the last GOOD
@@ -857,7 +867,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     this.#workspaceProvisioned = false;
     // Invalidate before touching the stream: even if journaling fails and the
     // hook rejects, no later call may reuse readiness from the old container.
-    await this.#appendLifecycleEventAndCatchUpInBackground({
+    this.#lastStartedOffset = await this.#appendLifecycleEventAndCatchUpInBackground({
       type: "events.iterate.com/sandbox/started",
       payload: {},
     });
@@ -871,7 +881,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // This covers container crashes while the DO stays resident: without it
     // the memo would keep describing a container that no longer exists.
     this.#invalidateWorkspaceMemo();
-    await this.#appendLifecycleEventAndCatchUpInBackground({
+    this.#lastStoppedOffset = await this.#appendLifecycleEventAndCatchUpInBackground({
       type: "events.iterate.com/sandbox/stopped",
       payload: {},
     });
@@ -1612,9 +1622,22 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * spending that lifecycle budget waiting on another Durable Object. */
   async #appendLifecycleEventAndCatchUpInBackground(
     input: SandboxLifecycleEventInput,
-  ): Promise<void> {
+  ): Promise<number> {
     const offset = await this.#appendLifecycleEvent(input);
     this.ctx.waitUntil(this.#waitUntilProcessed(offset));
+    return offset;
+  }
+
+  /** Fold the latest completion before an explicit lifecycle command
+   * returns. An undefined offset means this command found the container
+   * already in the requested condition; catchUp still closes any reducer lag
+   * left by an earlier incarnation's durable lifecycle append. */
+  async #catchUpLifecycleCompletion(offset: number | undefined): Promise<void> {
+    if (offset === undefined) {
+      await this.#processorResources().registry.catchUp(SandboxProcessorContract.slug);
+      return;
+    }
+    await this.#waitUntilProcessed(offset);
   }
 
   async #waitUntilProcessed(offset: number): Promise<void> {
