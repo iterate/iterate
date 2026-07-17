@@ -79,6 +79,37 @@ export type WorkerBuildFailure = {
 };
 
 /**
+ * The build genuinely ran and failed — the message is the bundler's own
+ * error (compile errors, unresolvable dependencies). The builder wraps ONLY
+ * real bundler failures in this name; transport/cancellation errors stay
+ * unwrapped so callers retry them instead of recording a failure. Name-based
+ * matching because the error crosses Workers RPC (which preserves
+ * `error.name` but not class identity). Lives here (not worker-loader.ts)
+ * because the builder worker throws it and must not import the loader's env.
+ */
+export class WorkerBuildFailedError extends Error {
+  override readonly name = "WorkerBuildFailedError";
+}
+
+export function isWorkerBuildFailedError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === "WorkerBuildFailedError";
+}
+
+/**
+ * Bundler error dumps scale with error count and quote user-controlled
+ * source; the message travels in a response header on every stale-serving
+ * request, so it must stay a small bounded string.
+ */
+const BUILD_FAILURE_MESSAGE_LIMIT = 2_000;
+
+export function buildFailureMessageFromError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > BUILD_FAILURE_MESSAGE_LIMIT
+    ? `${message.slice(0, BUILD_FAILURE_MESSAGE_LIMIT)}… (truncated)`
+    : message;
+}
+
+/**
  * The per-worker "previous good build" pointer — the ONE mutable record in
  * this store (everything else is content-addressed). Keyed by worker identity
  * (project + repo path + build options — see workerLastGoodKey), it names the

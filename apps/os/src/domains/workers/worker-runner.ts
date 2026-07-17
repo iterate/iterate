@@ -13,12 +13,13 @@ import {
   isWebSocketUpgradeRequest,
   withWorkerFetchDispatchHeader,
 } from "./worker-fetch-dispatch.ts";
-import { withWorkerServeInfo } from "./worker-serve-overlay.ts";
+import { stripWorkerServeInfo, withWorkerServeInfo } from "./worker-serve-info.ts";
 import {
   loadResolvedWorker,
   resolveCachedArtifact,
   resolveWorkerSource,
   type ResolvedWorkerSource,
+  type ServedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
 
@@ -95,7 +96,7 @@ export class DynamicWorkerRunner {
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
+  ): Promise<{ klass: T; resolved: ServedWorkerSource }> {
     const { resolved, worker } = await this.#load(ref, buildBudgetMs);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
@@ -152,15 +153,16 @@ export class DynamicWorkerRunner {
     return this.#trace(ref, "fetch", traceRole, async (span) => {
       let response: Response;
       if (ref.type === "stateful") {
-        // Stateful responses only get the header STRIPPED (below): the outer
-        // DO owns facet versioning, and this hop cannot know which build the
-        // facet is actually running.
-        response = await (
-          env.WORKER.getByName(
-            statefulWorkerDurableObjectName(this.#projectId, ref),
-          ) as unknown as Fetcher
-        ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
-        response = withWorkerServeInfo(response, undefined);
+        // Stateful responses only get the header STRIPPED: the outer DO owns
+        // facet versioning, and this hop cannot know which build the facet is
+        // actually running.
+        response = stripWorkerServeInfo(
+          await (
+            env.WORKER.getByName(
+              statefulWorkerDurableObjectName(this.#projectId, ref),
+            ) as unknown as Fetcher
+          ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref })),
+        );
       } else {
         const { resolved, worker } = await this.#load(ref, buildBudgetMs);
         const entrypoint = worker.getEntrypoint(ref.entrypoint, {
@@ -242,7 +244,7 @@ export class DynamicWorkerRunner {
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
+  ): Promise<{ resolved: ServedWorkerSource; worker: WorkerStub }> {
     const resolved = await resolveWorkerSource({
       buildBudgetMs,
       projectId: this.#projectId,

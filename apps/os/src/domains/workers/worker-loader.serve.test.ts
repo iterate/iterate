@@ -21,6 +21,7 @@ const h = vi.hoisted(() => {
   const state = {
     buildCalls: [] as string[],
     failBuilds: false,
+    failTransport: false,
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
   };
@@ -28,7 +29,15 @@ const h = vi.hoisted(() => {
     BUILDER: {
       build: async (input: { buildKey: string; files: Record<string, string> }) => {
         state.buildCalls.push(input.buildKey);
-        if (state.failBuilds) throw new Error("esbuild exploded");
+        if (state.failBuilds) {
+          // Mirror the real builder's classification: a genuine bundler
+          // failure crosses RPC as the NAMED error (name survives, class
+          // identity does not).
+          const failure = new Error("esbuild exploded");
+          failure.name = "WorkerBuildFailedError";
+          throw failure;
+        }
+        if (state.failTransport) throw new Error("RPC receiver disconnected");
         return {
           buildKey: input.buildKey,
           mainModule: "worker.js",
@@ -51,7 +60,8 @@ const h = vi.hoisted(() => {
 
 vi.mock("../../env.ts", () => ({ itxEnv: h.itxEnv }));
 
-const { isWorkerBuildFailedError, resolveWorkerSource } = await import("./worker-loader.ts");
+const { isWorkerBuildFailedError } = await import("./artifact-store.ts");
+const { resolveWorkerSource } = await import("./worker-loader.ts");
 
 const pending: Promise<unknown>[] = [];
 const waitUntil = (promise: Promise<unknown>) => {
@@ -182,6 +192,36 @@ describe("resolveWorkerSource serve matrix", () => {
     } finally {
       h.state.failBuilds = false;
     }
+  });
+
+  test("a transport error is never recorded as a build failure — the next caller retries the build", async () => {
+    setCommit("c1", "repo-f-v1", "F1");
+    h.state.failTransport = true;
+    try {
+      // The blocking caller sees the raw infra error, not a named build
+      // failure...
+      const blocking = resolveWorkerSource({
+        projectId: "prj_f",
+        source: repoSource("/repos/f"),
+        waitUntil,
+      });
+      await expect(blocking).rejects.toThrow("RPC receiver disconnected");
+      await expect(blocking).rejects.not.toSatisfy(isWorkerBuildFailedError);
+    } finally {
+      h.state.failTransport = false;
+    }
+
+    // ...and no failure marker was written, so the next (budgeted) caller
+    // dispatches a real build instead of serving a bogus build-failed state.
+    const callsAfterBlip = h.state.buildCalls.length;
+    const recovered = await resolveWorkerSource({
+      buildBudgetMs: 5_000,
+      projectId: "prj_f",
+      source: repoSource("/repos/f"),
+      waitUntil,
+    });
+    expect(recovered.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
+    expect(h.state.buildCalls.length).toBe(callsAfterBlip + 1);
   });
 
   test("inline loader-ready sources bypass the pipeline and carry no serve info", async () => {

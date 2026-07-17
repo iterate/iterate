@@ -2,9 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { takeWorkerFetchDispatch, workerBuildingResponse } from "./worker-fetch-dispatch.ts";
-import { isWorkerBuildFailedError, isWorkerBuildInProgressError } from "./worker-loader.ts";
-import { workerBuildFailedResponse } from "./worker-serve-overlay.ts";
+import { takeWorkerFetchDispatch, workerBuildStatusResponse } from "./worker-fetch-dispatch.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
@@ -62,8 +60,8 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       // Answer the building/failed cases HERE rather than relying on the
       // error name surviving the Durable Object fetch hop back to the
       // dispatching entrypoint — same pages every fetch-lane hop serves.
-      if (isWorkerBuildInProgressError(error)) return workerBuildingResponse();
-      if (isWorkerBuildFailedError(error)) return workerBuildFailedResponse(error);
+      const buildStatus = workerBuildStatusResponse(error);
+      if (buildStatus !== null) return buildStatus;
       throw error;
     }
     return await (facet as Fetcher).fetch(taken.request);
@@ -128,6 +126,25 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // awaited storage calls here keeps the facet version check/update in one DO
     // turn and matches Cloudflare's current guidance for SQLite-backed DOs.
     const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
+
+    // A budgeted fetch-lane resolve can answer STALE (the loader's last-good
+    // fallback while a newer commit builds). A stale class must never abort a
+    // running facet or move the version marker backward: the awaited resolve
+    // above is an interleave point, so a concurrent fresh load may already
+    // have swapped the facet to newer code — aborting it here would downgrade
+    // live state to the old build (and wedge the marker behind reality). If
+    // no facet is running we do start one on the stale class, and then the
+    // marker records that truth so the next fresh resolve swaps it out.
+    if (resolved.serveInfo?.status === "stale") {
+      let started = false;
+      const facet = this.ctx.facets.get(FACET_NAME, () => {
+        started = true;
+        return { class: klass };
+      });
+      if (started && previous !== version) this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
+      return facet;
+    }
+
     if (previous && previous !== version) {
       this.ctx.facets.abort(FACET_NAME, `stateful worker source changed for ${this.ctx.id.name}`);
     }

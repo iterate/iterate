@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFailureMessageFromError,
   KvWorkerBuildArtifactStore,
   WORKER_BUILD_ARTIFACT_SCHEMA_VERSION,
   type WorkerBuildArtifact,
@@ -93,6 +94,14 @@ describe("KvWorkerBuildArtifactStore", () => {
     // Deliberately short-lived: a transient failure must heal on its own.
     expect(kv.putTtls[0]).toBeLessThanOrEqual(10 * 60);
     expect(kv.putTtls[0]).toBeGreaterThan(0);
+  });
+
+  it("bounds failure messages — they travel in a response header per request", () => {
+    expect(buildFailureMessageFromError(new Error("short"))).toBe("short");
+    expect(buildFailureMessageFromError("not an error")).toBe("not an error");
+    const huge = buildFailureMessageFromError(new Error("x".repeat(100_000)));
+    expect(huge.length).toBeLessThan(3_000);
+    expect(huge).toContain("(truncated)");
   });
 
   it("round-trips the last-good pointer with cache-lifetime TTL", async () => {

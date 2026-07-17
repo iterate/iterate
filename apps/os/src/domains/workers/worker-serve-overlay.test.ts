@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
   OVERLAY_OPT_OUT_HEADER,
+  stripWorkerServeInfo,
   WORKER_BUILD_FAILED_HEADER,
   WORKER_SERVE_HEADER,
   type WorkerServeInfo,
   withWorkerServeInfo,
+} from "./worker-serve-info.ts";
+import {
   workerBuildFailedResponse,
   workerOverlayDecision,
   workerOverlayHtml,
@@ -36,7 +39,7 @@ describe("withWorkerServeInfo", () => {
     const spoofed = new Response("ok", {
       headers: { [WORKER_SERVE_HEADER]: JSON.stringify({ status: "fresh" }) },
     });
-    expect(withWorkerServeInfo(spoofed, undefined).headers.get(WORKER_SERVE_HEADER)).toBeNull();
+    expect(stripWorkerServeInfo(spoofed).headers.get(WORKER_SERVE_HEADER)).toBeNull();
   });
 
   test("keeps status, other headers, and body intact", async () => {
@@ -67,8 +70,20 @@ describe("workerOverlayDecision", () => {
     ["a page with its own CSP", htmlResponse({ "content-security-policy": "default-src 'self'" })],
     ["malformed serve info", htmlResponse({ [WORKER_SERVE_HEADER]: "not json" })],
     ["serve info that fails the schema", htmlResponse({ [WORKER_SERVE_HEADER]: '{"status":"?"}' })],
+    ["a pre-encoded body we cannot parse", htmlResponse({ "content-encoding": "gzip" })],
   ])("stays out of %s", (_name, response) => {
     expect(workerOverlayDecision(documentRequest, response)).toBeNull();
+  });
+
+  test("stays out of body-less responses", () => {
+    const bodyless = new Response(null, {
+      headers: {
+        "content-type": "text/html",
+        [WORKER_SERVE_HEADER]: JSON.stringify(freshInfo),
+      },
+      status: 204,
+    });
+    expect(workerOverlayDecision(documentRequest, bodyless)).toBeNull();
   });
 
   test("stays out of subresource fetches, counts absent sec-fetch-dest as a document", () => {

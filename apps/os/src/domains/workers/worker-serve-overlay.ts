@@ -1,62 +1,25 @@
-import { z } from "zod";
+import { buildFailureMessageFromError } from "./artifact-store.ts";
+import {
+  OVERLAY_OPT_OUT_HEADER,
+  WORKER_BUILD_FAILED_HEADER,
+  WORKER_SERVE_HEADER,
+  WorkerServeInfo,
+} from "./worker-serve-info.ts";
 
 /**
- * The serve-side status surface of the fetch lane: what a browser learns about
- * the dynamic worker that answered it, and the platform chrome built from it.
+ * The presentation half of the serve-side status surface (contract:
+ * worker-serve-info.ts): the platform chrome browsers see around dynamic
+ * worker builds.
  *
- * Every project-host response carries `x-iterate-worker-serve` — platform-
- * authored (the runner overwrites whatever user code set) and deliberately
- * public: it says which build is serving ("fresh" at a commit) or that the
- * platform fell back to the previous good build (a newer commit is still
- * building, or its build failed — with the failure). Ingress reads the header
- * to inject the @iterate overlay into HTML pages (HTMLRewriter, before
- * `</body>`): a floating iterate mark that surfaces build state in the corner
- * of every project page, and — while a rebuild runs — polls the same header
- * until the fresh build lands, then reloads.
- *
- * The building page (worker-fetch-dispatch.ts) and the build-failed page below
- * are the two terminal states of the same lane: nothing built yet to fall back
- * on, so a page stands in for the worker. Both poll and self-heal the same
- * way the overlay does.
+ * - The @iterate overlay — injected by project ingress into HTML documents
+ *   (HTMLRewriter, before `</body>`): a floating iterate mark that surfaces
+ *   build state in the corner of every project page, and — while a rebuild
+ *   runs — polls the serve header until the fresh build lands, then reloads.
+ * - The building page body (served by workerBuildingResponse in
+ *   worker-fetch-dispatch.ts) and the build-failed page — the two terminal
+ *   states of the lane: nothing built yet to fall back on, so a page stands
+ *   in for the worker. Both poll their own URL and self-heal.
  */
-export const WORKER_SERVE_HEADER = "x-iterate-worker-serve";
-
-/** Marks a 500 as "the worker's build failed and no previous build exists" on
- * the fetch lane — the terminal sibling of WORKER_BUILDING_HEADER. */
-export const WORKER_BUILD_FAILED_HEADER = "x-iterate-worker-build-failed";
-
-/** A worker response can opt its HTML out of the overlay by setting this
- * header (any value) — an escape hatch, not a negotiation. */
-export const OVERLAY_OPT_OUT_HEADER = "x-iterate-overlay";
-
-export const WorkerServeInfo = z.object({
-  /** The commit the SERVING artifact was built from (when known). */
-  commitOid: z.string().optional(),
-  failure: z
-    .object({ at: z.string(), commitOid: z.string().optional(), message: z.string() })
-    .optional(),
-  /** Why a stale build is serving; absent when status is "fresh". */
-  reason: z.enum(["building", "build-failed"]).optional(),
-  status: z.enum(["fresh", "stale"]),
-});
-export type WorkerServeInfo = z.infer<typeof WorkerServeInfo>;
-
-/**
- * Stamps the platform's serve info onto a worker response. Always deletes
- * first: the header is trusted platform output, so whatever user code set must
- * never survive — even when this hop has nothing to say. 101s pass through
- * untouched (a socket response cannot be reconstructed).
- */
-export function withWorkerServeInfo(
-  response: Response,
-  info: WorkerServeInfo | undefined,
-): Response {
-  if (response.status === 101 || response.webSocket) return response;
-  const stamped = new Response(response.body, response);
-  stamped.headers.delete(WORKER_SERVE_HEADER);
-  if (info !== undefined) stamped.headers.set(WORKER_SERVE_HEADER, JSON.stringify(info));
-  return stamped;
-}
 
 /** The iterate mark — the letter i from the logo, as it appears in
  * apps/iterate-com/backend/assets/symbol.svg. */
@@ -83,7 +46,7 @@ function servePageHtml(input: { body: string; head?: string; title: string }): s
     <style>
       body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0a0a0a; color: #fafafa; font: 14px/1.6 ui-sans-serif, system-ui, sans-serif; }
       main { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px; text-align: center; max-width: 620px; }
-      main > svg { width: 56px; height: 56px; }
+      main > svg, main > div > svg { width: 56px; height: 56px; }
       h1 { font-size: 16px; font-weight: 600; margin: 4px 0 0; }
       p { margin: 0; color: #a3a3a3; }
       pre { margin: 8px 0 0; padding: 10px 12px; background: #171717; border: 1px solid #262626; border-radius: 8px; color: #fca5a5; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: left; white-space: pre-wrap; word-break: break-word; max-width: 100%; max-height: 40vh; overflow: auto; }
@@ -97,13 +60,27 @@ function servePageHtml(input: { body: string; head?: string; title: string }): s
 </html>`;
 }
 
+/** The stand-in pages' shared self-heal loop: poll this URL until the marker
+ * header clears, then reload. */
+function reloadWhenHeaderClearsScript(headerName: string, intervalMs: number): string {
+  return `const poll = async () => {
+        try {
+          const res = await fetch(location.href, { cache: "no-store" });
+          if (!res.headers.get(${JSON.stringify(headerName)})) { location.reload(); return; }
+        } catch {}
+        setTimeout(poll, ${intervalMs});
+      };
+      setTimeout(poll, ${intervalMs});`;
+}
+
 /**
  * The building page body: nothing has ever built for this worker, so a page
  * stands in — it polls its own URL and reloads the moment the building marker
  * disappears (no-JS clients fall back to a meta refresh). Served with the
- * 503/WORKER_BUILDING_HEADER contract by workerBuildingResponse.
+ * 503/WORKER_BUILDING_HEADER contract by workerBuildingResponse, which also
+ * owns that header's name — passed in here to keep the dependency one-way.
  */
-export function workerBuildingPageHtml(): string {
+export function workerBuildingPageHtml(buildingHeader: string): string {
   return servePageHtml({
     body: `<main data-spinner="true">
       <div class="pulse">${ITERATE_MARK_SVG}</div>
@@ -115,14 +92,7 @@ export function workerBuildingPageHtml(): string {
       const started = Date.now();
       const elapsed = document.getElementById("elapsed");
       setInterval(() => { elapsed.textContent = Math.round((Date.now() - started) / 1000) + "s"; }, 1000);
-      const poll = async () => {
-        try {
-          const res = await fetch(location.href, { cache: "no-store" });
-          if (res.headers.get("x-iterate-worker-building") !== "1") { location.reload(); return; }
-        } catch {}
-        setTimeout(poll, 1500);
-      };
-      setTimeout(poll, 1500);
+      ${reloadWhenHeaderClearsScript(buildingHeader, 1_500)}
     </script>`,
     head: `<noscript><meta http-equiv="refresh" content="3" /></noscript>`,
     title: "Building…",
@@ -136,24 +106,16 @@ export function workerBuildingPageHtml(): string {
  * page does.
  */
 export function workerBuildFailedResponse(error: unknown): Response {
-  const message = error instanceof Error ? error.message : String(error);
   return new Response(
     servePageHtml({
       body: `<main>
         ${ITERATE_MARK_SVG}
         <h1>Worker build failed</h1>
         <p>Fix the worker source and this page picks it up automatically.</p>
-        <pre>${escapeHtml(message)}</pre>
+        <pre>${escapeHtml(buildFailureMessageFromError(error))}</pre>
       </main>
       <script>
-        const poll = async () => {
-          try {
-            const res = await fetch(location.href, { cache: "no-store" });
-            if (!res.headers.get("x-iterate-worker-build-failed")) { location.reload(); return; }
-          } catch {}
-          setTimeout(poll, 3000);
-        };
-        setTimeout(poll, 3000);
+        ${reloadWhenHeaderClearsScript(WORKER_BUILD_FAILED_HEADER, 3_000)}
       </script>`,
       title: "Worker build failed",
     }),
@@ -172,21 +134,25 @@ export function workerBuildFailedResponse(error: unknown): Response {
 /**
  * Whether (and with what) to inject the overlay into a project-lane response:
  * an HTML document carrying platform serve info, not a socket, not opted out,
- * and not fenced by a CSP we would trip. Exported for unit tests — the
- * HTMLRewriter call itself is proven in e2e (workerd-only API).
+ * and nothing we would corrupt by transforming (own CSP, pre-encoded body).
+ * Exported for unit tests — the HTMLRewriter call itself is proven in e2e
+ * (workerd-only API).
  */
 export function workerOverlayDecision(
   request: Request,
   response: Response,
 ): WorkerServeInfo | null {
-  if (response.status === 101 || response.webSocket) return null;
+  if (response.status === 101 || response.webSocket || response.body === null) return null;
   const raw = response.headers.get(WORKER_SERVE_HEADER);
   if (raw === null) return null;
   if (!response.headers.get("content-type")?.includes("text/html")) return null;
   if (response.headers.has(OVERLAY_OPT_OUT_HEADER)) return null;
   // A page with its own CSP likely forbids inline scripts — injecting would
-  // only produce console errors, never a widget.
+  // only produce console errors, never a widget. A pre-encoded body (a worker
+  // returning bytes it compressed itself) cannot be parsed, let alone
+  // transformed.
   if (response.headers.has("content-security-policy")) return null;
+  if (response.headers.has("content-encoding")) return null;
   // Subresource fetches (XHR returning HTML fragments) don't need chrome;
   // absent sec-fetch-dest (curl, old clients) counts as a document.
   const dest = request.headers.get("sec-fetch-dest");
@@ -205,10 +171,17 @@ export function workerOverlayDecision(
  * The injected fragment: one inline script that mounts the floating iterate
  * mark in a shadow root (page CSS cannot reach in) with a status popover.
  * While a rebuild runs it polls the serve header and reloads on fresh.
+ *
+ * `info` MUST be schema-validated (workerOverlayDecision) — `state` derives
+ * from the `reason` enum and reaches the widget's innerHTML as an attribute.
  */
 export function workerOverlayHtml(info: WorkerServeInfo): string {
-  // U+003C escaping keeps any "</script>" inside failure messages inert.
-  const infoJson = JSON.stringify(info).replaceAll("<", "\\u003c");
+  // U+003C escaping keeps any "</script>" (or "<!--") inside failure messages
+  // inert; U+2028/2029 stay out of the source for pre-ES2019 parsers.
+  const infoJson = JSON.stringify(info)
+    .replaceAll("<", "\\u003c")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
   return `<script>(() => {
   if (window.__iterateWorkerOverlay) return;
   window.__iterateWorkerOverlay = true;
@@ -255,7 +228,7 @@ export function workerOverlayHtml(info: WorkerServeInfo): string {
   const poll = async () => {
     try {
       const res = await fetch(location.href, { cache: "no-store" });
-      const raw = res.headers.get("x-iterate-worker-serve");
+      const raw = res.headers.get(${JSON.stringify(WORKER_SERVE_HEADER)});
       if (raw) {
         const next = JSON.parse(raw);
         if (next.status === "fresh" || next.reason !== info.reason) { location.reload(); return; }
@@ -285,8 +258,7 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
     .transform(response);
   const out = new Response(transformed.body, transformed);
   // The transform changes byte length, and fetch already decompressed the
-  // upstream body — copied length/encoding headers would lie about this body.
+  // upstream body — a copied length header would lie about this body.
   out.headers.delete("content-length");
-  out.headers.delete("content-encoding");
   return out;
 }

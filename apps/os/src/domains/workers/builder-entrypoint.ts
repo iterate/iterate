@@ -1,6 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { z } from "zod";
-import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
+import {
+  buildFailureMessageFromError,
+  KvWorkerBuildArtifactStore,
+  WorkerBuildFailedError,
+  type WorkerBuildArtifact,
+} from "./artifact-store.ts";
 import { materializeWorkerBuild } from "./materialize.ts";
 import { WorkerBuildOptions } from "./schemas.ts";
 
@@ -60,7 +65,13 @@ export class BuilderEntrypoint extends WorkerEntrypoint<BuilderEnv> {
       // Best-effort duplicate suppression for budgeted callers (see
       // isBuildInFlight); the artifact write below always supersedes it.
       await store.markBuildInFlight(buildKey).catch(() => {});
-      const built = await materializeWorkerBuild({ files, options });
+      // The named wrap is the caller's classification signal: only a genuine
+      // bundler failure may be RECORDED as a build failure (and served as
+      // one); anything else that rejects this RPC — deploy rollover,
+      // cancellation when a caller's waitUntil ends — must stay retryable.
+      const built = await materializeWorkerBuild({ files, options }).catch((error: unknown) => {
+        throw new WorkerBuildFailedError(buildFailureMessageFromError(error), { cause: error });
+      });
       for (const warning of built.warnings) {
         console.warn(`[builder] ${buildKey.slice(0, 12)}: ${warning}`);
       }

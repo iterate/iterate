@@ -9,7 +9,10 @@ import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 // project HTML (HTMLRewriter is workerd-only, so this cannot be unit-tested).
 test(
   "project host serves the previous build through a broken commit, with serve info and overlay",
-  { timeout: 240_000 },
+  // Four polled phases at up to 120s each in the worst case — the timeout
+  // stays above their sum so a slow phase fails with pollHome's crafted
+  // message instead of a bare vitest timeout.
+  { timeout: 540_000 },
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
