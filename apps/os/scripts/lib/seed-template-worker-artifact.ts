@@ -32,7 +32,7 @@ import { workerBuildKey } from "../../src/domains/workers/build-key.ts";
 import {
   WORKER_COMPATIBILITY_DATE,
   WORKER_COMPATIBILITY_FLAGS,
-  withIterateSdkVirtualModule,
+  canonicalWorkerBuildOptions,
   workerBuildRecipe,
 } from "../../src/domains/workers/build-recipe.ts";
 import { runWorkerBuildRecipeOnHost } from "./worker-build-host-runner.ts";
@@ -58,7 +58,7 @@ export async function seedTemplateWorkerArtifact(input: {
   // (sdk virtual module injected, same as resolveThroughBuilder).
   const ref = defaultProjectWorkerRef();
   if (ref.source.files.type !== "repo") throw new Error("default worker ref must be repo-backed");
-  const options = withIterateSdkVirtualModule(ref.source.options ?? {});
+  const options = canonicalWorkerBuildOptions(ref.source.options ?? {});
   const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,

@@ -244,12 +244,11 @@ describe("resolveWorkerSource serve matrix", () => {
       waitUntil,
     });
     const callsAfterCanonical = h.state.buildCalls.length;
+    // No masks AND no options at all — both defaults (exclude, entryPoint)
+    // canonicalize before the key, so this still hits the same artifact.
     const bare = await resolveWorkerSource({
       projectId: "prj_h",
-      source: {
-        files: { repoPath: "/repos/h", type: "repo" },
-        options: { entryPoint: "worker.ts" },
-      },
+      source: { files: { repoPath: "/repos/h", type: "repo" } },
       waitUntil,
     });
     expect(bare.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });

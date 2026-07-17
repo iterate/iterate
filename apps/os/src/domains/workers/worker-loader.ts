@@ -19,7 +19,7 @@ import { executeWorkerBuild } from "./build-backend.ts";
 import {
   WORKER_COMPATIBILITY_DATE,
   WORKER_COMPATIBILITY_FLAGS,
-  withIterateSdkVirtualModule,
+  canonicalWorkerBuildOptions,
 } from "./build-recipe.ts";
 import type { WorkerServeInfo } from "./worker-serve-info.ts";
 import { stableSha256 } from "./utils.ts";
@@ -163,7 +163,7 @@ async function resolveThroughBuilder(input: {
   source: DynamicWorkerSource;
   waitUntil: (promise: Promise<unknown>) => void;
 }): Promise<ServedWorkerSource> {
-  const options = withIterateSdkVirtualModule(input.options);
+  const options = canonicalWorkerBuildOptions(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
   const sharedKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,

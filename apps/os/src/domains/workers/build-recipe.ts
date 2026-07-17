@@ -17,19 +17,29 @@ import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generat
  */
 
 /**
- * Every bundled dynamic worker build can `import ... from "iterate/sdk"`: the
- * platform supplies the sdk RUNTIME as a virtual module, pinned to this
- * deployment — the seeded `iterate` devDependency exists for typechecking and
- * editors, never as the runtime the platform executes. Injection happens
- * BEFORE the build key is computed, and `options` is hashed into the key
- * wholesale, so an sdk change invalidates cached artifacts instead of serving
- * stale builds. A source that supplies its own `iterate/sdk` virtual module
- * wins. Lives here (pure) because the deploy-time template seeder must inject
- * the SAME module the runtime resolver does, or their build keys fork.
+ * The one options canonicalization, applied BEFORE the build key is computed
+ * (options are hashed into the key wholesale). Two defaults live here so
+ * differently-spelled equivalent refs hash to ONE key — a bare ref that omits
+ * `options` and the fully spelled-out `defaultProjectWorkerRef` must share an
+ * artifact, or the deploy-time template seed silently misses (and fresh
+ * projects fall back to per-project container builds):
+ *
+ * - `entryPoint` defaults to "worker.ts" HERE, not just inside the recipe.
+ * - The platform's virtual modules are injected: every bundled build can
+ *   `import ... from "iterate/sdk"` / `"iterate/processors"` — the runtime
+ *   pinned to this deployment (the seeded `iterate` devDependency exists for
+ *   typechecking and editors, never as the runtime the platform executes),
+ *   so a platform runtime change invalidates cached artifacts instead of
+ *   serving stale builds. A source supplying its own entry for a specifier
+ *   wins.
+ *
+ * Lives here (pure) because the deploy-time template seeder must apply the
+ * SAME canonicalization the runtime resolver does, or their build keys fork.
  */
-export function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
+export function canonicalWorkerBuildOptions(options: WorkerBuildOptions): WorkerBuildOptions {
   return {
     ...options,
+    entryPoint: options.entryPoint ?? "worker.ts",
     virtualModules: {
       "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE,
       "iterate/processors": ITERATE_PROCESSORS_VIRTUAL_MODULE,
