@@ -39,6 +39,26 @@ describe("githubWebhookAssociations", () => {
     );
   });
 
+  it("keeps malformed recognized deliveries out of pull-request routing", () => {
+    expect(
+      githubWebhookAssociations({
+        id: "delivery-1",
+        name: "pull_request",
+        payload: { repository },
+      }),
+    ).toEqual({
+      mentionedUsers: [],
+      repository: { id: 101, owner: "acme", repo: "widgets" },
+    });
+    expect(
+      githubWebhookAssociations({
+        id: "delivery-2",
+        name: "pull_request",
+        payload: { repository: { id: 101, owner: { login: "acme" } } },
+      }),
+    ).toEqual({});
+  });
+
   it("extracts only the content author and complete GitHub mentions", () => {
     expect(
       githubWebhookAssociations({

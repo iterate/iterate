@@ -45,53 +45,62 @@ export function githubWebhookAssociations(input: {
   const event = input as RelevantGithubWebhook;
   const nativeRepository = event.payload.repository;
   const repositoryOwner = nativeRepository?.owner?.login;
+  const repositoryName = nativeRepository?.name;
   if (
     nativeRepository === undefined ||
-    repositoryOwner === undefined ||
+    typeof repositoryOwner !== "string" ||
+    repositoryOwner.length === 0 ||
     !Number.isSafeInteger(nativeRepository.id) ||
     nativeRepository.id < 1 ||
-    nativeRepository.name.length === 0
+    typeof repositoryName !== "string" ||
+    repositoryName.length === 0
   )
     return {};
   const repository = {
     id: nativeRepository.id,
     owner: repositoryOwner,
-    repo: nativeRepository.name,
+    repo: repositoryName,
   };
   let content: MentionableGithubContent | undefined;
-  let pullRequestNumber: number | undefined;
+  let nativePullRequestNumber: unknown;
 
   switch (event.name) {
     case "issue_comment":
-      if (event.payload.issue.pull_request !== undefined) {
-        pullRequestNumber = event.payload.issue.number;
+      if (event.payload.issue?.pull_request !== undefined) {
+        nativePullRequestNumber = event.payload.issue.number;
         content = event.payload.comment;
       }
       break;
     case "pull_request":
     case "pull_request_review_thread":
-      pullRequestNumber = event.payload.pull_request.number;
+      nativePullRequestNumber = event.payload.pull_request?.number;
       break;
     case "pull_request_review":
-      pullRequestNumber = event.payload.pull_request.number;
+      nativePullRequestNumber = event.payload.pull_request?.number;
       content = event.payload.review;
       break;
     case "pull_request_review_comment":
-      pullRequestNumber = event.payload.pull_request.number;
+      nativePullRequestNumber = event.payload.pull_request?.number;
       content = event.payload.comment;
       break;
   }
 
+  const pullRequestNumber =
+    typeof nativePullRequestNumber === "number" &&
+    Number.isSafeInteger(nativePullRequestNumber) &&
+    nativePullRequestNumber > 0
+      ? nativePullRequestNumber
+      : undefined;
+  const user = content?.user;
   const author =
-    content?.user === null || content?.user === undefined
-      ? undefined
-      : {
-          association: content.author_association,
-          login: content.user.login,
-          type: content.user.type,
-        };
+    typeof content?.author_association === "string" &&
+    typeof user?.login === "string" &&
+    typeof user?.type === "string"
+      ? { association: content.author_association, login: user.login, type: user.type }
+      : undefined;
   const mentionedUsers = new Set<string>();
-  for (const match of (content?.body ?? "").matchAll(
+  const body = typeof content?.body === "string" ? content.body : "";
+  for (const match of body.matchAll(
     /(^|[^\w@])@([a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38})(?![a-z\d_-])/gi,
   )) {
     if (match[2] !== undefined) mentionedUsers.add(match[2].toLowerCase());
