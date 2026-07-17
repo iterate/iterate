@@ -236,8 +236,8 @@ type StreamSubscribersHooks = {
   dial: SubscriberDial;
   /**
    * Append a fact the delivery machinery produces (presence, parked, poison
-   * error records). Teardown facts may be logged and swallowed by the owner;
-   * a failed parking fact must throw so work is not silently cleared.
+   * error records). Must not throw: close paths run during teardown where an
+   * append can fail, and that must never mask the close itself.
    */
   appendFact(event: StreamEventInput): void;
   /**
@@ -345,11 +345,6 @@ export class StreamSubscribers {
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
     this.wake();
-    this.rearmPendingRetries();
-  }
-
-  /** Restore the earliest durable retry alarm after an incarnation starts. */
-  rearmPendingRetries(): void {
     this.#armAlarmFromStore();
   }
 
@@ -685,16 +680,7 @@ export class StreamSubscribers {
           // flight bumped the epoch, and this ack no-ops instead of
           // clobbering it — the next iteration re-reads the row and drains
           // from wherever the seek pointed.
-          try {
-            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
-          } catch (error) {
-            // The receiver accepted the batch, but the stream has not durably
-            // advanced its cursor. Treat that as the same at-least-once
-            // failure as a rejected receiver call: retain the cursor, persist
-            // bounded backoff, and redeliver the stable ID.
-            this.#onDeliveryFailure(subscriptionKey, error, row.attempt);
-            return;
-          }
+          this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }
@@ -882,22 +868,15 @@ export class StreamSubscribers {
       return;
     }
     const row = this.#hooks.store.get(subscriptionKey);
-    try {
-      this.#hooks.appendFact({
-        type: "events.iterate.com/stream/subscription-parked",
-        payload: {
-          subscriptionKey,
-          atOffset: row?.ackedOffset ?? 0,
-          attempts,
-          error: errorMessage(error),
-        },
-      });
-    } catch (appendError) {
-      // The stream did not durably enter parked state. Retain the cursor and
-      // schedule another bounded attempt instead of stranding the delivery.
-      this.#backoff(subscriptionKey, attempts, appendError);
-      return;
-    }
+    this.#hooks.appendFact({
+      type: "events.iterate.com/stream/subscription-parked",
+      payload: {
+        subscriptionKey,
+        atOffset: row?.ackedOffset ?? 0,
+        attempts,
+        error: errorMessage(error),
+      },
+    });
     // A parked row must not keep driving the alarm: the park was preceded by
     // a nack whose (now past) next_attempt_at would otherwise be re-armed by
     // every onAlarm forever — a permanent alarm hot loop per parked

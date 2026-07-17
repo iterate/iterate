@@ -149,7 +149,7 @@ describe("first-party PostHog stream integration", () => {
     });
   });
 
-  it("models a project by immutable id and slug without filtering its birth payload", async () => {
+  it("models one project group by immutable id and its creation slug without filtering payload", async () => {
     const created = streamEvent({
       type: "events.iterate.com/project/created",
       path: "/",
@@ -175,7 +175,7 @@ describe("first-party PostHog stream integration", () => {
       event: "$groupidentify",
       properties: {
         $group_key: "prj_123",
-        $group_set: { id: "prj_123", slug: "gold-path" },
+        $group_set: { id: "prj_123", name: "gold-path", slug: "gold-path" },
         $group_type: "project",
       },
     });

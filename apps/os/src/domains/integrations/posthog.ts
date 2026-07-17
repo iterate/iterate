@@ -12,14 +12,10 @@ const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/batch/";
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
 const ProjectGroupBirthPayload = z.object({
   config: z.object({
-    slug: z.string().trim().min(1).max(50),
+    slug: z.string(),
   }),
 });
 
-// PostHog requires identified events for group linkage. Keep one synthetic
-// identity per deployment/project: this avoids creating identities per stream
-// while preventing one project's distinct-id limiter from stalling every
-// project's durable feed.
 /** The ordinary durable subscription appended to every new project stream. */
 export function posthogSubscriptionEvent() {
   return {
@@ -52,7 +48,8 @@ function eventIdentity(
   // Deployment identity and the durable stream coordinate distinguish
   // preview/prd and every committed row, while an exact at-least-once
   // redelivery keeps the same PostHog UUID. PostHog's ingestion-side UUID
-  // deduplication is best-effort, so the source stream remains authoritative.
+  // deduplication is best-effort, so the source stream remains authoritative:
+  // https://posthog.com/docs/api/capture
   // JSON-array encoding is unambiguous even when a user-controlled path
   // contains `/`. A recovered row at the same coordinate is the same source
   // occurrence.
@@ -66,7 +63,7 @@ function eventIdentity(
   ]);
 }
 
-function canonicalEventTimestamp(createdAt: string): string {
+function normalizeEventTimestamp(createdAt: string): string {
   if (!StreamEventTimestamp.safeParse(createdAt).success) {
     throw new Error("PostHog stream event has an invalid createdAt timestamp");
   }
@@ -103,7 +100,11 @@ function projectGroupIdentifyEvent(args: {
   const birth = ProjectGroupBirthPayload.safeParse(event.payload);
   if (!birth.success) return undefined;
 
-  const timestamp = canonicalEventTimestamp(event.createdAt);
+  const timestamp = normalizeEventTimestamp(event.createdAt);
+  // PostHog recommends an immutable ID as the group key and uses `name` as
+  // the UI label. This value is explicitly the slug at project creation;
+  // project slugs can change independently later.
+  // https://posthog.com/docs/product-analytics/group-analytics
   return {
     distinct_id: distinctId,
     event: "$groupidentify",
@@ -112,6 +113,7 @@ function projectGroupIdentifyEvent(args: {
       $group_key: projectId,
       $group_set: {
         id: projectId,
+        name: birth.data.config.slug,
         slug: birth.data.config.slug,
       },
       $group_type: "project",
@@ -128,6 +130,10 @@ function posthogEvents(args: {
   workerName: string;
 }): PostHogBatchEvent[] {
   const { batch, projectId, workerName } = args;
+  // PostHog requires identified events for group linkage. Keep one synthetic
+  // identity per deployment/project: this avoids creating identities per stream
+  // while preventing one project's distinct-id limiter from stalling every
+  // project's durable feed.
   const distinctId = `iterate-os-project:${posthogUuid([
     "project-identity-v1",
     workerName,
@@ -135,7 +141,7 @@ function posthogEvents(args: {
   ])}`;
   const streamId = posthogUuid(["stream-v1", workerName, projectId, batch.path]);
   const occurrences = batch.events.map((event) => {
-    const createdAt = canonicalEventTimestamp(event.createdAt);
+    const createdAt = normalizeEventTimestamp(event.createdAt);
     const eventUuid = eventIdentity(workerName, projectId, batch.path, {
       createdAt,
       offset: event.offset,
@@ -214,12 +220,12 @@ export async function capturePosthogStreamEventBatch(
       signal: AbortSignal.timeout(8_000),
     });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      await response.body?.cancel();
       throw new Error(`PostHog batch capture rejected the request with HTTP ${response.status}`);
     }
     // Workerd requires response bodies to be consumed or cancelled before the
     // invocation finishes. The public endpoint has no synchronous per-event
     // ingestion result to interpret.
-    await response.body?.cancel().catch(() => undefined);
+    await response.body?.cancel();
   });
 }

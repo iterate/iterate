@@ -54,7 +54,6 @@ function evt(offset: number, type: string, payload?: Record<string, unknown>): S
  */
 class FakeCursorStore implements SubscriptionCursorStore {
   readonly rows = new Map<string, SubscriptionCursorRow>();
-  #ackFailures: Error[] = [];
   #lastEpoch = 0;
 
   get(subscriptionKey: string): SubscriptionCursorRow | undefined {
@@ -80,8 +79,6 @@ class FakeCursorStore implements SubscriptionCursorStore {
   }
 
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
-    const failure = this.#ackFailures.shift();
-    if (failure !== undefined) throw failure;
     const row = this.rows.get(subscriptionKey);
     if (row === undefined) return;
     if (epoch !== undefined && row.epoch !== epoch) return;
@@ -133,10 +130,6 @@ class FakeCursorStore implements SubscriptionCursorStore {
     }
     return min;
   }
-
-  failNextAck(error = new Error("cursor ack unavailable")): void {
-    this.#ackFailures.push(error);
-  }
 }
 
 type PokeResult = Awaited<ReturnType<SubscriberDial["poke"]>>;
@@ -159,7 +152,6 @@ function makeHarness() {
   const log: StreamEvent[] = [];
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
-  let parkAppendFailures = 0;
   const armedAlarms: number[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
@@ -229,10 +221,6 @@ function makeHarness() {
       store,
       dial,
       appendFact: (event) => {
-        if (event.type === PARKED && parkAppendFailures > 0) {
-          parkAppendFailures -= 1;
-          throw new Error("park fact storage unavailable");
-        }
         facts.push(event);
         // Mimic the core reducer: a parked fact folds into desired state, and
         // the spine reads parked-ness from coreState().
@@ -303,9 +291,6 @@ function makeHarness() {
       };
     },
     factsOfType: (type: string) => facts.filter((fact) => fact.type === type),
-    failNextParkAppend: () => {
-      parkAppendFailures += 1;
-    },
     row: (subscriptionKey: string) => store.get(subscriptionKey),
   };
 }
@@ -404,50 +389,6 @@ describe("StreamSubscribers", () => {
     expect(h.pushes[1].events.map((event) => event.offset)).toEqual([4, 5]);
     expect(h.pushes[1].deliveryId).toBe("k:4-5");
     expect(h.row("k")?.ackedOffset).toBe(5);
-  });
-
-  it("a2. receiver success followed by cursor-ack failure enters retry and redelivers", async () => {
-    const h = makeHarness();
-    h.configure(pushPayload(), 0);
-    h.append(evt(1, "a"), evt(2, "b"));
-    h.store.failNextAck();
-
-    h.subscribers.wake();
-    await h.settle();
-
-    expect(h.pushes).toHaveLength(1);
-    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 1 });
-    const retryAt = h.row("k")?.nextAttemptAt;
-    expect(retryAt).not.toBeNull();
-    expect(h.armedAlarms).toContain(retryAt);
-
-    h.advanceTo(retryAt! + 1);
-    h.subscribers.onAlarm();
-    await h.settle();
-
-    expect(h.pushes).toHaveLength(2);
-    expect(h.pushes.map(({ deliveryId }) => deliveryId)).toEqual(["k:1-2", "k:1-2"]);
-    expect(h.pushes.map(({ attempt }) => attempt)).toEqual([1, 2]);
-    expect(h.row("k")).toMatchObject({ ackedOffset: 2, attempt: 0, nextAttemptAt: null });
-  });
-
-  it("a3. a fresh incarnation re-arms a future durable retry", async () => {
-    const h = makeHarness();
-    h.configure(pushPayload(), 0);
-    h.append(evt(1, "a"));
-    h.dialImpl.push = async () => {
-      throw new Error("receiver unavailable");
-    };
-
-    h.subscribers.wake();
-    await h.settle();
-    const retryAt = h.row("k")?.nextAttemptAt;
-    expect(retryAt).not.toBeNull();
-
-    h.armedAlarms.length = 0;
-    h.subscribers.rearmPendingRetries();
-
-    expect(h.armedAlarms).toEqual([retryAt]);
   });
 
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {
@@ -566,42 +507,6 @@ describe("StreamSubscribers", () => {
     await driveUntilParked(h, 2);
     expect(h.factsOfType(PARKED)).toHaveLength(2);
     expect(h.configured["k"].parkedAtOffset).toBe(0);
-  });
-
-  it("d2. retains retry state when the parked fact fails to commit", async () => {
-    const h = makeHarness();
-    h.configure(pushPayload({ onPoison: "park" }), 0);
-    h.append(evt(1, "a"));
-    h.dialImpl.push = async () => {
-      throw new Error("still down");
-    };
-    h.store.ensure("k", 0);
-    h.store.nack("k", {
-      attempt: MAX_DELIVERY_ATTEMPTS - 1,
-      nextAttemptAt: 0,
-      error: "still down",
-    });
-    h.failNextParkAppend();
-
-    h.subscribers.onAlarm();
-    await h.settle();
-
-    expect(h.factsOfType(PARKED)).toHaveLength(0);
-    expect(h.row("k")).toMatchObject({
-      ackedOffset: 0,
-      attempt: MAX_DELIVERY_ATTEMPTS,
-      lastError: "park fact storage unavailable",
-    });
-    const retryAt = h.row("k")?.nextAttemptAt;
-    expect(retryAt).not.toBeNull();
-    expect(h.armedAlarms).toContain(retryAt);
-
-    h.advanceTo(retryAt! + 1);
-    h.subscribers.onAlarm();
-    await h.settle();
-
-    expect(h.factsOfType(PARKED)).toHaveLength(1);
-    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 0, nextAttemptAt: null });
   });
 
   it("e. resume: onResumed retries immediately; a redrive is cursor-set then resume", async () => {
@@ -929,42 +834,6 @@ describe("StreamSubscribers", () => {
       attempt: 0,
       nextAttemptAt: null,
     });
-  });
-
-  it("l2. a same-key replacement cannot redirect a delivery already started from the birth config", async () => {
-    const h = makeHarness();
-    const birth = pushPayload({
-      delivery: { mode: "push", expression: ["processEventBatch"] },
-    });
-    h.configure(birth, 2);
-    h.append(evt(1, "events.iterate.com/stream/created"));
-
-    let releaseBirthDelivery: (() => void) | undefined;
-    h.dialImpl.push = () =>
-      new Promise<void>((resolve) => {
-        releaseBirthDelivery = resolve;
-      });
-    h.subscribers.wake();
-
-    // onSubscriptionConfigured starts the drain synchronously: before its
-    // first await it has already captured both the offset-one batch and the
-    // birth expression. A project replacing the public project-worker key in
-    // the next turn cannot steal or redirect that first delivery.
-    expect(h.pushes).toHaveLength(1);
-    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1]);
-    expect(h.pushes[0]!.configuredEvent.payload?.delivery).toEqual(birth.delivery);
-
-    const replacement = pushPayload({
-      delivery: { mode: "push", expression: ["worker", "replacement"] },
-    });
-    h.configure(replacement, 3);
-    h.subscribers.onSubscriptionConfigured(replacement, 3);
-    h.dialImpl.push = async () => {};
-    releaseBirthDelivery!();
-    await h.settle();
-
-    expect(h.pushes.some((delivery) => delivery.configuredEvent.offset === 3)).toBe(true);
-    expect(h.row("k")?.ackedOffset).toBe(1);
   });
 
   it("m. removal deletes the cursor row and closes the connection", async () => {

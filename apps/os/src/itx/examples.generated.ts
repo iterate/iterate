@@ -122,7 +122,7 @@ return { appended, count: events.length };
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers — processors and the project worker's processEventBatch feed — never receive it. Iterate's protected observability feed still acknowledges every row before any future eviction. Use it for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; Iterate's ordinary PostHog feed does so. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -135,26 +135,16 @@ const [tick] = await stream.append({
 });
 
 // The durable truth is its own ordinary event — THIS is what processors fold.
-// Platform lifecycle facts may commit between these two appends, so select
-// the product event types rather than assuming adjacent raw offsets.
 const [done] = await stream.append({
   type: "events.iterate.repl/work-completed",
   payload: { result: "ok" },
 });
 
-const eventTypes = [
-  "events.iterate.repl/progress-ticked",
-  "events.iterate.repl/work-completed",
-];
-const defaults = await stream.getEvents({ afterOffset: tick.offset - 1, eventTypes });
-const raw = await stream.getEvents({
-  afterOffset: tick.offset - 1,
-  eventTypes,
-  includeEphemeral: true,
-});
+const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
+const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
 return {
   tickOffset: tick.offset, // ephemeral rows consume offsets like any commit
-  doneOffset: done.offset,
+  doneOffset: done.offset, // the durable event landed right after it
   defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
   rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]
 };

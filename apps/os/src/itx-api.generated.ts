@@ -166,6 +166,12 @@ export interface Project {
   /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
+   * Platform dispatch point: streams deliver committed event batches here
+   * for the project worker. Scripts should not call this — subscribe to a
+   * stream (or configure a subscription) instead.
+   */
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
+  /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
    * invokeCapability in userspace, so a dotted call onto any getter the
@@ -1337,8 +1343,7 @@ export interface Stream {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
-   * Session-scoped live event delivery (the public "ephemeral" subscription
-   * lane; a protected platform observability push is the only durable opt-in):
+   * Session-scoped live event delivery (the "ephemeral" subscription lane):
    * `processEventBatch` first receives durable history after
    * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
    * when appended after this exact subscription opens and are never replayed.
@@ -1728,7 +1733,7 @@ export type ProjectDescription = Description & {
  * `["agents", ["get", path], "processor", "wakeStreamSubscriber"]`.
  *
  * `wakeStreamSubscriber` is dialed by stream delivery spines only
- * (stream-delivery): the handshake's sink drives the host's durable
+ * (trusted-internal): the handshake's sink drives the host's durable
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
  * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
@@ -1878,6 +1883,41 @@ export type RevokeCapabilityInput = {
  * dynamic path-call fallback, so this contract does not re-declare a surface.
  */
 export type OpenApiRpc = object;
+
+/**
+ * The batch a PUSH subscription's receiver is invoked with: the delivery
+ * coordinates and events, plus the fields an at-least-once stateless receiver
+ * needs to dedupe and self-configure. Deliberately NOT the live lanes'
+ * {@link StreamEventBatch}: push receivers include userspace project workers
+ * and sibling streams, and the folded core state — other subscriptions'
+ * delivery expressions, park errors, the presence roster — is internal to the
+ * deployment (the webhook envelope strips it for the same reason). Live sinks
+ * (ephemeral subscribers, wake-mode processors) still get state-carrying
+ * batches: they are the lanes that paint from state.
+ */
+export type StreamPushEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  subscriptionKey: SubscriptionKey;
+  /**
+   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
+   * so receivers can dedupe redeliveries even without per-event bookkeeping.
+   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
+   */
+  deliveryId: string;
+  /** 1-based consecutive attempt count for this batch. */
+  attempt: number;
+  /**
+   * The committed `subscription-configured` event this delivery serves — so a
+   * receiver can configure itself from committed stream state without a
+   * side-channel registry (which stream, which selector, whose params).
+   * Narrowed to the fields the fold stores; an honest shape instead of a
+   * `StreamEvent` cast that pretends metadata/source survived.
+   */
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
+};
 
 /** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
@@ -3055,50 +3095,16 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
-/**
- * The batch a PUSH subscription's receiver is invoked with: the delivery
- * coordinates and events, plus the fields an at-least-once stateless receiver
- * needs to dedupe and self-configure. Deliberately NOT the live lanes'
- * {@link StreamEventBatch}: push receivers include userspace project workers
- * and sibling streams, and the folded core state — other subscriptions'
- * delivery expressions, park errors, the presence roster — is internal to the
- * deployment (the webhook envelope strips it for the same reason). Live sinks
- * (ephemeral subscribers, wake-mode processors) still get state-carrying
- * batches: they are the lanes that paint from state.
- */
-export type StreamPushEventBatch = {
-  projectId: string | null;
-  path: string;
-  events: StreamEvent[];
-  streamMaxOffset: number;
-  subscriptionKey: SubscriptionKey;
-  /**
-   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),
-   * so receivers can dedupe redeliveries even without per-event bookkeeping.
-   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
-   */
-  deliveryId: string;
-  /** 1-based consecutive attempt count for this batch. */
-  attempt: number;
-  /**
-   * The committed `subscription-configured` event this delivery serves — so a
-   * receiver can configure itself from committed stream state without a
-   * side-channel registry (which stream, which selector, whose params).
-   * Narrowed to the fields the fold stores; an honest shape instead of a
-   * `StreamEvent` cast that pretends metadata/source survived.
-   */
-  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
-};
+/** Stable identity for one stream subscription connection. */
+export type SubscriptionKey = string;
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. `type` is a searchable
- * operational identifier (1–256 URI-like ASCII characters), never arbitrary
- * user content. `ephemeral: true` commits a
+ * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from ordinary durable subscribers (wake/push/webhook), and retained
- * until first-party observability acknowledges them — for transient signals
- * (LLM streaming chunks) whose durable truth lands as its own event. */
+ * excluded from durable delivery unless a push/webhook explicitly opts in, and evictable —
+ * for transient signals (LLM streaming chunks) whose durable truth lands as
+ * its own event. */
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -3141,9 +3147,8 @@ export type StreamEventReadInput = {
   limit?: number;
   /**
    * Include ephemeral events (default false). Ephemeral rows are second-class:
-   * excluded from every range read unless explicitly requested. They remain
-   * retained until first-party observability acknowledges them; product code
-   * must never derive durable state from one.
+   * excluded from every range read unless explicitly requested, and the stream
+   * may evict them later — never derive durable state from one.
    */
   includeEphemeral?: boolean;
 };
@@ -3281,9 +3286,6 @@ export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;
 };
-
-/** Stable identity for one stream subscription connection. */
-export type SubscriptionKey = string;
 
 /**
  * A structural patch turning a previous JSON value into the next one. Two

@@ -4,8 +4,8 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
-import { DurableObjectAlarm } from "./durable-object-alarm.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
@@ -38,6 +38,11 @@ import {
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
 
+/**
+ * The subscription key of the birth-certificate worker feed every
+ * project-scoped stream configures on itself (see the constructor). Userspace
+ * overrides it by re-appending `subscription-configured` with this same key.
+ */
 const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
 /**
@@ -69,10 +74,6 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  */
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
-  readonly #alarm = new DurableObjectAlarm(this.ctx, {
-    projectId: this.name.projectId,
-    streamId: this.ctx.id.toString(),
-  });
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)
@@ -95,8 +96,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
-          // live lanes deliver them; durable lanes filter them from DELIVERY
-          // unless their ordinary subscription explicitly opts in.
+          // ephemeral lane delivers them; durable lanes filter them from
+          // DELIVERY unless their ordinary subscription explicitly opts in.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -113,36 +114,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         // delivery-path operation that produced it, so failures log.
         try {
           this.append(event);
-          if (event.type === "events.iterate.com/stream/subscription-parked") {
-            console.error({
-              schema: "iterate.stream-subscription.v1",
-              message: "stream_subscription_parked",
-              outcome: "parked",
-              projectId: this.name.projectId,
-              subscriptionKey: event.payload?.subscriptionKey,
-              atOffset: event.payload?.atOffset,
-              attempts: event.payload?.attempts,
-            });
-          }
         } catch (error) {
-          console.error({
-            schema: "iterate.stream-subscription.v1",
-            message: "stream_delivery_fact_append_failed",
-            outcome: "failed",
-            projectId: this.name.projectId,
-            eventType: event.type,
-            errorName: error instanceof Error ? error.name : "NonErrorThrowable",
-          });
-          // Parking is a durable state transition. If its fact did not commit,
-          // the spine must keep its cursor/backoff and retry instead of silently
-          // clearing the only remaining work record.
-          if (event.type === "events.iterate.com/stream/subscription-parked") throw error;
+          console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => this.#alarm.armNoLaterThan(atMs),
+      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -156,11 +135,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
-    // For project-scoped streams the birth certificate includes the worker
-    // feed: a `subscription-configured` push subscription to the project
-    // worker's `processEventBatch`, appended by the stream to itself in the
-    // same synchronous turn as `created`. The PostHog feed is installed later
-    // by that processor when it receives this immutable birth event.
+    // Project streams are born with their ordinary platform feeds. Declaring
+    // both here means there is no asynchronous wiring window before the first
+    // user event, while the subscription facts remain removable/replaceable
+    // through the same public lifecycle as any other subscription.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
@@ -180,25 +158,46 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "skip",
           } satisfies SubscriptionConfiguredPayload,
         });
+        // The standalone streams playground reuses this DO without OS's
+        // PostHog credential or receiver. Deployed OS environments require
+        // the credential, so its presence is the deployment boundary.
+        if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
     this.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: crypto.randomUUID() },
     });
-    // A previous alarm-arm storage failure resets this incarnation. The retry
-    // row survived in SQLite, so every fresh incarnation must restore its
-    // earliest wake before it can become quiet again.
-    this.#subscribers.rearmPendingRetries();
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
   alarm(): void {
+    this.#alarmArmedForMs = null;
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
     this.#flushCoreProcessorState();
+  }
+
+  /**
+   * The earliest alarm time armed this incarnation, tracked in memory so two
+   * concurrent arms can't race each other through the async getAlarm/setAlarm
+   * pair (both observing null and the LATER one winning). Reset when the
+   * alarm fires; a stale-low value merely re-arms an already-set time.
+   */
+  #alarmArmedForMs: number | null = null;
+
+  /** Move the DO alarm earlier, never later (many rows share one alarm). */
+  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
+    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
+    this.#alarmArmedForMs = atMs;
+    try {
+      const current = await this.ctx.storage.getAlarm();
+      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
+    } catch (error) {
+      console.error("stream alarm arming failed", error);
+    }
   }
 
   // ===========================================================================
@@ -461,7 +460,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   // the offset/event counters.
   //
   // Do NOT re-parse the whole state on the way out: `state` was already
-  // validated at the trust boundary (the KV read and journal replay path
+  // validated at the trust boundary (the KV read and event-log recovery path
   // both parse). Re-validating the growing record fields on every append was
   // quadratic work for no added safety.
   /**
@@ -1265,6 +1264,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Sever every idle durable connection now — the idle timer's action, exposed for tests/operators. */
   runIdleTeardownNow(): void {
     this.#subscribers.runIdleTeardownNow();
+    // A stream going quiet checkpoints before it hibernates, so the next wake
+    // rebuilds from a fresh checkpoint instead of folding the debounce window.
     this.#flushCoreProcessorState();
   }
 

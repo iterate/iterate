@@ -200,10 +200,11 @@ subscription on every new project stream. It is not a project setting,
 user-provided integration, or optional connection:
 
 ```text
-project-worker subscription
-  -> itx.processEventBatch(stream/created)
-  -> append fixed subscription-configured fact to the same stream
-  -> durable stream cursor
+new project stream
+  -> commit stream/created
+  -> commit ordinary project-worker subscription
+  -> commit ordinary PostHog subscription
+  -> normal durable stream cursor
   -> itx.integrations.posthog.processEventBatch
   -> PostHog EU public batch capture
 ```
@@ -212,23 +213,22 @@ The conventional subscription key is `iterate-platform-posthog`. It delivers
 from offset zero, explicitly includes ephemeral rows, parks rather than
 poison-skipping, and uses the fixed expression
 `["integrations", "posthog", "processEventBatch"]`. This is normal stream
-configuration: the key and route are not reserved, and the subscription may be
-replaced or removed through the normal lifecycle. `includeEphemeral` is a
-generic push/webhook option rather than a private platform power.
+configuration: its key is not protected, and the subscription may be replaced
+or removed through the normal lifecycle. `includeEphemeral` is a generic
+push/webhook option rather than a private platform power.
 `itx.integrations.posthog` is a fixed first-party receiver with deployment
 credentials; projects do not configure their own PostHog connection.
 
-Fresh streams install the subscription when their existing project-worker feed
-delivers `events.iterate.com/stream/created` to
-`Project.processEventBatch`. Redelivery appends the same idempotent
-configuration, so it is harmless and does not reset the cursor. Neither the
+Fresh project streams append both platform subscriptions during their ordinary
+first-boot birth sequence, before the first user event can land. Neither the
 project-worker subscription nor the PostHog subscription receives a special
 protection mechanism. There is deliberately no legacy scan, wake-time shim, or
 operator-configurable backfill. Streams created before this invariant exists
-are outside the rollout boundary; every stream created afterwards acquires the
-feed through its ordinary durable birth delivery. There is no recovery import
-or restoration lane. The shared streams example app has no project-worker/OS
-integration root and therefore does not acquire this OS-only subscription.
+are outside the rollout boundary; every stream created afterwards in an OS
+deployment with its required PostHog credential starts with the ordinary feed.
+There is no recovery import or restoration lane. The shared streams example app
+has neither the OS credential nor the receiver and therefore does not acquire
+this OS-only subscription.
 
 “All events” means one PostHog occurrence for every committed row still owned
 by the stream, without a type selector, sampling, success/error filter,
@@ -259,9 +259,12 @@ Every occurrence carries PostHog's first-class `$groups: { project: <id> }`.
 The group key is the immutable project id, following PostHog's requirement that
 group keys be unique identifiers rather than display names. The authentic root
 `project/created` birth certificate additionally emits one idempotent
-`$groupidentify` occurrence for that same key. Its `$group_set` records the id
-and immutable canonical slug, so operators can find one project group by either
-identifier without creating parallel entities. The event must be first-hand,
+`$groupidentify` occurrence for that same key. Its `$group_set` records the id,
+creation-time slug, and that slug as PostHog's display `name`, so operators can
+find one project group by either identifier without creating parallel entities.
+Project slugs are mutable; synchronizing a later rename needs an authoritative
+directory event and is not falsely claimed by this birth-only feed. The event
+must be first-hand,
 durable, unannotated, on `/`, and carry the `project-created:<id>` idempotency
 key; lookalike or cross-posted events cannot write group properties. No
 directory lookup, mutable alias, or per-batch group update exists. The regular
@@ -431,9 +434,9 @@ alarm actions. Possible later operation adapters are:
 - [ ] Logging failure cannot alter the product outcome.
 - [ ] Secrets, bodies, scripts, prompts, arguments/results, auth headers, and
       query parameters are absent from logs, exceptions, and replay.
-- [ ] Every fresh project stream receives the ordinary PostHog
-      subscription from its `stream/created` delivery; there is no legacy
-      scan, backfill, or compatibility path.
+- [ ] Every fresh project stream receives the ordinary PostHog subscription
+      during its birth sequence; there is no legacy scan, backfill, or
+      compatibility path.
 - [ ] Every durable and ephemeral row is submitted as one project-grouped
       occurrence; no type, success/error, or sampling selector exists.
 - [ ] Only public-batch HTTP acceptance gates the durable cursor; transport

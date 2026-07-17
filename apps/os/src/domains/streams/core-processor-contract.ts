@@ -195,9 +195,9 @@ const SubscriptionConfiguredPayload = z
     // stream-owned-cursor modes. Accepting them on a wake config (where the
     // subscriber owns its checkpoint) would commit config that silently does
     // nothing.
-    if (payload.delivery.mode === "wake") {
-      for (const field of ["deliver", "onPoison", "includeEphemeral"] as const) {
-        if (payload[field] === undefined) continue;
+    if (payload.delivery.mode !== "wake") return;
+    for (const field of ["deliver", "onPoison", "includeEphemeral"] as const) {
+      if (payload[field] !== undefined) {
         ctx.addIssue({
           code: "custom",
           path: [field],

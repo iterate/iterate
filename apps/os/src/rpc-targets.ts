@@ -105,10 +105,7 @@ import {
 } from "./domains/integrations/github-api.ts";
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
-import {
-  capturePosthogStreamEventBatch,
-  posthogSubscriptionEvent,
-} from "./domains/integrations/posthog.ts";
+import { capturePosthogStreamEventBatch } from "./domains/integrations/posthog.ts";
 import {
   connectionSlackClient,
   normalizeSlackError,
@@ -434,12 +431,12 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT product event: live subscribe() connections see it, while default reads and durable subscribers exclude it unless a push/webhook explicitly opts in; the row may be evicted later, so append durable product truth separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
         crossPostTo:
-          "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
+          "Copy matching events onto another stream (optionally JSONata-transformed). Cross-post subscriptions do not opt into ephemeral rows; a selector matching only ephemeral types delivers nothing.",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
@@ -583,8 +580,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /**
-   * Session-scoped live event delivery (the "ephemeral" subscription lane —
-   * also the only lane that receives `ephemeral: true` events):
+   * Session-scoped live event delivery (the "ephemeral" subscription lane):
    * `processEventBatch` first receives durable history after
    * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
    * when appended after this exact subscription opens and are never replayed.
@@ -5519,7 +5515,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // delegation may reject into the spine's retry/park machinery. Same trust
   // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
-    await this.#installPosthogSubscriptionForCreatedStream(batch);
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
     // Search is a derived mirror, so schedule it independently of the user
@@ -5554,23 +5549,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         );
       }
       throw error;
-    }
-  }
-
-  /**
-   * New streams announce themselves through the existing project-worker feed.
-   * Append the PostHog feed as an ordinary durable subscription on that same
-   * stream. Its idempotency key makes project-worker redelivery harmless.
-   */
-  async #installPosthogSubscriptionForCreatedStream(batch: StreamPushEventBatch): Promise<void> {
-    if (!batch.events.some((event) => event.type === "events.iterate.com/stream/created")) return;
-    try {
-      await this.streams.get(batch.path).append(posthogSubscriptionEvent());
-    } catch (error) {
-      throw new StreamReceiverUnavailableError(
-        "could not install the first-party PostHog subscription",
-        { cause: error },
-      );
     }
   }
 
