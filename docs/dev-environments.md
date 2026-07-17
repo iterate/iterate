@@ -245,7 +245,13 @@ don't paste it into shared channels.
 
 ### Playwright specs against local dev or previews
 
-Root Playwright specs use the same forge key and admin API secret, but mint the
+The root Playwright config has projects named `web` and `mobile`. `pnpm spec`
+runs both; use `pnpm spec --project=web` or `pnpm spec --project=mobile` to
+select one product surface. Playwright owns both server lifecycles: it preserves
+the existing OS start/reuse behavior and launches a per-run Expo Web server on
+a free loopback port for the mobile specs.
+
+Web specs use the same forge key and admin API secret, but mint the
 session cookie directly instead of going through the browser sign-in URL. If
 `apps/os` has a Doppler config selected, `pnpm spec` can read the needed secrets
 directly; wrap the command in `doppler run` when you want to force a particular
@@ -280,6 +286,10 @@ runs the OS dev script through Node with `start`, `--detach`, `--keep-alive`,
 and `--port <port>`, so it reuses the same per-worktree dev server recorded in
 `apps/os/.dev-server/dev-server.json`, then waits directly on that server's
 `/api/health`.
+
+The mobile project always targets its local Expo Web server, including when the
+web project targets a deployed preview. Its phone-sized browser specs and
+reviewed baselines live under `specs/mobile/`.
 
 ### Minting in production
 

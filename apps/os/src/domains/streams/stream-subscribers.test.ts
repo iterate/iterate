@@ -5,7 +5,7 @@
 // skip-not-defer, backoff/park/resume, poison bisection, wake pokes with the
 // observational watermark, and the ephemeral lane.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   StreamEventBatch,
   StreamPushEventBatch,
@@ -1096,6 +1096,35 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(h.row("k")?.attempt).toBe(0);
+  });
+
+  it("classifies a Durable Object lifecycle reset as availability, not a delivery error", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 1);
+    h.append(evt(1, "a"));
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: makeSink().sink });
+    h.subscribers.wake();
+    await h.settle();
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const reset = Object.assign(new Error("kill requested"), { durableObjectReset: true });
+      h.subscribers.onDurableDeliveryError("k", reset);
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({ subscriptionKey: "k", error: reset }),
+      );
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")?.attempt).toBe(1);
+      expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
   });
 
   it("t. an in-flight push delivery cannot clobber a cursor seek (epoch fence)", async () => {

@@ -53,6 +53,7 @@ import type {
 import { isStreamReceiverUnavailableError } from "iterate/processors";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,
@@ -1205,10 +1206,16 @@ export class StreamSubscribers {
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    console.error("stream durable sink delivery failed; backing off before re-poke", {
-      subscriptionKey,
-      error,
-    });
+    const details = { subscriptionKey, error };
+    if (isDurableObjectLifecycleError(error)) {
+      // A killed, evicted, deployed, or overloaded subscriber is a modelled
+      // availability transition: the durable cursor stays put and the
+      // bounded backoff below reconnects it. Keep that expected transition
+      // out of the error signal while retaining an observable warning.
+      console.warn("stream durable sink unavailable; backing off before re-poke", details);
+    } else {
+      console.error("stream durable sink delivery failed; backing off before re-poke", details);
+    }
     this.#onDeliveryFailure(subscriptionKey, error);
     connection.close("delivery-failed");
   }

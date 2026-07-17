@@ -187,12 +187,22 @@ describe("preview workflow scope", () => {
     const os = cloudflarePreviewApps.os;
 
     expect(os).toMatchObject({
-      paths: expect.arrayContaining(["apps/dummy-petshop/**"]),
+      paths: expect.arrayContaining([
+        ".bun-version",
+        "apps/dummy-petshop/**",
+        "packages/iterate/**",
+      ]),
       previewDependencies: ["auth", "dummy-petshop"],
       previewTestDependencyBaseUrlEnvVars: {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
     });
+    expect(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ).toContain("- packages/iterate/**");
+    expect(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ).toContain("bun-version-file: .bun-version");
     expect(
       resolvePreviewTestBaseUrlEnvironment({
         app: os,
@@ -417,6 +427,12 @@ describe("preview test commands", () => {
     expect(workflow).toContain("path: test-results");
     expect(workflow).toContain("include-hidden-files: true");
     expect(workflow).not.toContain("            /tmp/os-e2e-*");
+
+    const collector = readFileSync(
+      resolve(repoRoot, "scripts/preview/collect-test-artifacts.sh"),
+      "utf8",
+    );
+    expect(collector).toContain('copy_dir_contents "apps/os/e2e/tui-test/tui-traces"');
   });
 
   test("normalizes marathon artifacts before Depot upload", () => {
@@ -432,23 +448,29 @@ describe("preview test commands", () => {
     expect(workflow).not.toContain("            /tmp/marathon");
   });
 
-  test("runs the OS vitest node project concurrently with the root Playwright specs", () => {
+  test("runs the OS TUI, vitest, and Playwright sub-lanes concurrently", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    // The chromium install starts first in the background; the single vitest
-    // lane (node project) runs in a background subshell concurrently with the
-    // foreground Playwright specs; the waits propagate their exit codes.
+    // The chromium install starts first in the background. TUI and Vitest run
+    // in the background alongside the foreground Playwright specs; every wait
+    // propagates its lane's exit code.
+    const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts >";
     const e2eLane = "pnpm e2e --project node >";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
+    expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
     expect(script).toContain('wait "$PW_INSTALL_PID"');
+    expect(script).toContain('wait "$TUI_PID"');
     expect(script).toContain('wait "$E2E_PID"');
+    expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
     // Install kicks off before the lane and completes (wait) before the specs.
+    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(tuiLane));
     expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(e2eLane));
+    expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
   });
 });
@@ -666,6 +688,51 @@ describe("preview deploy selection", () => {
     });
 
     expect(apps).toEqual([]);
+  });
+
+  test("selects OS and its dependencies for an iterate TUI-only change", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async (basehead) => {
+        expect(basehead).toBe(`base-sha...${currentHead}`);
+        return {
+          status: "ahead",
+          changedFilenames: ["packages/iterate/src/stream-tui/agent-chat-terminal.tsx"],
+        };
+      },
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+  });
+
+  test("selects the full fleet for an e2e policy-only change", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["packages/shared/src/test-support/e2e-policy/budgets.ts"],
+      }),
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "semaphore",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
   });
 
   test("self-heals an erased slot: a parked recorded-green app is redeployed with its dependencies", async () => {

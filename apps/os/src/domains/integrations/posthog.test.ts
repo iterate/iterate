@@ -84,20 +84,20 @@ function captureArgs(events: StreamEvent[], workerName = "os-preview-6") {
 }
 
 describe("first-party PostHog stream integration", () => {
-  it("uses an ordinary all-history subscription that explicitly includes ephemeral rows", () => {
+  it("uses an ordinary all-history subscription that excludes ephemeral rows", () => {
     const event = posthogSubscriptionEvent();
     expect(event).toEqual({
       type: "events.iterate.com/stream/subscription-configured",
-      idempotencyKey: "iterate-platform-posthog-subscription-v1",
+      idempotencyKey: "iterate-platform-posthog-subscription-v2",
       payload: {
         subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
-        description: "Iterate's first-party, all-event PostHog feed",
+        description: "Iterate's first-party durable-event PostHog feed",
         delivery: {
           mode: "push",
           expression: ["integrations", "posthog", "processEventBatch"],
         },
         deliver: "all",
-        includeEphemeral: true,
+        includeEphemeral: false,
         onPoison: "park",
       },
     });
@@ -109,18 +109,12 @@ describe("first-party PostHog stream integration", () => {
     ).not.toThrow();
   });
 
-  it("captures the complete committed event and raw stream path", async () => {
+  it("captures the complete durable committed event and raw stream path", async () => {
     const durable = streamEvent();
-    const ephemeral = streamEvent({
-      type: "events.example.com/progress",
-      offset: 8,
-      ephemeral: true,
-      payload: { token: "full payload retained" },
-    });
     const requests: CapturedRequest[] = [];
     const captureFetch = acceptingFetch(requests);
 
-    await capturePosthogStreamEventBatch(captureArgs([durable, ephemeral]), {
+    await capturePosthogStreamEventBatch(captureArgs([durable]), {
       fetch: captureFetch,
     });
 
@@ -130,7 +124,7 @@ describe("first-party PostHog stream integration", () => {
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).has("Authorization")).toBe(false);
     expect(requests[0]).toMatchObject({ api_key: "phc_test" });
-    expect(requests[0]!.batch).toHaveLength(2);
+    expect(requests[0]!.batch).toHaveLength(1);
     expect(requests[0]!.batch[0]).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
       properties: {
@@ -141,17 +135,43 @@ describe("first-party PostHog stream integration", () => {
         stream_event: durable,
         stream_event_original_json_bytes: jsonBytes(durable),
         stream_event_truncated: false,
+        stream_event_ephemeral: false,
         stream_event_type: durable.type,
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
     });
-    expect(requests[0]!.batch[1]).toMatchObject({
+  });
+
+  it("drops ephemeral rows from capture, including all-ephemeral batches", async () => {
+    const durable = streamEvent();
+    const ephemeral = streamEvent({
+      type: "events.example.com/progress",
+      offset: 8,
+      ephemeral: true,
+      payload: { token: "should never reach PostHog" },
+    });
+    const mixed: CapturedRequest[] = [];
+    const mixedFetch = acceptingFetch(mixed);
+    await capturePosthogStreamEventBatch(captureArgs([durable, ephemeral]), {
+      fetch: mixedFetch,
+    });
+    expect(mixedFetch).toHaveBeenCalledOnce();
+    expect(mixed[0]!.batch).toHaveLength(1);
+    expect(mixed[0]!.batch[0]).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
       properties: {
-        stream_event: ephemeral,
-        stream_event_ephemeral: true,
+        stream_event: durable,
+        stream_event_ephemeral: false,
       },
     });
+
+    const onlyEphemeral: CapturedRequest[] = [];
+    const onlyEphemeralFetch = acceptingFetch(onlyEphemeral);
+    await capturePosthogStreamEventBatch(captureArgs([ephemeral]), {
+      fetch: onlyEphemeralFetch,
+    });
+    expect(onlyEphemeralFetch).not.toHaveBeenCalled();
+    expect(onlyEphemeral).toEqual([]);
   });
 
   it("bounds an oversized committed event without filtering its indexed coordinates", async () => {

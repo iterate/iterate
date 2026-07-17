@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "iterate/processors";
+import { defineProcessorContract, type ProcessorState } from "iterate/processors";
 import { SandboxInstanceType } from "./instance-types.ts";
 
 const SandboxBirthCertificate = z.object({
@@ -105,6 +105,18 @@ const SANDBOX_EVENTS = {
       },
     ],
   },
+  "events.iterate.com/sandbox/kill-requested": {
+    description:
+      "kill() was called: the current Durable Object incarnation is deliberately aborted after this fact is durably folded. The container lifecycle and reduced running state are unchanged; the next request boots a fresh object around the same sandbox.",
+    payloadSchema: z.object({}),
+    examples: [
+      {
+        description:
+          "An operator requested a Durable Object restart while leaving the running container alone.",
+        payload: {},
+      },
+    ],
+  },
   "events.iterate.com/sandbox/destroy-requested": {
     description: "destroy() was called: tear the sandbox down permanently. `destroyed` confirms.",
     payloadSchema: z.object({}),
@@ -198,18 +210,21 @@ const SandboxStatus = z.enum(["created", "running", "stopped", "destroyed"]);
  *
  * A typical pet's own stream reads: created → started → … work … →
  * sleep-requested → backup-created → stopped → started (next day, implicit
- * wake) → workspace-restored → … → destroy-requested → stopped → destroyed —
+ * wake) → workspace-restored → kill-requested → … →
+ * destroy-requested → stopped → destroyed —
  * while the catalogue accumulates one create-requested per name ever claimed.
  */
 export const SandboxProcessorContract = defineProcessorContract({
   slug: "sandbox",
-  version: "0.2.0",
+  version: "0.4.0",
   description:
     "Sandbox lifecycle: explicit create/start/sleep/destroy commands and their completions, workspace snapshot/restore persistence, and configuration changes.",
   stateSchema: z.object({
     birthCertificate: SandboxBirthCertificate.nullable().default(null),
     /** Null until the birth certificate is reduced. */
     status: SandboxStatus.nullable().default(null),
+    /** The simple operational projection consumed by lists and controls. */
+    running: z.boolean().default(false),
     /** The newest workspace snapshot — what the next container start restores. */
     lastBackupId: z.string().nullable().default(null),
     /** The sandbox's configured env-var map (key → getSecret placeholder /
@@ -227,6 +242,9 @@ export const SandboxProcessorContract = defineProcessorContract({
   ],
   emits: [],
 });
+
+/** The sandbox processor's reduced lifecycle projection. */
+export type SandboxProcessorState = ProcessorState<typeof SandboxProcessorContract>;
 
 /**
  * One lifecycle event as the sandbox Durable Object appends it: the event

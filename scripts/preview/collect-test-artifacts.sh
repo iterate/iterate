@@ -12,6 +12,7 @@ mkdir -p "$artifact_root"
   echo "Source paths:"
   echo "- test-results"
   echo "- apps/os/test-results"
+  echo "- apps/os/e2e/tui-test/tui-traces"
   echo "- apps/streams-example-app/test-results"
   echo "- /tmp/os-e2e-*"
   echo "- /tmp/os-preview-*.log"
@@ -52,6 +53,9 @@ copy_files() {
 # upload root, and fold absolute/temp outputs underneath it so Depot does not
 # need to upload from mixed workspace and /tmp paths.
 copy_dir_contents "apps/os/test-results" "$artifact_root/apps-os-test-results"
+# Microsoft TUI Test keeps its PTY trace (frames, events, output) at the
+# app-local project root configured by e2e/tui-test/run.ts.
+copy_dir_contents "apps/os/e2e/tui-test/tui-traces" "$artifact_root/apps-os-tui-traces"
 # The streams example app's Playwright lane writes traces and its JSON report
 # under its own app directory (app-local playwright.config.ts).
 copy_dir_contents "apps/streams-example-app/test-results" "$artifact_root/apps-streams-example-app-test-results"

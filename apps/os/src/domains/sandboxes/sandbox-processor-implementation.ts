@@ -7,8 +7,8 @@ import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
  * sandbox is in its life, which snapshot a restart would restore).
  * Deliberately takes NO actions — the lifecycle itself is driven by the
  * imperative commands and SDK hooks inside the sandbox Durable Object, which
- * appends these events; this class exists to hold the contract and give
- * stream consumers a folded view. Not yet wired to a processor host anywhere.
+ * appends these events; the sandbox Durable Object hosts this processor and
+ * exposes its reduced state through the project capability tree.
  */
 export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorContract> {
   readonly contract = SandboxProcessorContract;
@@ -28,14 +28,15 @@ export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorCon
         return {
           ...state,
           birthCertificate: event.payload,
+          running: false,
           status: "created" as const,
         };
       case "events.iterate.com/sandbox/started":
-        return terminal ? state : { ...state, status: "running" as const };
+        return terminal ? state : { ...state, running: true, status: "running" as const };
       case "events.iterate.com/sandbox/stopped":
-        return terminal ? state : { ...state, status: "stopped" as const };
+        return terminal ? state : { ...state, running: false, status: "stopped" as const };
       case "events.iterate.com/sandbox/destroyed":
-        return { ...state, status: "destroyed" as const };
+        return { ...state, running: false, status: "destroyed" as const };
       case "events.iterate.com/sandbox/backup-created":
         return { ...state, lastBackupId: event.payload.backupId };
       case "events.iterate.com/sandbox/configured": {
