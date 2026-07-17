@@ -419,8 +419,18 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     return this.#identity().projectId;
   }
 
-  /** Abort the current Durable Object incarnation; the next request boots it again. */
-  kill(): void {
+  /**
+   * Abort the current Durable Object incarnation; the next request boots it
+   * again. Journal and fold the operator intent first: `ctx.abort()` is
+   * necessarily observed by Cloudflare and the caller as a lifecycle reset,
+   * so the sandbox stream must carry the durable explanation for that reset.
+   */
+  async kill(): Promise<void> {
+    this.#assertUsable();
+    await this.#appendLifecycleEventAndWait({
+      type: "events.iterate.com/sandbox/kill-requested",
+      payload: {},
+    });
     this.ctx.abort("kill requested");
   }
 

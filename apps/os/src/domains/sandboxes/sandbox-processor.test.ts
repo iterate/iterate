@@ -67,6 +67,8 @@ describe("SandboxProcessor", () => {
       // An implicit wake: started without a start-requested.
       event("events.iterate.com/sandbox/started"),
       event("events.iterate.com/sandbox/workspace-restored", { backupId: "bkp-1" }),
+      // Killing the Durable Object does not change the container lifecycle.
+      event("events.iterate.com/sandbox/kill-requested"),
       event("events.iterate.com/sandbox/destroy-requested"),
       event("events.iterate.com/sandbox/destroyed"),
     );
