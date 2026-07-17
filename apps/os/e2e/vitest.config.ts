@@ -112,8 +112,11 @@ export default defineConfig({
     // resets during concurrent project births; one was hidden by the suite's
     // single retry and two recovered inside the birth saga. Re-running the
     // complete runnable catalogue at peak 8 with retries disabled produced
-    // zero storage resets in the matching trace window. Keep this at 4 unless
-    // a preview marathon plus trace audit proves a higher setting clean.
+    // zero storage resets in the matching trace window. The preview runner
+    // now keeps this peak from overlapping Playwright's eight workers; that
+    // omitted lane-wide load had still produced project-processor timeouts.
+    // Keep this at 4 unless a preview marathon plus trace audit proves a
+    // higher setting clean.
     maxWorkers: 4,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
