@@ -3,6 +3,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
+import { ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE } from "./iterate-processors-cloudflare-virtual-module.generated.ts";
 import { ITERATE_PROCESSORS_VIRTUAL_MODULE } from "./iterate-processors-virtual-module.generated.ts";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 import { stableSha256 } from "./utils.ts";
@@ -126,6 +127,7 @@ function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOp
     virtualModules: {
       "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE,
       "iterate/processors": ITERATE_PROCESSORS_VIRTUAL_MODULE,
+      "iterate/processors/cloudflare": ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE,
       ...options.virtualModules,
     },
   };

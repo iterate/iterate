@@ -5,11 +5,13 @@ import {
   type StreamEvent,
 } from "iterate/sdk";
 import {
-  createStreamProcessorRegistry,
-  type StreamProcessorRegistry,
   type StreamSubscriberWakeRequest,
   type StreamSubscriberWakeResponse,
 } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
 import { processGithubReviewEvent } from "./github-reviews.ts";
 import {
   GUESTBOOK_APP_REF,
@@ -271,6 +273,17 @@ export class GuestbookApp extends IterateDurableObject {
         version: "0",
       });
       const guestbook = registry.register(
+        // NO `{ recovery: true }`: keepalive recovery arms durable alarms,
+        // and workerd does not implement alarms on the facet storage that
+        // hosts stateful dynamic workers ("alarms are not yet implemented
+        // for SQLite-backed Durable Objects") — arming would fail every
+        // delivery. Fine for the guestbook: its only side effect is an
+        // idempotency-keyed at-head append, re-derived on the next delivery,
+        // so nothing is owed across an eviction. Processors with
+        // consequential background obligations need a platform-hosted DO
+        // until facet alarms ship; then this becomes
+        // `registry.register(processor, { recovery: true })` plus an
+        // `alarm()` method routing to `registry.handleAlarm`.
         new GuestbookProcessor({ path: GUESTBOOK_STREAM_PATH, projectId, stream }),
       );
       this.#host = { guestbook, registry };

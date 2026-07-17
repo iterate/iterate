@@ -88,11 +88,6 @@ const sharedProvide = {
 const sharedResolve = {
   alias: {
     "~": resolve(appRoot, "src"),
-    // The node-side e2e process imports template/processor modules whose
-    // graph reaches `iterate/processors` (the registry imports
-    // cloudflare:workers). Same stand-in the unit lane uses; the REAL Workers
-    // implementation is exercised by the deployed OS the suite drives.
-    "cloudflare:workers": resolve(appRoot, "src/test/cloudflare-workers-shim.ts"),
   },
 };
 

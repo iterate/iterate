@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { MemoryStream } from "iterate/processors/testing";
 import { StreamProcessorRunner } from "iterate/processors";
-import { createStreamProcessorRegistry } from "iterate/processors";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";

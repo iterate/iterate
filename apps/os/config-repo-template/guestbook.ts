@@ -9,8 +9,8 @@
 // The doctrine this follows (birth certificates, monolithic reducer,
 // refold-safe side effects) is the platform's stream-processor convention;
 // GuestbookApp in worker.ts shows the hosting half: a Durable Object
-// registry, an itx-dialed stream handle, and the project worker poking the
-// host when guestbook events land.
+// registry over an itx-dialed stream handle, woken by the durable wake
+// subscription the creation batch below configures.
 import { z } from "zod";
 import {
   defineProcessorContract,

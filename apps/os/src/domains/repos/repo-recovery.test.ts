@@ -13,7 +13,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import { MemoryStreamNetwork } from "iterate/processors/testing";
-import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { GITHUB_LINK } from "./github-agent-test-helpers.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";

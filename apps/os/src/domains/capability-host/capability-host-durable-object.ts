@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { createStreamProcessorRegistry } from "iterate/processors";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";

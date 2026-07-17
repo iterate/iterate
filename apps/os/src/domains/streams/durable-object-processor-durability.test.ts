@@ -21,7 +21,7 @@ import {
   durableObjectRecovery,
   processorKeepaliveKey,
   processorProgressKey,
-} from "iterate/processors";
+} from "iterate/processors/cloudflare";
 import type { Stream } from "../../itx-api.generated.ts";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 

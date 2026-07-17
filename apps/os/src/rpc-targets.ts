@@ -49,7 +49,7 @@ import type {
 } from "iterate/processors";
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
-import type { StreamProcessorRegistry } from "iterate/processors";
+import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";

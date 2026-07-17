@@ -751,3 +751,20 @@ export const ProcessorContractAnnouncement = z.object({
 });
 
 export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnnouncement>;
+
+/**
+ * Platform stream events a processor contract may CONSUME without owning —
+ * pass as a `processorDeps` entry. Currently just the keepalive revival fact:
+ * a recovery-wired contract must consume it (the runner enforces this at
+ * construction) so the revival append lands an at-head `processEvent` turn.
+ * The event's authoritative definition lives with the platform's core stream
+ * contract; this catalog is deliberately payload-loose — reducers ignore the
+ * revival fact, its delivery IS the point.
+ */
+export const PLATFORM_STREAM_EVENTS = {
+  [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
+    description:
+      "Platform keepalive revival fact: appended when a processor's incarnation died owing background work, guaranteeing the revived processor an at-head reconcile turn.",
+    payloadSchema: z.looseObject({}),
+  },
+};

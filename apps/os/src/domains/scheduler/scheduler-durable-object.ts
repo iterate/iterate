@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { createStreamProcessorRegistry } from "iterate/processors";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type {
   ProcessorSnapshot,
   StreamSubscriberWakeRequest,

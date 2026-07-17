@@ -20,7 +20,10 @@ import { defineProcessorContract } from "iterate/processors";
 import { StreamProcessor } from "iterate/processors";
 import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import { MemoryStream } from "iterate/processors/testing";
-import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 
 const HOME = "/tests/registry";

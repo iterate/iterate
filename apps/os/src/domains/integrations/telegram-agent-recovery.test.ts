@@ -19,7 +19,10 @@
 import { describe, expect, it } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import { MemoryStreamNetwork } from "iterate/processors/testing";
-import { createStreamProcessorRegistry, type StreamProcessorRegistry } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { TelegramAgentProcessor } from "./telegram-agent-processor-implementation.ts";

@@ -54,6 +54,7 @@ export default defineConfig([
     // separate config object is safe. No dts for the sdk reason above.
     entry: {
       processors: "src/processors/index.ts",
+      "processors-cloudflare": "src/processors/cloudflare.ts",
       "processors-testing": "src/processors/testing.ts",
     },
     format: "esm",
