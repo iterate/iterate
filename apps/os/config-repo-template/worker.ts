@@ -316,7 +316,10 @@ export class GuestbookApp extends IterateDurableObject {
     const url = new URL(req.url);
     const project = await this.env.ITX.get();
     try {
-      const { guestbook, registry } = this.#ensureHost(project.projectId);
+      // Awaited on purpose: `project` is an RPC stub, so the property read is
+      // a promise — and #ensureHost caches its first construction, so passing
+      // it unawaited would permanently wire the host with a non-string id.
+      const { guestbook, registry } = this.#ensureHost(await project.projectId);
 
       if (req.method === "POST" && url.pathname === "/sign") {
         const form = await req.formData();
