@@ -13,7 +13,7 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
-import { telegramBotTokenSecretPath } from "./utils.ts";
+import { coerceTelegramId, telegramBotTokenSecretPath } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
 type TelegramBotApiResult = { description?: string; ok?: boolean; result?: unknown } & Record<
@@ -26,6 +26,54 @@ type TelegramBotApiResult = { description?: string; ok?: boolean; result?: unkno
  * params object. Shared by the dispatch guard (rpc-targets) and __describe. */
 export const TELEGRAM_CALL_GRAMMAR =
   "Use itx.integrations.telegram.get(connection?).<Bot API method>, for example itx.integrations.telegram.get().sendMessage({ chat_id, text }). Pass a connection slug only when a specific bot matters.";
+
+export const TELEGRAM_ACCESS_WELCOME_TEXT =
+  "Hello! You now have access to this Iterate project through this bot. Send me a message to get started.";
+
+export async function welcomeNewTelegramUsers(input: {
+  allowedUserIds: string[];
+  connection: string;
+  previouslyAllowedUserIds: string[];
+  sendTelegramMessage(message: {
+    body: Record<string, unknown>;
+    connection: string;
+  }): Promise<unknown>;
+}): Promise<string[]> {
+  const previouslyAllowed = new Set(input.previouslyAllowedUserIds);
+  const newlyAllowedUserIds = input.allowedUserIds.filter(
+    (userId) => !previouslyAllowed.has(userId),
+  );
+  const attempts = await Promise.allSettled(
+    newlyAllowedUserIds.map(async (userId) => {
+      await input.sendTelegramMessage({
+        connection: input.connection,
+        body: {
+          chat_id: coerceTelegramId(userId),
+          text: TELEGRAM_ACCESS_WELCOME_TEXT,
+        },
+      });
+    }),
+  );
+  const failures = attempts.flatMap((attempt, index) =>
+    attempt.status === "fulfilled"
+      ? []
+      : [{ error: attempt.reason, userId: newlyAllowedUserIds[index]! }],
+  );
+  if (failures.length > 0) {
+    const noun = failures.length === 1 ? "user" : "users";
+    const details = failures
+      .map(({ error, userId }) => {
+        const reason = error instanceof Error ? error.message : String(error);
+        return failures.length === 1 ? `${userId}: ${reason}` : `${userId} (${reason})`;
+      })
+      .join(", ");
+    throw new Error(
+      `Telegram access was updated, but ${input.connection} could not welcome newly approved ${noun} ${details}`,
+      { cause: failures[0]!.error },
+    );
+  }
+  return newlyAllowedUserIds;
+}
 
 /** The Bot API base for this deployment — https://api.telegram.org unless a
  * test repointed it (config.integrations.telegram.apiBaseUrl). */

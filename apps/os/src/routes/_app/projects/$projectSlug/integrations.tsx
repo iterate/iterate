@@ -761,7 +761,15 @@ function TelegramAccessSheet({
       toast.success("Telegram user access updated");
       onOpenChange(false);
     },
-    onError: (error) => toast.error(`Failed to update Telegram access: ${error.message}`),
+    onError: async (error) => {
+      // The access boundary is committed before newly approved users are
+      // welcomed. A welcome rejection therefore reports partial success; read
+      // the authoritative allowlist back before showing that explanation.
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "telegram-access", projectSlug, connection],
+      });
+      toast.error(error.message);
+    },
   });
 
   return (

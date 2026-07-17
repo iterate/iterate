@@ -796,9 +796,9 @@ export interface ProjectIntegrations {
    * means deny-all, including on connections created before this policy was
    * introduced. */
   getTelegramAccess(input: { connection: string }): Promise<{ allowedUserIds: string[] }>;
-  /** Replace one Telegram bot's complete user allowlist and wait until the
-   * ingress router has folded it, so the successful response is the access
-   * boundary taking effect—not merely an event being queued. */
+  /** Replace one Telegram bot's complete user allowlist, wait until the
+   * ingress router has folded it, then welcome each newly allowed user. If a
+   * welcome fails, the error explicitly says that access already took effect. */
   setTelegramAccess(input: {
     allowedUserIds: string[];
     connection: string;

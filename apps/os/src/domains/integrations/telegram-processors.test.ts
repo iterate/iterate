@@ -927,7 +927,11 @@ describe("TelegramAgentProcessor", () => {
       (event) => event.type === "events.iterate.com/agents/context-added",
     );
     expect(inputs).toHaveLength(1);
-    expect((inputs[0]!.payload as { content: string }).content).toContain("[photo]");
+    const content = (inputs[0]!.payload as { content: string }).content;
+    expect(content).toContain("[photo]");
+    expect(content).toContain("file_id: photo-1");
+    expect(content).toContain("token-safe download recipe");
+    expect(content).not.toContain("not directly viewable");
   });
 
   it("re-sends the typing action while the LLM works, with the chat id from state", async () => {
@@ -1372,8 +1376,15 @@ describe("telegramAgentSystemPrompt", () => {
     expect(prompt).toContain("your judgement");
     // Arbitrary Bot API methods remain available as immediate calls.
     expect(prompt).toContain(`itx.integrations.telegram.get("${CONNECTION}")`);
-    // v1 media limitation is stated so the agent doesn't hallucinate vision.
-    expect(prompt).toContain("[photo]");
+    // Telegram file metadata and the connection's write-only token compose
+    // into a token-safe download — the agent must not refuse before trying it.
+    expect(prompt).toContain(`itx.integrations.telegram.get("${CONNECTION}").getFile`);
+    expect(prompt).toContain(
+      `new Request('https://api.telegram.org/file/botgetSecret({ path: "/secrets/integrations/telegram/${CONNECTION}/bot-token" })/' + file_path)`,
+    );
+    expect(prompt).toContain("itx.egress.fetch");
+    expect(prompt).toContain("itx.agent.addFiles");
+    expect(prompt).not.toContain("you cannot view them yet");
   });
 });
 

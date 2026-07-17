@@ -145,6 +145,7 @@ import {
 import {
   callProjectTelegramBotApi,
   TELEGRAM_CALL_GRAMMAR,
+  welcomeNewTelegramUsers,
 } from "./domains/integrations/telegram-api.ts";
 import {
   connectionWaitroseClient,
@@ -3629,15 +3630,17 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     return { allowedUserIds: state.allowedUserIds };
   }
 
-  /** Replace one Telegram bot's complete user allowlist and wait until the
-   * ingress router has folded it, so the successful response is the access
-   * boundary taking effect—not merely an event being queued. */
+  /** Replace one Telegram bot's complete user allowlist, wait until the
+   * ingress router has folded it, then welcome each newly allowed user. If a
+   * welcome fails, the error explicitly says that access already took effect. */
   async setTelegramAccess(input: {
     allowedUserIds: string[];
     connection: string;
   }): Promise<{ allowedUserIds: string[] }> {
     await this.#assertConnectedTelegram(input.connection);
     const allowedUserIds = TelegramAllowedUserIds.parse(input.allowedUserIds);
+    const processor = this.#telegramProcessor(input.connection);
+    const { state: previousState } = await processor.snapshot();
     const configuredEvents = await new StreamRpcTarget({
       auth: this.props.auth,
       path: integrationConnectionStreamPath("telegram", input.connection),
@@ -3650,8 +3653,18 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     if (configured === undefined) {
       throw new Error("Telegram access policy append returned no configured event.");
     }
-    await this.#telegramProcessor(input.connection).waitUntilProcessed({
-      offset: configured.offset,
+    await processor.waitUntilProcessed({ offset: configured.offset });
+    await welcomeNewTelegramUsers({
+      allowedUserIds,
+      connection: input.connection,
+      previouslyAllowedUserIds: previousState.allowedUserIds,
+      sendTelegramMessage: async ({ body, connection }) =>
+        await callProjectTelegramBotApi({
+          body,
+          connection,
+          method: "sendMessage",
+          projectId: this.props.projectId,
+        }),
     });
     return { allowedUserIds };
   }
