@@ -1,5 +1,5 @@
 ---
-status: complete
+status: in-progress
 size: medium
 ---
 
@@ -7,7 +7,7 @@ size: medium
 
 ## Status
 
-Both fixes are complete. Nested file creation preserves the folder's canonical separator, and discarding a new file now confirms before removing it and closing its editor in one interaction.
+Both product fixes are complete and green. Follow-up review evidence is in progress: add a Playwright product spec and publish before/after recordings from that scenario in the draft PR body.
 
 ## Problem
 
@@ -48,3 +48,10 @@ Discarding an uncommitted new file is destructive because its content has no HEA
 - 2026-07-17: Traced the two-click behavior to the controlled CodeMirror wrapper reporting parent-driven value synchronization through `onChange`, which recreated the just-removed file as an empty working change.
 - 2026-07-17: Added a shared discard policy with the exact destructive confirmation, selection cleanup, and separate tracked/untracked behavior, then suppressed `onChange` while CodeMirror synchronizes an external `value` prop.
 - 2026-07-17: Verified cancel and confirm against the local `scm=true` UI in an isolated headed browser; cancel retained `must survive cancellation`, while confirm removed the SCM row and selected path in one click.
+
+## Playwright video follow-up
+
+- [ ] Add a product-level Playwright spec that creates and edits an uncommitted file, preserves it on confirmation cancel, and removes it on confirmation accept.
+- [ ] Record the scenario against the pre-fix and fixed implementations using the Playwright video lane.
+- [ ] Upload both recordings to GitHub and embed them as clearly labelled before/after media in the PR body.
+- [ ] Re-run affected checks, push the spec, confirm CI, and return this task to `tasks/complete/`.
