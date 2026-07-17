@@ -48,6 +48,8 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
 
 export type ItxEntrypointScope = {
   path: string;
+  /** The host-minted lane determines whether this binding can reach delivery-only sinks. */
+  purpose: "stream-delivery" | "userspace";
   /**
    * `null` is the deployment-global scope: the trusted root a GLOBAL
    * (`projectId: null`) stream's delivery dial evaluates expressions against.
@@ -72,6 +74,7 @@ export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProp
   return {
     path: normalizePath(input.path),
     projectId: input.projectId,
+    purpose: input.purpose,
   };
 }
 
@@ -84,14 +87,18 @@ export function scopeFromItxEntrypointProps(
   props: ItxEntrypointProps | undefined,
 ): ItxEntrypointScope {
   if (props === undefined) {
-    throw new Error("env.ITX.get() requires itx binding props with projectId and path");
+    throw new Error("env.ITX.get() requires itx binding props with projectId, path, and purpose");
   }
   if (props.projectId !== null && props.projectId.trim() === "") {
     throw new Error("env.ITX.get() requires a non-empty projectId (or null for the global scope)");
   }
+  if (props.purpose !== "stream-delivery" && props.purpose !== "userspace") {
+    throw new Error("env.ITX.get() requires purpose to be userspace or stream-delivery");
+  }
   return {
     path: normalizePath(props.path),
     projectId: props.projectId,
+    purpose: props.purpose,
   };
 }
 
@@ -148,6 +155,9 @@ const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
     "integrations",
     new Set([
       ...BUILTIN_INTEGRATION_SLUGS,
+      // Fixed first-party receiver; unlike connection families it is absent
+      // from the public integration catalog.
+      "posthog",
       "list",
       "getConnection",
       "startOAuthFlow",

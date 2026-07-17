@@ -4,6 +4,7 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import type {
   ProcessorRuntimeState,
@@ -141,8 +142,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
-          // ephemeral lane delivers them; the durable lanes filter them from
-          // DELIVERY in stream-subscribers.ts.
+          // ephemeral lane delivers them; durable lanes filter them from
+          // DELIVERY unless their ordinary subscription explicitly opts in.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -204,13 +205,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
-    // For project-scoped streams the birth certificate includes two
-    // independent push subscriptions, appended by the stream TO ITSELF in the
-    // same synchronous turn as `created`: the userspace project-worker feed
-    // and the platform search projection. Born-configured means zero wiring
-    // window — both cursors exist before the first user event can land (a
-    // voice stream streams from birth) — while remaining ordinary durable
-    // subscriptions in the one registry/spine.
+    // Project-scoped streams are born with their ordinary platform feeds,
+    // appended by the stream TO ITSELF in the same synchronous turn as
+    // `created`: the userspace project-worker feed, the platform search
+    // projection, and (in deployed OS environments) the first-party PostHog
+    // feed. Born-configured means zero wiring window before the first user
+    // event, while every feed remains an ordinary removable/replaceable
+    // durable subscription in the one registry/spine.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
@@ -254,6 +255,10 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "park",
           } satisfies SubscriptionConfiguredPayload,
         });
+        // The standalone streams playground reuses this DO without OS's
+        // PostHog credential or receiver. Deployed OS environments require
+        // the credential, so its presence is the deployment boundary.
+        if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
     this.append({

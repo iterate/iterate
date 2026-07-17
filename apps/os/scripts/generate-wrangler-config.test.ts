@@ -218,6 +218,11 @@ it("never ships the old shared auth service token to OS", () => {
   expect(config.secrets.required).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
 });
 
+it("requires the first-party PostHog project token in every deployed environment", () => {
+  expect(REQUIRED_SECRETS).toContain("APP_CONFIG_POSTHOG");
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_POSTHOG");
+});
+
 it("emits the AI response-cache key for every deployment while keeping production disabled", () => {
   expect(envShapedVars(envs.prd)).toMatchObject({
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: "",

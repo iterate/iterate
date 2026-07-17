@@ -714,16 +714,16 @@ export class StreamSubscribers {
             sized.map((entry) => [entry.event.offset, entry.byteLength]),
           );
 
-          // Ephemeral events never reach durable receivers — platform law,
-          // enforced as the same skip-not-defer shape selectors use: the raw
-          // read advances the cursor over their offsets, delivery drops them.
-          const durable = sized
-            .filter((entry) => entry.event.ephemeral !== true)
-            .map((entry) => entry.event);
+          // Durable delivery skips ephemeral rows unless the subscription
+          // explicitly opts in. The cursor still advances over skipped rows.
+          const visible =
+            config.includeEphemeral === true
+              ? sized.map((entry) => entry.event)
+              : sized.filter((entry) => entry.event.ephemeral !== true).map((entry) => entry.event);
           const { matched, conditionErrors } = this.#applySelector(
             subscriptionKey,
             config,
-            durable,
+            visible,
           );
           for (const fact of conditionErrors) this.#hooks.appendFact(fact);
 

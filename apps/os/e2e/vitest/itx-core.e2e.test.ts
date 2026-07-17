@@ -186,8 +186,8 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(committedEvent).toMatchObject({
     type: "hello-world",
     // The birth certificate: created(1), project-worker(2), durable search
-    // projection(3), woken(4) — the first user append is 5.
-    offset: 5,
+    // projection(3), PostHog(4), woken(5) — the first user append is 6.
+    offset: 6,
   });
   expect(await project.streams.get("/some/path").getEvents()).toMatchObject([
     {
@@ -200,6 +200,10 @@ test("Authenticated internal auth itx can create project and append to stream", 
     {
       type: "events.iterate.com/stream/subscription-configured",
       payload: { subscriptionKey: "platform-search-index", onPoison: "park" },
+    },
+    {
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { subscriptionKey: "iterate-platform-posthog" },
     },
     {
       type: "events.iterate.com/stream/woken",
