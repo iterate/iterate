@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useItx } from "iterate/react";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { useItx } from "~/itx/itx-react.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,

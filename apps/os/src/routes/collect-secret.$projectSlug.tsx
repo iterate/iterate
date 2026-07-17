@@ -16,11 +16,11 @@ import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/
 import { Input } from "@iterate-com/ui/components/input";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { ProjectScope, useItx, useItxQuery } from "iterate/react";
 import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { CollectSecretSearch } from "~/lib/collect-secret-link.ts";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
-import { ProjectScope, useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 // The secret-collection deep link target: a chrome-free, one-job page an
 // agent sends a user to when it needs a credential it must never see in

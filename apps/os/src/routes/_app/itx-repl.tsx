@@ -5,7 +5,7 @@
 // dynamic worker — and the browser can PROVIDE live capabilities too (see the
 // examples).
 //
-// The REPL rides the ONE browser itx session — useIterateSession (~/itx/itx-react.tsx).
+// The REPL rides the ONE browser itx session — useIterateSession (iterate/react).
 // It does NOT open its own socket: the tab has a single itx socket, and the
 // global repl uses the Session while a project repl narrows it via
 // session.projects.get(id); neither owns the connection. ConnectedItxRepl is
@@ -15,6 +15,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import type { RpcStub } from "capnweb";
+import { useItx, useIterateSession } from "iterate/react";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -23,7 +24,6 @@ import {
 } from "~/itx/browser-repl.ts";
 import type { Project, Session } from "~/itx-api.generated.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
-import { useItx, useIterateSession } from "~/itx/itx-react.tsx";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
 /** The REPL holds EITHER the Session (global repl) or a project itx — the

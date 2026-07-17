@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { Remote } from "comlink";
 import type { WorkerShape } from "@valtown/codemirror-ts/worker";
 import type { SourceCodeBlockExtension } from "@iterate-com/ui/components/source-code-block";
+import { useItx, type Itx } from "iterate/react";
 import { itxReplAutocompleteWorker } from "../itx-repl-autocomplete.ts";
 import {
   desiredRepoVfs,
@@ -13,7 +14,6 @@ import {
 } from "./repo-typescript-vfs.ts";
 import type { RepoTypeScriptWorkerApi } from "./repo-typescript.worker.ts";
 import { workingTreeStore } from "./staged-changes.ts";
-import { useItx, type Itx } from "~/itx/itx-react.tsx";
 
 /**
  * Host side of the repo IDE's TypeScript language service (the worker lives

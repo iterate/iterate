@@ -36,7 +36,7 @@ const router = {
       if (!otp.match(/^\d{6}$/)) {
         return { success: false, reason: "Invalid OTP: " + otp };
       }
-      execSync(`npm publish --otp=${otp}`);
+      execSync(`pnpm publish --otp=${otp}`);
       return { success: true };
     }),
 };
