@@ -238,10 +238,8 @@ export interface ProjectCollection {
    * own claims even when admin credentials ride the same socket;
    * "deployment" (every directory-known project) requires an admin principal
    * and is the default for non-user admin principals, which have no claims.
-   * `projectId` narrows the accessible catalog before deployment probing, for
-   * callers that need one project's status without probing account history.
    */
-  list(input?: { projectId?: string; scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
+  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
 
 /**

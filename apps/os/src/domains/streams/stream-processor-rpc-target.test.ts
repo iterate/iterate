@@ -8,6 +8,55 @@ import {
 } from "../../rpc-targets.ts";
 
 describe("StreamRpcTarget", () => {
+  it("detaches plain data from native RPC results and releases every invocation", async () => {
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      payload: { message: "still readable" },
+      type: "events.iterate.com/test/plain-rpc-result",
+    } satisfies StreamEvent;
+    const appended = [{ ...event }];
+    const read = { ...event };
+    const page = [{ ...event }];
+    const appendDispose = vi.fn();
+    const readDispose = vi.fn();
+    const pageDispose = vi.fn();
+    Object.defineProperty(appended, Symbol.dispose, { value: appendDispose });
+    Object.defineProperty(read, Symbol.dispose, { enumerable: true, value: readDispose });
+    Object.defineProperty(page, Symbol.dispose, { value: pageDispose });
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return {
+          append: async () => appended,
+          getEvent: async () => read,
+          getEvents: async () => page,
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const appendedResult = await stream.append(event);
+    const readResult = await stream.getEvent({ offset: event.offset });
+    const pageResult = await stream.getEvents();
+
+    expect(appendedResult).toEqual([event]);
+    expect(appendedResult).not.toBe(appended);
+    expect(readResult).toEqual(event);
+    expect(readResult).not.toBe(read);
+    expect(Reflect.has(readResult ?? {}, Symbol.dispose)).toBe(false);
+    expect(pageResult).toEqual([event]);
+    expect(pageResult).not.toBe(page);
+    expect(appendDispose).toHaveBeenCalledOnce();
+    expect(readDispose).toHaveBeenCalledOnce();
+    expect(pageDispose).toHaveBeenCalledOnce();
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();

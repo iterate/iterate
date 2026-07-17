@@ -17,7 +17,6 @@ const createFakeSession = (input: {
   listError?: unknown;
   onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
   description?: { principal: string };
-  onProjectList?: (args: unknown) => void;
   onProjectCreate?: (args: unknown) => void;
   projects?: Array<{
     deploymentStatus: "missing" | "ready" | "unknown";
@@ -47,19 +46,9 @@ const createFakeSession = (input: {
             [Symbol.dispose]: disposeProject,
           };
         },
-        list: async (args?: unknown) => {
-          input.onProjectList?.(args);
+        list: async () => {
           if (input.listError) throw input.listError;
-          const projects = input.projects ?? [];
-          if (
-            typeof args === "object" &&
-            args !== null &&
-            "projectId" in args &&
-            typeof args.projectId === "string"
-          ) {
-            return projects.filter((project) => project.id === args.projectId);
-          }
-          return projects;
+          return input.projects ?? [];
         },
       },
       [Symbol.dispose]: disposeAuthenticated,
@@ -488,27 +477,8 @@ describe("resolveChatProject", () => {
     );
   });
 
-  test("looks up only the selected project id and still sets it up when missing", async () => {
-    const onConnect = vi.fn();
-    const onProjectList = vi.fn();
-    let createArgs: unknown;
-    const fake = createFakeSession({
-      onConnect,
-      onProjectList,
-      onProjectCreate: (args) => {
-        createArgs = args;
-      },
-      projects: [
-        {
-          deploymentStatus: "missing",
-          id: "prj_manual",
-          organizationId: "org_123",
-          organizationName: "Acme",
-          organizationSlug: "acme",
-          slug: "manual",
-        },
-      ],
-    });
+  test("passes through a configured project id that is not in the project list", async () => {
+    const fake = createFakeSession({ projects: [] });
 
     await expect(
       resolveChatProject({
@@ -516,53 +486,10 @@ describe("resolveChatProject", () => {
         baseUrl: "https://os.iterate.com",
         configName: "prd",
         configPath: "/tmp/config.json",
-        explicitProject: "prj_manual",
+        configuredDefaultProject: "prj_manual",
         createSession: fake.createSession,
       }),
     ).resolves.toBe("prj_manual");
-
-    expect(onConnect).toHaveBeenCalledOnce();
-    expect(onProjectList).toHaveBeenCalledWith({ projectId: "prj_manual" });
-    expect(createArgs).toEqual({
-      organizationSlug: "acme",
-      projectId: "prj_manual",
-      slug: "manual",
-      waitUntilReady: false,
-    });
-    expect(fake.disposeProject).toHaveBeenCalledOnce();
-  });
-
-  test("lists the full accessible catalog only to explain an unknown project id", async () => {
-    const onProjectList = vi.fn();
-    const fake = createFakeSession({
-      onProjectList,
-      projects: [
-        {
-          deploymentStatus: "ready",
-          id: "prj_other",
-          organizationId: null,
-          organizationName: null,
-          organizationSlug: null,
-          slug: "other",
-        },
-      ],
-    });
-
-    await expect(
-      resolveChatProject({
-        auth: { credentials: { type: "bearer", token: "token_123" } },
-        baseUrl: "https://os.iterate.com",
-        configName: "prd",
-        configPath: "/tmp/config.json",
-        explicitProject: "prj_unknown",
-        createSession: fake.createSession,
-      }),
-    ).rejects.toThrow(
-      /Project "prj_unknown" was not found among accessible projects.*other \(prj_other, ready\)/,
-    );
-
-    expect(onProjectList).toHaveBeenNthCalledWith(1, { projectId: "prj_unknown" });
-    expect(onProjectList).toHaveBeenNthCalledWith(2, undefined);
   });
 
   test("does not bypass project resolution when listing accessible projects fails", async () => {

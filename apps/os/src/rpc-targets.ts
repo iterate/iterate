@@ -50,7 +50,7 @@ import type {
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
 import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
-import { LiveState, type LiveStateSubscription } from "iterate/live-state";
+import { disposeIgnoredRpcResult, LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -508,10 +508,17 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // had to treat it as fatal (the stream-browser double-kill e2e's old CI
   // fixme). Stub-returning methods (readEvents, subscribe) stay bare — a
   // `.catch` would collapse the returned stub — and their data legs already
-  // ride the tagged methods.
+  // ride the tagged methods. Native Workers RPC also makes every object-valued
+  // result disposable: detach its plain data, then release the invocation here
+  // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    try {
+      return [...result];
+    } finally {
+      disposeIgnoredRpcResult(result);
+    }
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -526,10 +533,18 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** One event by offset or idempotencyKey; undefined when it does not exist.
    * Point reads return ephemeral rows too — but those rows are evictable, so
    * an offset that once resolved may later read as undefined. */
-  getEvent(
+  async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    if (result === undefined) return undefined;
+    try {
+      const detached = { ...result };
+      Reflect.deleteProperty(detached, Symbol.dispose);
+      return detached;
+    } finally {
+      disposeIgnoredRpcResult(result);
+    }
   }
 
   /**
@@ -539,8 +554,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * `afterOffset: events.at(-1).offset`; reading a long stream without paging
    * shows you the beginning, not the head.
    */
-  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+  async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    try {
+      return [...result];
+    } finally {
+      disposeIgnoredRpcResult(result);
+    }
   }
 
   /**
@@ -5010,17 +5030,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * own claims even when admin credentials ride the same socket;
    * "deployment" (every directory-known project) requires an admin principal
    * and is the default for non-user admin principals, which have no claims.
-   * `projectId` narrows the accessible catalog before deployment probing, for
-   * callers that need one project's status without probing account history.
    */
-  async list(input?: {
-    projectId?: string;
-    scope?: "mine" | "deployment";
-  }): Promise<ProjectListEntry[]> {
-    const accessibleBases = await this.#listEntryBases(input?.scope);
-    const bases = input?.projectId
-      ? accessibleBases.filter((base) => base.id === input.projectId)
-      : accessibleBases;
+  async list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]> {
+    const bases = await this.#listEntryBases(input?.scope);
     const outcomes = await Promise.allSettled(bases.map((base) => projectProcessorState(base.id)));
     const statuses = deploymentStatusesFromProbes(
       bases.map((base) => base.id),

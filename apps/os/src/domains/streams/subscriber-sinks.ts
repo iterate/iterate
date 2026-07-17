@@ -235,7 +235,6 @@ type RetainedWakeHandshakeResponse = {
 export function retainWakeHandshakeResponse(args: {
   value: unknown;
   onDeliveryError: (error: unknown) => void;
-  onDisposed?: () => void;
 }): RetainedWakeHandshakeResponse {
   let originalReleased = false;
   const releaseOriginal = () => {
@@ -255,7 +254,6 @@ export function retainWakeHandshakeResponse(args: {
     for (const release of [
       () => ping?.[Symbol.dispose](),
       () => getRuntimeState?.[Symbol.dispose](),
-      () => args.onDisposed?.(),
     ]) {
       try {
         release();

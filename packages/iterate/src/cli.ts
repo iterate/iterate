@@ -377,15 +377,9 @@ export const resolveChatProject = async (input: {
     baseUrl: input.baseUrl,
     createSession: input.createSession,
     run: async (session) => {
-      const configuredProjectId = configured?.startsWith("prj_") ? configured : undefined;
       let projects: ProjectListEntry[];
       try {
-        // A project ID is already the routing key. Ask the server for that one
-        // catalog entry so startup does not probe every historical project,
-        // while preserving missing-project setup and access validation.
-        projects = await session.projects.list(
-          configuredProjectId ? { projectId: configuredProjectId } : undefined,
-        );
+        projects = await session.projects.list();
       } catch (error) {
         if (configured) {
           throw new Error(
@@ -402,11 +396,9 @@ export const resolveChatProject = async (input: {
           (candidate) => candidate.id === configured || candidate.slug === configured,
         );
         if (!project) {
-          // Keep the success path bounded to one project, but retain the full
-          // catalog in the uncommon error message so the user can recover.
-          const diagnosticProjects = configuredProjectId ? await session.projects.list() : projects;
+          if (configured.startsWith("prj_")) return configured;
           throw new Error(
-            `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(diagnosticProjects)}`,
+            `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
           );
         }
         if (project.deploymentStatus === "missing") {

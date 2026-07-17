@@ -139,11 +139,8 @@ describe("wake-handshake RPC ownership", () => {
       getRuntimeState.raw[Symbol.dispose]();
       ping.raw[Symbol.dispose]();
     });
-    const disposeAuthorityRoot = vi.fn();
-
     const retained = retainWakeHandshakeResponse({
       onDeliveryError: vi.fn(),
-      onDisposed: disposeAuthorityRoot,
       value: {
         checkpointOffset: 17,
         sink: sink.raw as ProcessEventBatch,
@@ -179,17 +176,14 @@ describe("wake-handshake RPC ownership", () => {
     expect(sink.duplicateDispose).toHaveBeenCalledOnce();
     expect(getRuntimeState.duplicateDispose).toHaveBeenCalledOnce();
     expect(ping.duplicateDispose).toHaveBeenCalledOnce();
-    expect(disposeAuthorityRoot).toHaveBeenCalledOnce();
   });
 
-  test("disposes the RPC result and authority root when the handshake is invalid", () => {
+  test("disposes the RPC result when the handshake is invalid", () => {
     const disposeResult = vi.fn();
-    const disposeAuthorityRoot = vi.fn();
 
     expect(() =>
       retainWakeHandshakeResponse({
         onDeliveryError: vi.fn(),
-        onDisposed: disposeAuthorityRoot,
         value: {
           checkpointOffset: -1,
           sink: () => {},
@@ -198,6 +192,5 @@ describe("wake-handshake RPC ownership", () => {
       }),
     ).toThrow("checkpointOffset");
     expect(disposeResult).toHaveBeenCalledOnce();
-    expect(disposeAuthorityRoot).toHaveBeenCalledOnce();
   });
 });
