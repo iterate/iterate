@@ -5,8 +5,8 @@
 // capability-host DO (the recovery template), the repo DO (at-head reconcile
 // inside processEvent), and the
 // agent DO (agent-durable-object.ts — multi-processor with per-processor
-// recovery on all five: agent, slack-agent, telegram-agent, email-agent,
-// github-agent; the spine's redelivery alone cannot cover a SIMULTANEOUS
+// recovery on its registered processors; the spine's redelivery alone cannot
+// cover a SIMULTANEOUS
 // Agent+Stream DO death mid-blocker — codex review P1).
 //
 // THE WIRING RECIPE (established by the secret DO; the same on every DO):

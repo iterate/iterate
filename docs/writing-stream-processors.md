@@ -201,7 +201,8 @@ few lines, and it doubles as scenario 4 below:
    **zero** events, and the refolded state equals the live instance's.
 
 References: the "refold: …" tests in `slack-processors.test.ts` (agent
-status/ack + router ack/forwards) and `github-agent.test.ts` (repo creation).
+status/ack + router ack/forwards) and `repo-task-events-processor.test.ts`
+(GitHub push import).
 
 ## What the runner registry gives you for free (and what it demands)
 
