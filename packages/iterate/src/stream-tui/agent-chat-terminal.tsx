@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 /** @jsxImportSource @opentui/react */
+// oxlint-disable react/only-export-components -- CLI entrypoint, not a Vite Fast Refresh module.
 /**
  * React/OpenTUI terminal chat with one project agent.
  *
