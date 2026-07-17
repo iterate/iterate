@@ -176,22 +176,27 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  /** The one ref whose identity this incarnation already delivered (JSON) —
-   * re-delivered when the caller's ref changes so a stashed inline recipe
-   * converges on current source. */
+  /** The (build version, ref) whose identity this incarnation already
+   * delivered — re-delivered when either changes, so a stashed inline recipe
+   * converges on current source and a rebuilt class that newly accepts
+   * identity gets it without waiting for an eviction. */
   #identityDelivered: string | undefined;
 
   async #facet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
     const facet = await this.#resolveFacet(ref, buildBudgetMs);
     // A facet cannot learn its own identity (ctx.facets.get has no props
     // channel, worker env is per-isolate) — deliver its ref before any
-    // traffic, once per incarnation per ref. The stash is what lets the
-    // worker's own code address itself (the SDK's alarm shim dials
+    // traffic, once per incarnation per ref AND BUILD. The stash is what
+    // lets the worker's own code address itself (the SDK's alarm shim dials
     // `itx.workers.get(ref)`, which resolves back to this DO). Marked
     // delivered only on success (or on a class that structurally cannot
     // accept identity), so a TRANSIENT failure retries on the next call
-    // instead of silently disabling self-alarms for the incarnation.
-    const identity = JSON.stringify(ref);
+    // instead of silently disabling self-alarms for the incarnation. The
+    // version marker in the key is what makes a "cannot accept" verdict
+    // expire with the build that earned it: a repo-backed ref's JSON never
+    // changes, but a rebuilt source that newly extends IterateDurableObject
+    // must get its identity without waiting for this DO's eviction.
+    const identity = `${this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) ?? ""}\n${JSON.stringify(ref)}`;
     if (this.#identityDelivered !== identity) {
       try {
         await invokeFlattenedPath({ args: [ref], path: ["__stashSelfRef"], target: facet });
