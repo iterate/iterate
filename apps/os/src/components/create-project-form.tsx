@@ -21,7 +21,6 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { connectIterateSession, reconnectIterateSession } from "iterate/react";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -43,12 +42,12 @@ export function CreateProjectForm() {
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
       // Straight through the itx session: create registers the project with
-      // the auth worker (org grant -> claims) and runs the engine bootstrap
+      // the auth worker (org grant -> claims) and starts the engine bootstrap
       // saga, then widens THIS socket's access to the new project.
       const session = await connectIterateSession();
       // Fast path: resolve as soon as the project EXISTS — the bootstrap saga
       // keeps running behind the handle, and the project home page plays its
-      // progress live from processor pushes until `state.created` flips.
+      // progress live from processor pushes until `state.ready` flips.
       const project = session.projects.create({
         slug: input.slug,
         waitUntilReady: false,
@@ -56,9 +55,9 @@ export function CreateProjectForm() {
       });
       // ONE pipelined round trip, then navigate: __describe() rides the create
       // pipeline, so the only wait is create itself (auth registration +
-      // bootstrap appends). Deliberately NOT awaited here: projects.list() —
-      // it probes engine existence for every project the caller owns, which
-      // costs whole seconds and is exactly the "weird delay" this path had.
+      // birth). Deliberately NOT awaited here: projects.list() — it probes
+      // engine existence for every project the caller owns, which costs whole
+      // seconds and is exactly the "weird delay" this path had.
       const description = await project.__describe();
       // The form validates strict kebab-case, so the auth worker's slug
       // normalization is an identity for UI creates; the background task
@@ -66,15 +65,16 @@ export function CreateProjectForm() {
       return { id: description.projectId, slug: input.slug };
     },
     onSuccess: (project) => {
-      // Onto the onboarding agent URL immediately. The stream page can render
-      // while the bootstrap saga and onboarding agent birth catch up behind it.
-      // The project route resolves without the refreshed session: create primes
-      // the server-side project directory, which is the auth fallback for
-      // exactly this claims-lag window.
+      // Onto the project home immediately with `welcome` so the creation
+      // checklist paints while the bootstrap saga runs. The project route
+      // resolves without the refreshed session: create primes the
+      // server-side project directory, which is the auth fallback for exactly
+      // this claims-lag window. Once `state.ready` flips, the home page
+      // hands off to the onboarding agent.
       void router.navigate({
-        to: "/projects/$projectSlug/agents/streams/$",
-        params: { projectSlug: project.slug, _splat: ONBOARDING_AGENT_PATH },
-        search: {},
+        to: "/projects/$projectSlug",
+        params: { projectSlug: project.slug },
+        search: { welcome: true },
       });
       // Session catch-up runs BEHIND the navigation: refresh the browser auth
       // session so its claims carry the new project, reconnect the one itx
@@ -94,9 +94,9 @@ export function CreateProjectForm() {
         );
         if (entry != null && entry.slug !== project.slug) {
           void router.navigate({
-            to: "/projects/$projectSlug/agents/streams/$",
-            params: { projectSlug: entry.slug, _splat: ONBOARDING_AGENT_PATH },
-            search: {},
+            to: "/projects/$projectSlug",
+            params: { projectSlug: entry.slug },
+            search: { welcome: true },
             replace: true,
           });
         }
@@ -126,7 +126,7 @@ export function CreateProjectForm() {
 
   return (
     <form
-      className="max-w-sm space-y-4"
+      className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
         event.stopPropagation();

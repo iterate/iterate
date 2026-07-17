@@ -40,20 +40,22 @@ test("a new user can create a project through the UI form", async ({ page }) => 
   expect(page.url()).toContain(`/projects/${firstSlug}/agents/streams/agents/onboarding`);
 
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    // /projects is the home of SUBSEQUENT projects: the header's "New project"
-    // and the sidebar's icon both link here, but share an accessible name, so
-    // navigate directly instead of picking one with a strict-mode locator.
+    // /new-project is the deep-linked create sheet (sidebar + projects list
+    // both link here). Navigate directly so strict-mode locators don't have
+    // to disambiguate multiple "Create project" controls.
     await page.goto("/new-project");
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
-    // Create resolves as soon as the project identity and bootstrap events
-    // exist, then redirects straight to the onboarding agent stream; repo and
-    // worker readiness continue behind that route. The composer is the
-    // destination's structural chrome; 60s covers the redirect plus the
-    // bootstrap still catching up behind it.
+    // Create resolves as soon as the project identity exists
+    // (`waitUntilReady: false`), then lands on the project home checklist so
+    // the bootstrap saga is visible. Once `state.ready` flips, the home page
+    // hands off to the onboarding agent. The composer is that destination's
+    // structural chrome; 60s covers birth + saga + handoff.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
+    await page.getByTestId("project-creation-progress").waitFor({ timeout: 30_000 });
+    expect(page.url()).toContain(`/projects/${slug}`);
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
-  // Same reasoning as above, now for the project created through the form.
+  // After the checklist completes, welcome handoff lands on onboarding.
   expect(page.url()).toContain(`/projects/${slug}/agents/streams/agents/onboarding`);
 });
