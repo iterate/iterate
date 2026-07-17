@@ -149,6 +149,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       now: () => Date.now(),
       random: () => 0.5,
       armAlarm: () => undefined,
+      defer: (work, _delayMs) => queueMicrotask(work),
       keepAlive: (promise) => void kept.push(promise),
       abortIncarnation: () => undefined,
     },

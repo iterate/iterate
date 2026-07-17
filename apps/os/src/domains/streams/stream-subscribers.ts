@@ -260,6 +260,12 @@ type StreamSubscribersHooks = {
   random(): number;
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
+  /**
+   * Run work after a bounded delay. Delayed push drains use this in-memory
+   * fast path and arm the Durable Object alarm for the same deadline as their
+   * crash-safe fallback.
+   */
+  defer(work: () => void, delayMs: number): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
   /** Tear down a stale Durable Object incarnation after a lifecycle reset. */
@@ -296,6 +302,8 @@ export class StreamSubscribers {
    */
   #tearingDown = false;
   readonly #pushDrains = new Set<string>();
+  /** Leading-edge batch deadlines for push subscriptions that opt in. */
+  readonly #scheduledPushDrains = new Map<string, { atMs: number; token: symbol }>();
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
   /** Consecutive poison skips per key (no intervening success) — see MAX_CONSECUTIVE_SKIPS. */
@@ -355,7 +363,25 @@ export class StreamSubscribers {
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
-    this.wake();
+    for (const connection of this.#connections.values()) connection.wake();
+    if (!this.#tearingDown) {
+      try {
+        const now = this.#hooks.now();
+        const due = new Set<string>();
+        for (const [subscriptionKey, scheduled] of this.#scheduledPushDrains) {
+          if (scheduled.atMs > now) continue;
+          due.add(subscriptionKey);
+        }
+        this.#reconcileDurable(due);
+      } catch (error) {
+        // Keep every due schedule intact until reconciliation either proves
+        // it is obsolete or launches its drain. A synchronous machinery
+        // failure therefore remains an owed alarm across the fresh
+        // incarnation instead of silently stranding a quiet projection.
+        console.error("stream durable alarm reconciliation failed; restarting incarnation", error);
+        this.#hooks.abortIncarnation("stream durable alarm reconciliation failed");
+      }
+    }
     this.#armAlarmFromStore();
   }
 
@@ -408,7 +434,7 @@ export class StreamSubscribers {
    * state rebuild the config events re-create them here), skip parked ones,
    * skip ones backing off (the alarm owns those), then poke or drain.
    */
-  #reconcileDurable(): void {
+  #reconcileDurable(startDelayedPushDrains: ReadonlySet<string> = new Set()): void {
     const state = this.#hooks.coreState();
     const now = this.#hooks.now();
 
@@ -421,19 +447,31 @@ export class StreamSubscribers {
       // below can never drift.
       this.#hooks.store.ensure(subscriptionKey, initialCursorFor(config, configOffset));
 
-      if (entry.parkedAtOffset !== undefined) continue;
+      if (entry.parkedAtOffset !== undefined) {
+        this.#scheduledPushDrains.delete(subscriptionKey);
+        continue;
+      }
 
       const row = this.#hooks.store.get(subscriptionKey);
       if (row === undefined) continue; // unreachable after ensure; defensive
-      if (row.nextAttemptAt !== null && row.nextAttemptAt > now) continue; // alarm owns it
+      if (row.nextAttemptAt !== null && row.nextAttemptAt > now) {
+        // The durable retry row, rather than the batching deadline, now owns
+        // the next attempt.
+        this.#scheduledPushDrains.delete(subscriptionKey);
+        continue;
+      }
       // "Caught up" trusts the monotonic watermark. A subscriber that
       // discarded its checkpoint (schema-change refold) and lost its
       // connection mid-replay parks here at a partial refold until the next
       // append or dial moves the head — self-healing, but slow on a quiet
       // stream; the subscriber's own keepalive covers the DO-death variant.
-      if (row.ackedOffset >= state.maxOffset) continue; // caught up; nothing to say
+      if (row.ackedOffset >= state.maxOffset) {
+        this.#scheduledPushDrains.delete(subscriptionKey);
+        continue; // caught up; nothing to say
+      }
 
       if (config.delivery.mode === "wake") {
+        this.#scheduledPushDrains.delete(subscriptionKey);
         if (this.#connections.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey)) {
           continue;
         }
@@ -441,9 +479,45 @@ export class StreamSubscribers {
         continue;
       }
 
-      if (this.#pushDrains.has(subscriptionKey)) continue;
+      if (this.#pushDrains.has(subscriptionKey)) {
+        this.#scheduledPushDrains.delete(subscriptionKey);
+        continue;
+      }
+      const batchWindowMs =
+        config.delivery.mode === "push" ? config.delivery.batchWindowMs : undefined;
+      if (batchWindowMs !== undefined && !startDelayedPushDrains.has(subscriptionKey)) {
+        this.#schedulePushDrain(subscriptionKey, batchWindowMs);
+        continue;
+      }
       this.#drainPush(subscriptionKey);
+      // Invalidate the timer only after #drainPush has synchronously claimed
+      // the key and handed its promise to keepAlive. If either step throws,
+      // the owed deadline survives for alarm/incarnation recovery.
+      this.#scheduledPushDrains.delete(subscriptionKey);
     }
+  }
+
+  /**
+   * Fix a leading-edge deadline for one delayed push subscription. Appends
+   * inside the window only move the stream head; they never extend the
+   * deadline. The timer is the low-latency path and the DO alarm is the
+   * durable fallback. A token makes whichever path loses the race a no-op.
+   */
+  #schedulePushDrain(subscriptionKey: string, batchWindowMs: number): void {
+    if (this.#scheduledPushDrains.has(subscriptionKey)) return;
+    const token = Symbol(`push-drain:${subscriptionKey}`);
+    const atMs = this.#hooks.now() + batchWindowMs;
+    this.#scheduledPushDrains.set(subscriptionKey, { atMs, token });
+    this.#hooks.armAlarm(atMs);
+    this.#hooks.defer(() => {
+      if (this.#scheduledPushDrains.get(subscriptionKey)?.token !== token) return;
+      try {
+        this.#reconcileDurable(new Set([subscriptionKey]));
+      } catch (error) {
+        console.error("stream durable timer reconciliation failed; restarting incarnation", error);
+        this.#hooks.abortIncarnation("stream durable timer reconciliation failed");
+      }
+    }, batchWindowMs);
   }
 
   /**
@@ -953,6 +1027,9 @@ export class StreamSubscribers {
       if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
+    for (const scheduled of this.#scheduledPushDrains.values()) {
+      if (next === null || scheduled.atMs < next) next = scheduled.atMs;
+    }
     if (next !== null) this.#hooks.armAlarm(next);
   }
 
@@ -963,6 +1040,9 @@ export class StreamSubscribers {
   /** A `subscription-configured` event committed (new or replacing). */
   onSubscriptionConfigured(payload: SubscriptionConfiguredPayload, eventOffset: number): void {
     const key = payload.subscriptionKey;
+    // Fence any timer for the replaced configuration. The wake below applies
+    // the new delivery mode/window from scratch.
+    this.#scheduledPushDrains.delete(key);
     // A replaced config's live connection belongs to the old config; drop it
     // and let reconcile re-establish against the new one.
     this.#connections.get(key)?.close("replaced");
@@ -982,6 +1062,7 @@ export class StreamSubscribers {
   /** A `subscription-removed` event committed. Deleting the row is revocation. */
   onSubscriptionRemoved(subscriptionKey: string): void {
     this.#hooks.store.delete(subscriptionKey);
+    this.#scheduledPushDrains.delete(subscriptionKey);
     this.#connections.get(subscriptionKey)?.close("subscription-removed");
     this.#batchLimits.delete(subscriptionKey);
     this.#consecutiveSkips.delete(subscriptionKey);

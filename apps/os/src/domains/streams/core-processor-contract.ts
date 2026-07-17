@@ -128,7 +128,17 @@ const SubscriptionDelivery = z.discriminatedUnion("mode", [
      */
     processorSlug: z.string().trim().min(1).optional(),
   }),
-  z.strictObject({ mode: z.literal("push"), expression: DeliveryExpression }),
+  z.strictObject({
+    mode: z.literal("push"),
+    expression: DeliveryExpression,
+    /**
+     * Optional leading-edge batching window. The first lagging event fixes
+     * the deadline (later appends do not extend it), then one delivery drains
+     * everything committed through that point. Useful for derived projections
+     * that would otherwise rewrite the same remote document once per append.
+     */
+    batchWindowMs: z.number().int().min(1).max(60_000).optional(),
+  }),
   z.strictObject({ mode: z.literal("webhook"), url: z.url({ protocol: /^https?$/ }) }),
 ]);
 

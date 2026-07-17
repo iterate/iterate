@@ -2032,7 +2032,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SubscriptionDelivery",
     kind: "typeAlias",
     sourceText:
-      '/** A durable subscription\'s delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */\nexport type SubscriptionDelivery =\n  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }\n  | { mode: "push"; expression: ItxExpression }\n  | { mode: "webhook"; url: string };',
+      '/** A durable subscription\'s delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */\nexport type SubscriptionDelivery =\n  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }\n  | { mode: "push"; expression: ItxExpression; batchWindowMs?: number | undefined }\n  | { mode: "webhook"; url: string };',
     summary:
       "A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST).",
     memberSummaries: {},

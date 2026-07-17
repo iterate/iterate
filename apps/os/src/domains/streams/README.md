@@ -290,7 +290,7 @@ certificate — `created (1)`, worker `subscription-configured (2)`, search
   onPoison: "skip" }   // one bad event must not silence the feed
 
 { subscriptionKey: "platform-search-index",
-  delivery: { mode: "push", expression: ["indexStreamSearchBatch"] },
+  delivery: { mode: "push", expression: ["indexStreamSearchBatch"], batchWindowMs: 250 },
   deliver: "all",
   onPoison: "park" }   // retry derived writes; never skip source data
 ```
@@ -301,6 +301,11 @@ durable config. The search feed owns a separate cursor, so an R2 outage cannot
 hold up the userspace worker; it retries with bounded backoff and parks with a
 durable explanation rather than skipping a source event. The worker returns →
 ack; throws → redelivery with backoff.
+The search feed uses a 250 ms leading-edge window: the first lagging event fixes
+the deadline, adjacent facts join the same index write, and later appends never
+extend it. The project-worker feed and hosted wake processors remain immediate.
+The timer is the low-latency path and the Durable Object alarm is the crash-safe
+fallback.
 `${event.path}@${event.offset}` is the idempotency idiom that makes
 at-least-once redelivery a no-op.
 

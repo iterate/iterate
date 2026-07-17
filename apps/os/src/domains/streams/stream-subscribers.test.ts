@@ -145,8 +145,9 @@ type ConfiguredEntry = {
   parkedAtOffset?: number;
 };
 
-function makeHarness() {
+function makeHarness(options: { manuallyRunDeferred?: boolean } = {}) {
   let now = 0;
+  let nextCoreStateError: Error | undefined;
   let assignedMaxOffset = 0;
   let streamCreatedAt: string | undefined = "stream-v1";
   const log: StreamEvent[] = [];
@@ -155,6 +156,7 @@ function makeHarness() {
   const armedAlarms: number[] = [];
   const abortedIncarnations: string[] = [];
   const kept: Promise<unknown>[] = [];
+  const deferred: Array<() => void> = [];
   const egress: { count: number; bytes: number }[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
 
@@ -211,14 +213,20 @@ function makeHarness() {
           .slice(0, limit)
           .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
       },
-      coreState: (): CoreProcessorState =>
-        CoreProcessorContract.stateSchema.parse({
+      coreState: (): CoreProcessorState => {
+        if (nextCoreStateError !== undefined) {
+          const error = nextCoreStateError;
+          nextCoreStateError = undefined;
+          throw error;
+        }
+        return CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
           path: "/t",
           createdAt: streamCreatedAt,
           maxOffset: assignedMaxOffset,
           configuredSubscribersByKey: configured,
-        }),
+        });
+      },
       store,
       dial,
       appendFact: (event) => {
@@ -235,6 +243,10 @@ function makeHarness() {
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
+      defer: (work, _delayMs) => {
+        if (options.manuallyRunDeferred === true) deferred.push(work);
+        else queueMicrotask(work);
+      },
       keepAlive: (promise) => kept.push(promise),
       abortIncarnation: (reason) => {
         abortedIncarnations.push(reason);
@@ -267,6 +279,9 @@ function makeHarness() {
     configured,
     log,
     settle,
+    runDeferred: () => {
+      for (const work of deferred.splice(0)) work();
+    },
     append: (...events: StreamEvent[]) => {
       assignedMaxOffset = Math.max(assignedMaxOffset, ...events.map((event) => event.offset));
       return log.push(...events);
@@ -281,6 +296,9 @@ function makeHarness() {
     now: () => now,
     advanceTo: (ms: number) => {
       now = ms;
+    },
+    failNextCoreState: (error: Error) => {
+      nextCoreStateError = error;
     },
     setIncarnation: (createdAt: string | undefined) => {
       streamCreatedAt = createdAt;
@@ -1374,6 +1392,104 @@ describe("StreamSubscribers", () => {
     expect(conditionFacts).toHaveLength(1);
     expect(conditionFacts[0]!.idempotencyKey).toBe("selector-condition-failed:k:1");
     expect(h.row("k")?.ackedOffset).toBe(2);
+  });
+
+  it("v2. batches an opted-in push outside the append response gate", async () => {
+    const h = makeHarness({ manuallyRunDeferred: true });
+    h.configure(
+      pushPayload({
+        delivery: {
+          mode: "push",
+          expression: ["worker", "processEventBatch"],
+          batchWindowMs: 250,
+        },
+      }),
+      0,
+    );
+    h.append(evt(1, "a"));
+
+    h.subscribers.wake();
+
+    // wake() is the append's post-commit path. It may arm the crash-safe
+    // alarm synchronously, but it must not enter the receiver (whose eventual
+    // cursor ack would join this RPC turn's Durable Object output gate).
+    expect(h.pushes).toEqual([]);
+    expect(h.armedAlarms).toEqual([250]);
+
+    // A second append joins the first fixed window. It neither starts the
+    // receiver nor extends/duplicates the deadline.
+    h.advanceTo(100);
+    h.append(evt(2, "b"));
+    h.subscribers.wake();
+    expect(h.pushes).toEqual([]);
+    expect(h.armedAlarms).toEqual([250]);
+
+    h.advanceTo(250);
+    h.runDeferred();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1, 2]);
+    expect(h.row("k")?.ackedOffset).toBe(2);
+  });
+
+  it("v3. the durable alarm wins a lost deferred-turn race without duplicate delivery", async () => {
+    const h = makeHarness({ manuallyRunDeferred: true });
+    h.configure(
+      pushPayload({
+        delivery: {
+          mode: "push",
+          expression: ["worker", "processEventBatch"],
+          batchWindowMs: 250,
+        },
+      }),
+      0,
+    );
+    h.append(evt(1, "a"));
+    h.subscribers.wake();
+
+    // Model eviction/lifecycle loss of the in-memory callback: the already
+    // armed alarm starts the owed drain in its own event turn.
+    h.advanceTo(250);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+
+    // The stale callback can still physically fire in a surviving
+    // incarnation; its token was invalidated by the alarm and it is a no-op.
+    h.runDeferred();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+  });
+
+  it("v4. a synchronous timer reconcile failure keeps the drain owed for recovery", async () => {
+    const h = makeHarness({ manuallyRunDeferred: true });
+    h.configure(
+      pushPayload({
+        delivery: {
+          mode: "push",
+          expression: ["worker", "processEventBatch"],
+          batchWindowMs: 250,
+        },
+      }),
+      0,
+    );
+    h.append(evt(1, "a"));
+    h.subscribers.wake();
+
+    h.advanceTo(250);
+    h.failNextCoreState(new Error("synchronous state read failed"));
+    h.runDeferred();
+    expect(h.abortedIncarnations).toEqual(["stream durable timer reconciliation failed"]);
+    expect(h.pushes).toEqual([]);
+
+    // In production abort() starts a new incarnation whose woken fact heals
+    // the subscription. Keeping this harness incarnation lets the already
+    // armed durable alarm prove the same deadline was not discarded.
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(1);
   });
 
   it("w. live-tail fast path: a caught-up drain consumes the handed-over tail without a storage read", async () => {

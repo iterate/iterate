@@ -167,6 +167,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      defer: (work, delayMs) => void setTimeout(work, delayMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
       abortIncarnation: (reason) => this.ctx.abort(reason),
     },
@@ -232,7 +233,15 @@ export class StreamDurableObject extends DurableObject<Env> {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             subscriptionKey: SEARCH_INDEX_SUBSCRIPTION_KEY,
-            delivery: { mode: "push", expression: ["indexStreamSearchBatch"] },
+            delivery: {
+              mode: "push",
+              expression: ["indexStreamSearchBatch"],
+              // A conversation turn appends several adjacent lifecycle facts.
+              // Coalesce them into one segment rewrite instead of letting the
+              // first R2 write serialize the following append RPCs behind the
+              // Stream DO's output gate.
+              batchWindowMs: 250,
+            },
             // Rebuild every segment from authoritative history, including
             // streams created before this deployment when production is
             // intentionally recreated for this breaking birth-certificate

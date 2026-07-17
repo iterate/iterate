@@ -3662,7 +3662,7 @@ export type StreamSubscriberDescriptor = {
 /** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
 export type SubscriptionDelivery =
   | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
-  | { mode: "push"; expression: ItxExpression }
+  | { mode: "push"; expression: ItxExpression; batchWindowMs?: number | undefined }
   | { mode: "webhook"; url: string };
 
 /**
