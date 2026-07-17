@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { trustedInternalAuthContext } from "../../auth.ts";
+import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
-import { deploymentItxForTrustedInternal, itxForScope } from "../../rpc-targets.ts";
+import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
 import {
   takeWorkerFetchDispatch,
   workerBuildStatusResponse,
@@ -22,16 +22,18 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
-    const { path, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { path, projectId, purpose } = scopeFromItxEntrypointProps(this.ctx.props);
+    const auth =
+      purpose === "stream-delivery" ? streamDeliveryAuthContext() : trustedInternalAuthContext();
     if (projectId === null) {
       // The deployment-global scope: what a GLOBAL (projectId: null) stream's
       // delivery dial evaluates expressions against. It is the same root a
       // trusted-internal session sees — deployment-wide repos/streams — so a
       // global repo stream's wake expression walks the identical shape a
       // project stream's does.
-      return deploymentItxForTrustedInternal({ ctx: this.ctx });
+      return deploymentItxForInternal({ auth, ctx: this.ctx });
     }
-    return itxForScope({ auth: trustedInternalAuthContext(), ctx: this.ctx, path, projectId });
+    return itxForScope({ auth, ctx: this.ctx, path, projectId });
   }
 
   /**

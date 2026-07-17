@@ -1475,6 +1475,27 @@ describe("StreamSubscribers", () => {
     });
   });
 
+  it("z2a. a push subscription can receive ephemeral and durable rows in exact offset order", async () => {
+    const h = makeHarness();
+    h.configure({ ...pushPayload(), includeEphemeral: true }, 0);
+    h.append(
+      evt(1, "durable"),
+      { ...evt(2, "chunk"), ephemeral: true as const },
+      evt(3, "durable-again"),
+    );
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map(({ offset, ephemeral }) => ({ offset, ephemeral }))).toEqual([
+      { offset: 1, ephemeral: undefined },
+      { offset: 2, ephemeral: true },
+      { offset: 3, ephemeral: undefined },
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
   it("z2b. a session selector receives an empty scan envelope across non-matches", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b"));
