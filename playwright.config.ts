@@ -47,11 +47,7 @@ export default defineConfig({
     ["json", { outputFile: "test-results/playwright-results.json" }],
   ],
   timeout: videoMode ? 300_000 : SPEC_TEST_TIMEOUT_MS,
-  expect: {
-    timeout: SPEC_EXPECT_TIMEOUT_MS,
-    toHaveScreenshot: { maxDiffPixelRatio: 0.01 },
-  },
-  snapshotPathTemplate: "{testDir}/{testFileDir}/screenshots/{arg}{ext}",
+  expect: { timeout: SPEC_EXPECT_TIMEOUT_MS },
   use: {
     // Tight on purpose; the middlewright spinner-waiter extends it only while
     // the app visibly reports progress (see e2e-policy/budgets.ts).
