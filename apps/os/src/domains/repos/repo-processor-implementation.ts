@@ -1,7 +1,5 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
-import { githubAgentCreationEvents } from "./github-agent-mechanics.ts";
-import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";
 import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
@@ -190,10 +188,17 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
     if (event.type === "events.iterate.com/github/webhook-received") {
       const push = repoGithubPushFromWebhookPayload(event.payload);
+      const origin = event.source?.crossPostedFrom?.at(-1);
       if (
         push !== null &&
         state.github !== null &&
         state.defaultBranch !== null &&
+        origin?.path === `/integrations/github/${state.github.connection}` &&
+        origin.projectId === this.projectId &&
+        origin.subscriptionKey === `github-repo:${this.path}` &&
+        origin.type === event.type &&
+        push.installationId === state.github.installationId &&
+        push.repositoryId === state.github.repositoryId &&
         push.branch === state.defaultBranch
       ) {
         // GitHub is an ingress lane, not a second source of commit facts. The
@@ -213,61 +218,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         );
       }
 
-      // PR webhooks route to a per-PR agent stream, everything else (pushes,
-      // stars, plain issues) stays a repo-stream fact. The first forward
-      // explicitly creates the agent, capability host, and GitHub
-      // facet before the webhook. Idempotency keys make replay repair safe.
-      const prNumbers = pullRequestNumbersFromWebhookBody(
-        (event.payload as { body?: unknown }).body,
-      );
-      const github = state.github;
-      if (prNumbers.length === 0 || github === null) return;
-      const projectId = this.projectId;
-      if (projectId === null) {
-        throw new Error(`GitHub PR routing requires a project-scoped repo: ${this.path}`);
-      }
-      // Durable obligation, not best-effort: this forward is the webhook's
-      // only path to the PR agent (the Slack router once lost a message to a
-      // fire-and-forget append). A check/workflow delivery may name several
-      // PRs, so every target append belongs to the same held obligation.
-      // blockProcessorWhile holds the checkpoint so a failed append replays;
-      // the keys below dedupe each target's replay.
-      blockProcessorWhile(async () => {
-        await Promise.all(
-          prNumbers.map(async (prNumber) => {
-            const streamPath = await githubAgentPath(
-              {
-                installationId: github.installationId,
-                owner: github.owner,
-                repo: github.repo,
-                repoPath: this.path,
-              },
-              prNumber,
-            );
-            // The key carries the FULL GitHub coordinates, not just the PR
-            // number: relinking the repo to a different repository or
-            // connection must repoint existing PR agents.
-            await appendTo(
-              streamPath,
-              ...githubAgentCreationEvents({
-                connection: github.connection,
-                installationId: github.installationId,
-                number: prNumber,
-                owner: github.owner,
-                path: streamPath,
-                projectId,
-                repo: github.repo,
-                repoPath: this.path,
-              }),
-              {
-                type: "events.iterate.com/github/webhook-received" as const,
-                idempotencyKey: this.idempotencyKey("pr-forward", event),
-                payload: event.payload,
-              },
-            );
-          }),
-        );
-      });
       return;
     }
   }

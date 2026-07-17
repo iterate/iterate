@@ -24,9 +24,9 @@ test("agent create installs only generic machinery; later events configure it", 
   await expect(
     (
       agent as unknown as {
-        create(input: { systemPrompt: string }): Promise<void>;
+        create(input: { unexpected: true }): Promise<void>;
       }
-    ).create({ systemPrompt: "caller must not replace the platform prompt" }),
+    ).create({ unexpected: true }),
   ).rejects.toThrow(
     "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
   );

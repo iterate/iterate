@@ -37,24 +37,37 @@ type RepoArtifactPush = {
 };
 
 /** Recognize a GitHub push webhook without treating it as a commit fact. */
-export function repoGithubPushFromWebhookPayload(
-  payload: unknown,
-): { afterCommitOid: string; branch: string } | null {
+export function repoGithubPushFromWebhookPayload(payload: unknown): {
+  afterCommitOid: string;
+  branch: string;
+  installationId: string;
+  repositoryId: number;
+} | null {
   const captured = record(payload);
-  const headers = record(captured?.headers);
-  if (headers?.githubEvent !== "push") return null;
+  const delivery = record(captured?.delivery);
+  if (delivery?.name !== "push") return null;
+  const installationId = string(captured?.installationId);
   const body = record(captured?.body);
+  const candidateRepositoryId = record(body?.repository)?.id;
+  const repositoryId =
+    typeof candidateRepositoryId === "number" &&
+    Number.isSafeInteger(candidateRepositoryId) &&
+    candidateRepositoryId > 0
+      ? candidateRepositoryId
+      : null;
   const ref = string(body?.ref);
   const afterCommitOid = string(body?.after);
   if (
     ref === null ||
     afterCommitOid === null ||
+    installationId === null ||
+    repositoryId === null ||
     afterCommitOid === ZERO_COMMIT_OID ||
     !ref.startsWith("refs/heads/")
   )
     return null;
   const branch = ref.slice("refs/heads/".length);
-  return branch === "" ? null : { afterCommitOid, branch };
+  return branch === "" ? null : { afterCommitOid, branch, installationId, repositoryId };
 }
 
 /** Markdown files below any directory segment named `tasks` are repo tasks. */

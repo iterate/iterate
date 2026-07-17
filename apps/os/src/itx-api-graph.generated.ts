@@ -1675,7 +1675,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  birthCertificate: { config: Record<string, never> } | null;\n  artifactName: string | null;\n  ready: boolean;\n  defaultBranch: string | null;\n  github: { connection: string; installationId: string; owner: string; repo: string } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
+      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  birthCertificate: { config: Record<string, never> } | null;\n  artifactName: string | null;\n  ready: boolean;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
     summary:
       "The repo processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -1992,7 +1992,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "GithubRepoLink",
     kind: "typeAlias",
     sourceText:
-      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n};",
+      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n  /** GitHub's stable database identity for this repository. */\n  repositoryId: number;\n};",
     summary:
       "The GitHub repository a repo is linked to: the named GitHub connection (an App installation) whose token authenticates mirror pushes, its installation id, and the owner/repo coordinates on GitHub.",
     memberSummaries: {},
