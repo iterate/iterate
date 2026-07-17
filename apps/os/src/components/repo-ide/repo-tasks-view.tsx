@@ -143,7 +143,7 @@ export function RepoTasksView({
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
   onDelete: (path: string) => void;
   onAssignAgent: (task: RepoTask, renamedFromPath?: string) => Promise<string | undefined>;
-  onCommitTaskChanges: (message: string) => Promise<unknown>;
+  onCommitTaskChanges: (message: string | undefined) => Promise<unknown>;
   commitPending: boolean;
 }) {
   // All task file contents in ONE clone, keyed by path. The previous approach

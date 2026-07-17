@@ -25,7 +25,8 @@ export function useRepoTaskCommit({
   taskChanges: readonly RepoTaskChange[];
   taskChangeSignature: string;
   commitPending: boolean;
-  onCommitTaskChanges: (message: string) => Promise<unknown>;
+  /** Pass a typed message, or `undefined` to let the commit path auto-generate from the snapshotted plan. */
+  onCommitTaskChanges: (message: string | undefined) => Promise<unknown>;
 }) {
   const itx = useItx();
   const [commitMessage, setCommitMessage] = useState("");
@@ -74,8 +75,10 @@ export function useRepoTaskCommit({
       if (commitInFlightRef.current || taskChanges.length === 0) return;
       commitInFlightRef.current = true;
       try {
-        const message = await resolveCommitMessage(manualMessage, taskChanges);
-        await onCommitTaskChanges(message);
+        // Only pass an explicit typed message. Empty means the mutation snapshots
+        // the working tree and generates the message from that same plan.
+        const typed = (manualMessage ?? "").trim();
+        await onCommitTaskChanges(typed === "" ? undefined : typed);
         setCommitMessage("");
         setAutoSave(null);
       } catch {
@@ -88,7 +91,7 @@ export function useRepoTaskCommit({
         commitInFlightRef.current = false;
       }
     },
-    [onCommitTaskChanges, resolveCommitMessage, taskChangeSignature, taskChanges],
+    [onCommitTaskChanges, taskChangeSignature, taskChanges.length],
   );
 
   const writeCommitMessage = useCallback(async () => {

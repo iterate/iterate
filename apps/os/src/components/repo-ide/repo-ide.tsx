@@ -30,15 +30,19 @@ import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
 import {
+  fallbackTaskCommitMessage,
+  listRepoTaskChanges,
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
   repoTaskAssignmentHeadPaths,
   taskCommitFileChanges,
+  taskCommitMessagePrompt,
   type RepoTask,
 } from "./repo-tasks.ts";
 import {
   commitPlan,
   effectiveEntry,
+  textContentForEntry,
   useWorkingTree,
   workingTreeStore,
   type FileEntry,
@@ -227,15 +231,84 @@ export function RepoIde({
 
   /** Tasks view: commit only task-path changes, leave unrelated working-tree edits. */
   const commitTasks = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async (message: string | undefined) => {
+      // Snapshot first so the RPC payload and any auto-generated message describe
+      // the same change set, even if the user keeps editing during AI generation.
       const plan = taskCommitFileChanges(store.changes);
       if (plan.paths.length === 0) return null;
+      const plannedChanges = new Map(
+        plan.paths.flatMap((path) => {
+          const change = store.changes.get(path);
+          return change === undefined ? [] : [[path, change] as const];
+        }),
+      );
+      const listed = listRepoTaskChanges(plannedChanges, headPathSet, {});
+      const typed = message?.trim() ?? "";
+      const commitMessage =
+        typed !== ""
+          ? typed
+          : await (async () => {
+              const prompt = taskCommitMessagePrompt(listed);
+              try {
+                const generated = (await itx.ai.run("openai/gpt-5.5", {
+                  messages: [
+                    { role: "system", content: prompt.system },
+                    { role: "user", content: prompt.user },
+                  ],
+                })) as { response?: string };
+                const text = generated.response?.trim().replace(/^["']|["']$/g, "");
+                if (text) return text.slice(0, 72);
+              } catch {
+                // Fall through to the deterministic summary.
+              }
+              return fallbackTaskCommitMessage(listed);
+            })();
+
+      const previousTaskContents =
+        queryClient.getQueryData<Record<string, string>>([
+          "itx",
+          "repo-task-files",
+          projectId,
+          repoPath,
+          files.commitOid,
+        ]) ?? {};
+
       const result = await itx.repos.get(repoPath).commitFiles({
-        message,
+        message: commitMessage,
         changes: plan.fileChanges,
       });
-      // Clear immediately so the board drops New/Edited/Deleted chrome before
-      // the HEAD oid migration finishes.
+
+      // Seed the new HEAD's task + file-list caches before clearing overlays so
+      // brand-new tasks never vanish and non-task working edits migrate onto
+      // the post-commit store even if invalidateQueries is still stale.
+      const nextTaskContents = { ...previousTaskContents };
+      const nextPathSet = new Set(headPaths);
+      for (const change of plan.fileChanges) {
+        if ("delete" in change && change.delete) {
+          delete nextTaskContents[change.path];
+          nextPathSet.delete(change.path);
+          continue;
+        }
+        nextPathSet.add(change.path);
+        const content =
+          "content" in change && typeof change.content === "string"
+            ? change.content
+            : textContentForEntry(
+                "contentBase64" in change && typeof change.contentBase64 === "string"
+                  ? { type: "write-base64", contentBase64: change.contentBase64 }
+                  : undefined,
+              );
+        if (content !== undefined) nextTaskContents[change.path] = content;
+      }
+      queryClient.setQueryData<Record<string, string>>(
+        ["itx", "repo-task-files", projectId, repoPath, result.commitOid],
+        nextTaskContents,
+      );
+      queryClient.setQueryData(["itx", "repo-files", projectId, repoPath], {
+        commitOid: result.commitOid,
+        paths: [...nextPathSet].sort((left, right) => left.localeCompare(right)),
+      });
+
       for (const path of plan.paths) {
         store.setWorking(path, undefined);
         store.setStaged(path, undefined);
@@ -265,7 +338,7 @@ export function RepoIde({
     },
   });
   const commitTaskChanges = useCallback(
-    (message: string) => commitTasks.mutateAsync(message),
+    (message: string | undefined) => commitTasks.mutateAsync(message),
     [commitTasks],
   );
 
