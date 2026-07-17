@@ -5,11 +5,15 @@ branch: stateful-worker-alarms
 ---
 
 > **Shipped** as option 1 (parent-owned alarm): `setAlarm`/`getAlarm` reserved
-> verbs on the worker capability, `StatefulWorkerDurableObject` persists
-> `{ atMs, ref }` + mirrors its real alarm and replays fires into the facet
-> class's `alarm()` (rethrow = native retry), `statefulWorkerAlarms` in
-> `iterate/sdk` presents the standard `ctx.storage` alarm API, and the
-> template guestbook registers with `{ recovery: true }`.
+> verbs on the worker capability; `StatefulWorkerDurableObject`'s real
+> platform alarm IS the facet's alarm (the only extra state is the worker
+> recipe to boot a cold fire), fires are delivered through the worker's
+> `invokeCapability` dispatcher (workerd reserves `alarm` as an RPC name)
+> and rethrow into native retry; `withStatefulWorkerAlarms` in `iterate/sdk`
+> presents the standard `ctx.storage` alarm API; the template guestbook
+> registers with `{ recovery: true }`. Follow-up: the crash-loop budget's
+> deploy-reset lane needs a userspace build identity (registry `version` is
+> a constant in the template until the platform exposes one).
 
 # Facet alarms: parent-owned alarm proxy so userspace processors get keepalive recovery
 

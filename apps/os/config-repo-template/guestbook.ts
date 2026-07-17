@@ -121,10 +121,8 @@ export const GuestbookProcessorContract = defineProcessorContract({
       ],
     },
   },
-  // The platform's keepalive revival fact: the processor registers with
-  // `{ recovery: true }` (see worker.ts), and a recovery-wired contract must
-  // consume it — its wake delivery is the guaranteed at-head turn after a
-  // revival. The reducer ignores it; the delivery is the point.
+  // Required by `{ recovery: true }` (see worker.ts): a recovery-wired
+  // contract must consume the platform revival fact.
   processorDeps: [PLATFORM_STREAM_EVENTS],
   consumes: [
     "events.iterate.com/guestbook/created",

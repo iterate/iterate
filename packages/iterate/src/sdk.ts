@@ -179,6 +179,34 @@ function disposeStub(stub: unknown): void {
   } catch {}
 }
 
+/** Open a project itx session, use it, dispose it. RPC stubs from
+ * `env.ITX.get()` must not outlive the invocation that dialed them, so every
+ * operation opens its own session. */
+async function withProject<T>(env: IterateEnv, fn: (project: Project) => Promise<T>): Promise<T> {
+  const project = await env.ITX.get();
+  try {
+    return await fn(project);
+  } finally {
+    disposeStub(project);
+  }
+}
+
+/**
+ * A view of `target` with `overrides` in front and everything else passed
+ * through. Proxies (not spreads or Object.create) because DurableObjectState
+ * and DurableObjectStorage are host objects: their methods must be invoked
+ * with the REAL receiver or workerd throws "Illegal invocation".
+ */
+function overlay<T extends object>(target: T, overrides: Record<PropertyKey, unknown>): T {
+  return new Proxy(target, {
+    get(object, prop) {
+      if (prop in overrides) return overrides[prop];
+      const value = Reflect.get(object, prop, object);
+      return typeof value === "function" ? value.bind(object) : value;
+    },
+  });
+}
+
 /**
  * A {@link ProcessorStream} over the project stream at `path`, dialed through
  * the platform ITX binding — the stream handle a worker-hosted stream
@@ -189,14 +217,8 @@ function disposeStub(stub: unknown): void {
  * session for its pager's lifetime (scope it with `using`, like any pager).
  */
 export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream {
-  const withStream = async <T>(fn: (stream: Project["streams"]) => Promise<T>): Promise<T> => {
-    const project = await env.ITX.get();
-    try {
-      return await fn(project.streams);
-    } finally {
-      disposeStub(project);
-    }
-  };
+  const withStream = <T>(fn: (streams: Project["streams"]) => Promise<T>): Promise<T> =>
+    withProject(env, (project) => fn(project.streams));
   return {
     append: (...events) => withStream((streams) => streams.get(path).append(...events)),
     getEvent: (args) => withStream((streams) => streams.get(path).getEvent(args)),
@@ -236,72 +258,60 @@ export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream
  * workerd does not implement alarms for facet-hosted Durable Objects — the
  * hosting model for stateful dynamic workers (workerd#6810; a facet
  * `setAlarm` even appears to succeed, then poisons the commit path). So the
- * platform Durable Object that hosts this worker keeps ONE real alarm on its
+ * platform Durable Object that hosts this worker keeps the real alarm on its
  * behalf: the trio here dials `itx.workers.get(ref).setAlarm/getAlarm`
  * through the worker's own ref, and the parent's fire calls this class's
  * `alarm(alarmInfo)` method — retried by the platform if it throws, exactly
  * like a native alarm handler.
  *
  * Everything except the three alarm methods is the worker's own `ctx`,
- * untouched (`storage.kv`, `waitUntil`, WebSocket APIs, …). Code written
- * against the returned state uses only standard Durable Object concepts, so
+ * untouched (`storage.kv`, `waitUntil`, WebSocket APIs, …), so code written
+ * against the returned state uses only standard Durable Object concepts, and
  * if workerd ships facet alarms this shim disappears without a caller
- * changing. Implement `alarm()` on the class — an armed alarm whose class has
- * no handler fails its fire and retries, as it would natively. (The fire is
- * delivered through the worker's `invokeCapability` dispatcher, because
- * workerd reserves `alarm` as an RPC method name — `IterateDurableObject`
- * carries that dispatcher, so extending it is all a class needs.)
+ * changing. Two honest divergences: the alarm methods ignore the native
+ * `options` bag, and alarms armed inside `storage.transaction()` bypass the
+ * shim. One more: native `setAlarm` rejects a class with no `alarm()`
+ * handler at arm time; this shim cannot check, so a missing handler shows up
+ * as a failing, platform-retried fire instead. (Fires are delivered through
+ * the worker's `invokeCapability` dispatcher — workerd reserves `alarm` as
+ * an RPC method name — and `IterateDurableObject` carries that dispatcher,
+ * so extending it is all a class needs.)
  *
  * ```ts
  * export class MyApp extends IterateDurableObject {
- *   #registry = createStreamProcessorRegistry(
- *     statefulWorkerAlarms(this.ctx, this.env, MY_APP_REF),
- *     ...
- *   );
+ *   // Construct the registry lazily — it needs the project id, which a
+ *   // stateful worker learns asynchronously (see the template guestbook's
+ *   // #ensureHost for the reference shape).
+ *   #registry(projectId: string) {
+ *     return createStreamProcessorRegistry(
+ *       withStatefulWorkerAlarms(this.ctx, this.env, MY_APP_REF),
+ *       { projectId, ... },
+ *     );
+ *   }
  *   async alarm(alarmInfo?: AlarmInvocationInfo) {
- *     await this.#registry.handleAlarm(alarmInfo);
+ *     await this.#ensureRegistry().handleAlarm(alarmInfo);
  *   }
  * }
  * ```
  */
-export function statefulWorkerAlarms(
+export function withStatefulWorkerAlarms(
   ctx: DurableObjectState,
   env: IterateEnv,
   ref: StatefulDynamicWorkerRef,
 ): DurableObjectState {
-  const withWorker = async <T>(fn: (worker: DynamicWorkerCapability) => Promise<T>): Promise<T> => {
-    const project = await env.ITX.get();
-    try {
-      return await fn(project.workers.get(ref));
-    } finally {
-      disposeStub(project);
-    }
-  };
-  // Proxies (not spreads or Object.create) because DurableObjectState and
-  // DurableObjectStorage are host objects: their methods must be invoked with
-  // the REAL receiver or workerd throws "Illegal invocation".
-  const storage = new Proxy(ctx.storage, {
-    get(target, prop) {
-      if (prop === "setAlarm") {
-        return (scheduledTime: number | Date) =>
-          withWorker((worker) =>
-            worker.setAlarm(
-              typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime(),
-            ),
-          );
-      }
-      if (prop === "deleteAlarm") return () => withWorker((worker) => worker.setAlarm(null));
-      if (prop === "getAlarm") return () => withWorker((worker) => worker.getAlarm());
-      const value = Reflect.get(target, prop, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  return new Proxy(ctx, {
-    get(target, prop) {
-      if (prop === "storage") return storage;
-      const value = Reflect.get(target, prop, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
+  const withWorker = <T>(fn: (worker: DynamicWorkerCapability) => Promise<T>): Promise<T> =>
+    withProject(env, (project) => fn(project.workers.get(ref)));
+  return overlay(ctx, {
+    storage: overlay(ctx.storage, {
+      setAlarm: (scheduledTime: number | Date) =>
+        withWorker((worker) =>
+          worker.setAlarm(
+            typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime(),
+          ),
+        ),
+      deleteAlarm: () => withWorker((worker) => worker.setAlarm(null)),
+      getAlarm: () => withWorker((worker) => worker.getAlarm()),
+    }),
   });
 }
 

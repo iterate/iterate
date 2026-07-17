@@ -2,7 +2,7 @@ import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
   itxProjectStream,
-  statefulWorkerAlarms,
+  withStatefulWorkerAlarms,
   type Project,
   type StreamEvent,
   type StreamEventInput,
@@ -492,24 +492,27 @@ export class GuestbookApp extends IterateDurableObject {
   // Hosting is constructed lazily, not in the constructor: the registry and
   // the processor's provenance stamps need the owning project's id, which
   // arrives with the wake request or is read from the project stub on first
-  // fetch.
+  // fetch — and is cached durably so an alarm fire needs no dial.
   #ensureHost(projectId: string): {
     guestbook: GuestbookProcessor;
     registry: StreamProcessorRegistry;
   } {
     if (this.#host === undefined) {
+      this.ctx.storage.kv.put("guestbook:project-id", projectId);
       const stream = itxProjectStream(this.env, guestbookStreamPath);
-      // statefulWorkerAlarms: this class is hosted as a workerd FACET, and
-      // facet storage has no alarms — the wrapper routes the standard
+      // withStatefulWorkerAlarms: this class is hosted as a workerd facet,
+      // and facet storage has no alarms — the wrapper routes the standard
       // `ctx.storage` alarm API through the platform Durable Object hosting
-      // this worker, whose alarm fire calls `alarm()` below. Everything else
-      // on the wrapped state is this facet's own ctx.
+      // this worker, whose fire calls `alarm()` below.
       const registry = createStreamProcessorRegistry(
-        statefulWorkerAlarms(this.ctx, this.env, guestbookAppRef),
+        withStatefulWorkerAlarms(this.ctx, this.env, guestbookAppRef),
         {
           path: guestbookStreamPath,
           projectId,
           stream,
+          // The crash-loop budget's deploy-reset lane: a facet has no build
+          // identity to hand here yet, so a broken-then-fixed worker waits
+          // out the keepalive backoff instead of resetting on deploy.
           version: "0",
         },
       );
@@ -526,11 +529,18 @@ export class GuestbookApp extends IterateDurableObject {
   }
 
   /** The hosting Durable Object's alarm fire, replayed into this class (see
-   * statefulWorkerAlarms above). Route it to the registry: each keepalive
+   * withStatefulWorkerAlarms above). Route it to the registry: each keepalive
    * self-gates on its own persisted record, so a stale fire is a no-op. */
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    using project = await this.env.ITX.get();
-    const { registry } = this.#ensureHost(await project.projectId);
+    // A fire can be a cold incarnation's first event, so don't depend on a
+    // live loopback dial: any prior contact cached the project id durably
+    // (an alarm can only exist after a delivery armed it).
+    let projectId = this.ctx.storage.kv.get<string>("guestbook:project-id");
+    if (projectId === undefined) {
+      using project = await this.env.ITX.get();
+      projectId = await project.projectId;
+    }
+    const { registry } = this.#ensureHost(projectId);
     await registry.handleAlarm(alarmInfo);
   }
 

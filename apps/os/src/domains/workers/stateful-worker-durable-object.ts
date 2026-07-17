@@ -1,19 +1,22 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+import {
+  invokeFlattenedPath,
+  invokePreferringFlattenedPath,
+  isMissingInvokeCapabilityError,
+  replayPath,
+} from "../capability-host/live-capability.ts";
 import { takeWorkerFetchDispatch, workerBuildStatusResponse } from "./worker-fetch-dispatch.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
-const ALARM_STORAGE_KEY = "workers:stateful-worker-alarm";
-
-/** The persisted alarm desire of the hosted facet. The ref rides along so an
- * alarm fire on a cold outer DO knows which worker recipe to boot — the same
- * late-bound resolution every invocation does. */
-type StoredFacetAlarm = { atMs: number; ref: StatefulDynamicWorkerRef };
+/** The worker recipe to boot when an alarm fires on a cold outer DO — the
+ * same late-bound resolution every invocation does. Every arm rewrites it
+ * with the caller's current ref, so fires converge on current source. */
+const ALARM_REF_STORAGE_KEY = "workers:stateful-worker-alarm-ref";
 
 /** The durable marker for "which build is this facet running": enough to both
  * detect source changes and re-load the exact artifact for stale serving. */
@@ -104,61 +107,59 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    * The hosted facet's durable alarm, owned HERE because workerd does not
    * implement alarms for facets (their storage hooks throw "alarms are not
    * yet implemented for SQLite-backed Durable Objects"; workerd#6810). This
-   * outer DO is a root actor whose alarm works everywhere, so it keeps the
-   * one real alarm on the facet's behalf: persist the desire (with the ref,
-   * for fire-time boot), mirror it into the platform alarm, and let
-   * {@link alarm} replay the fire into the facet class's own `alarm()`
-   * method. Semantics deliberately mirror the native storage API so hosted
-   * code needs no new concepts — `iterate/sdk`'s `statefulWorkerAlarms`
-   * presents exactly `setAlarm`/`getAlarm`/`deleteAlarm` over this.
+   * outer DO is a root actor, so its real platform alarm IS the facet's
+   * alarm — these verbs guard it, and the only extra state is the worker
+   * recipe to boot when a fire lands cold. Everything behavioral is the
+   * native runtime's, inherited rather than reimplemented: consume on
+   * success, retry with backoff on a throwing handler (this handler
+   * rethrows), and getAlarm()'s during-a-fire view. `iterate/sdk`'s
+   * `withStatefulWorkerAlarms` presents this as the standard
+   * `setAlarm`/`getAlarm`/`deleteAlarm` storage API.
    */
   async setAlarm({ atMs, ref }: { atMs: number | null; ref: StatefulDynamicWorkerRef }) {
     this.#assertRefMatchesName(ref);
     if (atMs === null) {
-      this.ctx.storage.kv.delete(ALARM_STORAGE_KEY);
       await this.ctx.storage.deleteAlarm();
+      this.ctx.storage.kv.delete(ALARM_REF_STORAGE_KEY);
       return;
     }
-    this.ctx.storage.kv.put(ALARM_STORAGE_KEY, { atMs, ref } satisfies StoredFacetAlarm);
+    // Platform alarm first: if arming throws, nothing was persisted and
+    // getAlarm() keeps telling the truth. No interleave risk — storage
+    // awaits hold the Durable Object's input gate.
     await this.ctx.storage.setAlarm(atMs);
+    this.ctx.storage.kv.put(ALARM_REF_STORAGE_KEY, ref);
   }
 
-  getAlarm(): number | null {
-    return this.ctx.storage.kv.get<StoredFacetAlarm>(ALARM_STORAGE_KEY)?.atMs ?? null;
+  getAlarm(): Promise<number | null> {
+    return this.ctx.storage.getAlarm();
   }
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    const stored = this.ctx.storage.kv.get<StoredFacetAlarm>(ALARM_STORAGE_KEY);
-    // Disarmed between scheduling and fire — a stale platform fire is a no-op.
-    if (stored === undefined) return;
-    // Consume before delivering, like the native runtime: during its handler
-    // the facet observes getAlarm() === null unless it re-arms.
-    this.ctx.storage.kv.delete(ALARM_STORAGE_KEY);
+    const ref = this.ctx.storage.kv.get<StatefulDynamicWorkerRef>(ALARM_REF_STORAGE_KEY);
+    // No armed recipe (disarmed after the fire was scheduled) — a stray
+    // platform fire is a no-op.
+    if (ref === undefined) return;
     // Plain copy: AlarmInvocationInfo is a host object and does not
     // serialize across the facet RPC hop (DataCloneError).
     const info =
       alarmInfo === undefined
         ? undefined
         : { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount };
+    const target = await this.#facet(ref);
     try {
       // Flattened on purpose: workerd reserves `alarm` as an RPC method name
       // on Durable Object stubs, so the fire rides the worker's own
-      // `invokeCapability` dispatcher (the iterate/sdk base classes carry it),
-      // whose userland walk calls the class's `alarm()` locally — where the
-      // name is ordinary.
-      await this.invokeCapability({
-        args: [info],
-        flattenNestedPath: true,
-        path: ["alarm"],
-        ref: stored.ref,
-      });
+      // `invokeCapability` dispatcher, whose userland walk calls the class's
+      // `alarm()` locally — where the name is ordinary. Failures rethrow
+      // into the platform's native alarm retry.
+      await invokeFlattenedPath({ args: [info], path: ["alarm"], target });
     } catch (error) {
-      // Restore the consumed desire so the platform's alarm retry (this
-      // handler rethrows, workerd re-fires with backoff — native at-least-once
-      // semantics, no policy invented here) finds it again. A re-arm the
-      // facet managed before failing wins: don't clobber it.
-      if (this.ctx.storage.kv.get(ALARM_STORAGE_KEY) === undefined) {
-        this.ctx.storage.kv.put(ALARM_STORAGE_KEY, stored);
+      if (isMissingInvokeCapabilityError(error)) {
+        throw new Error(
+          `Stateful worker class "${ref.className}" cannot receive alarm fires: it does not ` +
+            `expose invokeCapability — extend IterateDurableObject from iterate/sdk. (workerd ` +
+            `reserves "alarm" as an RPC name, so fires are delivered through that dispatcher.)`,
+        );
       }
       throw error;
     }

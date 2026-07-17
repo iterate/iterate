@@ -247,8 +247,7 @@ export class DynamicWorkerRunner {
     await this.#statefulWorker(ref).kill();
   }
 
-  /** Arm (or with null, disarm) a stateful dynamic worker's durable alarm —
-   * owned by its hosting Durable Object, since facets have none of their own. */
+  /** Arm (or with null, disarm) a stateful dynamic worker's durable alarm. */
   async setAlarm(ref: StatefulDynamicWorkerRef, atMs: number | null): Promise<void> {
     await this.#statefulWorker(ref).setAlarm({ atMs, ref });
   }

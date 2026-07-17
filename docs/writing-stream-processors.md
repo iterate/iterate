@@ -256,7 +256,7 @@ What hosting code must do:
   has no revival.
 - **Stateful dynamic workers** (project-userspace DOs, hosted as workerd
   facets) have no native alarms — build the registry over
-  `statefulWorkerAlarms(this.ctx, this.env, SELF_REF)` from `iterate/sdk`,
+  `withStatefulWorkerAlarms(this.ctx, this.env, SELF_REF)` from `iterate/sdk`,
   which routes the standard `ctx.storage` alarm API through the platform
   Durable Object hosting the worker; its fire calls the class's `alarm()`.
   The seeded template's guestbook is the reference shape.
