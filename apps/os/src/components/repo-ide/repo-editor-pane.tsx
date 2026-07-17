@@ -44,6 +44,7 @@ export function RepoEditorPane({
   onTogglePreview,
   onSetWorking,
   onSetStaged,
+  onDiscardFile,
   onStageFile,
   onUnstageFile,
   onOpenWorking,
@@ -65,6 +66,7 @@ export function RepoEditorPane({
   onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
   onSetStaged: (entry: FileEntry | undefined) => void;
+  onDiscardFile: () => void;
   onStageFile: () => void;
   onUnstageFile: () => void;
   /** Leave the Index view for the editable working-tree file. */
@@ -240,7 +242,7 @@ export function RepoEditorPane({
           size="sm"
           className="text-xs"
           title="Discard changes"
-          onClick={() => onSetWorking(undefined)}
+          onClick={onDiscardFile}
         >
           <Undo2Icon className="size-3.5" />
           Discard
