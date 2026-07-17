@@ -237,12 +237,18 @@ async function runBuild(
   context: ResolveContext,
   buildKey: string,
 ): Promise<ResolvedWorkerSource> {
+  let marked = false;
   try {
     const files = await resolvedSourceFiles(context.projectId, context.resolved);
     // Best-effort duplicate suppression for budgeted callers (the building
     // page's poll loop would otherwise dispatch a fresh build per refresh);
     // the artifact write below always supersedes it.
-    await store.markBuildInFlight(buildKey).catch(() => {});
+    await store.markBuildInFlight(buildKey).then(
+      () => {
+        marked = true;
+      },
+      () => {},
+    );
     const built = await executeWorkerBuild({
       buildKey,
       files,
@@ -259,11 +265,15 @@ async function runBuild(
     await noteLastGoodBuild(store, context, buildKey);
     return resolvedSource;
   } catch (error) {
-    // The build ran in THIS promise chain — a rejection of any kind means no
-    // build is running anymore, so the marker must clear (a stranded marker
-    // holds budgeted callers in "building" until its TTL). Only GENUINE
-    // failures are additionally recorded; transport errors stay retryable.
-    const bookkeeping = [store.clearBuildInFlight(buildKey).catch(() => {})];
+    // This attempt's build is dead, so clear the marker it set (a stranded
+    // marker holds budgeted callers in "building" until its TTL) — but only
+    // when it actually MARKED: a failure before that point must not wipe a
+    // marker a concurrent sibling is relying on. The marker is per-key, so a
+    // failed attempt clearing while a sibling still runs remains possible —
+    // that costs duplicate (idempotent) builds, deliberately preferred over
+    // the TTL-long wedge a stranded marker causes. Only GENUINE failures are
+    // additionally recorded; transport errors stay retryable.
+    const bookkeeping = marked ? [store.clearBuildInFlight(buildKey).catch(() => {})] : [];
     if (isWorkerBuildFailedError(error)) {
       bookkeeping.push(recordBuildFailure(store, buildKey, context.resolved, error));
     }
