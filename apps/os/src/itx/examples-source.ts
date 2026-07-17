@@ -151,7 +151,7 @@ return await itx.projects.get(pid).__describe();
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; Iterate's ordinary PostHog feed does so. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; Iterate's ordinary PostHog feed does not. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { path?: string }) => {
       // Transient signal: live product subscribers see it; product state never will.
