@@ -36,3 +36,6 @@ pnpm-workspace.yaml
 # shadcn/ui and AI Elements components (auto-generated)
 **/components/ui/
 **/components/ai-elements/
+
+# Task specifications
+**/tasks/**
