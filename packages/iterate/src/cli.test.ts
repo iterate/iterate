@@ -17,6 +17,7 @@ const createFakeSession = (input: {
   listError?: unknown;
   onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
   description?: { principal: string };
+  onProjectList?: (args: unknown) => void;
   onProjectCreate?: (args: unknown) => void;
   projects?: Array<{
     deploymentStatus: "missing" | "ready" | "unknown";
@@ -46,7 +47,8 @@ const createFakeSession = (input: {
             [Symbol.dispose]: disposeProject,
           };
         },
-        list: async () => {
+        list: async (args?: unknown) => {
+          input.onProjectList?.(args);
           if (input.listError) throw input.listError;
           return input.projects ?? [];
         },
@@ -477,9 +479,27 @@ describe("resolveChatProject", () => {
     );
   });
 
-  test("uses a project id directly without enumerating accessible projects", async () => {
+  test("looks up only the selected project id and still sets it up when missing", async () => {
     const onConnect = vi.fn();
-    const fake = createFakeSession({ onConnect, projects: [] });
+    const onProjectList = vi.fn();
+    let createArgs: unknown;
+    const fake = createFakeSession({
+      onConnect,
+      onProjectList,
+      onProjectCreate: (args) => {
+        createArgs = args;
+      },
+      projects: [
+        {
+          deploymentStatus: "missing",
+          id: "prj_manual",
+          organizationId: "org_123",
+          organizationName: "Acme",
+          organizationSlug: "acme",
+          slug: "manual",
+        },
+      ],
+    });
 
     await expect(
       resolveChatProject({
@@ -492,7 +512,15 @@ describe("resolveChatProject", () => {
       }),
     ).resolves.toBe("prj_manual");
 
-    expect(onConnect).not.toHaveBeenCalled();
+    expect(onConnect).toHaveBeenCalledOnce();
+    expect(onProjectList).toHaveBeenCalledWith({ projectId: "prj_manual" });
+    expect(createArgs).toEqual({
+      organizationSlug: "acme",
+      projectId: "prj_manual",
+      slug: "manual",
+      waitUntilReady: false,
+    });
+    expect(fake.disposeProject).toHaveBeenCalledOnce();
   });
 
   test("does not bypass project resolution when listing accessible projects fails", async () => {

@@ -4926,9 +4926,17 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * own claims even when admin credentials ride the same socket;
    * "deployment" (every directory-known project) requires an admin principal
    * and is the default for non-user admin principals, which have no claims.
+   * `projectId` narrows the accessible catalog before deployment probing, for
+   * callers that need one project's status without probing account history.
    */
-  async list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]> {
-    const bases = await this.#listEntryBases(input?.scope);
+  async list(input?: {
+    projectId?: string;
+    scope?: "mine" | "deployment";
+  }): Promise<ProjectListEntry[]> {
+    const accessibleBases = await this.#listEntryBases(input?.scope);
+    const bases = input?.projectId
+      ? accessibleBases.filter((base) => base.id === input.projectId)
+      : accessibleBases;
     const outcomes = await Promise.allSettled(bases.map((base) => projectProcessorState(base.id)));
     const statuses = deploymentStatusesFromProbes(
       bases.map((base) => base.id),

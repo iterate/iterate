@@ -372,11 +372,6 @@ export const resolveChatProject = async (input: {
 }) => {
   const configured = input.explicitProject || input.configuredDefaultProject;
 
-  // A project ID is already the routing key. Enumerating every accessible
-  // project before using it makes startup proportional to account history;
-  // the scoped itx connection will validate the ID directly.
-  if (configured?.startsWith("prj_")) return configured;
-
   return await withAuthenticatedOsSession({
     auth: input.auth,
     baseUrl: input.baseUrl,
@@ -384,7 +379,12 @@ export const resolveChatProject = async (input: {
     run: async (session) => {
       let projects: ProjectListEntry[];
       try {
-        projects = await session.projects.list();
+        // A project ID is already the routing key. Ask the server for that one
+        // catalog entry so startup does not probe every historical project,
+        // while preserving missing-project setup and access validation.
+        projects = await session.projects.list(
+          configured?.startsWith("prj_") ? { projectId: configured } : undefined,
+        );
       } catch (error) {
         if (configured) {
           throw new Error(
