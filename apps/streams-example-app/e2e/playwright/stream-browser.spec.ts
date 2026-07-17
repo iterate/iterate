@@ -316,7 +316,7 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
 
-  const expectedCount = insertedCount + 4; // created + worker-feed config + woken + subscriber-connected
+  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
@@ -851,7 +851,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
 
-  const expectedCount = insertedCount + 4; // created + worker-feed config + woken + subscriber-connected
+  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
   });
