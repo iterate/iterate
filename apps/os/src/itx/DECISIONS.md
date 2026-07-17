@@ -337,10 +337,13 @@ been circling:
   subscription. The processor explicitly births the root capability host,
   scheduler, config repo, and email router; `project/ready` records
   completion. The default call waits through birth and readiness. Pass
-  `waitUntilReady: false` to return as soon as identity is registered, the
-  directory is primed, and birth events are appended (no birth/ready wait)
-  so the dashboard can redirect into the project home checklist immediately
-  and render progress from live processor state.
+  `waitUntilReady: false` to return as soon as the project exists (identity
+  registered, directory primed, birth events appended); create still drives
+  processor birth via a post-response nudge so the saga never depends on the
+  caller. `itx.waitUntilReady()` is the composable wait, and `itx.identity()`
+  pipelines the canonical slug through the create round trip — the dashboard
+  uses exactly that to land on the project home checklist immediately and
+  render progress from live processor state.
   The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd

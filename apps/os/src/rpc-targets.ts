@@ -4852,15 +4852,18 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
 
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — convenient for scripts
-   * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve as soon as the project identity is
-   * registered, the directory is primed, and the bootstrap birth events are
-   * **appended** (not yet waited through processor birth / ready): the saga
-   * runs behind the returned handle, and its progress is ordinary live state
-   * (`itx.liveState` — `state.reduced.ready` flips when bootstrap lands).
-   * The dashboard uses this fast path to redirect into the project home
-   * checklist immediately and play creation progress from pushes.
+   * bootstrap saga has committed `project/ready` — the right shape for
+   * scripts and pipelined chains that use the project immediately.
+   *
+   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
+   * registered, directory primed, birth events appended. The saga keeps
+   * running behind the returned handle — create still drives processor birth
+   * via a post-response nudge, so no caller has to. Progress is ordinary
+   * live state (`state.reduced.ready` flips when bootstrap lands), and
+   * `waitUntilReady()` on the handle is the composable wait. Pipeline
+   * `identity()` through the create call to learn the canonical slug (auth
+   * may normalize it) in the same round trip — the dashboard does exactly
+   * that, then plays the checklist from live pushes.
    */
   async create(args: {
     organizationSlug?: string;
@@ -4931,11 +4934,21 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       path: "/",
       projectId: args.projectId,
     });
-    // Fast path for the dashboard: identity + directory + birth events are
-    // enough to navigate into the project home and watch the saga via live
-    // state. Waiting for processor birth here is what made Create spin for
-    // many seconds while the user saw nothing of the checklist.
+    // Fast path: identity + directory + birth events are enough for callers
+    // that watch the saga as live state. Nobody is left waiting, so create
+    // itself must stay the guaranteed birth driver: nudge the processor
+    // after this response instead of parking the caller behind it. A failed
+    // nudge is telemetry, not a create failure — durable delivery retries
+    // and the checklist's stall detector cover the rest.
     if (args.waitUntilReady === false) {
+      this.props.ctx.waitUntil(
+        timedStep("create-timing", timing, "nudge-project-birth", () =>
+          project.processor.waitUntilProcessed({
+            offset: Math.max(created.offset, subscription.offset),
+            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+          }),
+        ).catch(() => undefined),
+      );
       return project;
     }
 
@@ -5439,6 +5452,51 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** The project this itx is scoped into. */
   get projectId(): string {
     return this.#props.projectId;
+  }
+
+  /**
+   * Canonical identity from the project directory: id, slug (the auth
+   * worker's normalized form — what URLs and ingress hostnames use),
+   * organization, and display name. A directory read only — no project DO
+   * dial — so it is safe pre-birth and cheap to pipeline through
+   * `projects.create()`.
+   */
+  async identity(): Promise<{
+    projectId: string;
+    slug: string;
+    organizationId: string | null;
+    name: string;
+  }> {
+    const record = await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId);
+    if (record == null) {
+      throw new Error(`Project ${this.#props.projectId} is missing from the project directory.`);
+    }
+    return {
+      projectId: record.id,
+      slug: record.slug,
+      organizationId: record.organizationId,
+      name: record.name,
+    };
+  }
+
+  /**
+   * Resolve once the bootstrap saga has committed `project/ready`. Replays
+   * stream history first, so an already-ready project resolves immediately,
+   * and dialing the processor here heals a lost birth wake rather than just
+   * observing. The composable partner of
+   * `projects.create({ waitUntilReady: false })`.
+   */
+  async waitUntilReady(args?: { timeoutMs?: number }): Promise<void> {
+    // Loading the processor folds any unprocessed events, so this wait
+    // drives a stalled saga instead of watching it.
+    void this.processor.snapshot().catch(() => undefined);
+    await rootStream({ auth: this.#props.auth, projectId: this.#props.projectId }).waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/project/ready"],
+      // Tight on purpose: the saga should complete in seconds (see
+      // tasks/os-cold-create-latency.md for the cold-slot outliers).
+      timeoutMs: args?.timeoutMs ?? 60_000,
+    });
   }
 
   /** @internal */
