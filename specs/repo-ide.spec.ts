@@ -113,5 +113,5 @@ test("discarding a new file confirms before permanently removing it", async ({
   await acceptClickPromise;
 
   await page.getByText("No changes.").waitFor();
-  expect(new URL(page.url()).searchParams.has("file")).toBe(false);
+  expect(new URL(page.url()).searchParams.get("file")).toBeNull();
 });

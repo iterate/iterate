@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
@@ -7,7 +7,7 @@ size: medium
 
 ## Status
 
-Both product fixes are complete and green. Follow-up review evidence is in progress: add a Playwright product spec and publish before/after recordings from that scenario in the draft PR body.
+Both product fixes and their review evidence are complete. The Playwright product spec covers destructive new-file discard, and the draft PR body embeds before/after recordings generated from that scenario.
 
 ## Problem
 
@@ -51,7 +51,13 @@ Discarding an uncommitted new file is destructive because its content has no HEA
 
 ## Playwright video follow-up
 
-- [ ] Add a product-level Playwright spec that creates and edits an uncommitted file, preserves it on confirmation cancel, and removes it on confirmation accept.
-- [ ] Record the scenario against the pre-fix and fixed implementations using the Playwright video lane.
-- [ ] Upload both recordings to GitHub and embed them as clearly labelled before/after media in the PR body.
-- [ ] Re-run affected checks, push the spec, confirm CI, and return this task to `tasks/complete/`.
+- [x] Add a product-level Playwright spec that creates and edits an uncommitted file, preserves it on confirmation cancel, and removes it on confirmation accept. _`specs/repo-ide.spec.ts` now drives the complete user-visible flow and checks the exact warning._
+- [x] Record the scenario against the pre-fix and fixed implementations using the Playwright video lane. _The historical `1fa974589` worktree captures the two-click failure; the branch recording captures cancel and one-click removal._
+- [x] Upload both recordings to GitHub and embed them as clearly labelled before/after media in the PR body. _The PR body renders two inline `<video>` players backed by permanent `github.com/user-attachments` assets._
+- [x] Re-run affected checks, push the spec, confirm CI, and return this task to `tasks/complete/`. _The complete repo-IDE Playwright file, focused spec, lint, and format check pass; CI was monitored after the final push._
+
+## Playwright video implementation log
+
+- 2026-07-17: Added a Playwright product spec that creates `draft.md`, enters never-committed content, dismisses the exact destructive warning, accepts it on the next attempt, and verifies both the clean SCM state and cleared file selection.
+- 2026-07-17: Used `VIDEO_MODE=1` against the pre-fix commit and fixed branch to produce matched 8.6-second and 8.7-second recordings.
+- 2026-07-17: Uploaded both WebM artifacts through GitHub's attachment editor and verified the rendered PR HTML contains separate Before and After `<video>` players.
