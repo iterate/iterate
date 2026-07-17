@@ -225,6 +225,37 @@ describe("resolveWorkerSource serve matrix", () => {
     expect(h.state.buildCalls.length).toBe(callsAfterBlip + 1);
   });
 
+  test("a bare repo ref and the canonical default-masked ref share one build key", async () => {
+    // The template's app refs omit exclude masks while defaultProjectWorkerRef
+    // spells them out — resolveFileSource canonicalizes the default so both
+    // hash to one key, or the deploy-time template seed would never match the
+    // apps and every fresh project's first app click would pay a cold build.
+    setCommit("c1", "repo-h-v1", "H1");
+    await resolveWorkerSource({
+      projectId: "prj_h",
+      source: {
+        files: {
+          exclude: [".git/**", "node_modules/**", "dist/**", "build/**"],
+          repoPath: "/repos/h",
+          type: "repo",
+        },
+        options: { entryPoint: "worker.ts" },
+      },
+      waitUntil,
+    });
+    const callsAfterCanonical = h.state.buildCalls.length;
+    const bare = await resolveWorkerSource({
+      projectId: "prj_h",
+      source: {
+        files: { repoPath: "/repos/h", type: "repo" },
+        options: { entryPoint: "worker.ts" },
+      },
+      waitUntil,
+    });
+    expect(bare.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
+    expect(h.state.buildCalls.length).toBe(callsAfterCanonical);
+  });
+
   test("runtime artifacts are project-scoped — one project's build never serves another", async () => {
     setCommit("c1", "repo-g-v1", "G1");
     await resolveWorkerSource({ projectId: "prj_g1", source: repoSource("/repos/g"), waitUntil });

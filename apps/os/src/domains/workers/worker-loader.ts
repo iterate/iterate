@@ -1,5 +1,6 @@
 import { itxEnv as env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DEFAULT_REPO_WORKER_SOURCE_EXCLUDE } from "../repos/utils.ts";
 import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
 import {
   isWorkerBuildFailedError,
@@ -498,7 +499,11 @@ async function loaderReadyInlineSource(
 }
 
 /** Pin any late-bound source identity (a branch name) to a commit so build key
- * and artifact are immutable and auditable. */
+ * and artifact are immutable and auditable. Repo sources that omit `exclude`
+ * get the canonical default masks HERE — before the key is computed — so a
+ * bare `{ type: "repo", repoPath }` ref (the template's app refs, most
+ * userland refs) and defaultProjectWorkerRef hash to the same build key and
+ * share one artifact, the deploy-time template seed included. */
 async function resolveFileSource({
   projectId,
   source,
@@ -509,12 +514,13 @@ async function resolveFileSource({
   if (source.files.type === "inline") {
     return { files: source.files.files, type: "inline" };
   }
+  const exclude = source.files.exclude ?? DEFAULT_REPO_WORKER_SOURCE_EXCLUDE;
 
   if (source.files.ref !== undefined && "commitOid" in source.files.ref) {
     return {
       branch: source.files.ref.branch,
       commitOid: source.files.ref.commitOid,
-      exclude: source.files.exclude,
+      exclude,
       include: source.files.include,
       repoPath: source.files.repoPath,
       type: "repo",
@@ -535,7 +541,7 @@ async function resolveFileSource({
     branch: head.branch,
     commitOid: head.commitOid,
     contentHash: head.contentHash,
-    exclude: source.files.exclude,
+    exclude,
     include: source.files.include,
     repoPath: source.files.repoPath,
     type: "repo",
