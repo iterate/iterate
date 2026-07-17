@@ -279,7 +279,9 @@ The creation call now shares the Repo DO's write serializer with mutations.
 Seeding is strictly create-if-absent: cloning any existing branch returns it
 untouched, including user commits. Two genuine first drives that both observe
 an empty Artifact produce the same root oid from a fixed synthetic seed
-identity and timestamp, making their pushes equivalent.
+identity and timestamp, making their pushes equivalent. Initial publication is
+also a normal fast-forward push, never forced: if a different head wins the
+race, creation fails instead of replacing it.
 
 The same retries-disabled run found an independent first-use secret race. A
 GitHub App token mint read secret state at offset 5; a
@@ -448,8 +450,8 @@ structural one. The Repo DO now serializes every write through a `#writeChain`
 repo can never be in flight at once: each clones the latest HEAD, commits, and
 fast-forward pushes with **no `force`**. With a single writer at a time there is
 no compare-and-swap race to lose and no force-push to clobber a concurrent commit
-— the two failure modes above are structurally impossible. (`seedArtifactRepo`
-keeps its one force-push: it runs once at repo creation, never concurrently.)
+— the two failure modes above are structurally impossible. Repo seeding now
+uses the same non-forced publication rule.
 The diagnosis is retained here because it explains _why_ main dropped `force` and
 serialized writes; the marathon re-verifies it end-to-end.
 

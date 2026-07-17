@@ -1424,7 +1424,10 @@ async function seedArtifactRepo(input: {
   // create-succeeded/ready-append-failed retry must preserve every commit that
   // may have landed since the first drive.
   if (cloned) {
-    const [head] = await git.log({ depth: 1 });
+    const [head] = await git.log({ depth: 1, ref: input.branch }).catch((error: unknown) => {
+      if (String(error).includes(`Could not find refs/heads/${input.branch}`)) return [];
+      throw error;
+    });
     if (head) {
       return {
         commitOid: head.oid,
@@ -1455,10 +1458,10 @@ async function seedArtifactRepo(input: {
   await ensureBranchRef({ branch: input.branch, git });
 
   // When two first drives both observe an empty remote, the fixed
-  // identity/timestamp above gives them the same root oid, so their force
-  // pushes are equivalent.
+  // identity/timestamp above gives them the same root oid. Never force this
+  // publication: if a different branch head appeared, creation must lose the
+  // race instead of replacing real history.
   const pushed = await git.push({
-    force: true,
     ref: input.branch,
     remote: "origin",
     ...credentials,
@@ -1467,7 +1470,7 @@ async function seedArtifactRepo(input: {
     throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
   }
 
-  const [head] = await git.log({ depth: 1 });
+  const [head] = await git.log({ depth: 1, ref: input.branch });
   if (!head) throw new Error(`Seeded repo has no head commit on ${input.branch}.`);
   return {
     commitOid: head.oid,

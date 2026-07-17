@@ -295,9 +295,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * reaction: a journal refold (the normal aftermath of a state-schema
    * deploy) replays the `repo/created` birth certificate, but the at-head fold
    * (`args.state`, NOT `previousState`) has already absorbed any journaled
-   * `repo/ready` fact —
-   * so `createRepoArtifact`, whose seeding force-pushes the seed commit and
-   * would clobber user commits, provably never re-runs. The `ready`
+   * `repo/ready` fact — so `createRepoArtifact`, an already-completed external
+   * creation obligation, provably never re-runs. The `ready`
    * idempotency key binds NO event offset (`this.idempotencyKey("ready")`),
    * so a redelivery/revival cannot rotate it and re-seed. No expiry on
    * purpose: "this repo should exist" does not go stale. The creation
