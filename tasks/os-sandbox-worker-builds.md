@@ -8,18 +8,22 @@ tags: [os, workers, dynamic-workers, sandboxes, build-pipeline]
 # Build dynamic workers in a sandbox container (kill esbuild-wasm)
 
 > **Progress:** steps 2 + 3 of the sequencing below landed as one clean-break
-> PR — the sandbox build backend (recipe: `npm install --ignore-scripts` +
-> pinned `wrangler deploy --dry-run`, shared verbatim by the container and the
-> local-dev host endpoint), the wasm/builder-sidecar deletion, and the build-key
-> rework. Deviations from the design below, discovered during implementation:
+> PR (#2083) — the sandbox build backend (recipe: `npm install
+> --ignore-scripts` + pinned `wrangler deploy --dry-run`, shared verbatim by
+> the container and the local-dev host endpoint), the wasm/builder-sidecar
+> deletion, the build-key rework, AND deploy-time template seeding, which the
+> first preview run proved is load-bearing rather than an optimization:
+> project birth blocks event delivery on the worker build, so runtime builds
+> at birth put a container cold boot on `projects.create`'s 60s repo-ready
+> deadline and birth one builder container per project (fixture-heavy flows
+> collide with per-class instance caps). Deviations from the design below:
 > the builder sandbox is `/sandboxes/worker-builder` (sandbox names are single
 > path segments — `cloudflare/builder` is not addressable), destroyed names are
 > tombstoned forever so the platform probes name generations
 > (`worker-builder-2`, …), instance types already have per-type DO classes so
 > `basic` applies to the builder only, and runtime artifacts are project-KEYED
-> with a trusted content-only tier reserved for deploy-time seeding.
-> **Remaining:** step 1 — eager-on-commit builds + deploy-time template
-> seeding (now the trusted-tier writer).
+> with a trusted content-only tier written exclusively by the deploy-time
+> seeder. **Remaining:** eager-on-commit builds (the other half of step 1).
 
 Replace the in-workerd bundler (`@cloudflare/worker-bundler`, esbuild-wasm)
 with real `npm install` + a real bundler running inside a **sandbox container
