@@ -23,6 +23,7 @@ import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-doma
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
+const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 60_000;
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectProcessorContract,
@@ -104,6 +105,8 @@ export class ProjectProcessor extends StreamProcessor<
     // included) pumps its own events into the worker's `processEventBatch`
     // with a durable checkpoint (see streams/project-worker-delivery.ts).
 
+    // Event-less at-head pass: this processor has no at-head work.
+    if (event === null) return;
     if (event.type !== "events.iterate.com/project/created" && state.birthCertificate === null) {
       return;
     }
@@ -278,22 +281,48 @@ export class ProjectProcessor extends StreamProcessor<
           // processors it created: once the Project birth is processed, every
           // universally available project capability must have folded its own
           // complete birth batch too.
-          await Promise.all([
-            timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
-              this.deps.itx.capabilityHost.processor.waitUntilProcessed({
-                offset: capabilityHostOffset,
-              }),
-            ),
-            timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
-              this.deps.itx.scheduler.processor.waitUntilProcessed({ offset: schedulerOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-config-repo-birth", () =>
-              this.deps.itx.repo.processor.waitUntilProcessed({ offset: configRepoOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-email-router-birth", () =>
-              this.deps.itx.email.processor.waitUntilProcessed({ offset: emailRouterOffset }),
-            ),
-          ]);
+          // These remote processor facades are nested inside the Project
+          // processor's own blocking frame. Keep one acknowledgement in
+          // flight at a time: the sibling streams already start concurrently
+          // from the append batch above, so this does not serialize their
+          // processing; it only avoids retaining four cross-DO facade calls
+          // through one frame. Every wait is bounded so a broken sibling
+          // fails the frame and enters ordinary durable redelivery instead of
+          // pinning project creation forever.
+          const siblingBirthDeadline = Date.now() + SIBLING_BIRTH_BARRIER_TIMEOUT_MS;
+          const remainingSiblingBirthWaitMs = () => {
+            const remaining = siblingBirthDeadline - Date.now();
+            if (remaining <= 0) {
+              throw new Error(
+                `project sibling birth barrier timed out after ${SIBLING_BIRTH_BARRIER_TIMEOUT_MS}ms`,
+              );
+            }
+            return remaining;
+          };
+          await timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
+            this.deps.itx.capabilityHost.processor.waitUntilProcessed({
+              offset: capabilityHostOffset,
+              timeoutMs: remainingSiblingBirthWaitMs(),
+            }),
+          );
+          await timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
+            this.deps.itx.scheduler.processor.waitUntilProcessed({
+              offset: schedulerOffset,
+              timeoutMs: remainingSiblingBirthWaitMs(),
+            }),
+          );
+          await timedStep("create-timing", timing, "wait-config-repo-birth", () =>
+            this.deps.itx.repo.processor.waitUntilProcessed({
+              offset: configRepoOffset,
+              timeoutMs: remainingSiblingBirthWaitMs(),
+            }),
+          );
+          await timedStep("create-timing", timing, "wait-email-router-birth", () =>
+            this.deps.itx.email.processor.waitUntilProcessed({
+              offset: emailRouterOffset,
+              timeoutMs: remainingSiblingBirthWaitMs(),
+            }),
+          );
         });
         break;
       }

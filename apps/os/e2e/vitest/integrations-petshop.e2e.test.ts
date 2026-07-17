@@ -38,13 +38,13 @@ test.skipIf(shouldSkipPetshopE2e())(
   "two OAuth clients, two connections: connect, call, forced-expiry refresh",
   async () => {
     const petshop = petshopBaseUrl();
-    // Instance A uses the seeded client; instance B a freshly minted one — the
-    // two-client proof. Both are project-owned (userspace) clients: the client
-    // credential lives IN the connection secret's material, next to the tokens
-    // (bring-your-own-app connections are self-contained cells).
-    const clientB = await petshopMintClient();
+    // Both instances get a unique project-owned (userspace) client. Their
+    // credentials live IN each connection secret's material, next to the
+    // tokens (bring-your-own-app connections are self-contained cells). The
+    // seeded client is reserved for the concurrently running first-party test.
+    const [clientA, clientB] = await Promise.all([petshopMintClient(), petshopMintClient()]);
     const instances = [
-      { ...PETSHOP_DEFAULT_CLIENT, slug: `petshop-home-${RUN}`, connection: "jonas" },
+      { ...clientA, slug: `petshop-home-${RUN}`, connection: "jonas" },
       { ...clientB, slug: `petshop-work-${RUN}`, connection: "ops" },
     ];
 
@@ -97,7 +97,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
       // Force a real 401 (epoch bump) and call again: the Secret DO must run
       // the refresh grant against the pinned token endpoint and retry to a 200.
-      await petshopExpireTokens();
+      await petshopExpireTokens(instance.clientId);
       const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
       expect(afterExpiry).toMatchObject({ status: 200, body: { clientId: instance.clientId } });
 
@@ -162,7 +162,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     // Force a 401 and prove the strategy refreshes using the PLATFORM client
     // credential resolved from deployment config — never present in material.
-    await petshopExpireTokens();
+    await petshopExpireTokens(clientId);
     const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
     expect(afterExpiry).toMatchObject({ status: 200, body: { clientId } });
   },

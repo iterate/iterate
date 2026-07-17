@@ -45,6 +45,30 @@ test("stream page appends through the shared browser mirror", async ({ page }) =
   await expect(eventMeta(page, type).first()).toBeVisible();
 });
 
+test("collapsed event rows keep a stable height with long metadata", async ({ page }) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  const type = `events.iterate.com/debug/${"long-segment/".repeat(24)}`;
+  await appendComposerEvent(page, {
+    type,
+    payload: { streamPath, value: crypto.randomUUID() },
+  });
+
+  const metadata = eventMeta(page, type).first();
+  await expect(metadata).toBeVisible();
+  await expect
+    .poll(() =>
+      metadata.evaluate((element) => {
+        const row = element.closest('[data-testid="virtual-row"]');
+        if (!(row instanceof HTMLElement)) throw new Error("event metadata must be inside a row");
+        return Math.round(row.getBoundingClientRect().height);
+      }),
+    )
+    .toBe(40);
+});
+
 // The pre-itx-v4 hosted circuit-breaker processor (via the removed
 // StreamProcessorRunner DO) is gone; on itx the pause door is core
 // stream behavior, driven directly through the sidebar's pause/resume gate.
@@ -297,7 +321,9 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
   });
-  await expect(page.locator(`[data-index='${expectedCount - 1}']`)).toBeVisible();
+  const tailRow = page.locator(`[data-index='${expectedCount - 1}']`);
+  await expect(tailRow.getByTestId("event-meta")).toBeVisible();
+  await expect(tailRow).toHaveCSS("height", "40px");
   await expectAtStreamEnd(page);
 
   await page.reload();
@@ -811,6 +837,9 @@ test("split view disposes a replaced same-stream pane and keeps leadership", asy
 test("large streams stay virtualized and can scroll from tail to earliest rows", async ({
   page,
 }) => {
+  // The narrowest desktop width keeps the sidebar open and puts maximum
+  // wrapping pressure on the virtual row metadata columns.
+  await page.setViewportSize({ width: 761, height: 720 });
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
@@ -1196,11 +1225,11 @@ async function holdCurrentWriterLock(page: Page, streamPath: string) {
     // apps/os/.../browser/stream-leader.ts. Format:
     //   stream-writer:<projectId>:<path>:browser-stream-mirror:<versionVector>
     // versionVector = the canonical members' `<slug>@<schemaVersion>` sorted and
-    // joined by "|" (browser-feed@3, browser-raw-events@7). Bump here whenever a
+    // joined by "|" (browser-feed@4, browser-raw-events@7). Bump here whenever a
     // member's schemaVersion changes — that bump is exactly what this lock guards.
     await new Promise<void>((resolve) => {
       void navigator.locks.request(
-        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@3|browser-raw-events@7`,
+        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@4|browser-raw-events@7`,
         async () => {
           resolve();
           await new Promise(() => {});

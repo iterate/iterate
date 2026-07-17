@@ -6,7 +6,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ProjectProcessorContract } from "~/domains/projects/project-processor-contract.ts";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import { connectItx } from "~/itx/itx-react.tsx";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -68,7 +68,7 @@ function CustomDomainsEditor({
         hostname: input.hostname,
         projectHostnameBases,
       });
-      const itx = await connectItxBrowser({ projectId });
+      const itx = await connectItx(projectId);
       await itx.streams.get("/").append(
         ProjectProcessorContract.buildEvent({
           type: customDomainEventType(input.action),

@@ -215,7 +215,7 @@ test("RpcTarget live capabilities can dispatch through nested RpcTarget getters"
   using project = providerItx.projects.create({ slug: `nested-rpc-target-live-${marker}` });
   const { projectId } = await project.__describe();
 
-  await project.provideCapability({
+  using _slackProvision = await project.provideCapability({
     path: ["slackSdk"],
     type: "live",
     capability: new SlackSdk(),

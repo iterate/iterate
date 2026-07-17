@@ -113,12 +113,16 @@ function envBlock(env: AuthDeployedEnv) {
     }),
     send_email: sendEmailBindings,
     vars: envShapedVars(env),
-    secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS] },
+    // Derived values do not exist until deploy.ts computes them after secret
+    // collection. Listing them as build requirements makes the Vite plugin
+    // report them missing even though deploy.ts always supplies them
+    // atomically through --secrets-file.
+    secrets: { required: [...REQUIRED_SECRETS] },
     observability: OBSERVABILITY,
   };
 }
 
-const config = {
+export const config = {
   $schema: "node_modules/wrangler/config-schema.json",
   // Env-less service name: wrangler tags every `--env` deploy with
   // `cf:service=<top-level name>`, so a "-dev" suffix here would mis-bucket

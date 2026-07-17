@@ -6,6 +6,7 @@ import {
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  removeWorkerSecrets,
   SANDBOX_BACKUP_EXPIRY_RULE,
   SANDBOX_BACKUP_TTL_SECONDS_PRD,
   smokeResponse,
@@ -62,6 +63,70 @@ describe("assertWorkerSecretAbsent", () => {
     await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toBe(
       cloudflareError,
     );
+  });
+});
+
+describe("removeWorkerSecrets", () => {
+  const retiredSecretNames = [secretName, "APP_CONFIG_SLACK_BOT_TOKEN"] as const;
+
+  it("deletes only named retired secrets and verifies the resulting binding set", async () => {
+    const allowedSecret = "APP_CONFIG_OPEN_AI_API_KEY";
+    const cf = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { name: allowedSecret, type: "secret_text" },
+        { name: retiredSecretNames[1], type: "secret_text" },
+        { name: secretName, type: "secret_text" },
+      ])
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce([{ name: allowedSecret, type: "secret_text" }]);
+
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: retiredSecretNames }),
+    ).resolves.toEqual([...retiredSecretNames].sort());
+
+    expect(cf.mock.calls).toEqual([
+      [listPath],
+      [`${listPath}/${secretName}`, { method: "DELETE" }],
+      [`${listPath}/${retiredSecretNames[1]}`, { method: "DELETE" }],
+      [listPath],
+    ]);
+  });
+
+  it("is an idempotent no-op when the Worker has no retired secrets", async () => {
+    const cf = vi.fn(async () => [{ name: "CURRENT_SECRET", type: "secret_text" }]);
+
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: retiredSecretNames }),
+    ).resolves.toEqual([]);
+
+    expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
+  });
+
+  it("is an idempotent no-op when the Worker has not been created", async () => {
+    const cf = vi.fn(async () => {
+      throw new CloudflareApiError("GET", listPath, 404, [{ code: 10007 }]);
+    });
+
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: retiredSecretNames }),
+    ).resolves.toEqual([]);
+
+    expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
+  });
+
+  it("fails closed when deletion does not remove a retired secret", async () => {
+    const binding = { name: secretName, type: "secret_text" };
+    const cf = vi
+      .fn()
+      .mockResolvedValueOnce([binding])
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce([binding]);
+
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: retiredSecretNames }),
+    ).rejects.toThrow(`Retired Worker secrets remain after deletion: ${workerName}/${secretName}`);
   });
 });
 

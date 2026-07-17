@@ -78,6 +78,20 @@ export const OPTIONAL_SECRETS = [
 ];
 
 /**
+ * Secrets removed from the OS deployment contract. Wrangler preserves omitted
+ * secrets, so deploy.ts rejects Workers that still carry these names and the
+ * explicit erase/handover path deletes them before a slot changes owners.
+ */
+export const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+export const RETIRED_WORKER_SECRETS = [
+  RETIRED_AUTH_SERVICE_TOKEN,
+  "APP_CONFIG_GEMINI_API_KEY",
+  "APP_CONFIG_LOGS",
+  "APP_CONFIG_SLACK_BOT_TOKEN",
+  "APP_CONFIG_X_AI_API_KEY",
+] as const;
+
+/**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
  * emitted as per-env `vars` so the worker's runtime hostnames can never
  * drift from the routes generated off the same entry. Local dev has no env
@@ -476,7 +490,10 @@ function localDevBindings() {
     accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     ...authBinding,
   });
-  const localAuthJwks = localDevAuthJwks();
+  const localAuthJwks = localDevAuthJwks({
+    forgePrivateJwk: process.env.AUTH_FORGE_PRIVATE_JWK,
+    deployedEnv: process.env.CLOUDFLARE_ENV,
+  });
   return {
     ...bindings,
     vars: {
@@ -498,8 +515,18 @@ function localDevBindings() {
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
 
-function localDevAuthJwks() {
-  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+export function localDevAuthJwks(input: {
+  forgePrivateJwk: string | undefined;
+  deployedEnv: string | undefined;
+}) {
+  // The forge key is inherited from _shared in deployed Doppler configs, but
+  // this derived public JWKS is only a local-dev binding. Emitting it at the
+  // top level during a CLOUDFLARE_ENV build makes Wrangler correctly warn
+  // that the selected env does not inherit it; deployed workers receive the
+  // freshly baked JWKS atomically via --secrets-file in deploy.ts instead.
+  if (input.deployedEnv) return undefined;
+
+  const forgePrivateJwk = input.forgePrivateJwk?.trim();
   if (!forgePrivateJwk) return undefined;
 
   const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<

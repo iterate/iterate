@@ -36,7 +36,7 @@ An iOS app equivalent of apps/os. v1 goal: beat "open Safari → os.iterate.com 
 
 ## Found along the way
 
-Local dev servers used to reject forge-minted bearer tokens with "missing or invalid auth" — the deploy path bakes the forge public key into the JWKS but `pnpm dev` had no equivalent, tracked in `tasks/os-dev-server-auth-minting-without-auth-worker.md` (pre-existing, high-priority, small). This branch first fixed it locally in `apps/os/scripts/dev.ts` (fetch-and-merge into the spawned vite child's env), but main independently landed a more complete fix in the same window (PR #1706, `generate-wrangler-config.ts` deriving a forge-only JWKS at config-gen time, with tests and docs) — so on merging main, this branch's `dev.ts` version was dropped as redundant/superseded rather than carried forward. The live e2e still exercises the forged-bearer lane; it now depends on main's fix instead of this branch's.
+Local dev servers used to reject forge-minted bearer tokens with "missing or invalid auth" — the deploy path bakes the forge public key into the JWKS but `pnpm dev` had no equivalent. PR #1706 fixed this in `generate-wrangler-config.ts` by deriving a forge-only JWKS at config-generation time, with tests and durable documentation. The mobile branch's local `apps/os/scripts/dev.ts` version was dropped as redundant when that fix reached main; the live e2e still exercises the forged-bearer lane against main's implementation.
 
 ## Handoff — the one manual pass (needs Misha's phone)
 

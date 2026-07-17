@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./agent-events": "./src/agent-events.ts",
     "./config": "./src/config.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./evlog": "./src/evlog/with-evlog.ts",

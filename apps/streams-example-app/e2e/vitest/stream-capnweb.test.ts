@@ -129,7 +129,7 @@ describe("stream capnweb protocol", () => {
     });
   });
 
-  it.fails("documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends", async () => {
+  it("documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-inbound-frame-limit");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
     const event: StreamEventInput = {
@@ -142,7 +142,11 @@ describe("stream capnweb protocol", () => {
     // This is expected to fail before stream storage sees the event: Cloudflare
     // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
     // a single append call into one WebSocket message.
-    await stream.stream.append(event);
+    await expect(async () => {
+      await stream.stream.append(event);
+    }).rejects.toThrow(
+      /(?:connection (?:lost|failed)|Peer closed WebSocket: 1009 Message is too large: \d+ > 33554432)/i,
+    );
   });
 
   // Cross-stream appends now go through the public `Stream.at(relativePath)`

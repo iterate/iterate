@@ -42,6 +42,7 @@ import {
   listProjectDirectory,
   primeProjectDirectory,
   readProjectById,
+  resolveProjectIdBySlug,
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
@@ -58,12 +59,6 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
-import type {
-  StreamRecoveryExportPage,
-  StreamRecoveryExportSink,
-  StreamRecoveryExportSummary,
-  StreamRecoveryRestoreInput,
-} from "./domains/streams/recovery.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -145,7 +140,12 @@ import type {
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
-import { rethrowStreamUnavailable } from "./domains/streams/stream-unavailable.ts";
+import {
+  isDurableObjectLifecycleError,
+  isStreamWaitTimeoutError,
+  rethrowStreamUnavailable,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
+} from "./domains/streams/stream-unavailable.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -207,6 +207,7 @@ import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
+  enqueueAutomaticStreamIndex,
   ensureProjectSearchInstance,
   indexDocument,
   indexPinnedStreamEvent,
@@ -235,6 +236,10 @@ import type {
   AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import {
+  settleByDeadline,
+  type DeadlineOutcome,
+} from "./domains/capability-host/execution-deadline.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
@@ -389,6 +394,10 @@ const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
+// Public create calls are acknowledgement boundaries, not indefinite leases.
+// A wedged processor must fail the caller loudly instead of parking an RPC
+// forever; the durable birth events remain committed for ordinary redelivery.
+const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -416,6 +425,8 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
     },
   );
 }
+
+const STREAM_WAIT_REACQUIRE_MS = 10_000;
 
 /**
  * Durable event stream capability.
@@ -530,13 +541,100 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * `ephemeral: true` event appended after this wait opens, but historical
    * ephemeral rows are never replayed.
    */
-  waitForEvent(args: {
+  async waitForEvent(args: {
     afterOffset?: number;
     eventTypes?: readonly string[];
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+    // Preserve the DO's validation error for invalid timeouts instead of
+    // manufacturing a deadline from NaN/Infinity/a non-positive duration.
+    if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+      return await this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+    }
+
+    const deadline = Date.now() + args.timeoutMs;
+    let replayAfterOffset = args.afterOffset;
+
+    // A cursor-less DO wait is live-from-the-head at which that individual
+    // subscription opens. Re-arming it with no cursor would therefore skip a
+    // durable event committed between subscriptions. Pin one post-call-start
+    // head and replay from it on every incarnation instead. Acquiring that
+    // head is itself sliced under the same public deadline: a silent orphan
+    // cannot wedge recovery before the first wait is even armed.
+    while (replayAfterOffset === undefined && Date.now() < deadline) {
+      const attemptDeadline = Math.min(deadline, Date.now() + STREAM_WAIT_REACQUIRE_MS);
+      let head: Promise<number>;
+      try {
+        head = Promise.resolve(this.durableObjectStub.getMaxOffset());
+      } catch (error) {
+        rethrowStreamUnavailable(error);
+      }
+      const outcome = await settleByDeadline(head, attemptDeadline, Date.now);
+      if (outcome.status === "fulfilled") {
+        replayAfterOffset = outcome.value;
+        break;
+      }
+      if (outcome.status === "rejected") rethrowStreamUnavailable(outcome.error);
+    }
+
+    const terminal = Promise.withResolvers<StreamEvent>();
+    let lastSliceTimeout: unknown;
+
+    while (Date.now() < deadline) {
+      const attemptDeadline = Math.min(deadline, Date.now() + STREAM_WAIT_REACQUIRE_MS);
+      // Keep the preceding healthy subscription alive for one extra slice
+      // while its replacement opens. This bounds normal overlap at two and
+      // avoids introducing an ephemeral-event gap at each recovery boundary;
+      // durable events are additionally protected by replayAfterOffset.
+      const remoteTimeoutMs = Math.max(
+        1,
+        Math.min(deadline - Date.now(), STREAM_WAIT_REACQUIRE_MS * 2),
+      );
+      let wait: Promise<StreamEvent>;
+      try {
+        wait = Promise.resolve(
+          this.durableObjectStub.waitForEvent({
+            ...args,
+            afterOffset: replayAfterOffset,
+            timeoutMs: remoteTimeoutMs,
+          }),
+        );
+      } catch (error) {
+        rethrowStreamUnavailable(error);
+      }
+
+      // A superseded call can still report an ephemeral match that a fresh
+      // subscription cannot replay. Let that success win. Likewise, retain a
+      // late predicate/application/lifecycle failure as the terminal result;
+      // only the explicitly modelled slice timeout is safe to replace with a
+      // fresh durable replay. In particular, an explicit kill must retain the
+      // public `stream-unavailable` rejection contract rather than being
+      // hidden behind recovery until the caller's deadline.
+      void wait.then(terminal.resolve, (error: unknown) => {
+        if (!isStreamWaitTimeoutError(error)) terminal.reject(error);
+      });
+
+      const outcome = await settleByDeadline(
+        Promise.race([wait, terminal.promise]),
+        attemptDeadline,
+        Date.now,
+      );
+      if (outcome.status === "fulfilled") return outcome.value;
+      if (outcome.status === "rejected") {
+        if (isStreamWaitTimeoutError(outcome.error)) {
+          lastSliceTimeout = outcome.error;
+          continue;
+        }
+        rethrowStreamUnavailable(outcome.error);
+      }
+    }
+
+    throw new Error(
+      `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
+        "(the public deadline expired while recovery re-armed one-shot waits).",
+      lastSliceTimeout === undefined ? undefined : { cause: lastSliceTimeout },
+    );
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
@@ -751,61 +849,6 @@ class StreamCollectionRpcTarget<
   }
 }
 
-/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
-class StreamRecoveryCollectionRpcTarget extends IterateRpcTarget<"StreamRecoveryCollection"> {
-  constructor(readonly props: { auth: ItxAuth }) {
-    super();
-    if (!props.auth.isAdmin()) throw new Error("stream recovery requires an admin principal");
-  }
-
-  get(input: { projectId: string | null; path: string }): StreamRecoveryRpcTarget {
-    return new StreamRecoveryRpcTarget({
-      projectId: input.projectId,
-      path: normalizePath(input.path),
-    });
-  }
-}
-
-/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
-class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
-  constructor(readonly props: { projectId: string | null; path: string }) {
-    super();
-  }
-
-  get #stream() {
-    return env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(this.props, { allowNullProjectId: true }),
-    );
-  }
-
-  exportForRecovery(args?: {
-    afterOffset?: number;
-    limit?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportPage> {
-    return this.#stream.exportForRecovery(args);
-  }
-
-  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
-  exportToRecovery(args: {
-    sink: StreamRecoveryExportSink;
-    afterOffset?: number;
-    limit?: number;
-    maxPages?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportSummary> {
-    return this.#stream.exportToRecovery(args);
-  }
-
-  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
-    restoredEventCount: number;
-    lastImportedOffset: number;
-    currentMaxOffset: number;
-  }> {
-    return this.#stream.restoreFromRecovery(input);
-  }
-}
-
 /** Project-scoped stream catalog with reduced-state listing. */
 class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"ProjectStreamCollection"> {
   constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
@@ -904,7 +947,10 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("scheduler create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
@@ -1004,7 +1050,10 @@ async function requestRepoCreate(input: {
   const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
   if (createOffset === 0) throw new Error("repo create committed no events");
   const repo = new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
-  await repo.processor.waitUntilProcessed({ offset: createOffset });
+  await repo.processor.waitUntilProcessed({
+    offset: createOffset,
+    timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+  });
 
   await timedStep("create-timing", timing, "wait-repo-ready", () =>
     stream.waitForEvent({
@@ -4163,8 +4212,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("agent create committed no events");
     await Promise.all([
-      this.processor.waitUntilProcessed({ offset }),
-      this.capabilityHost.processor.waitUntilProcessed({ offset }),
+      this.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
+      this.capabilityHost.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
     ]);
   }
 
@@ -4576,10 +4631,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Project catalog: get("prj_...") and create({ slug }) vend a project itx; list() enriches with deployment status.',
+        'Project catalog: get("prj_..." or a slug) and create({ slug }) vend a project itx; list() enriches with deployment status.',
       children: {
         create: "Create a project; returns its itx.",
-        get: "The itx for a project id.",
+        get: "The itx for a project id or slug.",
         list: "The session's projects with deployment status.",
       },
       parent: "session.projects",
@@ -4590,25 +4645,35 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     super();
   }
 
-  /** The itx at the project root for a `prj_…` id. */
-  async get(projectId: string): Promise<ProjectRpcTarget> {
-    // Guard the id shape: itx state is namespaced by whatever string lands
-    // here, so an unvalidated slug (e.g. `cli itx run --context <slug>`) would
-    // silently manufacture a phantom project namespace instead of failing.
-    if (!projectId.startsWith("prj_")) {
-      throw new Error(
-        `"${projectId}" is not a project id (expected "prj_..."). Resolve slugs to ids first.`,
-      );
+  /**
+   * The itx at the project root, addressable by `prj_…` id OR by URL slug — the
+   * browser passes `params.projectSlug` straight through, no client-side
+   * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution
+   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},
+   * which passes `prj_` ids through untouched and resolves slugs); slugs are
+   * immutable, so a slug handle can't silently repoint. Confinement stays keyed
+   * on the resolved id — the access check runs on the id, never the raw input.
+   */
+  async get(idOrSlug: string): Promise<ProjectRpcTarget> {
+    const projectId = await resolveProjectIdBySlug({
+      directory: env.PROJECT_DIRECTORY,
+      identifier: idOrSlug,
+    });
+    // A miss is genuine (garbage, or a slug with no directory row): fail loudly
+    // rather than manufacture a phantom namespace — itx state is namespaced by
+    // whatever string lands as the project id.
+    if (projectId === null) {
+      throw new Error(`no project "${idOrSlug}" (unknown project id or slug)`);
     }
     // Claims can lag right after a create; the auth context may consult the
-    // project directory and widen itself before the synchronous constructor
-    // assert runs. Cap'n Web pipelines through the returned promise.
+    // project directory and widen itself before access is granted. Cap'n Web
+    // pipelines through the returned promise.
     await this.props.auth.ensureCanAccessProject?.(projectId);
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
       path: "/",
-      projectId: projectId,
+      projectId,
     });
   }
 
@@ -4696,6 +4761,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     await timedStep("create-timing", timing, "wait-project-birth", () =>
       project.processor.waitUntilProcessed({
         offset: Math.max(created.offset, subscription.offset),
+        // A create must never leave its caller parked behind a wedged
+        // processor indefinitely. One project birth frame has a shared 60s
+        // sibling-barrier deadline; 75s leaves 15s for durable-delivery
+        // backoff and transport redial.
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     );
     // The project now EXISTS and its birth has been processed. Whether to
@@ -4951,7 +5021,10 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("capability host create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
@@ -5511,9 +5584,22 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
-    this.#indexStreamSearch(batch);
+    // Search is a derived mirror, so schedule it independently of the user
+    // worker outcome: a batch that the delivery spine eventually poison-skips
+    // must still be searchable. waitUntil keeps it off the authoritative
+    // acknowledgement path, while the isolate-wide per-stream tail preserves
+    // ordering across cached project-target remints.
+    if (batch.projectId !== null) {
+      this.#props.ctx.waitUntil(
+        enqueueAutomaticStreamIndex({
+          projectId: batch.projectId,
+          path: batch.path,
+          run: () => this.#indexStreamSearch(batch),
+        }),
+      );
+    }
     try {
-      return await this.worker.processEventBatch(batch);
+      await this.worker.processEventBatch(batch);
     } catch (error) {
       // The bootstrap window: the worker cannot be MATERIALIZED yet (config
       // repo unseeded, or its first build still in flight). That is this
@@ -5633,37 +5719,31 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * SPIKE platform step: mirror the batch's stream events into the itx.search
    * corpus (domains/search/search-index.ts) as fixed 100-offset segment
-   * documents. Same rules as {@link #indexStreamActivity}: idempotent
-   * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
-   * — only the worker delegation may reject into the spine's retry. It rides
-   * the same ordered, checkpointed delivery, re-reading each touched segment's
-   * full range from the stream so a transient failure self-heals on the next
-   * batch in that segment (see indexStreamEventBatch).
+   * documents. It is idempotent (segment docs are deterministic rewrites),
+   * queued in delivery order under waitUntil, and MUST NOT throw — only the
+   * worker delegation may reject into the spine's retry. Re-reading each
+   * touched segment's full range means a transient failure self-heals on the
+   * next batch in that segment (see indexStreamEventBatch).
    */
-  #indexStreamSearch(batch: StreamPushEventBatch): void {
+  async #indexStreamSearch(batch: StreamPushEventBatch): Promise<void> {
     if (batch.projectId === null) return;
-    const streamStub = env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: batch.projectId, path: batch.path },
-        { allowNullProjectId: true },
-      ),
-    );
-    // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
-    // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
-    // promise can be cancelled when the invocation's I/O context ends.
-    const projectId = batch.projectId;
-    this.#props.ctx.waitUntil(
-      indexStreamEventBatch({
+    try {
+      const streamStub = env.STREAM.getByName(
+        DurableObjectNameCodec.stringify(
+          { projectId: batch.projectId, path: batch.path },
+          { allowNullProjectId: true },
+        ),
+      );
+      await indexStreamEventBatch({
         batch,
         readEvents: (args) => streamStub.getEvents(args),
-      })
-        // Freshness: nudge the project's instance (if one exists) so passive
-        // content is searchable in minutes, not on the hourly schedule.
-        .then(() => triggerProjectSearchSyncDebounced(projectId))
-        .catch((error: unknown) => {
-          console.warn("search index stream batch failed", { path: batch.path, error });
-        }),
-    );
+      });
+      // Freshness: nudge the project's instance (if one exists) so passive
+      // content is searchable in minutes, not on the hourly schedule.
+      await triggerProjectSearchSyncDebounced(batch.projectId);
+    } catch (error: unknown) {
+      console.warn("search index stream batch failed", { path: batch.path, error });
+    }
   }
 
   /**
@@ -5757,7 +5837,6 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       children: {
         projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
         repos: "Deployment-wide repos (admin only; projectId: null).",
-        streamRecovery: "Admin-only exact-offset Stream Durable Object recovery.",
         streams: "Deployment-wide streams (admin only; projectId: null).",
       },
       parent: "the /api unauthenticated entrypoint, via authenticate(credentials)",
@@ -5779,11 +5858,6 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       auth: this.props.auth,
       projectId: null,
     });
-  }
-
-  /** Admin-only exact-offset Stream Durable Object recovery. */
-  get streamRecovery(): StreamRecoveryCollectionRpcTarget {
-    return new StreamRecoveryCollectionRpcTarget({ auth: this.props.auth });
   }
 
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
@@ -6181,7 +6255,11 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    await this.#catchUpBeforeSnapshot?.();
+    // The runner waiter registers first, then starts its own serialized
+    // self-pull. Its timeout therefore bounds the WHOLE read-your-writes
+    // operation. Awaiting catchUpBeforeSnapshot here first made timeoutMs
+    // dishonest: a stuck catch-up could hold this call forever before the
+    // timed waiter even existed.
     await this.#reads.waitUntilEvent(input);
   }
 }
@@ -6474,6 +6552,8 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
   telegramProcessor: PromiseLike<unknown>;
 };
 
+const PROCESSOR_WAIT_REACQUIRE_MS = 10_000;
+
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
  *
@@ -6495,7 +6575,7 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
  * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
  * exists to close for `ingest`).
  */
-class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
+export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements WakeableStreamProcessorRpc<State>
 {
@@ -6518,16 +6598,141 @@ class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorH
     return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
   }
 
+  #disposeProcessor(processor: StreamProcessorRpc<State>): void {
+    // A Workers RPC property returning an RpcTarget materializes a remote
+    // stub for every relay call. It is only needed for this one method and
+    // must be released deterministically. In-process targets are real
+    // RpcTargets and remain owned by their host.
+    if (processor instanceof RpcTarget) return;
+    try {
+      (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+    } catch (error) {
+      // Disposal is cleanup, not the authoritative processor outcome. A
+      // stale workerd RPC stub can reject disposal after its backing DO
+      // resets; preserve the success/error/retry already chosen above,
+      // while keeping the cleanup failure observable.
+      console.warn("processor relay transient facade dispose failed", { error });
+    }
+  }
+
+  async #callProcessorOutcome<Result>(
+    call: (processor: StreamProcessorRpc<State>) => Promise<Result>,
+    expiresAt?: number,
+  ): Promise<DeadlineOutcome<Result>> {
+    const settle = <Value>(promise: Promise<Value>): Promise<DeadlineOutcome<Value>> =>
+      expiresAt === undefined
+        ? promise.then<DeadlineOutcome<Value>, DeadlineOutcome<Value>>(
+            (value) => ({ status: "fulfilled", value }),
+            (error: unknown) => ({ status: "rejected", error }),
+          )
+        : settleByDeadline(promise, expiresAt, Date.now);
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      let processor: StreamProcessorRpc<State> | undefined;
+      const acquisition = this.#processor();
+      const acquired = await settle(acquisition);
+      if (acquired.status === "deadline") {
+        // The acquisition may still materialize a remote facade after this
+        // caller has moved on. Observe both outcomes and release a late stub.
+        void acquisition.then(
+          (lateProcessor) => this.#disposeProcessor(lateProcessor),
+          () => undefined,
+        );
+        return acquired;
+      }
+      if (acquired.status === "rejected") {
+        if (attempt === 1 && isDurableObjectLifecycleError(acquired.error)) {
+          console.info("processor relay retrying after Durable Object lifecycle reset");
+          continue;
+        }
+        return acquired;
+      }
+
+      processor = acquired.value;
+      if (expiresAt !== undefined && Date.now() >= expiresAt) {
+        // Acquisition won the promise race but consumed the complete slice.
+        // Do not schedule a call on a facade that cleanup must now release.
+        this.#disposeProcessor(processor);
+        return { status: "deadline" };
+      }
+      let outcome: DeadlineOutcome<Result>;
+      try {
+        outcome = await settle(call(processor));
+      } catch (error) {
+        outcome = { status: "rejected", error };
+      } finally {
+        this.#disposeProcessor(processor);
+      }
+      if (
+        outcome.status === "rejected" &&
+        attempt === 1 &&
+        isDurableObjectLifecycleError(outcome.error)
+      ) {
+        // Deploys and evictions may reset a processor-hosting DO while its
+        // facade property or method call is in flight. A fresh host stub
+        // reaches the replacement incarnation; retry exactly once. App errors
+        // are never retried, and a second lifecycle failure propagates.
+        console.info("processor relay retrying after Durable Object lifecycle reset");
+        continue;
+      }
+      return outcome;
+    }
+    return {
+      status: "rejected",
+      error: new Error("processor relay exhausted its bounded lifecycle retry"),
+    };
+  }
+
+  async #callProcessor<Result>(
+    call: (processor: StreamProcessorRpc<State>) => Promise<Result>,
+  ): Promise<Result> {
+    const outcome = await this.#callProcessorOutcome(call);
+    if (outcome.status === "fulfilled") return outcome.value;
+    if (outcome.status === "rejected") throw outcome.error;
+    throw new Error("processor relay reached an impossible unbounded deadline");
+  }
+
   async snapshot() {
-    return await (await this.#processor()).snapshot();
+    return await this.#callProcessor((processor) => processor.snapshot());
   }
 
   async getRuntimeState() {
-    return await (await this.#processor()).getRuntimeState();
+    return await this.#callProcessor((processor) => processor.getRuntimeState());
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    return await (await this.#processor()).waitUntilProcessed(input);
+    if (input.timeoutMs === undefined) {
+      return await this.#callProcessor((processor) => processor.waitUntilProcessed(input));
+    }
+
+    const deadline = Date.now() + input.timeoutMs;
+    const timeoutError = () =>
+      new Error(
+        `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
+      );
+    while (Date.now() < deadline) {
+      // A remote RpcTarget call can be orphaned when its hosting DO is
+      // replaced without workerd rejecting the caller. Bound the LOCAL
+      // acquisition + call as well as the remote runner's timer, then obtain a
+      // fresh facade and re-check durable progress within the one public
+      // deadline. Promise races retain rejection observers, and disposal
+      // cancels/releases the superseded remote waiter.
+      const attemptDeadline = Math.min(deadline, Date.now() + PROCESSOR_WAIT_REACQUIRE_MS);
+      const outcome = await this.#callProcessorOutcome((processor) => {
+        const timeoutMs = deadline - Date.now();
+        return timeoutMs <= 0
+          ? Promise.reject(timeoutError())
+          : processor.waitUntilProcessed({ ...input, timeoutMs });
+      }, attemptDeadline);
+      if (outcome.status === "fulfilled") return outcome.value;
+      if (outcome.status === "rejected") throw outcome.error;
+      if (attemptDeadline >= deadline) break;
+      console.info("processor relay re-acquiring after bounded wait slice", {
+        offset: input.offset,
+        remainingMs: deadline - Date.now(),
+      });
+    }
+    throw timeoutError();
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */

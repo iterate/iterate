@@ -188,7 +188,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   ): undefined {
     const { append, appendTo, blockProcessorWhile, event, previousState, runInBackground, state } =
       args;
-    if (event.type === "events.iterate.com/agent/created") {
+    if (event !== null && event.type === "events.iterate.com/agent/created") {
       blockProcessorWhile(() =>
         appendTo("/", {
           type: "events.iterate.com/agent/created",
@@ -198,9 +198,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       );
     }
     if (state.birthCertificate === null) return;
-    // AT-HEAD reconcile (was `onCaughtUp`): fires only for the last consumed
-    // event of a batch that reached head (`delivery.caughtUp`), so `state` is
-    // the whole fold — drive or settle open LLM obligations, derive the next
+    // AT-HEAD reconcile: `delivery.caughtUp` means `state` is the whole
+    // observed fold. The signal rides the last consumed event, or an eventless
+    // pass when the raw tail contains nothing this processor consumes. Drive
+    // or settle open LLM obligations, derive the next
     // scheduling decision, then announce busy/idle flips. ONE blocking closure
     // so the whole pass is awaited as this head event's own work before its
     // deferred commit; a failure fails the frame and the transport replays it.
@@ -216,6 +217,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         await this.#reconcileStatusAnnouncement(args);
       });
     }
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile
+    // above — which is exactly what drives an obligation stranded because the
+    // stream head is an unconsumed event (subscriber-disconnected, a foreign
+    // fact). This is why the reconcile MUST run without a consumed event.
+    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/agents/web-message-sent": {
         // Files the agent attached to its own message ride the reflection too,
@@ -566,8 +572,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   // ---------------------------------------------------------------------------
   // Lane 3: reconciliation. Invoked from `processEvent` under
-  // `delivery.caughtUp` (the last consumed event of a batch that reached
-  // head), so neither pass needs its own mid-refold gate: a catch-up fold can
+  // `delivery.caughtUp` after the scan reaches head, so neither pass needs its
+  // own mid-refold gate: a catch-up fold can
   // never dial env.AI for a long-settled request or journal a false failure.
   // RECOVERY rides this same path: `events.iterate.com/stream/processor-revived` — the
   // fact the keepalive's revival pass journals after an eviction took

@@ -57,10 +57,16 @@ export function petshopMintClient(): Promise<{ clientId: string; clientSecret: s
   });
 }
 
-/** Bump the access-token epoch so every outstanding access token is instantly
- * invalid — the deterministic way to force a real 401 → refresh. */
-export function petshopExpireTokens(): Promise<{ accessTokenEpoch: number }> {
-  return petshopJson("/__backdoor/expire-tokens", { method: "POST", headers: backdoorHeaders() });
+/** Bump one token client's epoch—the deterministic way to force its real
+ * 401 → refresh without invalidating credentials used by concurrent tests. */
+export function petshopExpireTokens(
+  clientId: string,
+): Promise<{ clientId: string; accessTokenEpoch: number }> {
+  return petshopJson("/__backdoor/expire-tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    body: JSON.stringify({ clientId }),
+  });
 }
 
 // petshop's webhook backdoors (/__backdoor/rotate-signing-secret,

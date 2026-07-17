@@ -18,7 +18,8 @@ if (baseUrl) process.env.APP_CONFIG_BASE_URL = baseUrl;
 // A stream-delivery timeout under concurrent load can surface as an UNHANDLED
 // rejection rather than inside a test's await: when one test's `waitForEvent`
 // RPC rejects (server-side `Timed out waiting for stream event` /
-// `waitUntilEvent timed out`), the promise for a *sibling* concurrent test — or
+// `waitUntilEvent timed out` / `waitUntilProcessed timed out`), the promise for
+// a *sibling* concurrent test — or
 // a background subscription whose owning test already moved on — rejects into
 // the void as capnweb's read loop drains. Node's default is to CRASH the vitest
 // worker on that, which produces zero test output and BYPASSES the CI
@@ -31,7 +32,8 @@ if (baseUrl) process.env.APP_CONFIG_BASE_URL = baseUrl;
 // a suite-killing crash into an ordinary (usually retry-absorbed) failure.
 // Every other unhandled rejection is re-thrown, which Node escalates to an
 // uncaughtException — preserving the crash-on-real-bug behaviour.
-const TRANSIENT_STREAM_WAIT = /Timed out waiting for stream event|waitUntilEvent timed out/i;
+const TRANSIENT_STREAM_WAIT =
+  /Timed out waiting for stream event|waitUntilEvent timed out|waitUntilProcessed timed out/i;
 process.on("unhandledRejection", (reason) => {
   const message = reason instanceof Error ? reason.message : String(reason);
   if (TRANSIENT_STREAM_WAIT.test(message)) {

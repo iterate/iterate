@@ -42,6 +42,7 @@ import {
   DEFAULT_CLIENT_ID,
   DEFAULT_CLIENT_SECRET,
   DEFAULT_INSTALLATION_ID,
+  accessTokenEpochFor,
   type OauthClient,
   type PetshopState,
   PetshopStateDurableObject,
@@ -111,7 +112,7 @@ interface CodePayload {
   codeChallenge?: string;
 }
 
-/** Sealed access token; `epoch` must still equal the state's accessTokenEpoch. */
+/** Sealed access token; `epoch` must still equal this client's revocation epoch. */
 interface AccessPayload {
   t: "access";
   sub: string;
@@ -199,7 +200,7 @@ const INDEX = dedent`
 
   GET  /__backdoor/state                   the whole mutable state, for spec assertions
   POST /__backdoor/clients                 {accessTokenTtlSeconds?} → mint {clientId, clientSecret}
-  POST /__backdoor/expire-tokens           invalidate every outstanding access token (epoch bump)
+  POST /__backdoor/expire-tokens           {clientId} → invalidate that client's outstanding access tokens
   POST /__backdoor/revoke-refresh-token    {refreshToken} → that refresh token stops working
   POST /__backdoor/rotate-signing-secret   new webhook HMAC secret
   POST /__backdoor/fail-token-endpoint     {times} → next N POST /oauth/token calls return 500
@@ -497,14 +498,14 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     if (!(await deps.state.consumeAuthorizationCode(code.jti))) {
       return json({ error: "invalid_grant", error_description: "code already used" }, 400);
     }
-    // Re-read the epoch at issue time: the awaits above release the DO input
-    // gate, so a concurrent expire-tokens could have bumped the epoch since the
-    // snapshot — stamping the stale epoch would mint a token that 401s at once.
+    // Re-read this client's epoch at issue time: the awaits above release the
+    // DO input gate, so concurrent targeted expiry could otherwise make the
+    // replacement token invalid as soon as it is minted.
     return issueTokens({
       sub: code.sub,
       clientId,
       ttlSeconds: client.accessTokenTtlSeconds,
-      epoch: (await deps.state.getState()).accessTokenEpoch,
+      epoch: accessTokenEpochFor(await deps.state.getState(), clientId),
       sealKey: deps.sealKey,
     });
   }
@@ -523,7 +524,7 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
       sub: refresh.sub,
       clientId,
       ttlSeconds: client.accessTokenTtlSeconds,
-      epoch: current.accessTokenEpoch,
+      epoch: accessTokenEpochFor(current, clientId),
       sealKey: deps.sealKey,
     });
   }
@@ -570,7 +571,7 @@ async function legacyLogin(request: Request, deps: PetshopDeps): Promise<Respons
     t: "access",
     sub: email,
     clientId: "legacy-login",
-    epoch: state.accessTokenEpoch,
+    epoch: accessTokenEpochFor(state, "legacy-login"),
     exp: nowSeconds() + DEFAULT_ACCESS_TTL_SECONDS,
   };
   return json({
@@ -630,10 +631,9 @@ async function appInstallationAccessToken(
     clientId: app.appId,
     installationId,
     appId: app.appId,
-    // Re-read the epoch at seal time (verifyAppJwt released the input gate) so a
-    // concurrent expire-tokens can't make this token 401 immediately — same
-    // freshness the OAuth token path has.
-    epoch: (await deps.state.getState()).accessTokenEpoch,
+    // Re-read this App client's epoch at seal time (verifyAppJwt released the
+    // input gate), matching the OAuth token path's revocation freshness.
+    epoch: accessTokenEpochFor(await deps.state.getState(), app.appId),
     exp,
   };
   // GitHub answers 201 Created with { token, expires_at } (ISO 8601 UTC).
@@ -658,7 +658,8 @@ async function accessGrant(request: Request, deps: PetshopDeps): Promise<Grant |
     // this login flow has no OAuth client).
     const session = await graphqlSessionFromBearer(token, {
       sealKey: deps.sealKey,
-      getAccessTokenEpoch: () => deps.state.getState().then((state) => state.accessTokenEpoch),
+      getAccessTokenEpoch: () =>
+        deps.state.getState().then((state) => accessTokenEpochFor(state, "graphql-session-login")),
     });
     if (!session) return null;
     return {
@@ -671,7 +672,7 @@ async function accessGrant(request: Request, deps: PetshopDeps): Promise<Grant |
   }
   if (grant.t !== "access" && grant.t !== "installation") return null;
   if (grant.exp < nowSeconds()) return null;
-  if (grant.epoch !== (await deps.state.getState()).accessTokenEpoch) return null;
+  if (grant.epoch !== accessTokenEpochFor(await deps.state.getState(), grant.clientId)) return null;
   return grant;
 }
 
@@ -728,7 +729,17 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
     );
   }
   if (key === "POST /__backdoor/expire-tokens") {
-    return json({ accessTokenEpoch: await deps.state.expireAccessTokens() });
+    const clientId = (await readJson(request)).clientId;
+    if (typeof clientId !== "string" || clientId.length === 0) {
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "clientId is required so expiry cannot affect unrelated tests",
+        },
+        400,
+      );
+    }
+    return json({ clientId, accessTokenEpoch: await deps.state.expireAccessTokens(clientId) });
   }
   if (key === "POST /__backdoor/revoke-refresh-token") {
     const body = await readJson(request);
@@ -859,12 +870,12 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
 }
 
 /** The gateway's validation deps, projected from the request deps: the sealing
- * key and a per-call read of the CURRENT access-token epoch (so a token revoked
- * between upgrade and auth is rejected, exactly like the HTTP routes). */
+ * key and a per-call read of the token client's CURRENT revocation epoch. */
 function gatewayDeps(deps: PetshopDeps): GatewayDeps {
   return {
     sealKey: deps.sealKey,
-    getAccessTokenEpoch: () => deps.state.getState().then((s) => s.accessTokenEpoch),
+    getAccessTokenEpoch: (clientId) =>
+      deps.state.getState().then((state) => accessTokenEpochFor(state, clientId)),
   };
 }
 
@@ -1048,7 +1059,8 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
   if (key === "POST /graphql") {
     return handleGraphqlLogin(request, {
       sealKey: deps.sealKey,
-      getAccessTokenEpoch: () => deps.state.getState().then((state) => state.accessTokenEpoch),
+      getAccessTokenEpoch: () =>
+        deps.state.getState().then((state) => accessTokenEpochFor(state, "graphql-session-login")),
     });
   }
   if (key === "GET /api/me" || key === "GET /api/pets") {
