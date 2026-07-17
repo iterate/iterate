@@ -55,16 +55,17 @@ export function CreateProjectForm({
       // Fast path: waitUntilReady: false returns once identity is registered,
       // the directory is primed, and birth events are appended — not after
       // processor birth or project/ready. Navigate on that; the project home
-      // plays the checklist from live pushes.
-      await session.projects.create({
+      // plays the checklist from live pushes. No __describe() hop before
+      // navigate (that was pure wait).
+      const project = await session.projects.create({
         slug: input.slug,
         waitUntilReady: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
-      // Form slug is strict kebab-case; auth normalization is identity for UI
-      // creates. Skip __describe() — it added a needless round trip before
-      // navigation.
-      return { slug: input.slug };
+      // projectId is a sync property on the handle (no extra RTT). Form slug
+      // is the usual navigate target; background reconcile covers rare auth
+      // slugify differences (reserved names / all-numeric).
+      return { id: project.projectId, slug: input.slug };
     },
     onSuccess: (project) => {
       setNavigatingAway(true);
@@ -88,6 +89,20 @@ export function CreateProjectForm({
         reconnectIterateSession();
         await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
         await router.invalidate();
+        // If auth normalized the slug (rare for UI kebab-case; reserved /
+        // all-numeric cases), hop to the canonical URL.
+        const session = await connectIterateSession();
+        const entry = (await session.projects.list()).find(
+          (candidate) => candidate.id === project.id,
+        );
+        if (entry != null && entry.slug !== project.slug) {
+          void router.navigate({
+            to: "/projects/$projectSlug",
+            params: { projectSlug: entry.slug },
+            search: { welcome: true },
+            replace: true,
+          });
+        }
       })().catch(() => {
         // Claims catch up on the next token refresh regardless; the directory
         // fallback keeps the project usable in the meantime.
