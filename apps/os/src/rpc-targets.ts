@@ -27,7 +27,7 @@
  *   shortcuts onto it); `itx.capabilityHosts.get(path)` addresses any other
  *   scope's host, including the project root at `"/"`.
  */
-import { RpcTarget } from "cloudflare:workers";
+import { RpcTarget, tracing } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -67,6 +67,11 @@ import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   scriptSettlementFromEvent,
 } from "./domains/capability-host/script-execution-settlement.ts";
+import {
+  commitForegroundScriptSettlement,
+  executeForegroundScript,
+  type ForegroundScriptExecutor,
+} from "./domains/capability-host/script-execution-foreground.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -5056,9 +5061,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     result: unknown;
   }> {
     const request = await this.#durableObject.requestScript(code);
-    let completedEvent: StreamEvent;
-    try {
-      completedEvent = await waitForStreamIdempotencyKey({
+    const observeCompletion = () =>
+      waitForStreamIdempotencyKey({
         connect: (idempotencyKey) =>
           connectStreamIdempotencyWaitSocket(this.#stream.durableObjectStub, idempotencyKey),
         idempotencyKey: request.completionIdempotencyKey,
@@ -5067,6 +5071,55 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
           request.expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - Date.now(),
         ),
       });
+    let completedEvent: StreamEvent;
+    try {
+      if (request.preparation.status === "ready") {
+        const preparation = request.preparation;
+        // Do not open the completion WebSocket before invoking the executor.
+        // It is intentionally long-lived and can otherwise occupy the exact
+        // outbound request lane needed to create the event it waits for.
+        const settlement = await tracing.enterSpan(
+          "capability_host.script_foreground_execute",
+          async (span) => {
+            span.setAttribute("iterate.capability_host.execution_id", request.executionId);
+            return await executeForegroundScript({
+              authority: {
+                ownerWorkerName: env.WORKER_SELF,
+                projectId: this.#props.projectId,
+                scopePath: this.#props.path,
+              },
+              executor: env.SCRIPT_EXECUTOR as unknown as ForegroundScriptExecutor,
+              preparation: {
+                ...preparation,
+                expiresAt: request.expiresAt,
+              },
+            });
+          },
+        );
+        completedEvent = await tracing.enterSpan(
+          "capability_host.script_settlement_commit",
+          async (span) => {
+            span.setAttribute("iterate.capability_host.execution_id", request.executionId);
+            return await commitForegroundScriptSettlement({
+              commit: () =>
+                this.#durableObject.settleScriptExecution({
+                  executionId: request.executionId,
+                  settlement,
+                }),
+              observe: observeCompletion,
+              onCommitFailure: ({ attempt, error }) => {
+                console.warn("[capability-host] script settlement commit attempt failed", {
+                  attempt,
+                  error,
+                  executionId: request.executionId,
+                });
+              },
+            });
+          },
+        );
+      } else {
+        completedEvent = await observeCompletion();
+      }
     } catch (error) {
       if (!(error instanceof StreamIdempotencyWaitTimeoutError)) {
         const detail = error instanceof Error ? error.message : String(error);

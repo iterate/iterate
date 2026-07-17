@@ -37,8 +37,8 @@ test(
 
     // The public runScript call is already waiting for its settlement. Kill
     // that Stream DO incarnation while the Dynamic Worker remains in flight;
-    // the Worker-owned observer must reopen a bounded lease and replay the
-    // durable completion from the request offset.
+    // the controlled abort closes its exact-key observer, which must reconnect
+    // and point-read the durable completion without polling.
     await stream.kill().catch(() => undefined);
 
     expect((await execution).success()).toEqual({ marker });

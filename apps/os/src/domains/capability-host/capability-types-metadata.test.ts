@@ -64,11 +64,6 @@ async function makeProcessor(options: {
     itx: (options.itx ?? {}) as Project,
     path: options.path ?? "/",
     projectId: null,
-    scriptExecutionEntrypoint: {
-      run: () => {
-        throw new Error("must not run in this scenario");
-      },
-    },
     validateCapabilityTypes: options.validateCapabilityTypes,
     reads: {
       snapshot: () => runner.snapshot(),

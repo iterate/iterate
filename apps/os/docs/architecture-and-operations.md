@@ -144,13 +144,18 @@ script shape: a body that runs with `itx` (and `vars`) in scope and ends with
 an explicit `return` (see `src/itx/examples.ts`, the catalogue that doubles
 as the REPL Examples panel and the cross-runtime e2e matrix).
 
-The CapabilityHost DO journals each request and outcome. The typechecker
-sidecar compiles the script; a tiny stateless script-executor sidecar then owns
-the Worker Loader invocation. It receives durable scope coordinates, not
-forwarded service stubs, and mints the exact CapabilityHost and Project DO
-stubs locally for scoped itx and egress. This keeps cold execution from loading
-a second copy of the full OS application and avoids the per-DO four-fresh-worker
-concurrency ceiling.
+The CapabilityHost DO journals the request, typechecks it, and records
+`started` before handing executable code back to the existing top-level ITX
+request. That caller invokes the tiny stateless script-executor sidecar and
+commits its exact outcome to the host. The host RPC has returned before
+userspace starts, so capability calls enter through a bounded lineage instead
+of recursively re-entering the host request waiting on the script. A named
+slice of the host's shared alarm enforces the absolute deadline; recovery fails
+an ownerless request as provably unstarted and never replays a started script.
+The executor receives durable scope coordinates, not forwarded service stubs,
+and mints the exact CapabilityHost and Project DO stubs locally for scoped itx
+and egress. This also keeps cold execution from loading a second copy of the
+full OS application.
 
 Capabilities are visible through `itx.__describe()`. The built-ins
 (`itx.streams`, `itx.repos`, `itx.secrets`, `itx.agents`, `itx.workers`,

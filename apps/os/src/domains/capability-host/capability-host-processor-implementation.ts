@@ -25,8 +25,8 @@ import {
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
   scriptCompletionInput,
   settlementAppendDeadline,
+  settlementForLostForegroundRequest,
   settlementForUndrivenScript,
-  settlementFromWorkerOutcome,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
 } from "./script-execution-settlement.ts";
 import {
@@ -39,10 +39,13 @@ export type ScriptRunRequest = {
   completionIdempotencyKey: string;
   executionId: string;
   expiresAt: number;
-};
-
-type ScriptExecutionEntrypoint = {
-  run(code: string, options: { emittedJs?: string; expiresAt: number }): Promise<unknown>;
+  preparation:
+    | { status: "settled" }
+    | {
+        status: "ready";
+        code: string;
+        emittedJs?: string;
+      };
 };
 
 const INVALID_PATH_SEGMENTS = new Set([
@@ -167,7 +170,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   readonly contract = CapabilityHostProcessorContract;
   #itx: Project;
   #path: string;
-  #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
   /** Injected clock (expiry decisions); production defaults to Date.now. */
   #now: (() => number) | undefined;
   #resolveAncestor: ((path: string) => CapabilityHostAncestor) | undefined;
@@ -178,7 +180,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         code: string;
       }) => Promise<ScriptExecutionCheck>)
     | undefined;
-  #runScriptInBackground: (work: () => Promise<unknown>) => void;
   #liveCapabilities = new Map<string, LiveCapability>();
   #reads: CapabilityHostProcessorReads;
 
@@ -188,8 +189,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       path: string;
       /** Runner-backed fold reads — see {@link CapabilityHostProcessorReads}. */
       reads: CapabilityHostProcessorReads;
-      /** Runs run-script workers in this scope. */
-      scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
       /** Injected clock (expiry decisions); production defaults to Date.now. */
       now?: () => number;
       /** Resolves only the path recorded in the host's birth certificate. */
@@ -210,25 +209,16 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         capabilities: CapabilityDescription[];
         code: string;
       }) => Promise<ScriptExecutionCheck>;
-      /**
-       * Starts a committed script obligation on the hosting runner's recovery
-       * lane. Production injects the registry runner; tests may use the base
-       * processor keepalive.
-       */
-      runScriptInBackground?: (work: () => Promise<unknown>) => void;
     },
   ) {
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
     this.#reads = args.reads;
-    this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#now = args.now;
     this.#resolveAncestor = args.resolveAncestor;
     this.#validateCapabilityTypes = args.validateCapabilityTypes;
     this.#typecheckScript = args.typecheckScript;
-    this.#runScriptInBackground =
-      args.runScriptInBackground ?? ((work) => this.runInBackground(work));
   }
 
   protected override reduce({
@@ -315,17 +305,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
   }
 
-  /** Script executions alive in THIS incarnation — the "actual" half of the
-   * reconciliation below. */
-  readonly #liveExecutions = new Set<string>();
   /**
-   * Incarnation-local launch ownership. A foreground reservation exists before
-   * its journal request and remains through the append continuation, so
-   * committed-state pruning must never infer that its absence from a snapshot
-   * makes it stale. Once launched, foreground and reconcile owners remain
-   * until the committed fold removes the obligation.
+   * Scripts whose top-level ITX request still owns the only permitted
+   * userspace attempt in this incarnation. The request reserves its id before
+   * journaling, commits `started` before returning executable code, and keeps
+   * ownership until the settlement is folded. A new incarnation deliberately
+   * cannot recreate this set: requested work is then failed as provably
+   * unstarted, while started work is never replayed.
    */
-  readonly #executionOwners = new Map<string, "foreground-reserved" | "foreground" | "reconcile">();
+  readonly #foregroundExecutions = new Set<string>();
   /**
    * Exact outcomes already known by this incarnation but not yet observed
    * back from the journal. A timed-out completion append is an ambiguous
@@ -351,7 +339,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       args.event.type === "events.iterate.com/capability-host/script-run-settled"
     ) {
       this.#pendingSettlements.delete(args.event.payload.executionId);
-      this.#executionOwners.delete(args.event.payload.executionId);
+      this.#foregroundExecutions.delete(args.event.payload.executionId);
     }
     // ONE outer blocking closure per at-head pass — the settle appends inside
     // #reconcileScriptObligations are awaited (holding this head event's
@@ -363,20 +351,20 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   /**
-   * At-head reconciliation of desired (open script obligations in the head
-   * fold) against actual (this incarnation's live executions) — the
-   * obligation doctrine, with one policy difference from the LLM providers: a
-   * `started` script that lost its incarnation is settled as a FAILURE and
-   * never re-run, because a script may have half-executed its side effects
-   * and scripts are not assumed idempotent. The agent renders the failure and
-   * the model decides whether to retry.
+   * At-head reconciliation of open script obligations against this
+   * incarnation's foreground owners. Normal execution belongs to the existing
+   * top-level ITX request, outside the CapabilityHost invocation lineage. A
+   * requested obligation without its owner provably never reached userspace
+   * and is failed immediately. A started obligation may still be running in a
+   * stateless executor after this DO was evicted, so it remains open until its
+   * absolute deadline and is never replayed.
    *
    * RECOVERY rides this same path: `events.iterate.com/stream/processor-revived`
    * — the fact the keepalive's revival pass journals after an eviction took
    * in-flight work — is consumed by the contract, so its ordinary delivery is
-   * a guaranteed turn that lands at head and runs this reconcile, where the
-   * undriven obligations are re-driven. The `processEvent` switch has no arm
-   * for its type; the at-head reconcile is the whole point.
+   * a guaranteed turn that lands at head and runs this reconcile. The
+   * `processEvent` switch has no arm for its type; the at-head reconcile is the
+   * whole point.
    */
   async #reconcileScriptObligations(
     args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
@@ -419,24 +407,23 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       settlement: ScriptExecutionSettlementValue;
     }[] = [];
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
-      if (this.#liveExecutions.has(executionId)) continue;
       const pendingSettlement = this.#pendingSettlements.get(executionId);
       if (pendingSettlement !== undefined) {
         settle.push({ executionId, expiresAt: execution.expiresAt, settlement: pendingSettlement });
         continue;
       }
+      if (this.#foregroundExecutions.has(executionId) && now < execution.expiresAt) {
+        continue;
+      }
       if (execution.status === "requested" && now < execution.expiresAt) {
-        // A prior attempt in this incarnation may already have committed its
-        // started/completed evidence while this fold still shows requested.
-        if (this.#executionOwners.has(executionId)) continue;
-        this.#driveRequestedScript({
-          execution,
+        settle.push({
           executionId,
-          state: args.state,
-          runInBackground: args.runInBackground,
+          expiresAt: execution.expiresAt,
+          settlement: settlementForLostForegroundRequest(),
         });
         continue;
       }
+      if (execution.status === "started" && now < execution.expiresAt) continue;
       settle.push({
         executionId,
         expiresAt: execution.expiresAt,
@@ -456,65 +443,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // recovery backlog consumes one bounded settlement window and commits
     // every orphan classification atomically in canonical execution order.
     await this.#appendCompletionsWithin(settle);
-  }
-
-  /**
-   * Turn one durable `requested` fact into an incarnation-local attempt.
-   * Recovery reconciliation acquires an unowned claim; `requestScript` reserves
-   * its own owner before journaling and calls #startOwnedScript directly.
-   */
-  #driveRequestedScript(input: {
-    execution: { code: string; expiresAt: number };
-    executionId: string;
-    state: ProcessorState<CapabilityHostProcessorContract>;
-    runInBackground: (work: () => Promise<unknown>) => void;
-  }): void {
-    if (this.#executionOwners.has(input.executionId)) return;
-    this.#executionOwners.set(input.executionId, "reconcile");
-    this.#startOwnedScript({ ...input, launchOwner: "reconcile" });
-  }
-
-  /** Start an attempt whose incarnation-local ownership is already recorded. */
-  #startOwnedScript(input: {
-    execution: { code: string; expiresAt: number };
-    executionId: string;
-    launchOwner: "foreground" | "reconcile";
-    state: ProcessorState<CapabilityHostProcessorContract>;
-    runInBackground: (work: () => Promise<unknown>) => void;
-  }): void {
-    if (this.#executionOwners.get(input.executionId) !== input.launchOwner) {
-      throw new Error(
-        `script execution "${input.executionId}" started without ${input.launchOwner} ownership`,
-      );
-    }
-    this.#liveExecutions.add(input.executionId);
-    try {
-      input.runInBackground(() =>
-        this.#executeScript({
-          birthCertificate: this.#requireBirthCertificate(input.state.birthCertificate),
-          capabilities: input.state.capabilities,
-          code: input.execution.code,
-          executionId: input.executionId,
-          expiresAt: input.execution.expiresAt,
-          launchOwner: input.launchOwner,
-        }),
-      );
-    } catch (error) {
-      this.#liveExecutions.delete(input.executionId);
-      this.#executionOwners.delete(input.executionId);
-      throw error;
-    }
-  }
-
-  /** Drop launched owners only from a COMMITTED fold with no obligation.
-   * Pre-append reservations are intentionally invisible to this pruning. */
-  #pruneExecutionOwners(state: ProcessorState<CapabilityHostProcessorContract>): void {
-    for (const [executionId, owner] of this.#executionOwners) {
-      if (owner === "foreground-reserved") continue;
-      if (state.scriptExecutions[executionId] === undefined) {
-        this.#executionOwners.delete(executionId);
-      }
-    }
   }
 
   async provideCapability(input: ProvideCapabilityInput) {
@@ -851,24 +779,26 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   /**
-   * Journal and launch one script obligation, then return its exact durable
-   * completion coordinate. Completion observation deliberately does not live
-   * in this incarnation: the Worker waits through the Stream DO's hibernating
-   * WebSocket lane and can survive either object's hibernation or restart.
+   * Journal and prepare one script obligation for the calling top-level ITX
+   * request. This method never invokes userspace. It returns executable code
+   * only after the request and its `started` evidence are durable, making the
+   * response itself the one-way no-rerun handoff to the stateless caller.
+   * Completion observation lives on the Stream DO's hibernating WebSocket
+   * lane and survives either object's hibernation or restart.
    */
-  async requestScript(code: string): Promise<ScriptRunRequest> {
+  async requestScript(
+    code: string,
+    options: { expiresAt?: number } = {},
+  ): Promise<ScriptRunRequest> {
     const { state } = await this.#reads.snapshot();
-    this.#pruneExecutionOwners(state);
-    this.#requireBirthCertificate(state.birthCertificate);
+    const birthCertificate = this.#requireBirthCertificate(state.birthCertificate);
     const executionId = crypto.randomUUID();
     const completionIdempotencyKey = this.#completionIdempotencyKey(executionId);
     const now = this.#now ?? Date.now;
-    const expiresAt = now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
-    // Reserve before the request append. Push delivery can fold the request
-    // before this foreground continuation resumes; without the reservation,
-    // that reconcile could acquire the same obligation and launch it from an
-    // unrelated delivery lineage.
-    this.#executionOwners.set(executionId, "foreground-reserved");
+    const expiresAt = options.expiresAt ?? now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
+    // Reserve before the append so an eager stream wake cannot mistake the
+    // foreground-owned request for an abandoned one.
+    this.#foregroundExecutions.add(executionId);
     try {
       await tracing.enterSpan("capability_host.script_request_append", async (span) => {
         span.setAttribute("iterate.capability_host.execution_id", executionId);
@@ -886,35 +816,26 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         }
         span.setAttribute("iterate.capability_host.request_offset", requestedEvent.offset);
       });
-
-      // The append is the durable recovery boundary. Starting the exact
-      // obligation now keeps foreground latency independent of subscriber
-      // delivery and the runner's serialized catch-up chain. If this
-      // incarnation dies after the append but before/during the launch, the
-      // journaled request is what a later at-head reconcile adopts.
-      if (this.#executionOwners.get(executionId) !== "foreground-reserved") {
-        throw new Error(`script execution "${executionId}" lost its foreground reservation`);
-      }
-      this.#executionOwners.set(executionId, "foreground");
-      this.#startOwnedScript({
-        execution: { code, expiresAt },
+      const preparation = await this.#prepareForegroundScript({
+        birthCertificate,
+        capabilities: state.capabilities,
+        code,
         executionId,
-        launchOwner: "foreground",
-        state,
-        runInBackground: this.#runScriptInBackground,
+        expiresAt,
       });
+      if (preparation.status === "settled") {
+        this.#foregroundExecutions.delete(executionId);
+      }
       return {
         completionIdempotencyKey,
         executionId,
         expiresAt,
+        preparation,
       };
     } catch (error) {
-      // Before #startOwnedScript schedules work, the foreground path owns
-      // only an in-memory reservation. Releasing it lets durable recovery
-      // adopt any request whose append committed before this failure.
-      if (!this.#liveExecutions.has(executionId)) {
-        this.#executionOwners.delete(executionId);
-      }
+      // No executable code crossed the RPC boundary. Releasing this owner lets
+      // reconciliation durably classify any committed request as never run.
+      this.#foregroundExecutions.delete(executionId);
       throw error;
     }
   }
@@ -999,139 +920,106 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
   }
 
-  async #executeScript(input: {
+  /** Typecheck the foreground-owned request and commit its no-rerun boundary. */
+  async #prepareForegroundScript(input: {
     birthCertificate: CapabilityHostBirthCertificate;
     capabilities: CapabilityRecord[];
     code: string;
     executionId: string;
     expiresAt: number;
-    launchOwner: "foreground" | "reconcile";
-  }) {
+  }): Promise<ScriptRunRequest["preparation"]> {
     const now = this.#now ?? Date.now;
     const executionExpiresAt = input.expiresAt - SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS;
-    let durableAttemptEvidenceCommitted = false;
-    // This work deliberately outlives the requestScript RPC under waitUntil.
-    // Cloudflare custom spans are request-scoped: starting them here lets the
-    // foreground request close their parent while this promise keeps running,
-    // which produces impossible parentage and even negative child durations.
-    // Keep the foreground request-append/public runScript spans, plus the
-    // independently request-scoped typechecker and executor spans; the durable
-    // requested/started/settled facts remain the execution phase record.
-    try {
-      // The typecheck gate runs BEFORE the started evidence: it has no side
-      // effects, so a rejected script provably never ran (requested →
-      // completed, no started event) and the reconciler doctrine is untouched.
-      const checkedOutcome = await settleByDeadline(
-        this.#typecheckScriptForRun(input.code, input.capabilities, input.birthCertificate),
-        executionExpiresAt,
-        now,
-      );
-      if (checkedOutcome.status === "deadline") {
-        await this.#appendAndFoldCompletionWithin(
-          {
-            executionId: input.executionId,
-            settlement: {
-              status: "failed",
-              error:
-                "Script execution reached its absolute deadline while being typechecked. It never ran.",
-              failureKind: "deadline",
-              phase: "typecheck",
-              executionMayHaveOccurred: false,
-              cancellation: "not-applicable",
-            },
-          },
-          input.expiresAt,
-        );
-        return;
-      }
-      if (checkedOutcome.status === "rejected") throw checkedOutcome.error;
-      const checked = checkedOutcome.value;
-      if (checked.rejection !== null) {
-        await this.#appendAndFoldCompletionWithin(
-          {
-            executionId: input.executionId,
-            settlement: {
-              status: "failed",
-              error: checked.rejection,
-              failureKind: "typecheck",
-              phase: "typecheck",
-              executionMayHaveOccurred: false,
-              cancellation: "not-applicable",
-            },
-          },
-          input.expiresAt,
-        );
-        return;
-      }
-      // Started-evidence lands durably BEFORE the script body runs, so the
-      // fold can always tell "provably never ran" (requested, startable late)
-      // from "may have half-run" (started, settle-only). Deliberately OUTSIDE
-      // the try below: if this append fails the script never ran, so no
-      // completion may be appended — the obligation stays `requested`, the
-      // rethrow marks the keepalive window failed, and a later reconciliation
-      // retries the whole attempt. (Same shape as the LLM providers.)
-      await this.#awaitJournalAppend(
-        this.append({
-          type: "events.iterate.com/capability-host/script-run-started",
-          idempotencyKey: this.idempotencyKey(`script-run-started@${input.executionId}`),
-          payload: { executionId: input.executionId },
-        }),
-        executionExpiresAt,
-        `record the start of script execution "${input.executionId}"`,
-      );
-      durableAttemptEvidenceCommitted = true;
-      if (now() >= executionExpiresAt) {
-        await this.#appendAndFoldCompletionWithin(
-          {
-            executionId: input.executionId,
-            settlement: {
-              status: "failed",
-              error:
-                "Script execution reached its absolute deadline after its start was recorded but before the worker was invoked. It never ran.",
-              failureKind: "deadline",
-              phase: "before-execution",
-              executionMayHaveOccurred: false,
-              cancellation: "not-applicable",
-            },
-          },
-          input.expiresAt,
-        );
-        return;
-      }
-
-      // The entrypoint owns a timer around the dynamic-worker invocation, but
-      // the RPC carrying that result back to this host is a second failure
-      // boundary. Bound it independently: a half-open worker stub must not
-      // keep the journal obligation (and the public runScript call) alive
-      // forever even if the remote timer fired correctly.
-      const runPromise = this.#scriptExecutionEntrypoint.run(input.code, {
-        emittedJs: checked.emittedJs,
-        expiresAt: executionExpiresAt,
-      });
-      const runOutcome = await settleByDeadline(runPromise, executionExpiresAt, now);
-      if (runOutcome.status === "deadline") {
-        // Workers RPC promises are disposable capabilities at runtime. End
-        // this host's retained call as soon as its absolute wait expires;
-        // the durable settlement still conservatively says arbitrary
-        // external work may continue because disposal is not a cancellation
-        // acknowledgement from code the script already invoked.
-        (runPromise as Promise<unknown> & Partial<Disposable>)[Symbol.dispose]?.();
-      }
-      const settlement = settlementFromWorkerOutcome(runOutcome);
-      // Deliberately outside the worker-invocation catch: a failed journal
-      // append must never be reclassified as a script runtime failure. It
-      // rejects this tracked attempt, and reconciliation retries the same
-      // idempotent settlement.
+    // The typecheck gate runs before `started`; a rejection therefore proves
+    // the script never ran.
+    const checkedOutcome = await settleByDeadline(
+      this.#typecheckScriptForRun(input.code, input.capabilities, input.birthCertificate),
+      executionExpiresAt,
+      now,
+    );
+    if (checkedOutcome.status === "deadline") {
       await this.#appendAndFoldCompletionWithin(
-        { executionId: input.executionId, settlement },
+        {
+          executionId: input.executionId,
+          settlement: {
+            status: "failed",
+            error:
+              "Script execution reached its absolute deadline while being typechecked. It never ran.",
+            failureKind: "deadline",
+            phase: "typecheck",
+            executionMayHaveOccurred: false,
+            cancellation: "not-applicable",
+          },
+        },
         input.expiresAt,
       );
-    } finally {
-      this.#liveExecutions.delete(input.executionId);
-      if (!durableAttemptEvidenceCommitted && !this.#pendingSettlements.has(input.executionId)) {
-        this.#executionOwners.delete(input.executionId);
-      }
+      return { status: "settled" };
     }
+    if (checkedOutcome.status === "rejected") throw checkedOutcome.error;
+    const checked = checkedOutcome.value;
+    if (checked.rejection !== null) {
+      await this.#appendAndFoldCompletionWithin(
+        {
+          executionId: input.executionId,
+          settlement: {
+            status: "failed",
+            error: checked.rejection,
+            failureKind: "typecheck",
+            phase: "typecheck",
+            executionMayHaveOccurred: false,
+            cancellation: "not-applicable",
+          },
+        },
+        input.expiresAt,
+      );
+      return { status: "settled" };
+    }
+    // Started evidence lands durably before executable code crosses back to
+    // the top-level caller. If this append or its response is lost, userspace
+    // cannot have run and recovery classifies the request without replaying it.
+    await this.#awaitJournalAppend(
+      this.append({
+        type: "events.iterate.com/capability-host/script-run-started",
+        idempotencyKey: this.idempotencyKey(`script-run-started@${input.executionId}`),
+        payload: { executionId: input.executionId },
+      }),
+      executionExpiresAt,
+      `record the start of script execution "${input.executionId}"`,
+    );
+    if (now() >= executionExpiresAt) {
+      await this.#appendAndFoldCompletionWithin(
+        {
+          executionId: input.executionId,
+          settlement: {
+            status: "failed",
+            error:
+              "Script execution reached its absolute deadline after its start was recorded but before the worker was invoked. It never ran.",
+            failureKind: "deadline",
+            phase: "before-execution",
+            executionMayHaveOccurred: false,
+            cancellation: "not-applicable",
+          },
+        },
+        input.expiresAt,
+      );
+      return { status: "settled" };
+    }
+    return {
+      status: "ready",
+      code: input.code,
+      emittedJs: checked.emittedJs,
+    };
+  }
+
+  /** Commit the exact outcome returned to the still-live top-level caller. */
+  async settleScriptExecution(
+    executionId: string,
+    settlement: ScriptExecutionSettlementValue,
+  ): Promise<void> {
+    const { state } = await this.#reads.snapshot();
+    const execution = state.scriptExecutions[executionId];
+    if (execution === undefined) return;
+    await this.#appendAndFoldCompletionWithin({ executionId, settlement }, execution.expiresAt);
   }
 
   /**

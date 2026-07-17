@@ -49,7 +49,7 @@ export function settlementForUndrivenScript(
     ? {
         status: "failed",
         error:
-          "Script execution orphaned: the incarnation running it went away before completing (eviction mid-run). It may have partially executed; it was NOT re-run.",
+          "Script execution orphaned: its durable attempt ended after invocation became possible. It may have partially executed; it was NOT re-run.",
         failureKind: "orphaned",
         phase: "recovery",
         executionMayHaveOccurred: true,
@@ -64,6 +64,19 @@ export function settlementForUndrivenScript(
         executionMayHaveOccurred: false,
         cancellation: "not-applicable",
       };
+}
+
+/** A committed request whose foreground RPC vanished before the handoff. */
+export function settlementForLostForegroundRequest(): ScriptExecutionSettlementValue {
+  return {
+    status: "failed",
+    error:
+      "Script execution lost its foreground request before executable code was handed off. It never ran and was NOT replayed.",
+    failureKind: "orphaned",
+    phase: "recovery",
+    executionMayHaveOccurred: false,
+    cancellation: "not-applicable",
+  };
 }
 
 export function settlementFromWorkerOutcome(

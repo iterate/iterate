@@ -90,10 +90,11 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     /**
      * The host's open script OBLIGATIONS, keyed by executionId — the "what
      * should be running" half of the end-of-batch reconciliation (the same
-     * shape as the LLM providers' `requests`). Entries carry the code so an
-     * attempt can start from state alone; terminal completions delete them.
-     * `started` without a live execution means the running incarnation died —
-     * settled as a failure, never re-run (scripts are not assumed idempotent).
+     * shape as the LLM providers' `requests`). Entries carry the code for the
+     * durable audit record; terminal completions delete them. `started` means
+     * the foreground request crossed its durable no-rerun boundary: recovery
+     * may wait for its exact settlement, but never replays arbitrary side
+     * effects.
      */
     scriptExecutions: z
       .record(
@@ -245,9 +246,10 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     // processor; the payload's processorSlug names which). MUST be consumed
     // (the runner throws at construction otherwise): its ordinary delivery is
     // the guaranteed at-head turn where the obligation reconcile
-    // (`processEvent` under `delivery.caughtUp`) re-drives open script
-    // obligations — fresh requested scripts start, orphaned started scripts
-    // settle as failures. Reduce ignores it, and it is absent from `emits`:
+    // (`processEvent` under `delivery.caughtUp`) reconciles open script
+    // obligations — ownerless requested scripts fail as never run, while
+    // started work is left until its deadline and never replayed. Reduce
+    // ignores it, and it is absent from `emits`:
     // the recovery adapter appends it raw, as the runtime speaking.
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],

@@ -1442,8 +1442,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.kill();
   }
 
-  /** Kills the current Durable Object incarnation so experiments can observe restart behavior. */
+  /**
+   * Kills the current Durable Object incarnation so experiments can observe
+   * restart behavior. Explicit abort does not complete Cloudflare's close
+   * handshake for hibernatable sockets, so close exact-key observers first;
+   * they reconnect and point-read the authoritative committed event.
+   */
   kill(): void {
+    for (const socket of this.ctx.getWebSockets(STREAM_IDEMPOTENCY_WAIT_SOCKET_TAG)) {
+      try {
+        socket.close(1012, "stream incarnation restarting");
+      } catch {
+        // The client may have closed concurrently. Its terminal close/error
+        // event already drives the same bounded reconnect path.
+      }
+    }
     this.ctx.abort("kill requested");
   }
 }

@@ -27,11 +27,6 @@ function makeProcessor(input: {
       waitUntilEvent: (args) =>
         "offset" in args ? runner.waitUntilEvent(args) : runner.waitUntilEvent(args),
     },
-    scriptExecutionEntrypoint: {
-      run: () => {
-        throw new Error("must not run in this scenario");
-      },
-    },
   });
   runner = new StreamProcessorRunner({ processor, stream: input.stream });
   return { processor, runner };

@@ -4,12 +4,20 @@ import {
   scriptSettlementFromEvent,
   scriptCompletionInput,
   settlementAppendDeadline,
+  settlementForLostForegroundRequest,
   settlementForUndrivenScript,
   settlementFromWorkerOutcome,
 } from "./script-execution-settlement.ts";
 
 describe("script execution settlement policy", () => {
   it("classifies undriven requests separately from orphaned executions", () => {
+    expect(settlementForLostForegroundRequest()).toMatchObject({
+      status: "failed",
+      failureKind: "orphaned",
+      phase: "recovery",
+      executionMayHaveOccurred: false,
+      cancellation: "not-applicable",
+    });
     expect(settlementForUndrivenScript("requested")).toMatchObject({
       status: "failed",
       failureKind: "expired",

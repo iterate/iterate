@@ -20,29 +20,12 @@ import {
 } from "./capability-host-processor-implementation.ts";
 import {
   CapabilityHostProcessorContract,
+  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
   type ScriptExecutionSettlement,
 } from "./capability-host-processor-contract.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
-type ScriptExecutionEntrypoint = {
-  run(
-    code: string,
-    options: { emittedJs?: string; expiresAt: number },
-  ): Promise<ScriptExecutionSettlement>;
-};
-
-type ScriptExecutorService = {
-  run(input: {
-    authority: {
-      ownerWorkerName: string;
-      projectId: string;
-      scopePath: string;
-    };
-    code: string;
-    emittedJs?: string;
-    expiresAt: number;
-  }): Promise<ScriptExecutionSettlement>;
-};
+const SCRIPT_DEADLINE_ALARM_SLICE = "script-execution-deadline";
 
 type CapabilityHostAncestorEntrypoint = {
   invokeCapabilityFromDescendant(input: {
@@ -80,13 +63,10 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   });
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
-  // Registered WITH recovery: script executions are consequential
-  // `runInBackground` work (journaled requested/started obligations whose
-  // OUTCOME matters), so an incarnation that dies owing one must be revived —
-  // the keepalive alarm appends the `stream/processor-revived` fact, whose ordinary
-  // delivery lands at head and `processEvent`'s at-head reconcile
-  // (`delivery.caughtUp`) re-drives the obligations (see the registry module
-  // doc's recovery rule).
+  // Registered WITH recovery: the foreground ITX request executes userspace,
+  // but this host still owns the durable obligation. If the host disappears,
+  // its revival fact reconciles provably-unstarted requests immediately and
+  // never replays started work.
   readonly #capabilityHostProcessor = this.#registry.register(
     new CapabilityHostProcessor({
       stream: this.#stream,
@@ -97,17 +77,10 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       // processor. Namespace path prefixes are never dialed implicitly.
       resolveAncestor: (path) => this.#capabilityHostAncestor(path),
       reads: this.#processorReads(),
-      scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
       validateCapabilityTypes: (types) =>
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       typecheckScript: (input) =>
         checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
-      // runScript has already journaled the requested obligation; launch it
-      // through the SAME recovery-backed runner lane as an at-head reconcile,
-      // without making foreground execution wait for the serialized stream
-      // delivery/catch-up lane to fold that request.
-      runScriptInBackground: (work) =>
-        this.#registry.runInBackground(CapabilityHostProcessorContract.slug, work),
     }),
     { recovery: true },
   );
@@ -127,34 +100,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return {
       snapshot: () => this.#reads.snapshot(),
       waitUntilEvent: (input) => this.#reads.waitUntilEvent(input),
-    };
-  }
-
-  #scriptExecutionEntrypoint(): ScriptExecutionEntrypoint {
-    // The large OS worker owns the durable journal and mints the authority;
-    // the tiny script-executor sidecar owns only the Dynamic Worker load. A
-    // fresh sidecar request per run preserves the loader-concurrency fix
-    // without cold-starting another copy of the entire OS bundle.
-    return {
-      run: async (code, options) => {
-        // Only plain coordinates cross this service-RPC boundary. The sidecar
-        // uses configured cross-script namespaces to mint stable DO stubs for
-        // the exact capability host and project; native ServiceStub values
-        // cannot be forwarded without workerd's unstable `experimental` flag,
-        // and an incoming application RpcStub cannot be re-serialized into a
-        // Worker Loader environment because it is not persistent.
-        const executor = this.env.SCRIPT_EXECUTOR as unknown as ScriptExecutorService;
-        return await executor.run({
-          authority: {
-            ownerWorkerName: this.env.WORKER_SELF,
-            projectId: this.#name.projectId,
-            scopePath: this.#name.path,
-          },
-          code,
-          emittedJs: options.emittedJs,
-          expiresAt: options.expiresAt,
-        });
-      },
     };
   }
 
@@ -207,9 +152,32 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#registry.handleAlarm(alarmInfo);
+  /**
+   * The registry's shared DO alarm. Processor keepalives and the earliest
+   * script deadline occupy named slices; a deadline fire performs an
+   * eventless at-head reconciliation so no open attempt can remain forever.
+   */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      await this.#registry.handleAlarm(alarmInfo);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      // Run on every alarm, including a retry after the registry already
+      // consumed the in-memory deadline slice. This makes the journal—not an
+      // incarnation-local marker—the source from which deadlines recover.
+      // First pass appends any recovery settlements inline; the second folds
+      // those exact events before deriving the next deadline slice.
+      await this.#catchUp();
+      await this.#catchUp();
+      await this.#armNextScriptDeadline();
+    } catch (error) {
+      console.error("[capability-host] script deadline alarm reconciliation failed", { error });
+      failures.push(error);
+    }
+    if (failures.length > 0) throw failures[0];
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -246,7 +214,28 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   async requestScript(code: string): Promise<ScriptRunRequest> {
     await this.#catchUp();
-    return await this.#capabilityHostProcessor.requestScript(code);
+    const expiresAt = Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
+    try {
+      // Arm before journaling. A crash in any later request/typecheck/start
+      // gap therefore leaves a durable alarm that can classify the obligation
+      // without ever replaying userspace.
+      await this.#armScriptDeadline(expiresAt);
+    } catch (error) {
+      throw new Error(
+        "Script was NOT accepted: its capability host could not durably arm the absolute execution deadline. It never ran.",
+        { cause: error },
+      );
+    }
+    return await this.#capabilityHostProcessor.requestScript(code, { expiresAt });
+  }
+
+  /** Commit the exact executor outcome supplied by the top-level ITX request. */
+  async settleScriptExecution(input: {
+    executionId: string;
+    settlement: ScriptExecutionSettlement;
+  }): Promise<void> {
+    await this.#catchUp();
+    await this.#capabilityHostProcessor.settleScriptExecution(input.executionId, input.settlement);
   }
 
   async describeCapabilities(): Promise<CapabilityDescription[]> {
@@ -267,5 +256,27 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
    */
   getItxForScript(): object {
     return this.#itx;
+  }
+
+  async #armScriptDeadline(expiresAt: number): Promise<void> {
+    const armed = this.#registry.getAlarmSlice(SCRIPT_DEADLINE_ALARM_SLICE);
+    if (armed === null || expiresAt < armed) {
+      await this.#registry.setAlarmSlice(SCRIPT_DEADLINE_ALARM_SLICE, expiresAt);
+    }
+  }
+
+  async #armNextScriptDeadline(): Promise<void> {
+    const { state } = await this.#reads.snapshot();
+    const deadlines = Object.values(state.scriptExecutions).map(({ expiresAt }) => expiresAt);
+    // A new request can arm its future deadline while this alarm is awaiting
+    // the snapshot but before its request event exists. Re-read the synchronous
+    // slice after the await and preserve it so reconciliation cannot clobber
+    // that pre-journal safety net.
+    const concurrentlyArmed = this.#registry.getAlarmSlice(SCRIPT_DEADLINE_ALARM_SLICE);
+    if (concurrentlyArmed !== null) deadlines.push(concurrentlyArmed);
+    await this.#registry.setAlarmSlice(
+      SCRIPT_DEADLINE_ALARM_SLICE,
+      deadlines.length === 0 ? null : Math.min(...deadlines),
+    );
   }
 }

@@ -48,6 +48,12 @@ CapabilityHost stub for its itx plus the Project stub for egress. No native
 service stub crosses RPC (which would require workerd's unstable catch-all
 `experimental` flag), and the sidecar stays a single-digit-KiB bundle.
 
+`runScript` prepares the durable obligation on the CapabilityHost, returns
+from that host RPC, and invokes the executor from the original top-level ITX
+request. Dynamic Worker callbacks therefore enter the host through a bounded
+lineage. The host's shared alarm retains the absolute deadline and reconciles
+lost ownership without replaying userspace.
+
 The builder is slated for deletion when builds move into the sandbox container
 ([tasks/os-sandbox-worker-builds.md](../../../tasks/os-sandbox-worker-builds.md)).
 

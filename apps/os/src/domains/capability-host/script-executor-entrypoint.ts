@@ -55,13 +55,13 @@ type ScriptExecutorEnv = {
  * stubs from its cross-script namespaces, so neither a native ServiceStub nor
  * a non-persistent incoming RpcStub has to be forwarded through Workers RPC.
  */
-type ScriptExecutionAuthority = {
+export type ScriptExecutionAuthority = {
   ownerWorkerName: string;
   projectId: string;
   scopePath: string;
 };
 
-type ScriptExecutorRunInput = {
+export type ScriptExecutorRunInput = {
   authority: ScriptExecutionAuthority;
   code: string;
   /** Typechecker output whose default export is the script function. */

@@ -45,13 +45,14 @@ function capabilityHostStream(ancestorPath: string | null = null): MemoryStream 
 }
 
 type Harness = {
+  execute(request: ScriptRunRequest): Promise<void>;
   processor: CapabilityHostProcessor;
   runner: StreamProcessorRunner<CapabilityHostProcessorContract>;
 };
 
-/** REAL runner drive (the production registry's driver): obligations launch
- * from the runner's at-head `onCaughtUp` pass, fold reads ride the runner's
- * committed progress — exactly as the hosting DO wires registry.reads(...). */
+/** REAL runner drive (the production registry's driver): the processor
+ * journals/prepares, the simulated top-level caller executes, and fold reads
+ * ride committed runner progress exactly as the hosting DO wires them. */
 function makeProcessor(options: {
   stream: MemoryStream;
   run?: (code: string) => Promise<unknown>;
@@ -61,35 +62,20 @@ function makeProcessor(options: {
     capabilities: CapabilityDescription[];
     code: string;
   }) => Promise<ScriptExecutionCheck>;
-  runScriptInBackground?: (work: () => Promise<unknown>) => void;
   waitUntilEvent?: (
     input: Parameters<CapabilityHostProcessorReads["waitUntilEvent"]>[0],
     fallback: () => Promise<void>,
   ) => Promise<void>;
 }): Harness {
   let runner!: Harness["runner"];
-  const processor = new CapabilityHostProcessor({
+  let processor!: CapabilityHostProcessor;
+  processor = new CapabilityHostProcessor({
     stream: options.stream,
     itx: {} as Project,
     path: options.path ?? "/",
     projectId: null,
     resolveAncestor: options.ancestor === undefined ? undefined : () => options.ancestor!,
-    scriptExecutionEntrypoint: {
-      run: async (code) => {
-        const result = await (
-          options.run ??
-          (() => {
-            throw new Error("must not run in this scenario");
-          })
-        )(code);
-        return {
-          status: "succeeded" as const,
-          ...(result === undefined ? {} : { result }),
-        };
-      },
-    },
     typecheckScript: options.typecheckScript,
-    runScriptInBackground: options.runScriptInBackground,
     reads: {
       snapshot: () => runner.snapshot(),
       waitUntilEvent: (input) => {
@@ -99,7 +85,37 @@ function makeProcessor(options: {
     },
   });
   runner = new StreamProcessorRunner({ processor, stream: options.stream });
-  return { processor, runner };
+  return {
+    processor,
+    runner,
+    async execute(request) {
+      if (request.preparation.status !== "ready") return;
+      let settlement;
+      try {
+        const result = await (
+          options.run ??
+          (() => {
+            throw new Error("must not run in this scenario");
+          })
+        )(request.preparation.code);
+        settlement = {
+          status: "succeeded" as const,
+          ...(result === undefined ? {} : { result: result as never }),
+        };
+      } catch (error) {
+        settlement = {
+          status: "failed" as const,
+          error: error instanceof Error ? error.message : String(error),
+          failureKind: "runtime" as const,
+          phase: "execution" as const,
+          executionMayHaveOccurred: true,
+          cancellation: "external-work-may-continue" as const,
+        };
+      }
+      await runner.catchUp();
+      await processor.settleScriptExecution(request.executionId, settlement);
+    },
+  };
 }
 
 async function requestScript(stream: MemoryStream, harness: Harness) {
@@ -109,15 +125,10 @@ async function requestScript(stream: MemoryStream, harness: Harness) {
       payload: { config: { ancestorPath: null } },
     });
   }
-  await stream.append({
-    type: T.requested,
-    payload: {
-      code: "async (itx) => itx.streams.gett('/')",
-      executionId: "exec-1",
-      expiresAt: Date.now() + 60_000,
-    },
-  });
   await harness.runner.catchUp();
+  const request = await harness.processor.requestScript("async (itx) => itx.streams.gett('/')");
+  await harness.execute(request);
+  return request;
 }
 
 function completion(stream: MemoryStream) {
@@ -125,7 +136,9 @@ function completion(stream: MemoryStream) {
 }
 
 async function runScript(stream: MemoryStream, harness: Harness, code: string) {
+  await harness.runner.catchUp();
   const request = await harness.processor.requestScript(code);
+  await harness.execute(request);
   return await scriptResult(stream, request);
 }
 
@@ -202,7 +215,7 @@ describe("script execution typecheck gate", () => {
     await vi.waitFor(() => {
       const completed = completion(stream);
       expect(completed?.payload).toMatchObject({
-        executionId: "exec-1",
+        executionId: expect.any(String),
         settlement: {
           status: "failed",
           error: expect.stringContaining("NOT executed"),
@@ -216,7 +229,9 @@ describe("script execution typecheck gate", () => {
         "Did you mean 'get'",
       );
       // Shared with the run/settle lanes, so a race collapses to one completion.
-      expect(completed?.idempotencyKey).toBe("capability-host/script-run-settled@exec-1");
+      expect(completed?.idempotencyKey).toBe(
+        `capability-host/script-run-settled@${(completed!.payload as { executionId: string }).executionId}`,
+      );
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(false);
   });
@@ -236,7 +251,7 @@ describe("script execution typecheck gate", () => {
 
     await vi.waitFor(() => {
       expect(completion(stream)?.payload).toMatchObject({
-        executionId: "exec-1",
+        executionId: expect.any(String),
         settlement: { status: "succeeded", result: 42 },
       });
     });
@@ -275,10 +290,12 @@ describe("script execution typecheck gate", () => {
       code: expect.any(String),
     });
     expect(describeCapabilities).not.toHaveBeenCalled();
-    // The execution is detached from requestScript under waitUntil. Custom
-    // spans are request-scoped, so emitting them here would let their request
-    // parent close first and publish an incoherent trace.
-    expect(recordedSpans).toEqual([]);
+    // Preparation now stays inside the foreground request, so its append span
+    // has a coherent live parent and closes before executable code is handed
+    // back to the caller.
+    expect(recordedSpans.map(({ name }) => name)).toEqual([
+      "capability_host.script_request_append",
+    ]);
   });
 
   it("an unchecked verdict runs the script (permissive on unknowns)", async () => {
@@ -296,7 +313,7 @@ describe("script execution typecheck gate", () => {
 
     await vi.waitFor(() => expect(completion(stream)).toBeDefined());
     expect(completion(stream)?.payload).toMatchObject({
-      executionId: "exec-1",
+      executionId: expect.any(String),
       settlement: { status: "succeeded", result: null },
     });
     expect(ran).toHaveLength(1);
@@ -340,7 +357,7 @@ describe("script execution typecheck gate", () => {
 
     await vi.waitFor(() => {
       expect(completion(stream)?.payload).toMatchObject({
-        executionId: "exec-1",
+        executionId: expect.any(String),
         settlement: { status: "succeeded", result: "ok" },
       });
     });
@@ -449,26 +466,35 @@ describe("script execution typecheck gate", () => {
     expect(requestFold).not.toHaveBeenCalled();
   });
 
-  it("keeps concurrent request launches in their foreground RPC owners", async () => {
+  it("hands executable code off only after durable started evidence", async () => {
     const stream = capabilityHostStream();
-    const foregroundLaunches = vi.fn();
-    const backgroundWork: Promise<unknown>[] = [];
+    const run = vi.fn(async () => "ok");
+    const harness = makeProcessor({ stream, run });
+    await harness.runner.catchUp();
+
+    const request = await harness.processor.requestScript("async () => null");
+    expect(request.preparation).toMatchObject({ status: "ready", code: "async () => null" });
+    expect(stream.events.find((event) => event.type === T.started)?.payload).toEqual({
+      executionId: request.executionId,
+    });
+    expect(run).not.toHaveBeenCalled();
+
+    await harness.execute(request);
+    await expect(scriptResult(stream, request)).resolves.toMatchObject({ result: "ok" });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("executes concurrent requests independently from their foreground RPCs", async () => {
+    const stream = capabilityHostStream();
     const harness = makeProcessor({
       stream,
       run: async (code) => code,
-      runScriptInBackground: (work) => {
-        foregroundLaunches();
-        backgroundWork.push(work());
-      },
     });
     await harness.runner.catchUp();
 
     const results = await Promise.all(
       Array.from({ length: 20 }, (_, index) => runScript(stream, harness, `async () => ${index}`)),
     );
-    await Promise.all(backgroundWork);
-
-    expect(foregroundLaunches).toHaveBeenCalledTimes(20);
     expect(results.map(({ result }) => result)).toEqual(
       Array.from({ length: 20 }, (_, index) => `async () => ${index}`),
     );
