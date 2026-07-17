@@ -1,3 +1,4 @@
+import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
@@ -940,7 +941,7 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
         z.object({
           phase: z.literal("requested"),
-          reason: z.enum(["interrupted-by-user-input", "durable-object-crashed"]),
+          reason: AgentLlmRequestCancelReason,
           llmRequestOffset: z.number().int().positive(),
         }),
       ]),

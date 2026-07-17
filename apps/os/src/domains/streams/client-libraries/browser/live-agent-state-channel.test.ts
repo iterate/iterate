@@ -122,10 +122,10 @@ describe("LiveAgentStateChannel", () => {
       liveAgentStateChannelName({
         projectId: "project:one",
         streamPath: "/agents/web one",
-        versionVector: "browser-feed@3|raw-events@7",
+        versionVector: "browser-feed@4|raw-events@7",
       }),
     ).toBe(
-      "stream-live-agent:project%3Aone:%2Fagents%2Fweb%20one:browser-feed%403%7Craw-events%407",
+      "stream-live-agent:project%3Aone:%2Fagents%2Fweb%20one:browser-feed%404%7Craw-events%407",
     );
   });
 

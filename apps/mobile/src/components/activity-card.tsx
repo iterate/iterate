@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { summarizeAgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
 import { summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
@@ -35,11 +36,13 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
 }
 
 function liveSummary(activity: AgentUiActivity): string {
-  const current = activity.steps.at(-1);
-  if (current == null) return "working…";
-  if (current.kind === "code") return "running code…";
-  if (current.responseText !== "") return "writing code…";
-  if (current.thinkingText !== "") return "thinking…";
+  const current = activity.steps.findLast((step) => step.status === "running");
+  if (current?.kind === "code") return "running code…";
+  if (current?.kind === "llm" && current.responseText !== "") return "writing code…";
+  if (current?.kind === "llm" && current.thinkingText !== "") return "thinking…";
+  if (activity.phase === "script") return "running code…";
+  if (activity.phase === "llm") return "waiting for a response…";
+  if (summarizeAgentUiActivity(activity).restartPending) return "restarted — continuing…";
   return "working…";
 }
 
@@ -79,7 +82,13 @@ function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
     ...(step.durationMs ? [`${(step.durationMs / 1000).toFixed(1)}s`] : []),
     ...(step.outputTokens ? [`${step.outputTokens} tok`] : []),
     ...(step.outcome === "failed" ? ["failed"] : []),
-    ...(step.outcome === "cancelled" ? ["cancelled"] : []),
+    ...(step.cancelReason === "durable-object-crashed"
+      ? ["agent restarted"]
+      : step.cancelReason === "interrupted-by-user-input"
+        ? ["stopped for your new message"]
+        : step.outcome === "cancelled"
+          ? ["cancelled"]
+          : []),
   ];
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }

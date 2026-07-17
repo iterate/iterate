@@ -1198,11 +1198,11 @@ async function holdCurrentWriterLock(page: Page, streamPath: string) {
     // apps/os/.../browser/stream-leader.ts. Format:
     //   stream-writer:<projectId>:<path>:browser-stream-mirror:<versionVector>
     // versionVector = the canonical members' `<slug>@<schemaVersion>` sorted and
-    // joined by "|" (browser-feed@3, browser-raw-events@7). Bump here whenever a
+    // joined by "|" (browser-feed@4, browser-raw-events@7). Bump here whenever a
     // member's schemaVersion changes — that bump is exactly what this lock guards.
     await new Promise<void>((resolve) => {
       void navigator.locks.request(
-        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@3|browser-raw-events@7`,
+        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@4|browser-raw-events@7`,
         async () => {
           resolve();
           await new Promise(() => {});

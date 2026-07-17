@@ -32,15 +32,6 @@ describe("formatActivitySummary", () => {
             expiresAtMs: 60_000,
           },
           {
-            kind: "code",
-            id: "c2",
-            executionId: "y",
-            status: "done",
-            code: "",
-            startedAtMs: 0,
-            expiresAtMs: 60_000,
-          },
-          {
             kind: "llm",
             id: "l1",
             llmRequestOffset: 1,
@@ -48,11 +39,24 @@ describe("formatActivitySummary", () => {
             thinkingText: "",
             responseText: "",
             startedAtMs: 0,
+            durationMs: 1000,
+            outcome: "cancelled",
+            cancelReason: "durable-object-crashed",
+          },
+          {
+            kind: "llm",
+            id: "l2",
+            llmRequestOffset: 2,
+            status: "done",
+            thinkingText: "",
+            responseText: "",
+            startedAtMs: 0,
+            outcome: "completed",
           },
         ],
       }),
     );
-    expect(summary).toBe("Ran code 2× · 1 request · 7.4s");
+    expect(summary).toBe("Ran code 1× · 1 request · 1 retry · recovered · 7.4 s");
   });
 });
 
@@ -71,8 +75,10 @@ describe("formatStepLine", () => {
         outputTokens: 80,
         durationMs: 1234,
         startedAtMs: 0,
+        outcome: "cancelled",
+        cancelReason: "durable-object-crashed",
       }),
-    ).toBe("gpt-test · 1.2k → 80 tok · 1.2s");
+    ).toBe("Agent restarted · gpt-test · 1.2k → 80 tok · 1.2s");
   });
 
   test("running code step is labeled Running code", () => {
@@ -112,7 +118,7 @@ describe("formatLiveActivityLabel", () => {
     ).toBe("Thinking");
   });
 
-  test("Waiting for a response before tokens and while response streams", () => {
+  test("Waiting for a response before tokens and restarting between phases", () => {
     expect(
       formatLiveActivityLabel(
         activity({
@@ -140,15 +146,18 @@ describe("formatLiveActivityLabel", () => {
               kind: "llm",
               id: "l1",
               llmRequestOffset: 1,
-              status: "running",
+              status: "done",
               thinkingText: "hmm",
               responseText: "hi",
               startedAtMs: 0,
+              durationMs: 1000,
+              outcome: "cancelled",
+              cancelReason: "durable-object-crashed",
             },
           ],
         }),
       ),
-    ).toBe("Waiting for a response");
+    ).toBe("Restarted — continuing…");
   });
 
   test("Running code with one-decimal elapsed counter", () => {
