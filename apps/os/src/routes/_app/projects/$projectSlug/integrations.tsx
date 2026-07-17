@@ -175,8 +175,16 @@ function ProjectIntegrationsContent() {
     (entry) => entry.integration === "telegram",
   );
   const telegramAccessConnection =
-    telegramConnections.find((entry) => entry.connection === search.telegramAccess)?.connection ||
-    null;
+    telegramConnections.find(
+      (entry) => entry.connection === search.telegramAccess && entry.status?.connected,
+    )?.connection || null;
+  const setTelegramAccessSheetOpen = (open: boolean) => {
+    if (open) return;
+    void navigate({
+      replace: true,
+      search: (previous) => ({ ...previous, telegramAccess: undefined }),
+    });
+  };
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
@@ -414,16 +422,12 @@ function ProjectIntegrationsContent() {
           <AccountConnectionsItem />
         </ItemGroup>
         {telegramAccessConnection === null ? null : (
-          <Suspense fallback={<TelegramAccessSheetLoading />}>
+          <Suspense
+            fallback={<TelegramAccessSheetLoading onOpenChange={setTelegramAccessSheetOpen} />}
+          >
             <TelegramAccessSheet
               connection={telegramAccessConnection}
-              onOpenChange={(open) => {
-                if (open) return;
-                void navigate({
-                  replace: true,
-                  search: (previous) => ({ ...previous, telegramAccess: undefined }),
-                });
-              }}
+              onOpenChange={setTelegramAccessSheetOpen}
               projectSlug={project.slug}
             />
           </Suspense>
@@ -815,9 +819,9 @@ function TelegramAccessSheet({
   );
 }
 
-function TelegramAccessSheetLoading() {
+function TelegramAccessSheetLoading({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
   return (
-    <Sheet open>
+    <Sheet open onOpenChange={onOpenChange}>
       <SheetContent side="right">
         <SheetHeader>
           <SheetTitle>Telegram user access</SheetTitle>
