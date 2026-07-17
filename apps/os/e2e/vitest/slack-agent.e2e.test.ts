@@ -24,7 +24,6 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
-const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const CONNECTION = "main-slack";
 const SLACK_BOT_TOKEN_SECRET_PATH = `/secrets/integrations/slack/${CONNECTION}/bot-token`;
 const SLACK_INTEGRATION_STREAM_PATH = `/integrations/slack/${CONNECTION}`;
@@ -35,14 +34,18 @@ test.skipIf(signingSecret === null)(
   "inbound Slack webhook routes to a slack agent that attempts a Web API reply",
   { timeout: 240_000 },
   async () => {
-    const teamId = `T0E2E${RUN_SUFFIX.toUpperCase()}`;
+    // Vitest retries invoke this callback again in the same module isolate.
+    // Every attempt needs a new project AND Slack event identity: reusing an
+    // idempotency key for a different timestamp/body is a real conflict.
+    const runSuffix = crypto.randomUUID().slice(0, 8);
+    const teamId = `T0E2E${runSuffix.toUpperCase()}`;
     const channel = "C0E2ESLACK";
     const threadTs = `${Math.floor(Date.now() / 1000)}.000100`;
     const agentStreamPath = `/agents/slack/${CONNECTION}/${channel.toLowerCase()}/ts-${threadTs.replace(".", "-")}`;
 
     using session = withItxSession();
     using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = root.projects.create({ slug: `slack-agent-e2e-${RUN_SUFFIX}` });
+    using project = root.projects.create({ slug: `slack-agent-e2e-${runSuffix}` });
     const { projectId } = await project.__describe();
 
     // --- Seed a claimed workspace without OAuth: fake bot token secret +
@@ -51,7 +54,7 @@ test.skipIf(signingSecret === null)(
     using secret = project.secrets.get(SLACK_BOT_TOKEN_SECRET_PATH);
     await secret.create({
       egress: { urls: ["https://slack.com"] },
-      material: `xoxb-e2e-fake-${RUN_SUFFIX}`,
+      material: `xoxb-e2e-fake-${runSuffix}`,
     });
     await waitFor(
       () => secret.__describe(),
@@ -74,7 +77,7 @@ test.skipIf(signingSecret === null)(
           externalId: teamId,
           projectId,
           teamId,
-          teamName: `e2e-${RUN_SUFFIX}`,
+          teamName: `e2e-${runSuffix}`,
         },
       },
     );
@@ -89,7 +92,7 @@ test.skipIf(signingSecret === null)(
     const unclaimedBody = JSON.stringify({
       type: "event_callback",
       team_id: "T0UNCLAIMED",
-      event_id: `EvUnclaimed${RUN_SUFFIX}`,
+      event_id: `EvUnclaimed${runSuffix}`,
       event: { type: "message", channel, user: "UHUMAN", text: "hi", ts: threadTs },
     });
     const unclaimedResponse = await fetch(
@@ -109,7 +112,7 @@ test.skipIf(signingSecret === null)(
     const humanBody = JSON.stringify({
       type: "event_callback",
       team_id: teamId,
-      event_id: `Ev${RUN_SUFFIX}`,
+      event_id: `Ev${runSuffix}`,
       authorizations: [{ is_bot: true, user_id: "UBOT", bot_id: "BBOT" }],
       event: {
         type: "message",
@@ -203,6 +206,10 @@ function slackSigningSecret(): string | null {
 }
 
 async function signedSlackWebhookRequest(body: string, signingSecret: string): Promise<Request> {
+  const eventId = (JSON.parse(body) as { event_id?: unknown }).event_id;
+  if (typeof eventId !== "string" || eventId.length === 0) {
+    throw new Error("signed Slack E2E webhook body must contain event_id");
+  }
   const timestamp = String(Math.floor(Date.now() / 1000));
   const key = await crypto.subtle.importKey(
     "raw",
@@ -221,7 +228,7 @@ async function signedSlackWebhookRequest(body: string, signingSecret: string): P
       "content-type": "application/json",
       "x-slack-request-timestamp": timestamp,
       "x-slack-signature": signature,
-      "x-slack-event-id": `Ev${RUN_SUFFIX}`,
+      "x-slack-event-id": eventId,
     },
     method: "POST",
   });

@@ -176,8 +176,13 @@ describe("userspace GitHub pull-request routing", () => {
           },
         },
         {
-          idempotencyKey: "github-pr/status",
-          payload: { icon: "github", title: "PR #7" },
+          idempotencyKey: "github-pr/metadata",
+          payload: {
+            activity: "Reviewing acme/widgets#7",
+            summary: "Reviewing pull request #7 in acme/widgets and reporting findings on GitHub.",
+            title: "PR #7",
+          },
+          type: "events.iterate.com/agent/metadata-changed",
         },
       ],
     });
@@ -186,9 +191,20 @@ describe("userspace GitHub pull-request routing", () => {
     );
     expect(test.appendBatches).toHaveLength(1);
     expect(test.appendBatches[0]?.path).toBe(agentPath);
-    expect(test.appendBatches[0]?.events).toHaveLength(2);
-    expect(test.appendBatches[0]?.events[0]?.source?.crossPostedFrom?.[0]?.projectId).toBe("prj_1");
-    expect(test.appendBatches[0]?.events[0]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(3);
+    expect(test.appendBatches[0]?.events[0]).toEqual({
+      type: "events.iterate.com/agent/binding-set",
+      idempotencyKey: "github-pr/binding",
+      payload: {
+        type: "github_pull_request",
+        connection: "install-789",
+        installationId: "789",
+        owner: "acme",
+        repo: "widgets",
+        number: 7,
+      },
+    });
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
       idempotencyKey: "github-pr/webhook:/integrations/github/install-789:12",
       payload: event.payload,
       source: {
@@ -202,7 +218,7 @@ describe("userspace GitHub pull-request routing", () => {
         ],
       },
     });
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
       idempotencyKey: "github-pr/review:install-789:101:acme/widgets:iterate:1:head-abc",
       payload: {
         key: "github/review-task",
@@ -211,7 +227,7 @@ describe("userspace GitHub pull-request routing", () => {
       },
       type: "events.iterate.com/agents/context-added",
     });
-    const task = JSON.stringify(test.appendBatches[0]?.events[1]);
+    const task = JSON.stringify(test.appendBatches[0]?.events[2]);
     expect(task).toContain("complete changed-file list");
     expect(task).toContain("exactly one consolidated COMMENT review");
     expect(task).toContain("iterate-lint-disable-next-line");
@@ -219,7 +235,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(task).toContain("<!-- iterate-ai-lint:101:policy:1:head:head-abc -->");
   });
 
-  it("creates only from pull_request:opened", async () => {
+  it("does not create from an unmentioned later delivery", async () => {
     const test = harness();
 
     await handleGithubPullRequestWebhook(
@@ -241,6 +257,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.create).toHaveBeenCalledOnce();
     expect(test.appendBatches).toHaveLength(2);
     expect(test.appendBatches[1]?.events.map((item) => item.idempotencyKey)).toEqual([
+      "github-pr/binding",
       "github-pr/webhook:/integrations/github/install-789:12",
       "github-pr/review:install-789:101:acme/widgets:iterate:1:head-abc",
     ]);
@@ -263,7 +280,7 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).not.toHaveBeenCalled();
-    const reviews = test.appendBatches.map((batch) => batch.events[1]);
+    const reviews = test.appendBatches.map((batch) => batch.events[2]);
     expect(reviews.map((review) => review?.idempotencyKey)).toEqual([
       "github-pr/review:install-789:101:acme/widgets:iterate:1:head-one",
       "github-pr/review:install-789:101:acme/widgets:iterate:1:head-two",
@@ -294,14 +311,31 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.agentAppendBatches[0]?.events[1]).toEqual({
-      type: "events.iterate.com/agent/status-changed",
-      idempotencyKey: "github-pr/status",
-      payload: { icon: "github", title: "PR #7" },
+      type: "events.iterate.com/agent/metadata-changed",
+      idempotencyKey: "github-pr/metadata",
+      payload: {
+        title: "PR #7",
+        activity: "Reviewing renamed/widgets-next#7",
+        summary:
+          "Reviewing pull request #7 in renamed/widgets-next and reporting findings on GitHub.",
+      },
     });
-    expect(JSON.stringify(test.appendBatches[0]?.events[1])).toContain(
+    expect(test.appendBatches[0]?.events[0]).toEqual({
+      type: "events.iterate.com/agent/binding-set",
+      idempotencyKey: "github-pr/binding",
+      payload: {
+        type: "github_pull_request",
+        connection: "install-789",
+        installationId: "789",
+        owner: "renamed",
+        repo: "widgets-next",
+        number: 7,
+      },
+    });
+    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
       "renamed/widgets-next pull request #7",
     );
-    expect(test.appendBatches[0]?.events[1]?.idempotencyKey).toBe(
+    expect(test.appendBatches[0]?.events[2]?.idempotencyKey).toBe(
       "github-pr/review:install-789:101:renamed/widgets-next:iterate:1:head-abc",
     );
   });
@@ -313,16 +347,16 @@ describe("userspace GitHub pull-request routing", () => {
       webhook({ action: "created", mentionedUsers: ["iterate"], name: "issue_comment" }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
-    expect(test.appendBatches[0]?.events[1]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(4);
+    expect(test.appendBatches[0]?.events[2]).toMatchObject({
       idempotencyKey: "github-pr/mention-instructions:/integrations/github/install-789:12",
       payload: {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
         role: "developer",
       },
     });
-    expect(test.appendBatches[0]?.events[1]?.payload).not.toHaveProperty("actor");
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events[2]?.payload).not.toHaveProperty("actor");
+    expect(test.appendBatches[0]?.events[3]).toMatchObject({
       idempotencyKey: "github-pr/mention:/integrations/github/install-789:12",
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
@@ -337,11 +371,11 @@ describe("userspace GitHub pull-request routing", () => {
         ],
       },
     });
-    const instructions = JSON.stringify(test.appendBatches[0]?.events[1]);
+    const instructions = JSON.stringify(test.appendBatches[0]?.events[2]);
     expect(instructions).toContain("GitHub's signed webhook identifies @jonas as MEMBER");
     expect(instructions).toContain("issues.createComment");
     expect(instructions).not.toContain("@iterate please review");
-    const request = JSON.stringify(test.appendBatches[0]?.events[2]);
+    const request = JSON.stringify(test.appendBatches[0]?.events[3]);
     expect(request).toContain("@iterate please review");
     expect(request).toContain("https://github.com/acme/widgets/pull/7#issuecomment-991");
     expect(JSON.stringify(test.appendBatches[0]?.events)).not.toContain("checkCollaborator");
@@ -356,7 +390,7 @@ describe("userspace GitHub pull-request routing", () => {
         name: "issue_comment",
       }),
     );
-    expect(ignored.appendBatches[0]?.events).toHaveLength(1);
+    expect(ignored.appendBatches[0]?.events).toHaveLength(2);
   });
 
   it("takes submitted review text from the committed webhook without rereading its ref", async () => {
@@ -372,10 +406,10 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(JSON.stringify(test.appendBatches[0]?.events[2])).toContain(
+    expect(JSON.stringify(test.appendBatches[0]?.events[3])).toContain(
       "@iterate answer this review",
     );
-    expect(JSON.stringify(test.appendBatches[0]?.events[2])).not.toContain("wrong field");
+    expect(JSON.stringify(test.appendBatches[0]?.events[3])).not.toContain("wrong field");
   });
 
   it("does not wake from normalized mention metadata when the native message body is absent", async () => {
@@ -390,7 +424,7 @@ describe("userspace GitHub pull-request routing", () => {
       }),
     );
 
-    expect(test.appendBatches[0]?.events).toHaveLength(1);
+    expect(test.appendBatches[0]?.events).toHaveLength(2);
   });
 
   it("creates the pull-request agent from a trusted mention", async () => {
@@ -401,8 +435,8 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(3);
-    expect(test.appendBatches[0]?.events[2]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(4);
+    expect(test.appendBatches[0]?.events[3]).toMatchObject({
       payload: {
         actor: { login: "jonas", senderType: "User", type: "github" },
         llmRequestPolicy: { behaviour: "after-current-request" },
@@ -415,7 +449,7 @@ describe("userspace GitHub pull-request routing", () => {
     const test = harness();
     await handleGithubPullRequestWebhook(test.itx, webhook({ draft: true }));
     expect(test.create).toHaveBeenCalledOnce();
-    expect(test.appendBatches[0]?.events).toHaveLength(1);
+    expect(test.appendBatches[0]?.events).toHaveLength(2);
   });
 
   it("copies native thread resolution without waking the agent", async () => {
@@ -424,8 +458,8 @@ describe("userspace GitHub pull-request routing", () => {
       test.itx,
       webhook({ action: "resolved", name: "pull_request_review_thread" }),
     );
-    expect(test.appendBatches[0]?.events).toHaveLength(1);
-    expect(test.appendBatches[0]?.events[0]).toMatchObject({
+    expect(test.appendBatches[0]?.events).toHaveLength(2);
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
       payload: { body: { action: "resolved" }, delivery: { name: "pull_request_review_thread" } },
       type: "events.iterate.com/github/webhook-received",
     });

@@ -8,6 +8,7 @@ import {
   EMAIL_AGENT_SYSTEM_PROMPT,
   EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
+import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
   EmailProcessorContract,
@@ -205,10 +206,24 @@ function emailAgentCreationEvents(input: {
   subject?: string;
   threadId: string;
 }): EmittedInput<typeof EmailProcessorContract>[] {
+  const subject = normalizeAgentBindingLabel(input.subject);
+  const counterpart = normalizeAgentBindingLabel(input.counterpart);
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
-    platformSystemPrompt: {
+    initialEvents: [
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: `agent/binding:${input.projectId}:${input.path}`,
+        payload: {
+          type: "email_thread",
+          threadId: input.threadId,
+          ...(subject === undefined ? {} : { subject }),
+          ...(counterpart === undefined ? {} : { counterpart }),
+        },
+      },
+    ],
+    systemPromptPolicy: {
       content: EMAIL_AGENT_SYSTEM_PROMPT,
       id: "email",
       revision: EMAIL_AGENT_SYSTEM_PROMPT_REVISION,

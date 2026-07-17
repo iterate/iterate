@@ -102,10 +102,12 @@ export class AgentDurableObject extends DurableObject<Env> {
 
   // Registered on every agent host; it only wakes on routed Slack agent
   // streams (`/agents/slack/**`) where the project processor configured its
-  // subscription. Slack-facing side effects are best effort: a failed status
-  // update or reaction must not wedge the processor checkpoint. Registered
-  // WITH recovery (codex review P1): the status paints and 👀 acks are
-  // blocking work, and the held cursor alone only helps while something still
+  // subscription. The processor sequences Slack presentation attempts after
+  // the durable work they acknowledge, but a rejected cosmetic/enrichment
+  // call is explicitly best-effort: it is logged once and never holds the
+  // checkpoint. Actual agent-authored Slack messages use the ordinary itx
+  // capability path instead and remain failure-visible. Registered WITH
+  // recovery because the held cursor alone only helps while something still
   // dials — a SIMULTANEOUS Agent+Stream DO death mid-blocker (a deploy evicts
   // both) leaves nothing armed to redeliver. The alarm's
   // `stream/processor-revived` append cold-boots the stream; the unacknowledged
@@ -142,10 +144,13 @@ export class AgentDurableObject extends DurableObject<Env> {
           const name = result.channel?.name;
           return typeof name === "string" && name.length > 0 ? name : null;
         } catch (error) {
-          console.warn("[slack-agent] conversations.info failed; falling back to channel id", {
-            channel,
-            error,
+          // The channel id is the binding identity; its human-readable name
+          // is optional enrichment. Record the binding without a name when
+          // Slack cannot provide it instead of wedging the route forever.
+          console.warn("[slack-agent] Slack channel-name enrichment failed", {
+            method: "conversations.info",
             path: this.#name.path,
+            reason: error instanceof Error ? error.message : String(error),
           });
           return null;
         }
