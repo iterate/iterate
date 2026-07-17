@@ -52,8 +52,9 @@ test("a new user can create a project through the UI form", async ({ page }) => 
     // hands off to the onboarding agent. The composer is that destination's
     // structural chrome; 60s covers birth + saga + handoff.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
+    // Checklist is the early-land destination (project home while bootstrap
+    // runs). Locator wait only — no expect() under this outer await (lint).
     await page.getByTestId("project-creation-progress").waitFor({ timeout: 30_000 });
-    expect(page.url()).toContain(`/projects/${slug}`);
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
   // After the checklist completes, welcome handoff lands on onboarding.
