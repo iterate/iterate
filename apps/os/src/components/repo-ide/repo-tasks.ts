@@ -2,6 +2,12 @@ import type { Document } from "yaml";
 import { isRepoTaskMarkdownPath } from "../../domains/repos/repo-task-events.ts";
 import type { RepoFileChange } from "../../domains/repos/types.ts";
 import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-frontmatter.ts";
+import {
+  effectiveEntry,
+  textContentForEntry,
+  type FileEntry,
+  type WorkingTreeChanges,
+} from "./staged-changes.ts";
 
 const DEFAULT_TASK_STATE = "todo";
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
@@ -360,6 +366,79 @@ export function taskStateLabel(state: string): string {
     .filter(Boolean)
     .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
     .join(" ");
+}
+
+/** Uncommitted board status for a task path (working or staged). */
+export type RepoTaskChangeStatus = "added" | "modified" | "deleted";
+
+export type RepoTaskChange = {
+  path: string;
+  status: RepoTaskChangeStatus;
+  title: string;
+  entry: FileEntry;
+};
+
+/**
+ * Task-only working-tree changes for the board's staged/visual + commit UI.
+ * Titles prefer live content, then HEAD content for pure deletions.
+ */
+export function listRepoTaskChanges(
+  changes: WorkingTreeChanges,
+  headPaths: ReadonlySet<string>,
+  headContents: Readonly<Record<string, string>> = {},
+): RepoTaskChange[] {
+  const listed: RepoTaskChange[] = [];
+  for (const [path, change] of changes) {
+    if (!isRepoTaskPath(path)) continue;
+    const entry = effectiveEntry(change);
+    if (entry === undefined) continue;
+    const status: RepoTaskChangeStatus =
+      entry.type === "delete" ? "deleted" : headPaths.has(path) ? "modified" : "added";
+    const content = textContentForEntry(entry) ?? headContents[path];
+    const parsed = content === undefined ? null : parseRepoTask(path, content);
+    listed.push({
+      path,
+      status,
+      title:
+        parsed?.title ?? (pathSegments(path).at(-1) ?? "task").replace(/\.(?:md|markdown)$/i, ""),
+      entry,
+    });
+  }
+  return listed.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+/** Deterministic commit message when AI is unavailable or empty. */
+export function fallbackTaskCommitMessage(taskChanges: readonly RepoTaskChange[]): string {
+  if (taskChanges.length === 0) return "Update tasks";
+  const added = taskChanges.filter((change) => change.status === "added");
+  const modified = taskChanges.filter((change) => change.status === "modified");
+  const deleted = taskChanges.filter((change) => change.status === "deleted");
+  const parts: string[] = [];
+  if (added.length === 1) parts.push(`add ${added[0]!.title}`);
+  else if (added.length > 1) parts.push(`add ${added.length} tasks`);
+  if (modified.length === 1) parts.push(`update ${modified[0]!.title}`);
+  else if (modified.length > 1) parts.push(`update ${modified.length} tasks`);
+  if (deleted.length === 1) parts.push(`delete ${deleted[0]!.title}`);
+  else if (deleted.length > 1) parts.push(`delete ${deleted.length} tasks`);
+  const body = parts.join(", ");
+  return body === "" ? "Update tasks" : `${body[0]!.toUpperCase()}${body.slice(1)}`;
+}
+
+/** Prompt payload for `itx.ai.run` commit-message generation. */
+export function taskCommitMessagePrompt(taskChanges: readonly RepoTaskChange[]): {
+  system: string;
+  user: string;
+} {
+  const lines = taskChanges.map((change) => {
+    const verb =
+      change.status === "added" ? "Added" : change.status === "deleted" ? "Deleted" : "Edited";
+    return `- ${verb}: ${change.title} (${change.path})`;
+  });
+  return {
+    system:
+      "You write short git commit messages for a task board. Reply with one line only, imperative mood, no quotes, no trailing period, max 72 characters.",
+    user: `Write a commit message for these task changes:\n${lines.join("\n")}`,
+  };
 }
 
 function pathSegments(path: string): string[] {
