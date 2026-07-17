@@ -50,7 +50,7 @@ import type {
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
 import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
-import { LiveState, type LiveStateSubscription } from "iterate/live-state";
+import { disposeIgnoredRpcResult, LiveState, type LiveStateSubscription } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -446,6 +446,25 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
 
+function detachPlainRpcResult<T>(result: T[]): T[];
+function detachPlainRpcResult<T extends object>(result: T): T;
+function detachPlainRpcResult(result: object): object {
+  try {
+    const detached = Array.isArray(result) ? [...result] : { ...result };
+    Reflect.deleteProperty(detached, Symbol.dispose);
+    return detached;
+  } finally {
+    try {
+      disposeIgnoredRpcResult(result);
+    } catch (error) {
+      // The remote method has already succeeded and its plain data is safely
+      // detached. Cleanup failure must stay observable without rewriting that
+      // authoritative outcome into a product failure.
+      console.warn("stream plain-data RPC result dispose failed", { error });
+    }
+  }
+}
+
 /**
  * Durable event stream capability.
  *
@@ -508,10 +527,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // had to treat it as fatal (the stream-browser double-kill e2e's old CI
   // fixme). Stub-returning methods (readEvents, subscribe) stay bare — a
   // `.catch` would collapse the returned stub — and their data legs already
-  // ride the tagged methods.
+  // ride the tagged methods. Native Workers RPC also makes every object-valued
+  // result disposable: detach its plain data, then release the invocation here
+  // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -526,10 +548,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** One event by offset or idempotencyKey; undefined when it does not exist.
    * Point reads return ephemeral rows too — but those rows are evictable, so
    * an offset that once resolved may later read as undefined. */
-  getEvent(
+  async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    return this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    if (result === undefined) return undefined;
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -539,8 +563,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * `afterOffset: events.at(-1).offset`; reading a long stream without paging
    * shows you the beginning, not the head.
    */
-  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+  async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
+    const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /**
@@ -568,7 +593,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // Preserve the DO's validation error for invalid timeouts instead of
     // manufacturing a deadline from NaN/Infinity/a non-positive duration.
     if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
-      return await this.durableObjectStub.waitForEvent(args).catch(rethrowStreamUnavailable);
+      const result = await this.durableObjectStub
+        .waitForEvent(args)
+        .catch(rethrowStreamUnavailable);
+      return detachPlainRpcResult(result);
     }
 
     const deadline = Date.now() + args.timeoutMs;
@@ -617,7 +645,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
             afterOffset: replayAfterOffset,
             timeoutMs: remoteTimeoutMs,
           }),
-        );
+        ).then((result) => detachPlainRpcResult(result));
       } catch (error) {
         rethrowStreamUnavailable(error);
       }
@@ -656,10 +684,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
-  getProcessorRuntimeState(args: {
+  async getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    return this.durableObjectStub.getProcessorRuntimeState(args).catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub
+      .getProcessorRuntimeState(args)
+      .catch(rethrowStreamUnavailable);
+    return result === null ? null : detachPlainRpcResult(result);
   }
 
   /**
@@ -673,7 +704,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * throttled mutual-ping round over the live connections (observer-driven
    * sampling), so a polling debug UI sees RTTs populate.
    */
-  runtimeState(): Promise<{
+  async runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, ConnectionRuntimeState>;
@@ -683,7 +714,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    return this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    return detachPlainRpcResult(result);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -6010,11 +6042,10 @@ export function itxForScope(props: {
 
 /**
  * The deployment-global trusted root: what a GLOBAL (`projectId: null`)
- * stream's delivery dial evaluates expressions against (`ItxEntrypoint.get()`
- * with `projectId: null` props). Session-shaped on purpose — deployment-wide
- * repos/streams live on the session — so a global repo stream's wake
- * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
- * walks the same shape a project stream's does.
+ * stream's delivery dial evaluates expressions against. Session-shaped on
+ * purpose — deployment-wide repos/streams live on the session — so a global
+ * repo stream's wake expression (`["repos", ["get", path], "processor",
+ * "wakeStreamSubscriber"]`) walks the same shape a project stream's does.
  */
 export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
   return new SessionRpcTarget(props);
