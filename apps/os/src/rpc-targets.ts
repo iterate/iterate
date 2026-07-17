@@ -387,6 +387,10 @@ const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
+// Public create calls are acknowledgement boundaries, not indefinite leases.
+// A wedged processor must fail the caller loudly instead of parking an RPC
+// forever; the durable birth events remain committed for ordinary redelivery.
+const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -847,7 +851,10 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("scheduler create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
@@ -947,7 +954,10 @@ async function requestRepoCreate(input: {
   const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
   if (createOffset === 0) throw new Error("repo create committed no events");
   const repo = new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
-  await repo.processor.waitUntilProcessed({ offset: createOffset });
+  await repo.processor.waitUntilProcessed({
+    offset: createOffset,
+    timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+  });
 
   await timedStep("create-timing", timing, "wait-repo-ready", () =>
     stream.waitForEvent({
@@ -4106,8 +4116,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("agent create committed no events");
     await Promise.all([
-      this.processor.waitUntilProcessed({ offset }),
-      this.capabilityHost.processor.waitUntilProcessed({ offset }),
+      this.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
+      this.capabilityHost.processor.waitUntilProcessed({
+        offset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
     ]);
   }
 
@@ -4640,10 +4656,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       project.processor.waitUntilProcessed({
         offset: Math.max(created.offset, subscription.offset),
         // A create must never leave its caller parked behind a wedged
-        // processor indefinitely. One project birth frame has a shared 30s
-        // sibling-barrier deadline; 75s leaves a second full frame plus 15s
-        // for durable-delivery backoff and transport redial.
-        timeoutMs: 75_000,
+        // processor indefinitely. One project birth frame has a shared 60s
+        // sibling-barrier deadline; 75s leaves 15s for durable-delivery
+        // backoff and transport redial.
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     );
     // The project now EXISTS and its birth has been processed. Whether to
@@ -4899,7 +4915,10 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("capability host create committed no events");
-    await this.processor.waitUntilProcessed({ offset });
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
   }
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */

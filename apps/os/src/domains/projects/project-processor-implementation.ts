@@ -23,7 +23,7 @@ import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-doma
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
-const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 30_000;
+const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 60_000;
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectProcessorContract,

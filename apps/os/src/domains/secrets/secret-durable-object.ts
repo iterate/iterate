@@ -41,6 +41,9 @@ import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
 const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
+// Secret folds are pure and normally complete during catchUp. If ingestion is
+// broken, fail the command instead of retaining its RPC forever.
+const INGEST_WAIT_TIMEOUT_MS = 15_000;
 
 /**
  * One path-addressed secret. THE INVARIANT (the whole design, one sentence):
@@ -596,7 +599,7 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #waitUntilProcessed(offset: number): Promise<void> {
     await this.#registry.catchUp(SecretProcessorContract.slug);
-    await this.#reads.waitUntilEvent({ offset });
+    await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
   }
 
   async #decrypt(

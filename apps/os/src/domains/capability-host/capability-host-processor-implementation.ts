@@ -60,6 +60,9 @@ const INVALID_PATH_SEGMENTS = new Set([
 /** ~4k tokens: how much of a mount's types `__describe` shows before
  * deferring to docs.get's budgeted reader. */
 const MAX_DESCRIBED_TYPES_CHARS = 16_000;
+// provide/revoke are read-your-write boundaries. A broken delivery path must
+// reject the command rather than retain an RPC forever.
+const INGEST_WAIT_TIMEOUT_MS = 15_000;
 
 function truncatedTypes(types: string, mountPoint: string): string {
   if (types.length <= MAX_DESCRIBED_TYPES_CHARS) return types;
@@ -482,7 +485,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     previousLive?.dispose();
 
-    await this.#reads.waitUntilEvent({ offset: committedOffset });
+    await this.#reads.waitUntilEvent({
+      offset: committedOffset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
     return { path, providedAtOffset: committedOffset };
   }
 
@@ -554,7 +560,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     });
     this.#liveCapabilities.delete(key);
     previousLive?.dispose();
-    await this.#reads.waitUntilEvent({ offset: committed.offset });
+    await this.#reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {

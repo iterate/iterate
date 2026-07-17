@@ -171,7 +171,7 @@ describe("ProjectProcessor bootstrap", () => {
       { offset: 3, processor: "repo" },
       { offset: 3, processor: "email" },
     ]);
-    expect(processorWaitTimeouts).toEqual([30_000, 20_000, 15_000, 10_000]);
+    expect(processorWaitTimeouts).toEqual([60_000, 50_000, 45_000, 40_000]);
 
     await delivery;
     expect(settled).toBe(true);

@@ -55,6 +55,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   classifyRepoAccessError,
+  gitBranchContainsCommit,
   isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
@@ -1606,16 +1607,24 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   for (let attempt = 0; ; attempt += 1) {
     try {
       cloned = await clone();
-      if (input.expectedCommitOid === undefined || cloned.head.oid === input.expectedCommitOid) {
+      if (
+        input.expectedCommitOid === undefined ||
+        cloned.head.oid === input.expectedCommitOid ||
+        (await gitBranchContainsCommit({
+          branch: input.branch,
+          commitOid: input.expectedCommitOid,
+          git: cloned.git,
+        }))
+      ) {
         break;
       }
       if (attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
         throw new Error(
-          `Artifact branch ${input.branch} remained behind the last pushed commit ${input.expectedCommitOid} (saw ${cloned.head.oid}); refusing to commit on a stale base.`,
+          `Artifact branch ${input.branch} did not contain the last pushed commit ${input.expectedCommitOid} (saw ${cloned.head.oid}); refusing to commit on a stale or diverged base.`,
         );
       }
       console.warn(
-        `repo mutation clone is behind the last push (saw ${cloned.head.oid}, pushed ${input.expectedCommitOid}); retry ${attempt + 1}`,
+        `repo mutation clone does not contain the last push (saw ${cloned.head.oid}, pushed ${input.expectedCommitOid}); retry ${attempt + 1}`,
       );
     } catch (error) {
       if (input.expectedCommitOid === undefined || attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
