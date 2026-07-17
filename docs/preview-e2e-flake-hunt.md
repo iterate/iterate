@@ -266,6 +266,29 @@ through; the old per-projection materialization is gone.) See also flake 15 —
 serialized writes mean the recorded head can only move forward, never behind our
 last push.
 
+**2026-07-17, explicit-births follow-up:** requiring a mutation clone to see
+the exact advertised head closed the replica-lag case, but a retries-disabled
+preview run exposed a distinct writer. The failed repo stream had no user
+commit fact, while its Artifact history contained two consecutive
+`Seed minimal itx project worker` commits. An at-head creation obligation had
+been driven twice; the old seed path always made and force-pushed a commit even
+after cloning an existing branch, so it moved `main` between the mutation's
+checked clone and push.
+
+The creation call now shares the Repo DO's write serializer with mutations.
+Seeding is strictly create-if-absent: cloning any existing branch returns it
+untouched, including user commits. Two genuine first drives that both observe
+an empty Artifact produce the same root oid from a fixed synthetic seed
+identity and timestamp, making their pushes equivalent.
+
+The same retries-disabled run found an independent first-use secret race. A
+GitHub App token mint read secret state at offset 5; a
+`subscriber-connected` telemetry fact advanced the raw stream to offset 6;
+the material append's explicit offset then conflicted and was incorrectly
+reported as `secret_not_found`. Refreshed material now retries bounded offset
+conflicts while the reduced secret's `updatedOffset` and refresh policy remain
+unchanged. Any actual secret update still invalidates the in-flight mint.
+
 ### 7. Local harness must match the CI contract (vitest retry)
 
 The e2e vitest lane configures `retry: ci ? 1 : 0` — Depot CI absorbs one

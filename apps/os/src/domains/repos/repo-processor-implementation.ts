@@ -300,9 +300,10 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * would clobber user commits, provably never re-runs. The `ready`
    * idempotency key binds NO event offset (`this.idempotencyKey("ready")`),
    * so a redelivery/revival cannot rotate it and re-seed. No expiry on
-   * purpose: "this repo should exist" does not go stale, and the vendor call
-   * is idempotent (get-or-create + re-seed of a fresh repo folds to a no-op),
-   * so a create-succeeded/append-failed retry is safe.
+   * purpose: "this repo should exist" does not go stale. The creation
+   * implementation leaves any existing branch untouched, gives concurrent
+   * first seeds the same commit oid, and serializes creation with branch
+   * mutation, so a create-succeeded/append-failed retry is safe.
    */
   async #reconcileObligations(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],

@@ -70,6 +70,9 @@ const REPO_DEFAULT_BRANCH = "main";
 const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
+// Artifact creation is an at-least-once obligation. Concurrent first drives
+// must produce the same root commit instead of racing two timestamped seeds.
+const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
 const TASK_FILE_INCLUDE_PATTERNS = [
   "tasks/**/*.md",
@@ -117,7 +120,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      createRepoArtifact: (input) => this.createArtifactRepo(input),
+      // Creation and public mutations all move the same branch. A duplicate
+      // at-head creation drive is harmless (the seed is idempotent below), but
+      // it must not move the ref between a mutation's checked clone and push.
+      createRepoArtifact: (input) => this.#serializeWrite(() => this.createArtifactRepo(input)),
       // Sync the current GitHub head, not necessarily the delivery's SHA:
       // GitHub webhooks may arrive out of order, and adopting a newer head
       // also satisfies every older push delivery. syncFromGithub derives a
@@ -1397,6 +1403,7 @@ async function seedArtifactRepo(input: {
   const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
 
+  let cloned = false;
   try {
     await git.clone({
       branch: input.branch,
@@ -1405,11 +1412,25 @@ async function seedArtifactRepo(input: {
       url: input.remote,
       ...credentials,
     });
+    cloned = true;
   } catch {
     await git.init({ defaultBranch: input.branch });
     await git.remote({
       add: { name: "origin", url: input.remote },
     });
+  }
+
+  // Creation is create-if-absent, never reset-to-template. In particular, a
+  // create-succeeded/ready-append-failed retry must preserve every commit that
+  // may have landed since the first drive.
+  if (cloned) {
+    const [head] = await git.log({ depth: 1 });
+    if (head) {
+      return {
+        commitOid: head.oid,
+        contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
+      };
+    }
   }
 
   for (const file of input.files) {
@@ -1421,19 +1442,21 @@ async function seedArtifactRepo(input: {
     await git.add({ filepath: file.path });
   }
 
-  try {
-    await git.commit({
-      author: {
-        email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
-        name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
-      },
-      message: "Seed minimal itx project worker",
-    });
-    await ensureBranchRef({ branch: input.branch, git });
-  } catch (error) {
-    if (!String(error).match(/nothing to commit|no changes/i)) throw error;
-  }
+  const identity = {
+    email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+    name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+    timestamp: REPO_SEED_COMMIT_TIMESTAMP_SECONDS,
+    timezoneOffset: 0,
+  };
+  await git.commit({
+    author: identity,
+    message: "Seed minimal itx project worker",
+  });
+  await ensureBranchRef({ branch: input.branch, git });
 
+  // When two first drives both observe an empty remote, the fixed
+  // identity/timestamp above gives them the same root oid, so their force
+  // pushes are equivalent.
   const pushed = await git.push({
     force: true,
     ref: input.branch,
