@@ -52,9 +52,18 @@ test("a new user can create a project through the UI form", async ({ page }) => 
     // hands off to the onboarding agent. The composer is that destination's
     // structural chrome; 60s covers birth + saga + handoff.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
-    // Checklist is the early-land destination (project home while bootstrap
-    // runs). Locator wait only — no expect() under this outer await (lint).
-    await page.getByTestId("project-creation-progress").waitFor({ timeout: 30_000 });
+    // The checklist (project home while bootstrap runs) is the usual early-land
+    // destination — but it is TRANSIENT: `project/ready` often commits within a
+    // second of create resolving, and when the browser's navigation loses that
+    // race the home page mounts already-ready and hands off to the onboarding
+    // agent without ever painting the checklist. Accept either landing: the
+    // checklist, or the composer of the onboarding agent it hands off to.
+    // Locator wait only — no expect() under this outer await (lint).
+    await page
+      .getByTestId("project-creation-progress")
+      .or(page.getByPlaceholder("Message this agent"))
+      .first()
+      .waitFor({ timeout: 60_000 });
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
   // After the checklist completes, welcome handoff lands on onboarding.
