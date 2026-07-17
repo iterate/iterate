@@ -45,8 +45,11 @@ installing a development build, enable iOS Developer Mode and use the normal
 `start` command for Metro. Use `start:go` when deliberately testing the
 Expo Go-compatible surface.
 
-This repository does not contain Apple or Expo credentials. As of 2026-07-17,
-the initial physical-device build remains to be run by an enrolled account.
+This repository does not contain Apple or Expo credentials. The first signed
+physical-device development build completed through the linked
+`@mishanustom/iterate` EAS project on 2026-07-17; subsequent builds reuse its
+EAS-managed Apple credentials and registered devices. Install a build from its
+EAS dashboard link on a provisioned phone before starting Metro.
 
 ## Run and test it in a browser
 

@@ -10,7 +10,10 @@
     "backgroundColor": "#0b0b0f",
     "ios": {
       "bundleIdentifier": "com.iterate.mobile",
-      "supportsTablet": false
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "plugins": [
       "expo-router",
@@ -36,6 +39,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "cfe38002-5822-4465-94d4-7223a2002280"
+      }
+    },
+    "owner": "mishanustom"
   }
 }
