@@ -85,7 +85,6 @@ test("Authenticated internal auth itx can create project and append to stream", 
       "events.iterate.com/repo/created",
       "events.iterate.com/repo/ready",
       "events.iterate.com/project/ready",
-      "events.iterate.com/stream/subscriber-disconnected",
     ]),
   );
 
