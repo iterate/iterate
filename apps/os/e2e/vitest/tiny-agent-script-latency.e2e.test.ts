@@ -13,7 +13,7 @@ test(
     using project = handle.itx();
     const agentPath = `/agents/web/${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
-    await agent.create({});
+    await agent.create();
 
     const code = String(fixture.events[0]!.payload.code);
     const wallStartedAt = performance.now();

@@ -2,11 +2,19 @@
 // sibling of slack-processor-implementation.ts. Emitted event types, payloads,
 // and idempotency keys are stable wire formats.
 
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { EmittedInput } from "../streams/processor-contracts.ts";
-import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { StreamProcessor, type EmittedInput } from "iterate/processors";
+import {
+  agentCreationForPath,
+  telegramAgentSystemPrompt,
+  TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
-import { readRecord, telegramChatStreamPath } from "./utils.ts";
+import {
+  coerceTelegramId,
+  readRecord,
+  telegramChatStreamPath,
+  webhookAckIsFresh,
+} from "./utils.ts";
 import {
   TelegramProcessorContract,
   type TelegramProcessorState,
@@ -20,7 +28,19 @@ type TelegramReplyHint = {
   sessionPath: string;
 };
 
-export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract> {
+type TelegramProcessorDeps = {
+  now(): number;
+  sendTelegramMessage(input: {
+    body: Record<string, unknown>;
+    connection: string;
+  }): Promise<unknown>;
+  telegramAccessSettingsUrl(input: { connection: string; projectId: string }): Promise<string>;
+};
+
+export class TelegramProcessor extends StreamProcessor<
+  TelegramProcessorContract,
+  TelegramProcessorDeps
+> {
   readonly contract = TelegramProcessorContract;
 
   protected override reduce({
@@ -33,14 +53,34 @@ export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract
           throw new Error("Telegram processor received more than one telegram/created event");
         }
         return { ...state, birthCertificate: event.payload };
+      case "events.iterate.com/telegram/access-configured":
+        return {
+          ...state,
+          accessPolicyConfigured: true,
+          allowedUserIds: [...new Set(event.payload.allowedUserIds)],
+          // A version refold must reconstruct pre-allowlist `/new` history,
+          // otherwise deploying access control silently sends every existing
+          // chat back to session zero. On the first explicit policy, retain
+          // only sessions started by users the owner has now authorized.
+          sessionsByChat: state.accessPolicyConfigured
+            ? state.sessionsByChat
+            : filterTelegramSessionsByAllowedUsers(
+                state.sessionsByChat,
+                event.payload.allowedUserIds,
+              ),
+        };
       case "events.iterate.com/telegram/webhook-received": {
         // `/new` starts a session: fold it straight off the webhook — the
         // webhook event itself is the session-start fact, so replay rebuilds
         // the exact same thread model with no extra event type.
         const connection = state.birthCertificate?.config.connection;
         if (connection === undefined) return state;
+        const senderId = telegramSenderIdFromUpdate(event.payload.body);
+        if (senderId === undefined) return state;
+        if (state.accessPolicyConfigured && !state.allowedUserIds.includes(senderId)) return state;
         const sessionStart = telegramSessionStartFromUpdate(event.payload.body, {
           connection,
+          senderId,
         });
         if (sessionStart === null) return state;
         const existing = state.sessionsByChat[sessionStart.chatKey] ?? [];
@@ -64,6 +104,7 @@ export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract
               {
                 date: sessionStart.date,
                 messageId: sessionStart.messageId,
+                senderId: sessionStart.senderId,
                 sessionPath: sessionStart.sessionPath,
               },
             ],
@@ -93,6 +134,7 @@ export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract
     appendTo,
     blockProcessorWhile,
     event,
+    runInBackground,
     state,
   }: Parameters<StreamProcessor<TelegramProcessorContract>["processEvent"]>[0]): undefined {
     // Event-less at-head pass: this processor has no at-head work.
@@ -108,6 +150,43 @@ export class TelegramProcessor extends StreamProcessor<TelegramProcessorContract
     // handles chat-scoped updates only.
     const target = telegramChatFromUpdate(event.payload.body);
     if (target == null) return;
+
+    const senderId = telegramSenderIdFromUpdate(event.payload.body);
+    if (senderId === undefined) return;
+    if (!state.allowedUserIds.includes(senderId)) {
+      // Denial is deterministic processor work: no agent stream, context, or
+      // LLM exists for an unauthorized sender. Only ordinary messages receive
+      // the handoff; service updates and button callbacks are denied silently.
+      if (
+        readRecord(readRecord(event.payload.body)?.message) !== null &&
+        webhookAckIsFresh(event, this.deps.now())
+      ) {
+        // The handoff is useful but not an authorization obligation. A user
+        // may have blocked the bot or Telegram may reject this chat; that
+        // must not wedge the connection router and hold later allowed users
+        // behind an undeliverable denial.
+        runInBackground(async () => {
+          if (this.projectId === null) {
+            throw new Error("Telegram router cannot build access settings without a project id");
+          }
+          const settingsUrl = await this.deps.telegramAccessSettingsUrl({
+            connection,
+            projectId: this.projectId,
+          });
+          await this.deps.sendTelegramMessage({
+            connection,
+            body: {
+              chat_id: coerceTelegramId(target.chatId),
+              ...(target.messageThreadId === undefined
+                ? {}
+                : { message_thread_id: coerceTelegramId(target.messageThreadId) }),
+              text: telegramAccessDeniedMessage({ settingsUrl, userId: senderId }),
+            },
+          });
+        });
+      }
+      return;
+    }
 
     // Everything routes to the chat's LATEST session — `state` is post-reduce,
     // so a `/new` update routes ITSELF (and its trailing text) into the fresh
@@ -168,16 +247,18 @@ function telegramAgentCreationEvents(input: {
   path: string;
   projectId: string;
 }): EmittedInput<TelegramProcessorContract>[] {
-  return agentCreationForPath({
+  const creation = agentCreationForPath({
     agentPath: input.path,
     capabilityHostAncestorPath: "/",
     projectId: input.projectId,
-    overrides: {
-      systemPrompt: telegramAgentSystemPrompt({
+    platformSystemPrompt: {
+      content: telegramAgentSystemPrompt({
         agentPath: input.path,
         chatId: input.chatId,
         connection: input.connection,
       }),
+      id: "telegram",
+      revision: TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION,
     },
     sibling: {
       birthCertificate: TelegramAgentProcessorContract.buildEvent({
@@ -195,7 +276,8 @@ function telegramAgentCreationEvents(input: {
       }),
       processorSlug: TelegramAgentProcessorContract.slug,
     },
-  }).events satisfies EmittedInput<TelegramProcessorContract>[];
+  });
+  return creation.events satisfies EmittedInput<TelegramProcessorContract>[];
 }
 
 /** The chat-scoped part of a routed stream path (`chat-{id}` or
@@ -226,8 +308,14 @@ export function telegramNewCommand(text: unknown): { trailingText: string | null
  */
 function telegramSessionStartFromUpdate(
   body: unknown,
-  input: { connection: string },
-): { chatKey: string; date: number; messageId: number; sessionPath: string } | null {
+  input: { connection: string; senderId: string },
+): {
+  chatKey: string;
+  date: number;
+  messageId: number;
+  senderId: string;
+  sessionPath: string;
+} | null {
   const update = readRecord(body);
   const message = readRecord(update?.message);
   if (message == null) return null;
@@ -241,12 +329,26 @@ function telegramSessionStartFromUpdate(
     chatKey: telegramChatKey(target),
     date,
     messageId,
+    senderId: input.senderId,
     sessionPath: telegramChatStreamPath({
       ...target,
       connection: input.connection,
       session: String(date),
     }),
   };
+}
+
+function filterTelegramSessionsByAllowedUsers(
+  sessionsByChat: TelegramProcessorState["sessionsByChat"],
+  allowedUserIds: string[],
+): TelegramProcessorState["sessionsByChat"] {
+  const allowed = new Set(allowedUserIds);
+  return Object.fromEntries(
+    Object.entries(sessionsByChat).flatMap(([chatKey, sessions]) => {
+      const retained = sessions.filter((session) => allowed.has(session.senderId));
+      return retained.length === 0 ? [] : [[chatKey, retained]];
+    }),
+  );
 }
 
 /**
@@ -345,4 +447,31 @@ function readTelegramId(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
   if (typeof value === "string" && value !== "") return value;
   return undefined;
+}
+
+/** The human who caused one update. This identity, not the chat, is the
+ * authorization principal: a permitted group must not grant every member
+ * project access. */
+function telegramSenderIdFromUpdate(body: unknown): string | undefined {
+  const update = readRecord(body);
+  const sender =
+    readRecord(readRecord(update?.message)?.from) ||
+    readRecord(readRecord(update?.edited_message)?.from) ||
+    readRecord(readRecord(update?.channel_post)?.from) ||
+    readRecord(readRecord(update?.edited_channel_post)?.from) ||
+    readRecord(readRecord(update?.callback_query)?.from) ||
+    readRecord(readRecord(update?.my_chat_member)?.from) ||
+    readRecord(readRecord(update?.chat_member)?.from) ||
+    readRecord(readRecord(update?.chat_join_request)?.from);
+  if (sender?.is_bot === true) return undefined;
+  return readTelegramId(sender?.id);
+}
+
+function telegramAccessDeniedMessage(input: { settingsUrl: string; userId: string }): string {
+  return [
+    "Access denied. This Telegram account is not allowed to use this Iterate project.",
+    `Ask a project owner to add Telegram user ID ${input.userId} to this bot's allowlist:`,
+    input.settingsUrl,
+    "You can forward this message to them.",
+  ].join("\n\n");
 }

@@ -10,9 +10,13 @@
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
+import {
+  defineProcessorContract,
+  ProcessorContractAnnouncement,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "iterate/processors";
 import { ItxExpression } from "../../itx/expression.ts";
 import { EventSelector } from "./event-selector.ts";
-import { defineProcessorContract } from "./processor-contracts.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
 // the core reducer starts deriving NEW state from already-reduced events
@@ -245,29 +249,6 @@ const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodT
   });
 
 /**
- * A processor contract announcement carried on the connect event when the
- * subscriber is a hosted stream processor. UIs and tooling read it from the
- * presence facts (the `subscriber-connected` events) and, for configured
- * subscriptions, from the reduced roster
- * (`connectionsByKey[..].subscriber.processor.announcement`).
- */
-export const ProcessorContractAnnouncement = z.object({
-  slug: z.string().trim().min(1),
-  version: z.string().trim().min(1),
-  description: z.string(),
-  consumes: z.array(z.string()),
-  emits: z.array(z.string()),
-  ownedEvents: z.array(
-    z.object({
-      type: z.string().trim().min(1),
-      description: z.string().optional(),
-    }),
-  ),
-});
-
-export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnnouncement>;
-
-/**
  * Identity the connecting party passes in its subscribe call. All fields are
  * optional: anonymous ephemeral watchers (a stream-viewer tab) may pass nothing,
  * processor hosts pass their incarnation id plus a processor announcement.
@@ -286,22 +267,6 @@ export const StreamSubscriberDescriptor = z.object({
 
 /** Serializable subscriber identity carried on presence facts and the runtime connection table. */
 export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
-
-/**
- * The ONE platform revival fact for every recovery-wired stream processor.
- * Appended by the platform keepalive (`durableObjectRecovery` in
- * durable-object-processor-durability.ts) when a processor is revived after
- * its incarnation died owing background work — never emitted by a processor.
- * Per-processor identity rides the payload's `processorSlug` and the
- * `processor-revived:<slug>@...` idempotency key, not the type string.
- * Recovery-wired contracts CONSUME it (the runner's construction check
- * requires that): its ordinary delivery is the guaranteed turn that lands at
- * the stream head, where `processEvent`'s at-head reconcile
- * (`delivery.caughtUp`) re-drives the processor's open obligations. Reduce
- * ignores it — the at-head reconcile its delivery guarantees is the whole
- * point.
- */
-export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
 
 export const StreamSubscriberDisconnectReason = z.enum([
   /** A new connection for the same subscriptionKey replaced this one. */

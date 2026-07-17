@@ -240,6 +240,30 @@ export function telegramChatStreamPath(input: {
   return input.session === undefined ? topical : `${topical}/session-${input.session}`;
 }
 
+/** Authenticated OS page for editing one Telegram connection's user access.
+ * The search param opens the exact editor after the project route authorizes
+ * the signed-in dashboard user. */
+export function buildTelegramAccessSettingsUrl(input: {
+  baseUrl: string;
+  connection: string;
+  projectSlug: string;
+}): string {
+  const url = new URL(
+    `/projects/${encodeURIComponent(input.projectSlug)}/integrations`,
+    input.baseUrl,
+  );
+  url.searchParams.set("telegramAccess", input.connection);
+  return url.toString();
+}
+
+/** Ids ride stream paths and processor state as strings; the Bot API wants
+ * Telegram's original integers back wherever JavaScript can represent them
+ * safely. */
+export function coerceTelegramId(id: string): number | string {
+  const numeric = Number(id);
+  return Number.isSafeInteger(numeric) ? numeric : id;
+}
+
 /**
  * The routed agent stream path for one Slack thread of one named connection.
  * Stable wire shape: `/agents/slack/{connection}/{channel}/ts-{threadTs}`.

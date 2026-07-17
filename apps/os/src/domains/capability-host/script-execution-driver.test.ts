@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent } from "../streams/schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import {
   driveScriptExecution,
   scriptExecutionExpiresAt,

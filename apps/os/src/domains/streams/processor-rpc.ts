@@ -1,4 +1,8 @@
-import type { ProcessorRuntimeState, ProcessorSnapshot, StreamProcessorRpc } from "./rpc-types.ts";
+import type {
+  ProcessorRuntimeState,
+  ProcessorSnapshot,
+  StreamProcessorRpc,
+} from "iterate/processors";
 
 /**
  * One data-only call from an isolate-side processor handle to the Durable

@@ -1,4 +1,4 @@
-import type { StreamEvent } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import { isDurableObjectLifecycleError, rethrowStreamUnavailable } from "./stream-unavailable.ts";
 
 /**

@@ -1,15 +1,15 @@
 import { DurableObject, tracing } from "cloudflare:workers";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type {
+  StreamEvent,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";

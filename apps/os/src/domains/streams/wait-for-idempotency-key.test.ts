@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import { waitForStreamIdempotencyKey } from "./wait-for-idempotency-key.ts";
 
 class TestSocket extends EventTarget {

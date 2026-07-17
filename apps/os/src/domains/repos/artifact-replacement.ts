@@ -1,4 +1,4 @@
-import { disposeIgnoredRpcResult } from "../../lib/rpc/retain.ts";
+import { disposeIgnoredRpcResult } from "iterate/live-state";
 
 const DELETE_POLL_INTERVAL_MS = 500;
 const DELETE_POLL_ATTEMPTS = 60;

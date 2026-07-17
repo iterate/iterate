@@ -6,13 +6,13 @@
  */
 import { test } from "vitest";
 import type { RpcStub } from "capnweb";
+import type { StreamEvent } from "iterate/processors";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   buildIntegrationRouterCreatedEvent,
   buildIntegrationRouterSubscriptionConfiguredEvent,
 } from "../../src/domains/integrations/integration-router-events.ts";
-import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import type { WakeableStreamProcessorRpc } from "../../src/itx-api.generated.ts";
 
 test("creates a disposable project and uses project streams through itx", async ({ expect }) => {

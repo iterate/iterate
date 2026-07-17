@@ -95,8 +95,8 @@ test(
       // use rebuilds.
       await project.repo.edit({
         path: "package.json",
-        oldString: '"dependencies": {},',
-        newString: '"dependencies": { "@slack/web-api": "^7.14.1" },',
+        oldString: '"dependencies": {',
+        newString: '"dependencies": {\n    "@slack/web-api": "^7.14.1",',
         message: "Depend on @slack/web-api",
       });
       await project.repo.edit({

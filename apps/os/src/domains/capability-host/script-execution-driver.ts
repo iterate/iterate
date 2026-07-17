@@ -1,5 +1,5 @@
 import { tracing } from "cloudflare:workers";
-import type { StreamEvent } from "../streams/schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import { StreamIdempotencyWaitTimeoutError } from "../streams/wait-for-idempotency-key.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./capability-host-processor-contract.ts";
 import {

@@ -22,7 +22,7 @@ test(
 
     const agentPath = `/agents/web/ancestry-${crypto.randomUUID()}`;
     using agent = itx.agents.get(agentPath);
-    await agent.create({});
+    await agent.create();
 
     // Agent creation commits the explicit relationship and both processor
     // subscriptions in one batch. No physical path prefix is consulted.

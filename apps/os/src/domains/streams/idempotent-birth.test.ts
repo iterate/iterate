@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { appendIdempotentBirthBatch } from "./idempotent-birth.ts";
 import { STREAM_UNAVAILABLE_MESSAGE_PREFIX } from "./stream-unavailable.ts";
 

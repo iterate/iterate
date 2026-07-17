@@ -37,8 +37,8 @@
 // appends) shares the types below but is gated on a commit-path benchmark.
 
 import type { z } from "zod";
-import type { Stream } from "../../itx-api.generated.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
+import type { ProcessorStream } from "./stream-handle.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./processor-contracts.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamEventBatch } from "./rpc-types.ts";
@@ -259,7 +259,7 @@ export class StreamProcessorRunner<
 > {
   private readonly processor: StreamProcessor<Contract, Deps>;
   private readonly driver: StreamProcessorDriver<Contract>;
-  private readonly stream: Stream;
+  private readonly stream: ProcessorStream;
   private readonly durability: ProcessorDurability<ProcessorState<Contract>> | undefined;
   private readonly keepAlive: ((work: () => Promise<unknown>) => void) | undefined;
   private readonly now: () => number;
@@ -300,7 +300,7 @@ export class StreamProcessorRunner<
     /** The processor under drive — passed IN; the runner never constructs one. */
     processor: StreamProcessor<Contract, Deps>;
     /** The processor's home stream (replay reads, revival appends). */
-    stream: Stream;
+    stream: ProcessorStream;
     /** Durable progress + optional recovery; omit for in-memory (tests, ephemeral views). */
     durability?: ProcessorDurability<ProcessorState<Contract>>;
     /** Incarnation keep-alive for in-flight async work (a DO's `waitUntil` lane). */

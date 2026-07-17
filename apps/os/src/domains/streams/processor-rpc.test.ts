@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamProcessorRpc } from "./rpc-types.ts";
+import type { StreamProcessorRpc } from "iterate/processors";
 import {
   readProcessorRuntimeState,
   readProcessorSnapshot,

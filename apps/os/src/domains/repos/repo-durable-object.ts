@@ -1,18 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { disposeIgnoredRpcResult } from "iterate/live-state";
 import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
-import { disposeIgnoredRpcResult } from "../../lib/rpc/retain.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";

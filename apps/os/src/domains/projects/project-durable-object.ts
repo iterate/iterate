@@ -1,4 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -10,13 +13,7 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
@@ -36,6 +33,9 @@ import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agen
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
 import { TelegramProcessorContract } from "../integrations/telegram-processor-contract.ts";
+import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
+import { buildTelegramAccessSettingsUrl } from "../integrations/utils.ts";
+import { readProjectById } from "../../project-directory.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
@@ -185,6 +185,27 @@ export class ProjectDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
+      now: Date.now,
+      sendTelegramMessage: ({ body, connection }) =>
+        callProjectTelegramBotApi({
+          body,
+          connection,
+          method: "sendMessage",
+          projectId: this.#name.projectId,
+        }),
+      telegramAccessSettingsUrl: async ({ connection, projectId }) => {
+        const project = await readProjectById(this.env.PROJECT_DIRECTORY, projectId);
+        if (project === null) {
+          throw new Error(
+            `Telegram access denial cannot link project ${projectId}: directory record missing`,
+          );
+        }
+        return buildTelegramAccessSettingsUrl({
+          baseUrl: parseConfig(this.env).baseUrl || "https://os.iterate.com",
+          connection,
+          projectSlug: project.slug,
+        });
+      },
     }),
   );
   readonly #telegramReads = this.#registry.reads(this.telegramRouterRegistration);

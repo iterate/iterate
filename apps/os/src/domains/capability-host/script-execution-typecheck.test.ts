@@ -8,12 +8,12 @@
 // here the checker is a stub and the subject is the gate's plumbing.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { StreamProcessorRunner } from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
 import type { Project } from "../../itx-api.generated.ts";
 import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
 import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
   CapabilityHostProcessor,

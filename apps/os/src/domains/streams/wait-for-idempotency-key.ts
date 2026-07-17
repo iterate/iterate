@@ -1,4 +1,4 @@
-import { StreamEvent as StreamEventSchema, type StreamEvent } from "./schemas.ts";
+import { StreamEvent as StreamEventSchema, type StreamEvent } from "iterate/processors";
 import {
   isDurableObjectLifecycleError,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,

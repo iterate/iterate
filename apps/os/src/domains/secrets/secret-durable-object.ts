@@ -1,23 +1,20 @@
 import { DurableObject } from "cloudflare:workers";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import { isStreamOffsetConflictError } from "iterate/processors";
+import type { StreamEventInput } from "iterate/processors";
+import type { ProcessorState } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import { serveProcessorRead, type ProcessorReadRequest } from "../streams/processor-rpc.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
 import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
-import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
-import type { StreamEventInput } from "../streams/schemas.ts";
-import type { ProcessorState } from "../streams/processor-contracts.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import type {
   SecretCreateInput,

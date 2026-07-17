@@ -1,9 +1,9 @@
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/processors";
+import type { StreamEvent, StreamListItem } from "iterate/processors";
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
-import type { StreamEvent, StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { capabilityHostBirthEvents } from "../capability-host/capability-host-birth.ts";

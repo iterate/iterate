@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import { type StreamEventWaitLeaseInput, waitForStreamEvent } from "./wait-for-event.ts";
 
 function event(offset: number, type = "events.iterate.test/match"): StreamEvent {

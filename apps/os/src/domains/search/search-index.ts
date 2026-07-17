@@ -34,9 +34,10 @@
 // The deployment's namespace must exist (ensure-resources); instances are
 // created per project at runtime.
 
+import type { StreamEvent } from "iterate/processors";
+import type { StreamPushEventBatch } from "iterate/processors";
 import { itxEnv } from "../../env.ts";
 import { ItxExpression } from "../../itx/expression.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { deleteR2ObjectIfPresent } from "./r2-delete.ts";
 import { expectedSearchSyncSkipReason } from "./search-sync-outcome.ts";
 import {

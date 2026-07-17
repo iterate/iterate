@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent, StreamEventInput } from "../../src/domains/streams/schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { isStreamUnavailableError } from "../../src/domains/streams/stream-unavailable.ts";
 import type { Stream } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";

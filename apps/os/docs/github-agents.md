@@ -95,13 +95,17 @@ the project-controlled repo path:
 /repos/team/service -> /agents/repos/team/service/pr/42
 ```
 
-Only `pull_request:opened` calls the idempotent `agent.create`. The status,
-webhook copy, and first review task are passed as its atomic `initialEvents`.
-Later events require the canonical agent birth event, so they cannot create an
-agent by accident. A valid delivery can append three kinds of facts to the PR
-stream:
+Only `pull_request:opened` calls the idempotent, zero-argument
+`agent.create()`. The router then uses `agent.append(...)` for the stable
+policy and status events consumed by the Agent processor. It appends the raw
+webhook copy and its referencing task atomically through `agent.stream.append`
+because the webhook is intentionally outside the Agent processor's consumed
+vocabulary. Later events require the canonical agent birth event, so they
+cannot create an agent by accident. A valid delivery can append four kinds of
+facts to the PR stream:
 
-- a stable title/icon status at birth;
+- a keyed, versioned developer-policy context item;
+- a stable title/icon status;
 - the complete webhook with explicit cross-post provenance; and
 - when appropriate, one developer task that wakes or interrupts the agent.
 

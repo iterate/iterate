@@ -2,7 +2,7 @@ import {
   ScriptExecutionSettlement as ScriptExecutionSettlementSchema,
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
 } from "@iterate-com/shared/script-execution";
-import type { StreamEvent } from "../streams/schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 import type { DeadlineOutcome } from "./execution-deadline.ts";
 
 export const ScriptExecutionSettlement = ScriptExecutionSettlementSchema;

@@ -1,4 +1,4 @@
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { retryStreamUnavailable } from "./stream-unavailable.ts";
 
 /**

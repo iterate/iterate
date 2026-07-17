@@ -9,11 +9,11 @@
 // the log, every fact-append triggers wake(), parked facts fold.
 
 import { describe, expect, it } from "vitest";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import {
   CoreProcessorContract,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamSubscribers } from "./stream-subscribers.ts";
 import type { RetainedProcessEventBatch } from "./subscriber-sinks.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";

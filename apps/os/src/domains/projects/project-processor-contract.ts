@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "iterate/processors";
+import { StreamListItem } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
@@ -7,7 +8,6 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
-import { StreamListItem } from "../streams/schemas.ts";
 import {
   EgressRule,
   HumanApprovalGrantedPayload,
