@@ -23,6 +23,10 @@ export type ProjectDirectoryRecord = {
 };
 
 const MEMO_TTL_MS = 15_000;
+// These writes are exact and idempotent. One retry absorbs a transient KV
+// stall while two short windows keep this required create step bounded.
+const WRITE_ATTEMPT_TIMEOUT_MS = 10_000;
+const WRITE_MAX_ATTEMPTS = 2;
 
 const slugMemo = new Map<string, { expiresAt: number; record: ProjectDirectoryRecord | null }>();
 
@@ -120,8 +124,8 @@ export async function primeProjectDirectory(
   directory: KVNamespace,
   record: ProjectDirectoryRecord,
 ): Promise<void> {
+  await writeThrough(directory, record);
   memoize(record.slug, record);
-  await writeThrough(directory, record).catch(() => {});
 }
 
 function memoize(slug: string, record: ProjectDirectoryRecord | null) {
@@ -134,8 +138,59 @@ async function writeThrough(directory: KVNamespace, record: ProjectDirectoryReco
   // (auth mints only an id, no directory row) have NO auth fallback, so an
   // expiring cache would break their slug ingress after the TTL.
   const body = JSON.stringify(record);
-  await Promise.all([
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= WRITE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await writeDirectoryRecord(directory, record, body);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < WRITE_MAX_ATTEMPTS) {
+        console.warn("[project-directory] write failed; retrying", {
+          attempt,
+          maxAttempts: WRITE_MAX_ATTEMPTS,
+          reason: errorMessage(error),
+        });
+      }
+    }
+  }
+
+  throw new Error(
+    `Project directory write failed after ${WRITE_MAX_ATTEMPTS} attempts: ${errorMessage(lastError)}`,
+    { cause: lastError },
+  );
+}
+
+async function writeDirectoryRecord(
+  directory: KVNamespace,
+  record: ProjectDirectoryRecord,
+  body: string,
+): Promise<void> {
+  const write = Promise.all([
     directory.put(slugKey(record.slug), body),
     directory.put(projectKey(record.id), body),
   ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      write,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(`Project directory KV write timed out after ${WRITE_ATTEMPT_TIMEOUT_MS}ms`),
+            ),
+          WRITE_ATTEMPT_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    // Promise.race keeps rejection handlers attached to the write after a
+    // timeout, so a late platform rejection remains observed.
+    clearTimeout(timer);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
