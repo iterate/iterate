@@ -113,6 +113,60 @@ describe("TelegramProcessor (webhook router)", () => {
     expect(network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`)).toEqual([]);
   });
 
+  it("preserves allowed legacy /new history when the first access policy is configured", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      now: () => 60_000,
+      sendTelegramMessage: async () => undefined,
+      telegramAccessSettingsUrl: async () =>
+        `https://os.iterate.com/projects/acme/integrations?telegramAccess=${CONNECTION}`,
+    });
+    const driver = driveProcessor(processor, stream);
+    await stream.append(
+      {
+        type: "events.iterate.com/telegram/created",
+        payload: { config: { connection: CONNECTION } },
+      },
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({
+          date: 1000,
+          messageId: 1,
+          text: "/new",
+          userId: 555,
+        }),
+      },
+      {
+        type: "events.iterate.com/telegram/webhook-received",
+        payload: humanMessageWebhookPayload({
+          date: 2000,
+          messageId: 2,
+          text: "/new",
+          userId: 999,
+        }),
+      },
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: ["555"] },
+      },
+    );
+
+    await driver.deliver();
+
+    expect(driver.state.sessionsByChat[`chat-${CHAT_ID}`]).toEqual([
+      {
+        date: 1000,
+        messageId: 1,
+        senderId: "555",
+        sessionPath: `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`,
+      },
+    ]);
+  });
+
   it("does not let a denied /new command rotate an allowed user's live chat session", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
@@ -139,6 +193,7 @@ describe("TelegramProcessor (webhook router)", () => {
       {
         date: 1000,
         messageId: 1,
+        senderId: "555",
         sessionPath: `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`,
       },
     ]);
@@ -371,6 +426,7 @@ describe("TelegramProcessor (webhook router)", () => {
     );
     await driver.deliver();
     expect(driver.state).toEqual({
+      accessPolicyConfigured: true,
       allowedUserIds: ["555"],
       birthCertificate: { config: { connection: CONNECTION } },
       sessionsByChat: {},
@@ -1328,6 +1384,7 @@ function humanMessageWebhookPayload(input: {
   replyToMessage?: Record<string, unknown>;
   text?: string;
   updateId?: number;
+  userId?: number;
 }) {
   return {
     botId: BOT_ID,
@@ -1335,7 +1392,12 @@ function humanMessageWebhookPayload(input: {
       update_id: input.updateId ?? 100001,
       message: {
         message_id: input.messageId ?? 1,
-        from: { id: 555, is_bot: false, first_name: "Misha", username: "misha" },
+        from: {
+          id: input.userId ?? 555,
+          is_bot: false,
+          first_name: "Misha",
+          username: "misha",
+        },
         chat: { id: input.chatId ?? CHAT_ID, type: input.chatType ?? "private" },
         date: input.date ?? 1_760_000_000,
         text: input.text ?? "hello agent",

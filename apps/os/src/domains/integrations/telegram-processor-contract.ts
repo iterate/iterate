@@ -31,6 +31,7 @@ export type TelegramAgentBirthCertificate = z.output<typeof TelegramAgentBirthCe
 const SessionStart = z.object({
   date: z.number(),
   messageId: z.number(),
+  senderId: z.string(),
   sessionPath: z.string(),
 });
 
@@ -69,10 +70,15 @@ const SessionStart = z.object({
  */
 export const TelegramProcessorContract = defineProcessorContract({
   slug: "telegram",
-  version: "0.3.0",
+  version: "0.4.0",
   description: "Routes raw Telegram webhook updates into Telegram-backed agent streams.",
   stateSchema: z.object({
     birthCertificate: TelegramBirthCertificate.nullable().default(null),
+    /** False only while replaying a legacy journal that predates access
+     * policy events. The first policy filters that reconstructed session
+     * history to newly authorized senders; subsequent policy edits do not
+     * erase sessions created while those senders were authorized. */
+    accessPolicyConfigured: z.boolean().default(false),
     /** Immutable Telegram user ids authorized to reach project agents through
      * this bot connection. Empty is deliberately deny-all. */
     allowedUserIds: z.array(z.string()).default([]),

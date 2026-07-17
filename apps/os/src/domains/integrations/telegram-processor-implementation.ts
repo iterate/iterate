@@ -51,7 +51,21 @@ export class TelegramProcessor extends StreamProcessor<
         }
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/telegram/access-configured":
-        return { ...state, allowedUserIds: [...new Set(event.payload.allowedUserIds)] };
+        return {
+          ...state,
+          accessPolicyConfigured: true,
+          allowedUserIds: [...new Set(event.payload.allowedUserIds)],
+          // A version refold must reconstruct pre-allowlist `/new` history,
+          // otherwise deploying access control silently sends every existing
+          // chat back to session zero. On the first explicit policy, retain
+          // only sessions started by users the owner has now authorized.
+          sessionsByChat: state.accessPolicyConfigured
+            ? state.sessionsByChat
+            : filterTelegramSessionsByAllowedUsers(
+                state.sessionsByChat,
+                event.payload.allowedUserIds,
+              ),
+        };
       case "events.iterate.com/telegram/webhook-received": {
         // `/new` starts a session: fold it straight off the webhook — the
         // webhook event itself is the session-start fact, so replay rebuilds
@@ -59,9 +73,11 @@ export class TelegramProcessor extends StreamProcessor<
         const connection = state.birthCertificate?.config.connection;
         if (connection === undefined) return state;
         const senderId = telegramSenderIdFromUpdate(event.payload.body);
-        if (senderId === undefined || !state.allowedUserIds.includes(senderId)) return state;
+        if (senderId === undefined) return state;
+        if (state.accessPolicyConfigured && !state.allowedUserIds.includes(senderId)) return state;
         const sessionStart = telegramSessionStartFromUpdate(event.payload.body, {
           connection,
+          senderId,
         });
         if (sessionStart === null) return state;
         const existing = state.sessionsByChat[sessionStart.chatKey] ?? [];
@@ -85,6 +101,7 @@ export class TelegramProcessor extends StreamProcessor<
               {
                 date: sessionStart.date,
                 messageId: sessionStart.messageId,
+                senderId: sessionStart.senderId,
                 sessionPath: sessionStart.sessionPath,
               },
             ],
@@ -284,8 +301,14 @@ export function telegramNewCommand(text: unknown): { trailingText: string | null
  */
 function telegramSessionStartFromUpdate(
   body: unknown,
-  input: { connection: string },
-): { chatKey: string; date: number; messageId: number; sessionPath: string } | null {
+  input: { connection: string; senderId: string },
+): {
+  chatKey: string;
+  date: number;
+  messageId: number;
+  senderId: string;
+  sessionPath: string;
+} | null {
   const update = readRecord(body);
   const message = readRecord(update?.message);
   if (message == null) return null;
@@ -299,12 +322,26 @@ function telegramSessionStartFromUpdate(
     chatKey: telegramChatKey(target),
     date,
     messageId,
+    senderId: input.senderId,
     sessionPath: telegramChatStreamPath({
       ...target,
       connection: input.connection,
       session: String(date),
     }),
   };
+}
+
+function filterTelegramSessionsByAllowedUsers(
+  sessionsByChat: TelegramProcessorState["sessionsByChat"],
+  allowedUserIds: string[],
+): TelegramProcessorState["sessionsByChat"] {
+  const allowed = new Set(allowedUserIds);
+  return Object.fromEntries(
+    Object.entries(sessionsByChat).flatMap(([chatKey, sessions]) => {
+      const retained = sessions.filter((session) => allowed.has(session.senderId));
+      return retained.length === 0 ? [] : [[chatKey, retained]];
+    }),
+  );
 }
 
 /**
