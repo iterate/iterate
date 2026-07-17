@@ -1085,27 +1085,31 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  test("marks an LLM request cancelled when interrupted", () => {
+  test("keeps a failed activity together while a crashed request restarts", () => {
     const state = reduceAll([
       llmEvent("requested", 7),
-      llmEvent("cancelled", 7, "interrupted-by-user-input"),
+      llmEvent("cancelled", 7, "future-cancel-reason"),
       llmEvent("requested", 11),
-      llmEvent("cancelled", 11, "future-cancel-reason"),
+      llmEvent("cancelled", 11),
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", content: "queued" },
+      },
+      llmEvent("requested", 16),
       {
         type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 12 },
+        payload: { busy: false, sinceOffset: 17 },
       },
     ]);
 
     expect(state.live).toBeNull();
-    expect(state.items).toHaveLength(1);
+    expect(state.items).toHaveLength(2);
     const activity = state.items[0];
     if (activity?.kind !== "activity") throw new Error("expected activity item");
     expect(activity.steps[0]).toMatchObject({
       kind: "llm",
       status: "done",
       outcome: "cancelled",
-      cancelReason: "interrupted-by-user-input",
       durationMs: 1_000,
     });
     expect(activity.steps[1]).toMatchObject({ outcome: "cancelled" });

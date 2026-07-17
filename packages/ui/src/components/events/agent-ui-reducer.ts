@@ -79,6 +79,7 @@ export type AgentUiActivitySummary = {
   requestCount: number;
   retryCount: number;
   outcome: "clean" | "recovering" | "recovered" | "interrupted" | "restart-failed" | "failed";
+  restartPending: boolean;
   interruptedWithPartialResponse: boolean;
   recoveryStartedAtMs: number | null;
 };
@@ -121,6 +122,7 @@ export function summarizeAgentUiActivity(
     }
   });
 
+  const restartPending = lastRestartIndex > lastCompletionIndex && activity.status === "running";
   const outcome: AgentUiActivitySummary["outcome"] = failed
     ? "failed"
     : interrupted
@@ -129,7 +131,7 @@ export function summarizeAgentUiActivity(
         ? "clean"
         : lastCompletionIndex > lastRestartIndex
           ? "recovered"
-          : activity.status === "running"
+          : restartPending
             ? "recovering"
             : "restart-failed";
   return {
@@ -137,6 +139,7 @@ export function summarizeAgentUiActivity(
     requestCount,
     retryCount,
     outcome,
+    restartPending,
     interruptedWithPartialResponse,
     recoveryStartedAtMs,
   };
@@ -175,9 +178,9 @@ export function formatAgentUiActivitySummary(
 
 function formatAgentUiDuration(durationMs: number): string {
   if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
-  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1).replace(/\.0$/, "")} s`;
+  const seconds = Math.round(durationMs / 1000);
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 export function isAgentUiActivityWorking(activity: AgentUiActivity | null): boolean {
@@ -185,7 +188,7 @@ export function isAgentUiActivityWorking(activity: AgentUiActivity | null): bool
     activity != null &&
     (activity.phase != null ||
       activity.steps.some((step) => step.status === "running") ||
-      summarizeAgentUiActivity(activity).outcome === "recovering")
+      summarizeAgentUiActivity(activity).restartPending)
   );
 }
 
@@ -625,7 +628,7 @@ function reduceAgentUiEvent(
     case AGENT_LLM_REQUEST_REQUESTED: {
       const base =
         state.queuedUserMessages.length === 0 ||
-        (state.live != null && summarizeAgentUiActivity(state.live).outcome === "recovering")
+        (state.live != null && summarizeAgentUiActivity(state.live).restartPending)
           ? state
           : settleLive(state, timestampMs, items);
       const ready =

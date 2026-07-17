@@ -36,14 +36,13 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
 }
 
 function liveSummary(activity: AgentUiActivity): string {
+  const current = activity.steps.findLast((step) => step.status === "running");
+  if (current?.kind === "code") return "running code…";
+  if (current?.kind === "llm" && current.responseText !== "") return "writing code…";
+  if (current?.kind === "llm" && current.thinkingText !== "") return "thinking…";
   if (activity.phase === "script") return "running code…";
   if (activity.phase === "llm") return "waiting for a response…";
-  if (summarizeAgentUiActivity(activity).outcome === "recovering") return "restarted — continuing…";
-  const current = activity.steps.at(-1);
-  if (current == null) return "working…";
-  if (current.kind === "code") return "running code…";
-  if (current.responseText !== "") return "writing code…";
-  if (current.thinkingText !== "") return "thinking…";
+  if (summarizeAgentUiActivity(activity).restartPending) return "restarted — continuing…";
   return "working…";
 }
 

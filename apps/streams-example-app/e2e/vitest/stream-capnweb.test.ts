@@ -142,7 +142,9 @@ describe("stream capnweb protocol", () => {
     // This is expected to fail before stream storage sees the event: Cloudflare
     // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
     // a single append call into one WebSocket message.
-    await expect(stream.stream.append(event)).rejects.toThrow(
+    await expect(async () => {
+      await stream.stream.append(event);
+    }).rejects.toThrow(
       /(?:connection (?:lost|failed)|Peer closed WebSocket: 1009 Message is too large: \d+ > 33554432)/i,
     );
   });
