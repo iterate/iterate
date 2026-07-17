@@ -8,9 +8,9 @@
 //   `blockProcessorWhile` so the checkpoint only advances once they finished;
 //   sequences like "commit agent context, then add the eyes reaction" keep their
 //   legacy ordering by sharing one blocking closure.
-// - Replay runs the same idempotency-keyed side effects as live delivery. The
-//   processor checkpoint is the guardrail; failed batches replay from the last
-//   fully processed offset.
+// - Known idempotent Slack outcomes are successful no-ops. Unexpected failures
+//   are reported once and treated as settled because this is a cosmetic lane;
+//   they must not stall the durable message/agent pipeline in a retry loop.
 // - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
@@ -105,12 +105,14 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (target == null) return state;
         const botUserId = state.botUserId ?? botUserIdFromPayload(event.payload);
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
+        const channelType = slackChannelTypeFromWebhookPayload(event.payload);
         const mentioned = slackWebhookMentionsOurBot(event.payload, botUserId);
         return {
           ...state,
           ...(botBotId == null ? {} : { botBotId }),
           ...(botUserId == null ? {} : { botUserId }),
           channel: target.channel,
+          ...(channelType == null ? {} : { channelType }),
           conversationActive: state.conversationActive || mentioned,
           ...(target.messageTs == null ? {} : { latestMessageTs: target.messageTs }),
           threadTs: target.threadTs,
@@ -142,9 +144,10 @@ export class SlackAgentProcessor extends StreamProcessor<
     // AT-HEAD repaint: `delivery.caughtUp` means `args.state` is the whole
     // observed fold. It rides the last consumed event or the runner's
     // eventless pass. ONE blocking closure — the runner awaits it as this head
-    // event's own work before the frame's deferred commit, so a failed paint
-    // fails the frame and the transport replays it (the memo re-accumulates on
-    // redelivery).
+    // event's own work before the frame's deferred commit. The reconcile owns
+    // Slack's outcome classification: idempotent outcomes are quiet success,
+    // while unexpected cosmetic failures are reported once and settled so
+    // they cannot wedge the durable agent pipeline.
     if (args.delivery.caughtUp) {
       args.blockProcessorWhileCaughtUp(() => this.#reconcileStatus(args));
     }
@@ -385,18 +388,19 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (latest == null) return;
     if (args.state.birthCertificate === null) return;
     const connection = args.state.birthCertificate.config.connection;
-    const { channel, latestMessageTs, status, threadTs } = args.state;
+    const { channel, channelType, latestMessageTs, status, threadTs } = args.state;
     if (channel == null || threadTs == null) return;
     const fresh = webhookAckIsFresh(latest, (this.deps.now ?? Date.now)());
+    const hasAssistantThreadUi = slackConversationHasAssistantThreadUi({ channel, channelType });
 
     // The agent-authored title paints whenever the folded title differs from
     // what this incarnation painted — freshness-gated with everything else,
     // so a refold never replays historical renames. The painted-title record
-    // is written only AFTER the call succeeds: a rejected call fails the
-    // frame, and the redelivered frame must retry the rename instead of
-    // seeing it as already painted.
+    // is written after the Slack outcome has been classified: success and
+    // known idempotent outcomes settle quietly, while an unexpected cosmetic
+    // failure is reported once rather than retried forever.
     const title = args.state.status?.title;
-    if (fresh && title !== undefined && title !== this.#paintedTitle) {
+    if (hasAssistantThreadUi && fresh && title !== undefined && title !== this.#paintedTitle) {
       await this.#callSlackApi(connection, "assistant.threads.setTitle", {
         channel_id: channel,
         thread_ts: threadTs,
@@ -406,7 +410,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     }
 
     if (status?.busy) {
-      if (!fresh) return;
+      if (!fresh || !hasAssistantThreadUi) return;
       // The agent's own words win; otherwise the platform-derived phase says
       // what it is doing ("making an LLM request" / "running a script").
       const text =
@@ -432,12 +436,14 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (status.blocked === true) {
       if (!fresh && !this.#paintedBusyStatus) return;
       const text = status.shortStatus ?? "waiting for input";
-      await this.#callSlackApi(connection, "assistant.threads.setStatus", {
-        channel_id: channel,
-        thread_ts: threadTs,
-        status: `is ${text}...`,
-        loading_messages: [`${text}...`],
-      });
+      if (hasAssistantThreadUi) {
+        await this.#callSlackApi(connection, "assistant.threads.setStatus", {
+          channel_id: channel,
+          thread_ts: threadTs,
+          status: `is ${text}...`,
+          loading_messages: [`${text}...`],
+        });
+      }
       if (latestMessageTs != null) {
         await this.#callSlackApi(connection, "reactions.remove", {
           channel,
@@ -445,7 +451,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           timestamp: latestMessageTs,
         });
       }
-      this.#paintedBusyStatus = true;
+      this.#paintedBusyStatus = hasAssistantThreadUi;
       return;
     }
     if (!fresh && !this.#paintedBusyStatus) return;
@@ -453,6 +459,7 @@ export class SlackAgentProcessor extends StreamProcessor<
       channel,
       connection,
       ...(latestMessageTs == null ? {} : { latestMessageTs }),
+      hasAssistantThreadUi,
       threadTs,
     });
     this.#paintedBusyStatus = false;
@@ -461,14 +468,17 @@ export class SlackAgentProcessor extends StreamProcessor<
   async #clearStatus(target: {
     channel: string;
     connection: string;
+    hasAssistantThreadUi: boolean;
     latestMessageTs?: string;
     threadTs: string;
   }) {
-    await this.#callSlackApi(target.connection, "assistant.threads.setStatus", {
-      channel_id: target.channel,
-      thread_ts: target.threadTs,
-      status: "",
-    });
+    if (target.hasAssistantThreadUi) {
+      await this.#callSlackApi(target.connection, "assistant.threads.setStatus", {
+        channel_id: target.channel,
+        thread_ts: target.threadTs,
+        status: "",
+      });
+    }
     if (target.latestMessageTs != null) {
       await this.#callSlackApi(target.connection, "reactions.remove", {
         channel: target.channel,
@@ -511,7 +521,11 @@ export class SlackAgentProcessor extends StreamProcessor<
         return;
       }
       if (method === "reactions.remove" && message.includes("no_reaction")) return;
-      throw error;
+      console.error("[slack-agent] Slack side effect failed", {
+        error,
+        method,
+        path: this.path,
+      });
     }
   }
 }
@@ -839,6 +853,22 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
     ...(messageTs == null ? {} : { messageTs }),
     threadTs,
   };
+}
+
+function slackChannelTypeFromWebhookPayload(payload: unknown): string | undefined {
+  const body = readRecord(readRecord(payload)?.body);
+  return readString(readRecord(body?.event)?.channel_type) ?? undefined;
+}
+
+/** Slack's Assistant thread UI is available on app direct-message threads,
+ * not ordinary channel mentions. Message webhooks name this as `im`; the `D`
+ * fallback covers interactivity payloads and older events without
+ * `channel_type` (Slack reserves D-prefixed conversation IDs for DMs). */
+function slackConversationHasAssistantThreadUi(input: {
+  channel: string;
+  channelType?: string;
+}): boolean {
+  return input.channelType === "im" || (input.channelType == null && input.channel.startsWith("D"));
 }
 
 /**
