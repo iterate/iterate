@@ -3,8 +3,8 @@
 // Freshness is enforced by itx-api.generated.test.ts.
 //
 // The Itx Type Graph: every exported declaration of itx-api.generated.ts as
-// one record, in file order — same generator run, same content, kept
-// per-declaration so runtime consumers (itx.docs, __describe) can assemble
+// one record, in file order. Namespace members use standalone mergeable
+// wrappers so runtime consumers (itx.docs, __describe) can assemble
 // bounded slices instead of shipping the whole flat file.
 import type { ItxApiDeclaration } from "./domains/itx/itx-api-graph.ts";
 
@@ -939,7 +939,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentConfiguredPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agent/configured`. */\nexport namespace events {\n  export type AgentConfiguredPayload = {\n    config: { systemPrompt?: string | undefined; llm?: { model?: string | undefined } | undefined };\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/configured`. */\n  export type AgentConfiguredPayload = {\n    config: { systemPrompt?: string | undefined; llm?: { model?: string | undefined } | undefined };\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/agent/configured`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -948,7 +948,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentCreatedPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agent/created`. */\nexport namespace events {\n  export type AgentCreatedPayload = { config: { systemPrompt: string; llm: { model: string } } };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/created`. */\n  export type AgentCreatedPayload = { config: { systemPrompt: string; llm: { model: string } } };\n}",
     summary: "Payload accepted by `events.iterate.com/agent/created`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -957,7 +957,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentLlmRequestCancelledPayload",
     kind: "namespace",
     sourceText:
-      '/** Payload accepted by `events.iterate.com/agent/llm-request-cancelled`. */\nexport namespace events {\n  export type AgentLlmRequestCancelledPayload =\n    | { phase: "scheduled"; reason: "interrupted-by-user-input"; requestId: string }\n    | {\n        phase: "requested";\n        reason: "durable-object-crashed" | "interrupted-by-user-input";\n        llmRequestOffset: number;\n      };\n}',
+      'export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/llm-request-cancelled`. */\n  export type AgentLlmRequestCancelledPayload =\n    | { phase: "scheduled"; reason: "interrupted-by-user-input"; requestId: string }\n    | {\n        phase: "requested";\n        reason: "durable-object-crashed" | "interrupted-by-user-input";\n        llmRequestOffset: number;\n      };\n}',
     summary: "Payload accepted by `events.iterate.com/agent/llm-request-cancelled`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -966,7 +966,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentLlmRequestCompletedPayload",
     kind: "namespace",
     sourceText:
-      '/** Payload accepted by `events.iterate.com/agent/llm-request-completed`. */\nexport namespace events {\n  export type AgentLlmRequestCompletedPayload = {\n    durationMs: number;\n    llmRequestOffset: number;\n    result:\n      | { rawResponse?: unknown; status: "success"; usage?: unknown }\n      | { error: { message: string }; rawResponse?: unknown; status: "failure" };\n  };\n}',
+      'export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/llm-request-completed`. */\n  export type AgentLlmRequestCompletedPayload = {\n    durationMs: number;\n    llmRequestOffset: number;\n    result:\n      | { rawResponse?: unknown; status: "success"; usage?: unknown }\n      | { error: { message: string }; rawResponse?: unknown; status: "failure" };\n  };\n}',
     summary: "Payload accepted by `events.iterate.com/agent/llm-request-completed`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -975,7 +975,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentLlmRequestRequestedPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agent/llm-request-requested`. */\nexport namespace events {\n  export type AgentLlmRequestRequestedPayload = {\n    model: string;\n    requestId: string;\n    expiresAt?: number | undefined;\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/llm-request-requested`. */\n  export type AgentLlmRequestRequestedPayload = {\n    model: string;\n    requestId: string;\n    expiresAt?: number | undefined;\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/agent/llm-request-requested`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -984,7 +984,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentLlmRequestScheduledPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agent/llm-request-scheduled`. */\nexport namespace events {\n  export type AgentLlmRequestScheduledPayload = {\n    debounceMs: number;\n    model: string;\n    requestId: string;\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/llm-request-scheduled`. */\n  export type AgentLlmRequestScheduledPayload = {\n    debounceMs: number;\n    model: string;\n    requestId: string;\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/agent/llm-request-scheduled`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -993,7 +993,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentLlmRequestStartedPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agent/llm-request-started`. */\nexport namespace events {\n  export type AgentLlmRequestStartedPayload = { llmRequestOffset: number; model: string };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/llm-request-started`. */\n  export type AgentLlmRequestStartedPayload = { llmRequestOffset: number; model: string };\n}",
     summary: "Payload accepted by `events.iterate.com/agent/llm-request-started`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1002,7 +1002,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentLoopStoppedPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agent/loop-stopped`. */\nexport namespace events {\n  export type AgentLoopStoppedPayload = {\n    maxAutonomousTurns: number;\n    reason: string;\n    triggerOffset: number;\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/loop-stopped`. */\n  export type AgentLoopStoppedPayload = {\n    maxAutonomousTurns: number;\n    reason: string;\n    triggerOffset: number;\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/agent/loop-stopped`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1011,7 +1011,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentStatusChangedPayload",
     kind: "namespace",
     sourceText:
-      '/** Payload accepted by `events.iterate.com/agent/status-changed`. */\nexport namespace events {\n  export type AgentStatusChangedPayload = {\n    busy?: boolean | undefined;\n    phase?: "llm" | "script" | undefined;\n    sinceOffset?: number | undefined;\n    blocked?: boolean | undefined;\n    title?: string | undefined;\n    note?: string | undefined;\n    shortStatus?: string | undefined;\n    icon?: string | undefined;\n  };\n}',
+      'export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/status-changed`. */\n  export type AgentStatusChangedPayload = {\n    busy?: boolean | undefined;\n    phase?: "llm" | "script" | undefined;\n    sinceOffset?: number | undefined;\n    blocked?: boolean | undefined;\n    title?: string | undefined;\n    note?: string | undefined;\n    shortStatus?: string | undefined;\n    icon?: string | undefined;\n  };\n}',
     summary: "Payload accepted by `events.iterate.com/agent/status-changed`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1020,7 +1020,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentTokenUsageReportedPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agent/token-usage-reported`. */\nexport namespace events {\n  export type AgentTokenUsageReportedPayload = {\n    llmRequestOffset: number;\n    model: string;\n    maxContextTokens: number;\n    inputTokens: number;\n    outputTokens: number;\n    cachedInputTokens?: number | undefined;\n    reasoningOutputTokens?: number | undefined;\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/token-usage-reported`. */\n  export type AgentTokenUsageReportedPayload = {\n    llmRequestOffset: number;\n    model: string;\n    maxContextTokens: number;\n    inputTokens: number;\n    outputTokens: number;\n    cachedInputTokens?: number | undefined;\n    reasoningOutputTokens?: number | undefined;\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/agent/token-usage-reported`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1029,7 +1029,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentsContextAddedPayload",
     kind: "namespace",
     sourceText:
-      '/** Payload accepted by `events.iterate.com/agents/context-added`. */\nexport namespace events {\n  export type AgentsContextAddedPayload =\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "system";\n      }\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "developer";\n        actor?:\n          | { type: "agent"; path: string }\n          | { type: "script"; executionId: string }\n          | { type: "slack"; userId?: string | undefined; botName?: string | undefined }\n          | { type: "telegram"; userId?: string | undefined; username?: string | undefined }\n          | { type: "email"; address?: string | undefined; name?: string | undefined }\n          | { type: "github"; login?: string | undefined; senderType?: string | undefined }\n          | undefined;\n        llmRequestPolicy?:\n          | { behaviour: "dont-trigger-request" }\n          | { behaviour: "interrupt-current-request" }\n          | { behaviour: "after-current-request" }\n          | undefined;\n        compaction?:\n          | {\n              replacesHistoryThrough: number;\n              usage?:\n                | {\n                    inputTokens: number;\n                    outputTokens: number;\n                    cachedInputTokens?: number | undefined;\n                    reasoningOutputTokens?: number | undefined;\n                  }\n                | undefined;\n            }\n          | undefined;\n      }\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "user";\n        actor: { type: "user"; origin: "mcp" | "web" };\n        llmRequestPolicy?:\n          | { behaviour: "dont-trigger-request" }\n          | { behaviour: "interrupt-current-request" }\n          | { behaviour: "after-current-request" }\n          | undefined;\n      }\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "assistant";\n        llmRequestOffset?: number | undefined;\n      };\n}',
+      'export namespace events {\n  /** Payload accepted by `events.iterate.com/agents/context-added`. */\n  export type AgentsContextAddedPayload =\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "system";\n      }\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "developer";\n        actor?:\n          | { type: "agent"; path: string }\n          | { type: "script"; executionId: string }\n          | { type: "slack"; userId?: string | undefined; botName?: string | undefined }\n          | { type: "telegram"; userId?: string | undefined; username?: string | undefined }\n          | { type: "email"; address?: string | undefined; name?: string | undefined }\n          | { type: "github"; login?: string | undefined; senderType?: string | undefined }\n          | undefined;\n        llmRequestPolicy?:\n          | { behaviour: "dont-trigger-request" }\n          | { behaviour: "interrupt-current-request" }\n          | { behaviour: "after-current-request" }\n          | undefined;\n        compaction?:\n          | {\n              replacesHistoryThrough: number;\n              usage?:\n                | {\n                    inputTokens: number;\n                    outputTokens: number;\n                    cachedInputTokens?: number | undefined;\n                    reasoningOutputTokens?: number | undefined;\n                  }\n                | undefined;\n            }\n          | undefined;\n      }\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "user";\n        actor: { type: "user"; origin: "mcp" | "web" };\n        llmRequestPolicy?:\n          | { behaviour: "dont-trigger-request" }\n          | { behaviour: "interrupt-current-request" }\n          | { behaviour: "after-current-request" }\n          | undefined;\n      }\n    | {\n        content: string;\n        key?: string | undefined;\n        files?:\n          | { contentType: string; filename: string; path: string; size: number; url: string }[]\n          | undefined;\n        refs?:\n          | (\n              | {\n                  type: "event";\n                  streamPath: string;\n                  offset: number;\n                  eventType?: string | undefined;\n                }\n              | { type: "user"; userId: string }\n              | { type: "file"; path: string }\n              | { type: "git-commit"; repoPath: string; commitOid: string }\n            )[]\n          | undefined;\n        role: "assistant";\n        llmRequestOffset?: number | undefined;\n      };\n}',
     summary: "Payload accepted by `events.iterate.com/agents/context-added`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1038,7 +1038,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.AgentsWebMessageSentPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/agents/web-message-sent`. */\nexport namespace events {\n  export type AgentsWebMessageSentPayload = {\n    message: string;\n    files?:\n      | { contentType: string; filename: string; path: string; size: number; url: string }[]\n      | undefined;\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/agents/web-message-sent`. */\n  export type AgentsWebMessageSentPayload = {\n    message: string;\n    files?:\n      | { contentType: string; filename: string; path: string; size: number; url: string }[]\n      | undefined;\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/agents/web-message-sent`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1047,7 +1047,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.CapabilityHostScriptRunRequestedPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/capability-host/script-run-requested`. */\nexport namespace events {\n  export type CapabilityHostScriptRunRequestedPayload = {\n    code: string;\n    executionId: string;\n    expiresAt: number;\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/capability-host/script-run-requested`. */\n  export type CapabilityHostScriptRunRequestedPayload = {\n    code: string;\n    executionId: string;\n    expiresAt: number;\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/capability-host/script-run-requested`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1056,7 +1056,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.CapabilityHostScriptRunSettledPayload",
     kind: "namespace",
     sourceText:
-      '/** Payload accepted by `events.iterate.com/capability-host/script-run-settled`. */\nexport namespace events {\n  export type CapabilityHostScriptRunSettledPayload = {\n    executionId: string;\n    settlement:\n      | { status: "succeeded"; result?: JsonValue | undefined }\n      | {\n          status: "failed";\n          error: string;\n          failureKind: "deadline" | "expired" | "orphaned" | "runtime" | "typecheck";\n          phase: "before-execution" | "execution" | "recovery" | "typecheck";\n          executionMayHaveOccurred: boolean;\n          cancellation: "external-work-may-continue" | "not-applicable";\n        };\n  };\n}',
+      'export namespace events {\n  /** Payload accepted by `events.iterate.com/capability-host/script-run-settled`. */\n  export type CapabilityHostScriptRunSettledPayload = {\n    executionId: string;\n    settlement:\n      | { status: "succeeded"; result?: JsonValue | undefined }\n      | {\n          status: "failed";\n          error: string;\n          failureKind: "deadline" | "expired" | "orphaned" | "runtime" | "typecheck";\n          phase: "before-execution" | "execution" | "recovery" | "typecheck";\n          executionMayHaveOccurred: boolean;\n          cancellation: "external-work-may-continue" | "not-applicable";\n        };\n  };\n}',
     summary: "Payload accepted by `events.iterate.com/capability-host/script-run-settled`.",
     memberSummaries: {},
     referencedTypeNames: ["JsonValue"],
@@ -1065,7 +1065,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.StreamProcessorRevivedPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/stream/processor-revived`. */\nexport namespace events {\n  export type StreamProcessorRevivedPayload = {\n    [x: string]: unknown;\n    processorSlug: string;\n    revivals: number;\n    version: string;\n  };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/stream/processor-revived`. */\n  export type StreamProcessorRevivedPayload = {\n    [x: string]: unknown;\n    processorSlug: string;\n    revivals: number;\n    version: string;\n  };\n}",
     summary: "Payload accepted by `events.iterate.com/stream/processor-revived`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1074,7 +1074,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.StreamSubscriberConnectedPayload",
     kind: "namespace",
     sourceText:
-      '/** Payload accepted by `events.iterate.com/stream/subscriber-connected`. */\nexport namespace events {\n  export type StreamSubscriberConnectedPayload = {\n    subscriptionKey: string;\n    subscriptionType: "configured" | "ephemeral";\n    subscriber?:\n      | {\n          description?: string | undefined;\n          processor?:\n            | {\n                announcement: {\n                  slug: string;\n                  version: string;\n                  description: string;\n                  consumes: string[];\n                  emits: string[];\n                  ownedEvents: { type: string; description?: string | undefined }[];\n                };\n              }\n            | undefined;\n        }\n      | undefined;\n  };\n}',
+      'export namespace events {\n  /** Payload accepted by `events.iterate.com/stream/subscriber-connected`. */\n  export type StreamSubscriberConnectedPayload = {\n    subscriptionKey: string;\n    subscriptionType: "configured" | "ephemeral";\n    subscriber?:\n      | {\n          description?: string | undefined;\n          processor?:\n            | {\n                announcement: {\n                  slug: string;\n                  version: string;\n                  description: string;\n                  consumes: string[];\n                  emits: string[];\n                  ownedEvents: { type: string; description?: string | undefined }[];\n                };\n              }\n            | undefined;\n        }\n      | undefined;\n  };\n}',
     summary: "Payload accepted by `events.iterate.com/stream/subscriber-connected`.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -1083,7 +1083,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "events.StreamWokenPayload",
     kind: "namespace",
     sourceText:
-      "/** Payload accepted by `events.iterate.com/stream/woken`. */\nexport namespace events {\n  export type StreamWokenPayload = { incarnationId: string };\n}",
+      "export namespace events {\n  /** Payload accepted by `events.iterate.com/stream/woken`. */\n  export type StreamWokenPayload = { incarnationId: string };\n}",
     summary: "Payload accepted by `events.iterate.com/stream/woken`.",
     memberSummaries: {},
     referencedTypeNames: [],

@@ -3,8 +3,9 @@
 // response, a __describe types field — rather than shipping all ~115KB
 // everywhere. The flat projection (src/itx-api.generated.ts) and this graph
 // are emitted by the same generator run from the same walk
-// (scripts/generate-itx-api.ts); the graph's records are the flat file's
-// declarations, verbatim.
+// (scripts/generate-itx-api.ts). Top-level records are verbatim; members of a
+// namespace are normalized into one-member mergeable namespace declarations
+// so each member remains independently fetchable.
 //
 // Identifier vocabulary is deliberately borrowed, not invented: "declaration"
 // is the TypeScript grammar term, "summary" is the TSDoc term for the prose
@@ -17,10 +18,10 @@
 
 /**
  * One exported declaration of the public itx surface, as the itx api
- * generator emits it. `sourceText` is the exact text of that declaration in
- * itx-api.generated.ts (leading JSDoc included); the other fields are derived
- * from it so runtime consumers (docs search, closure assembly) never re-parse
- * TypeScript.
+ * generator emits it. Top-level `sourceText` is the exact declaration text;
+ * a namespace member is wrapped in a one-member mergeable namespace. The
+ * other fields are derived during generation so runtime consumers (docs
+ * search, closure assembly) never re-parse TypeScript.
  */
 export interface ItxApiDeclaration {
   /** Exported declaration name, e.g. "Stream". Unique across the surface;
@@ -28,8 +29,7 @@ export interface ItxApiDeclaration {
   name: string;
   /** Which TypeScript declaration form this is. */
   kind: "interface" | "namespace" | "typeAlias";
-  /** Verbatim TypeScript source including the leading JSDoc comment — the
-   * exact text that appears in itx-api.generated.ts. */
+  /** Standalone TypeScript source including the declaration's JSDoc. */
   sourceText: string;
   /** The declaration's JSDoc summary (the prose before the first block tag),
    * first sentence. What search results and children maps show. */

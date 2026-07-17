@@ -16,9 +16,11 @@ Three consequences worth recording:
 
 1. **The Itx Type Graph is the canonical artifact; the flat file is a
    projection.** The generator emits one record per exported declaration
-   (`ItxApiDeclaration`: verbatim source text with JSDoc, TSDoc summary,
-   member summaries, referenced type names) and `itx-api.generated.ts`
-   becomes exactly the join of the records' source text. Discovery
+   (`ItxApiDeclaration`: standalone source text with JSDoc, TSDoc summary,
+   member summaries, referenced type names) and projects those records into
+   `itx-api.generated.ts`. Ordinary top-level records remain verbatim;
+   namespace members are individual graph records but are grouped into one
+   namespace in the flat SDK. Discovery
    (`itx.docs`, `__describe`), docs rendering, and script checking consume
    the graph; the flat file survives only for consumers that need standalone
    import-free text (the published `iterate` package, internal client typing,

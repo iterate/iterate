@@ -1649,20 +1649,16 @@ export interface WorkspaceGit {
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
 
-/** Payload accepted by `events.iterate.com/agent/configured`. */
 export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/configured`. */
   export type AgentConfiguredPayload = {
     config: { systemPrompt?: string | undefined; llm?: { model?: string | undefined } | undefined };
   };
-}
 
-/** Payload accepted by `events.iterate.com/agent/created`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/created`. */
   export type AgentCreatedPayload = { config: { systemPrompt: string; llm: { model: string } } };
-}
 
-/** Payload accepted by `events.iterate.com/agent/llm-request-cancelled`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/llm-request-cancelled`. */
   export type AgentLlmRequestCancelledPayload =
     | { phase: "scheduled"; reason: "interrupted-by-user-input"; requestId: string }
     | {
@@ -1670,10 +1666,8 @@ export namespace events {
         reason: "durable-object-crashed" | "interrupted-by-user-input";
         llmRequestOffset: number;
       };
-}
 
-/** Payload accepted by `events.iterate.com/agent/llm-request-completed`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/llm-request-completed`. */
   export type AgentLlmRequestCompletedPayload = {
     durationMs: number;
     llmRequestOffset: number;
@@ -1681,42 +1675,32 @@ export namespace events {
       | { rawResponse?: unknown; status: "success"; usage?: unknown }
       | { error: { message: string }; rawResponse?: unknown; status: "failure" };
   };
-}
 
-/** Payload accepted by `events.iterate.com/agent/llm-request-requested`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/llm-request-requested`. */
   export type AgentLlmRequestRequestedPayload = {
     model: string;
     requestId: string;
     expiresAt?: number | undefined;
   };
-}
 
-/** Payload accepted by `events.iterate.com/agent/llm-request-scheduled`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/llm-request-scheduled`. */
   export type AgentLlmRequestScheduledPayload = {
     debounceMs: number;
     model: string;
     requestId: string;
   };
-}
 
-/** Payload accepted by `events.iterate.com/agent/llm-request-started`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/llm-request-started`. */
   export type AgentLlmRequestStartedPayload = { llmRequestOffset: number; model: string };
-}
 
-/** Payload accepted by `events.iterate.com/agent/loop-stopped`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/loop-stopped`. */
   export type AgentLoopStoppedPayload = {
     maxAutonomousTurns: number;
     reason: string;
     triggerOffset: number;
   };
-}
 
-/** Payload accepted by `events.iterate.com/agent/status-changed`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/status-changed`. */
   export type AgentStatusChangedPayload = {
     busy?: boolean | undefined;
     phase?: "llm" | "script" | undefined;
@@ -1727,10 +1711,8 @@ export namespace events {
     shortStatus?: string | undefined;
     icon?: string | undefined;
   };
-}
 
-/** Payload accepted by `events.iterate.com/agent/token-usage-reported`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agent/token-usage-reported`. */
   export type AgentTokenUsageReportedPayload = {
     llmRequestOffset: number;
     model: string;
@@ -1740,10 +1722,8 @@ export namespace events {
     cachedInputTokens?: number | undefined;
     reasoningOutputTokens?: number | undefined;
   };
-}
 
-/** Payload accepted by `events.iterate.com/agents/context-added`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agents/context-added`. */
   export type AgentsContextAddedPayload =
     | {
         content: string;
@@ -1862,29 +1842,23 @@ export namespace events {
         role: "assistant";
         llmRequestOffset?: number | undefined;
       };
-}
 
-/** Payload accepted by `events.iterate.com/agents/web-message-sent`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/agents/web-message-sent`. */
   export type AgentsWebMessageSentPayload = {
     message: string;
     files?:
       | { contentType: string; filename: string; path: string; size: number; url: string }[]
       | undefined;
   };
-}
 
-/** Payload accepted by `events.iterate.com/capability-host/script-run-requested`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/capability-host/script-run-requested`. */
   export type CapabilityHostScriptRunRequestedPayload = {
     code: string;
     executionId: string;
     expiresAt: number;
   };
-}
 
-/** Payload accepted by `events.iterate.com/capability-host/script-run-settled`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/capability-host/script-run-settled`. */
   export type CapabilityHostScriptRunSettledPayload = {
     executionId: string;
     settlement:
@@ -1898,20 +1872,16 @@ export namespace events {
           cancellation: "external-work-may-continue" | "not-applicable";
         };
   };
-}
 
-/** Payload accepted by `events.iterate.com/stream/processor-revived`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/stream/processor-revived`. */
   export type StreamProcessorRevivedPayload = {
     [x: string]: unknown;
     processorSlug: string;
     revivals: number;
     version: string;
   };
-}
 
-/** Payload accepted by `events.iterate.com/stream/subscriber-connected`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/stream/subscriber-connected`. */
   export type StreamSubscriberConnectedPayload = {
     subscriptionKey: string;
     subscriptionType: "configured" | "ephemeral";
@@ -1933,10 +1903,8 @@ export namespace events {
         }
       | undefined;
   };
-}
 
-/** Payload accepted by `events.iterate.com/stream/woken`. */
-export namespace events {
+  /** Payload accepted by `events.iterate.com/stream/woken`. */
   export type StreamWokenPayload = { incarnationId: string };
 }
 

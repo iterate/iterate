@@ -58,10 +58,14 @@ test("contract-derived event unions share named payload declarations", () => {
   );
   expect(agentAppendInput).not.toContain("systemPrompt");
   expect(generated.match(/export type AgentConfiguredPayload\b/g)).toHaveLength(1);
-  expect(generated).toContain("export namespace events {");
-  const configuredPayload = generated.match(
-    /export type AgentConfiguredPayload =[\s\S]*?;(?=\n})/,
-  )?.[0];
+  expect(generated.match(/export namespace events \{/g)).toHaveLength(1);
+  expect(generated).toContain(
+    "export namespace events {\n  /** Payload accepted by `events.iterate.com/agent/configured`. */\n  export type AgentConfiguredPayload =",
+  );
+  const configuredPayload = generated.slice(
+    generated.indexOf("export type AgentConfiguredPayload ="),
+    generated.indexOf("export type AgentCreatedPayload ="),
+  );
   expect(configuredPayload?.match(/config:/g)).toHaveLength(1);
 });
 

@@ -55,7 +55,6 @@ import type {
   ClassDeclaration,
   ExpressionWithTypeArguments,
   InterfaceDeclaration,
-  ModuleDeclaration,
   Node,
   ParameterDeclaration,
   SourceFile,
@@ -189,15 +188,13 @@ export function internEventPayloadTypes(chunks: string[]): {
   const declarations = [...payloadsByEventType].map(([eventType, payloads]) => {
     const union = [...payloads].join(" | ");
     return [
-      `/** Payload accepted by \`${eventType}\`. */`,
-      "export namespace events {",
+      `  /** Payload accepted by \`${eventType}\`. */`,
       `  export type ${eventPayloadName(eventType)} = ${union};`,
-      "}",
     ].join("\n");
   });
   return {
     chunks: transformed,
-    namespaceSource: declarations.join("\n\n"),
+    namespaceSource: ["export namespace events {", declarations.join("\n\n"), "}"].join("\n"),
   };
 }
 
@@ -730,11 +727,9 @@ export function generateItxApi(): string {
 
 /**
  * The Itx Type Graph: parse the FORMATTED flat file back into one record per
- * exported declaration (see ItxApiDeclaration). Deriving the graph from the
- * emitted text — rather than collecting records during emission — guarantees
- * each record's `sourceText` is exactly the declaration's text in
- * itx-api.generated.ts (oxfmt formatting included), so "the flat file is the
- * join of the graph" holds by construction.
+ * exported declaration (see ItxApiDeclaration). Namespaced payload members
+ * become individual records wrapped in one-member mergeable namespace
+ * declarations, so docs can fetch one payload without pulling in every event.
  */
 export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
   using session = openProject(new Map([[outPath, flatFileSource]]));
@@ -768,30 +763,52 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
   };
 
   const declarations: Array<{
-    statement: InterfaceDeclaration | ModuleDeclaration | TypeAliasDeclaration;
+    statement: InterfaceDeclaration | TypeAliasDeclaration;
     record: ItxApiDeclaration;
   }> = [];
-  const declarationName = (
-    statement: InterfaceDeclaration | ModuleDeclaration | TypeAliasDeclaration,
-  ): string => {
-    const name = statement.name.getText().replaceAll(/^['"]|['"]$/g, "");
-    if (!isModuleDeclaration(statement)) return name;
-    const exportedTypes = [
-      ...statement.getText().matchAll(/\bexport\s+type\s+([A-Za-z_$][\w$]*)/g),
-    ];
-    if (exportedTypes.length !== 1) {
-      throw new Error(
-        `generated namespace ${name} must contain exactly one exported type, found ${exportedTypes.length}`,
-      );
-    }
-    return `${name}.${exportedTypes[0]![1]}`;
-  };
   for (const statement of sourceFile.statements) {
     if (
       !isInterfaceDeclaration(statement) &&
       !isModuleDeclaration(statement) &&
       !isTypeAliasDeclaration(statement)
     ) {
+      continue;
+    }
+    if (isModuleDeclaration(statement)) {
+      const namespaceName = statement.name.getText().replaceAll(/^['"]|['"]$/g, "");
+      if (!statement.body || !("statements" in statement.body)) {
+        throw new Error(`generated namespace ${namespaceName} must have a module block body`);
+      }
+      for (const member of statement.body.statements) {
+        if (!isTypeAliasDeclaration(member)) {
+          throw new Error(`generated namespace ${namespaceName} may only contain type aliases`);
+        }
+        const jsDoc = ownJsDoc(member);
+        const memberText = member
+          .getText()
+          .split("\n")
+          .map((line, index) => (index === 0 ? line : line.replace(/^ {2}/, "")))
+          .join("\n");
+        const memberSource = [jsDoc, memberText].filter(Boolean).join("\n");
+        declarations.push({
+          statement: member,
+          record: {
+            name: `${namespaceName}.${member.name.getText()}`,
+            kind: "namespace",
+            sourceText: [
+              `export namespace ${namespaceName} {`,
+              memberSource
+                .split("\n")
+                .map((line) => `  ${line}`)
+                .join("\n"),
+              "}",
+            ].join("\n"),
+            summary: summaryOf(jsDoc),
+            memberSummaries: {},
+            referencedTypeNames: [],
+          },
+        });
+      }
       continue;
     }
     const jsDoc = ownJsDoc(statement);
@@ -807,12 +824,8 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
     declarations.push({
       statement,
       record: {
-        name: declarationName(statement),
-        kind: isInterfaceDeclaration(statement)
-          ? "interface"
-          : isModuleDeclaration(statement)
-            ? "namespace"
-            : "typeAlias",
+        name: statement.name.getText().replaceAll(/^['"]|['"]$/g, ""),
+        kind: isInterfaceDeclaration(statement) ? "interface" : "typeAlias",
         sourceText: [jsDoc, statement.getText()].filter(Boolean).join("\n"),
         summary: summaryOf(jsDoc),
         memberSummaries,
@@ -857,8 +870,8 @@ export function generateItxApiGraphSource(flatFileSource: string): string {
     "// Freshness is enforced by itx-api.generated.test.ts.",
     "//",
     "// The Itx Type Graph: every exported declaration of itx-api.generated.ts as",
-    "// one record, in file order — same generator run, same content, kept",
-    "// per-declaration so runtime consumers (itx.docs, __describe) can assemble",
+    "// one record, in file order. Namespace members use standalone mergeable",
+    "// wrappers so runtime consumers (itx.docs, __describe) can assemble",
     "// bounded slices instead of shipping the whole flat file.",
     'import type { ItxApiDeclaration } from "./domains/itx/itx-api-graph.ts";',
     "",
