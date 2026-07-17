@@ -785,6 +785,17 @@ export interface ProjectIntegrations {
     connection: string;
     provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
+  /** The immutable Telegram user ids currently authorized for one bot. Empty
+   * means deny-all, including on connections created before this policy was
+   * introduced. */
+  getTelegramAccess(input: { connection: string }): Promise<{ allowedUserIds: string[] }>;
+  /** Replace one Telegram bot's complete user allowlist and wait until the
+   * ingress router has folded it, so the successful response is the access
+   * boundary taking effect—not merely an event being queued. */
+  setTelegramAccess(input: {
+    allowedUserIds: string[];
+    connection: string;
+  }): Promise<{ allowedUserIds: string[] }>;
   /**
    * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
    * validates the token, setWebhook points the bot at this deployment (with a

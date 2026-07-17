@@ -122,8 +122,13 @@ import {
 import {
   BUILTIN_INTEGRATION_SLUGS,
   googleConnectionSecretPath,
+  integrationConnectionStreamPath,
   isBuiltinIntegrationSlug,
 } from "./domains/integrations/utils.ts";
+import {
+  TelegramAllowedUserIds,
+  type TelegramProcessorState,
+} from "./domains/integrations/telegram-processor-contract.ts";
 import {
   connectionOctokit,
   GITHUB_CALL_GRAMMAR,
@@ -3164,6 +3169,22 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
+  #telegramProcessor(
+    connection: string,
+  ): ProcessorRelayRpcTarget<TelegramProcessorState, ProjectRouterProcessorHostStub> {
+    return new ProcessorRelayRpcTarget<TelegramProcessorState, ProjectRouterProcessorHostStub>({
+      auth: this.props.auth,
+      host: () =>
+        env.PROJECT.getByName(
+          DurableObjectNameCodec.stringify({
+            path: integrationConnectionStreamPath("telegram", connection),
+            projectId: this.props.projectId,
+          }),
+        ) as unknown as ProjectRouterProcessorHostStub,
+      processorFacade: (host) => host.telegramProcessor,
+    });
+  }
+
   /** Slack WebClient connections. `get()` selects the first connected workspace. */
   get slack(): IntegrationFamily<SlackConnection> {
     return this.#family("slack") as unknown as IntegrationFamily<SlackConnection>;
@@ -3410,17 +3431,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // It is what the connect flow's wake subscription persists
       // (["integrations", "telegram", ["get", <connection>], "processor", ...]).
       if (method[0] === "processor") {
-        const relay = new ProcessorRelayRpcTarget({
-          auth: this.props.auth,
-          host: () =>
-            env.PROJECT.getByName(
-              DurableObjectNameCodec.stringify({
-                path: `/integrations/telegram/${connection}`,
-                projectId: this.props.projectId,
-              }),
-            ) as unknown as ProjectRouterProcessorHostStub,
-          processorFacade: (host) => host.telegramProcessor,
-        });
+        const relay = this.#telegramProcessor(connection);
         if (method.length === 1) return relay;
         return await replayPathCall(relay, { args, path: method.slice(1) });
       }
@@ -3605,6 +3616,53 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       projectId: this.props.projectId,
       provider: input.provider,
     });
+  }
+
+  /** The immutable Telegram user ids currently authorized for one bot. Empty
+   * means deny-all, including on connections created before this policy was
+   * introduced. */
+  async getTelegramAccess(input: { connection: string }): Promise<{ allowedUserIds: string[] }> {
+    await this.#assertConnectedTelegram(input.connection);
+    const { state } = await this.#telegramProcessor(input.connection).snapshot();
+    return { allowedUserIds: state.allowedUserIds };
+  }
+
+  /** Replace one Telegram bot's complete user allowlist and wait until the
+   * ingress router has folded it, so the successful response is the access
+   * boundary taking effect—not merely an event being queued. */
+  async setTelegramAccess(input: {
+    allowedUserIds: string[];
+    connection: string;
+  }): Promise<{ allowedUserIds: string[] }> {
+    await this.#assertConnectedTelegram(input.connection);
+    const allowedUserIds = TelegramAllowedUserIds.parse(input.allowedUserIds);
+    const configuredEvents = await new StreamRpcTarget({
+      auth: this.props.auth,
+      path: integrationConnectionStreamPath("telegram", input.connection),
+      projectId: this.props.projectId,
+    }).append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds },
+    });
+    const configured = configuredEvents[0];
+    if (configured === undefined) {
+      throw new Error("Telegram access policy append returned no configured event.");
+    }
+    await this.#telegramProcessor(input.connection).waitUntilProcessed({
+      offset: configured.offset,
+    });
+    return { allowedUserIds };
+  }
+
+  async #assertConnectedTelegram(connection: string): Promise<void> {
+    const status = await getConnectionStatus({
+      connection,
+      projectId: this.props.projectId,
+      provider: "telegram",
+    });
+    if (!status.connected) {
+      throw new Error(`Telegram connection ${JSON.stringify(connection)} is not connected.`);
+    }
   }
 
   /**
