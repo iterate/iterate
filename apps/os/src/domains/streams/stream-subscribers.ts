@@ -50,7 +50,10 @@ import type {
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
 } from "iterate/processors";
-import { isStreamReceiverUnavailableError } from "iterate/processors";
+import {
+  isStreamReceiverUnavailableError,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
@@ -938,10 +941,11 @@ export class StreamSubscribers {
     error: unknown;
   }): "continue" | "stop" {
     const { subscriptionKey, config, matched, error } = args;
-    // A receiver that DECLARED itself unavailable (see
-    // StreamReceiverUnavailableError) is down, not poisoned: no bisecting, no
-    // skip confirmation — the same batch backs off and redelivers whole, and
-    // sustained unavailability parks loudly like any other outage. Known
+    // A receiver that DECLARED itself unavailable, or that failed to respond
+    // before the delivery deadline (both StreamReceiverUnavailableError), is
+    // down, not poisoned: no bisecting, no skip confirmation — the same batch
+    // backs off and redelivers whole, and sustained unavailability parks
+    // loudly like any other outage. Known
     // wrinkle: the backoff attempts accrued here share the row's counter with
     // skip confirmation, so a genuine poison event arriving the moment the
     // receiver recovers can confirm in fewer than SKIP_CONFIRM_ATTEMPTS lone
@@ -1611,9 +1615,10 @@ export class StreamSubscribers {
  * Bounds one delivery/poke attempt. Without it a wedged receiver (the worst
  * real case: a cold worker build that never completes) holds the drain slot
  * and pins the DO unboundedly, with no nack, no backoff, and no park. On
- * timeout the attempt counts as a failure — the spine backs off and retries;
- * a build that was merely slow continues server-side via waitUntil, so the
- * retry hits the warm cache (the same shape #1761's build budget had).
+ * timeout the receiver is unavailable, never evidence that one event is
+ * poison: the spine backs off and retries the same delivery whole. A build
+ * that was merely slow continues server-side via waitUntil, so the retry hits
+ * the warm cache (the same shape #1761's build budget had).
  */
 const DELIVERY_TIMEOUT_MS = 60_000;
 
@@ -1658,7 +1663,7 @@ async function withDeliveryTimeout<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(new StreamReceiverUnavailableError(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);

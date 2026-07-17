@@ -85,6 +85,12 @@ describe("worker fetch dispatch header", () => {
     expect(await failed!.text()).toContain("Expected ; but found is");
 
     expect(workerBuildStatusResponse(new Error("anything else"))).toBeNull();
+    // Only the platform-seeded default project worker may treat an empty repo
+    // as bootstrap-in-progress. Generic dispatch must surface an arbitrary
+    // user repo that stays empty instead of polling forever.
+    expect(
+      workerBuildStatusResponse(namedError("RepoNotSeededError", "Repo has no commits yet")),
+    ).toBeNull();
   });
 
   test("upgrade detection is header-cased", () => {

@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import { MemoryStream } from "iterate/processors/testing";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import type { Project } from "../../itx-api.generated.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";

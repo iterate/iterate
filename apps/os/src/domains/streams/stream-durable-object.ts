@@ -17,6 +17,10 @@ import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
+  projectWorkerSubscriptionEvent,
+  searchIndexSubscriptionEvent,
+} from "./platform-subscriptions.ts";
+import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
@@ -26,10 +30,7 @@ import {
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
-import {
-  isDurableObjectLifecycleError,
-  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
-} from "./stream-unavailable.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import {
   createSubscriberDial,
   type StreamSubscriberAuthorityRootLease,
@@ -45,7 +46,6 @@ import {
   CoreProcessorContract,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
   type CoreProcessorState,
-  type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
@@ -54,22 +54,6 @@ const MAX_GET_EVENTS_LIMIT = 500;
 const StreamIdempotencyWaitAttachment = z
   .object({ idempotencyKey: z.string().trim().min(1) })
   .strict();
-
-/**
- * The subscription key of the birth-certificate worker feed every
- * project-scoped stream configures on itself (see the constructor). Userspace
- * overrides it by re-appending `subscription-configured` with this same key.
- */
-const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
-
-/**
- * The platform-owned search projection. It has its own durable cursor so an
- * R2 outage cannot either drop a corpus update or hold up the userspace
- * project worker. Unlike the worker feed, poison is never skipped: the source
- * event is authoritative and a failed derived write must remain pending (and
- * eventually park loudly) until it can be replayed.
- */
-const SEARCH_INDEX_SUBSCRIPTION_KEY = "platform-search-index";
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -224,43 +208,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
       if (this.name.projectId !== null) {
-        this.append({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-            delivery: { mode: "push", expression: ["processEventBatch"] },
-            // Everything, from the beginning: the worker sees the stream's
-            // full history once it first builds. No default selector —
-            // selection is the worker's own code (or a same-key override).
-            deliver: "all",
-            // One poison event must not silence a project's entire feed.
-            onPoison: "skip",
-          } satisfies SubscriptionConfiguredPayload,
-        });
-        this.append({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            subscriptionKey: SEARCH_INDEX_SUBSCRIPTION_KEY,
-            delivery: {
-              mode: "push",
-              expression: ["indexStreamSearchBatch"],
-              // A conversation turn appends several adjacent lifecycle facts.
-              // Coalesce them into one segment rewrite instead of letting the
-              // first R2 write serialize the following append RPCs behind the
-              // Stream DO's output gate.
-              batchWindowMs: 250,
-            },
-            // Rebuild every segment from authoritative history, including
-            // streams created before this deployment when production is
-            // intentionally recreated for this breaking birth-certificate
-            // shape.
-            deliver: "all",
-            // A derived write failure is an outage, never poison source data.
-            // The durable spine retries with bounded backoff and parks with a
-            // durable fact after its attempt budget instead of skipping.
-            onPoison: "park",
-          } satisfies SubscriptionConfiguredPayload,
-        });
+        this.append(projectWorkerSubscriptionEvent());
+        this.append(searchIndexSubscriptionEvent());
         // The standalone streams playground reuses this DO without OS's
         // PostHog credential or receiver. Deployed OS environments require
         // the credential, so its presence is the deployment boundary.

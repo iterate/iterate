@@ -42,7 +42,6 @@ import type {
   StreamWebhookDelivery,
 } from "iterate/processors";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
-import { itxLoopbackStub } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type { SubscriberDial } from "./stream-subscribers.ts";
 

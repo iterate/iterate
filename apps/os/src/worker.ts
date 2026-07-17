@@ -20,10 +20,8 @@ import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
-import {
-  WORKER_FETCH_DISPATCH_HEADER,
-  workerBuildStatusResponse,
-} from "./domains/workers/worker-fetch-dispatch.ts";
+import { WORKER_FETCH_DISPATCH_HEADER } from "./domains/workers/worker-fetch-dispatch.ts";
+import { projectWorkerFetchStatusResponse } from "./domains/workers/project-worker-fetch-status.ts";
 import { applyProjectWorkerOverlay } from "./domains/workers/worker-serve-overlay.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import {
@@ -251,7 +249,7 @@ async function apiFetch(
       // a failed first-ever build shows the builder's error. Both self-heal —
       // once a good build exists, the runner serves it stale instead of
       // landing here.
-      const buildStatus = workerBuildStatusResponse(error);
+      const buildStatus = projectWorkerFetchStatusResponse(error);
       if (buildStatus !== null) return buildStatus;
       throw error;
     }

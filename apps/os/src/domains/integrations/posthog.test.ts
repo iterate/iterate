@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StreamPushEventBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import { PLATFORM_PUSH_DELIVERY_BATCH_WINDOW_MS } from "../streams/platform-subscriptions.ts";
 import {
   capturePosthogStreamEventBatch,
   POSTHOG_STREAM_EVENT_MAX_JSON_BYTES,
@@ -88,13 +89,14 @@ describe("first-party PostHog stream integration", () => {
     const event = posthogSubscriptionEvent();
     expect(event).toEqual({
       type: "events.iterate.com/stream/subscription-configured",
-      idempotencyKey: "iterate-platform-posthog-subscription-v2",
+      idempotencyKey: "iterate-platform-posthog-subscription-v3",
       payload: {
         subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
         description: "Iterate's first-party durable-event PostHog feed",
         delivery: {
           mode: "push",
           expression: ["integrations", "posthog", "processEventBatch"],
+          batchWindowMs: PLATFORM_PUSH_DELIVERY_BATCH_WINDOW_MS,
         },
         deliver: "all",
         includeEphemeral: false,

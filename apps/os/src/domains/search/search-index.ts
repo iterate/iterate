@@ -35,7 +35,6 @@
 // created per project at runtime.
 
 import type { StreamEvent } from "iterate/processors";
-import type { StreamPushEventBatch } from "iterate/processors";
 import { itxEnv } from "../../env.ts";
 import { ItxExpression } from "../../itx/expression.ts";
 import { deleteR2ObjectIfPresent } from "./r2-delete.ts";

@@ -1680,6 +1680,43 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
   });
 
+  it("x1. a receiver timeout backs off the whole batch instead of poison-bisecting in one alarm turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.configure(pushPayload({ onPoison: "skip" }), 0);
+      h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+
+      // The first receiver call wedges. If the timeout is misclassified as
+      // an event rejection, skip mode immediately bisects and calls again in
+      // this SAME alarm turn; make that second call resolve so a broken
+      // implementation terminates but visibly advances the cursor.
+      let calls = 0;
+      h.dialImpl.push = async () => {
+        calls += 1;
+        if (calls === 1) await new Promise<never>(() => {});
+      };
+
+      h.subscribers.wake();
+      const settled = h.settle();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.runAllTimersAsync();
+      await settled;
+
+      expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+        [1, 2, 3],
+      ]);
+      expect(h.row("k")).toMatchObject({
+        ackedOffset: 0,
+        attempt: 1,
+        lastError: "push k timed out after 60000ms",
+      });
+      expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("y. sustained receiver unavailability parks loudly instead of mass-skipping the backlog", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);

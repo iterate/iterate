@@ -288,7 +288,7 @@ certificate — `created (1)`, worker `subscription-configured (2)`, search
 
 ```ts
 { subscriptionKey: "project-worker",
-  delivery: { mode: "push", expression: ["processEventBatch"] },
+  delivery: { mode: "push", expression: ["processEventBatch"], batchWindowMs: 250 },
   deliver: "all",      // the worker sees full history once it first builds
   onPoison: "skip" }   // one bad event must not silence the feed
 
@@ -304,10 +304,11 @@ durable config. The search feed owns a separate cursor, so an R2 outage cannot
 hold up the userspace worker; it retries with bounded backoff and parks with a
 durable explanation rather than skipping a source event. The worker returns →
 ack; throws → redelivery with backoff.
-The search feed uses a 250 ms leading-edge window: the first lagging event fixes
-the deadline, adjacent facts join the same index write, and later appends never
-extend it. The project-worker feed and hosted wake processors remain immediate.
-The timer is the low-latency path and the Durable Object alarm is the crash-safe
+Both push feeds use a 250 ms leading-edge window: the first lagging event fixes
+the deadline, adjacent facts join the same delivery, and later appends never
+extend it. This keeps project-worker execution and search I/O outside the Stream
+Durable Object invocation that commits the append; hosted wake processors remain
+immediate. The timer is the low-latency path and the Durable Object alarm is the crash-safe
 fallback.
 `${event.path}@${event.offset}` is the idempotency idiom that makes
 at-least-once redelivery a no-op.

@@ -1,12 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ProcessorReadRequest } from "./processor-rpc.ts";
-import type { StreamEvent } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
-import {
-  ProcessorRelayRpcTarget,
-  StreamProcessorRpcTarget,
-  StreamRpcTarget,
-} from "../../rpc-targets.ts";
+import { ProcessorRelayRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import type { ProcessorReadRequest } from "./processor-rpc.ts";
 
 describe("StreamProcessorRpcTarget", () => {
   it("lets the runner waiter own the complete waitUntilProcessed timeout", async () => {

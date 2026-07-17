@@ -5,20 +5,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriberPing,
 } from "iterate/processors";
-
-const dialMocks = vi.hoisted(() => ({
-  evaluateItxExpression: vi.fn(),
-  itxLoopbackStub: vi.fn(),
-}));
-
-vi.mock("../../itx/expression.ts", () => ({
-  evaluateItxExpression: dialMocks.evaluateItxExpression,
-}));
-vi.mock("../itx/utils.ts", () => ({
-  itxLoopbackStub: dialMocks.itxLoopbackStub,
-}));
-
-const { createSubscriberDial, retainWakeHandshakeResponse } = await import("./subscriber-sinks.ts");
+import { createSubscriberDial, retainWakeHandshakeResponse } from "./subscriber-sinks.ts";
 
 function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
   const rawDispose = vi.fn();

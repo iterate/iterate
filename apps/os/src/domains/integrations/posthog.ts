@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { StreamPushEventBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
+import { PLATFORM_PUSH_DELIVERY_BATCH_WINDOW_MS } from "../streams/platform-subscriptions.ts";
 import { truncateJsonToBytes } from "./truncate-json.ts";
 
 export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
@@ -19,16 +20,16 @@ const ProjectGroupBirthPayload = z.object({
 export function posthogSubscriptionEvent() {
   return {
     type: "events.iterate.com/stream/subscription-configured",
-    // Bump when the subscription payload changes so new stream births land
-    // the revised config. Existing streams still rely on capture-side filtering
-    // until they are recreated or reconfigured.
-    idempotencyKey: "iterate-platform-posthog-subscription-v2",
+    // Bump when the subscription payload changes so recreated streams land
+    // the exact current platform feed policy.
+    idempotencyKey: "iterate-platform-posthog-subscription-v3",
     payload: {
       subscriptionKey: "iterate-platform-posthog",
       description: "Iterate's first-party durable-event PostHog feed",
       delivery: {
         mode: "push",
         expression: ["integrations", "posthog", "processEventBatch"],
+        batchWindowMs: PLATFORM_PUSH_DELIVERY_BATCH_WINDOW_MS,
       },
       deliver: "all",
       // High-volume transient rows (LLM chunks, progress ticks) stay off the
