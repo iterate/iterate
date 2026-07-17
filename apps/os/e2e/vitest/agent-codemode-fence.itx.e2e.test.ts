@@ -42,7 +42,7 @@ test(
     await waitForCondition(
       async () => {
         const events = await agent.stream.getEvents({
-          eventTypes: ["events.iterate.com/capability-host/script-execution-completed"],
+          eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
           limit: 100,
         });
         const completion = events.at(0);

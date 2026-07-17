@@ -41,7 +41,13 @@ export const StreamViewSearch = z.object({
   /** Offset of the raw event open in the inspector side panel. */
   event: z.number().optional().catch(undefined),
   /** llm-request-requested offset open in the LLM request inspector panel. */
-  llmRequest: z.number().optional().catch(undefined),
+  llmRequest: z.number().int().positive().optional().catch(undefined),
+  /** Script execution id open in the code/result inspector panel. */
+  scriptExecution: z
+    .union([z.string().min(1), z.number().finite()])
+    .transform(String)
+    .optional()
+    .catch(undefined),
   /** Whether the mode's search/filter row is open. */
   filter: z.boolean().optional().catch(undefined),
   /** Whether the processors sheet is open (overview when processor is absent). */
@@ -197,29 +203,31 @@ export function useStreamViewSearch(): {
 const RELEASE_PANEL_EDGE = {
   event: undefined,
   llmRequest: undefined,
+  scriptExecution: undefined,
   panel: undefined,
   processor: undefined,
 } satisfies Partial<StreamViewSearch>;
 
 /**
- * URL state for the stream view's right-edge overlays — the raw-event
- * inspector, the LLM request inspector, the processors sheet, and (on
- * full-panel layouts) the Events sheet. They share the same screen edge, so
- * every setter keeps them mutually exclusive; if a hand-edited URL asks for
- * more than one, either inspector beats the processors sheet, which beats
- * the Events sheet (between the two inspectors, StreamInspectorOverlay picks
- * whichever the active mode can render, raw-event inspector first).
+ * URL state for the stream view's right-edge sheets — the raw-event
+ * inspector, the LLM request inspector, the script execution inspector, the
+ * processors sheet, and (on full-panel layouts) the Events sheet. They share
+ * the same screen edge, so every setter keeps them mutually exclusive; if a
+ * hand-edited URL asks for more than one, an inspector beats the processors
+ * sheet, which beats the Events sheet (StreamInspectorSheet owns inspector
+ * precedence because it knows which modes can render the raw inspector).
  */
 export function useStreamViewPanels(): {
   inspectedOffset: number | null;
   inspectedLlmRequestOffset: number | null;
+  inspectedScriptExecutionId: string | null;
   focusedProcessorKey: string | null;
   processorsPanelOpen: boolean;
   eventsSheetOpen: boolean;
   inspectEvent: (offset: number) => void;
   closeInspector: () => void;
   inspectLlmRequest: (llmRequestOffset: number) => void;
-  closeLlmRequestInspector: () => void;
+  inspectScriptExecution: (executionId: string) => void;
   focusProcessor: (subscriptionKey: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
@@ -228,30 +236,43 @@ export function useStreamViewPanels(): {
 } {
   const { search, setSearch } = useStreamViewSearch();
   const inspectedOffset = search.event ?? null;
-  // Both inspector offsets are surfaced as-is. Openers keep them mutually
-  // exclusive, so both set = a stale or hand-edited URL; precedence between
-  // them is the RENDERER's call (StreamInspectorOverlay): only it knows
-  // whether the mode can actually show the raw inspector, and suppressing
-  // the LLM offset here would leave the edge empty in modes that can't.
+  // Inspector identifiers are surfaced as-is. Openers keep them mutually
+  // exclusive, so multiple values mean a stale or hand-edited URL; precedence
+  // is the RENDERER's call (StreamInspectorSheet), because only it knows
+  // whether the active mode can actually show the raw inspector.
   const inspectedLlmRequestOffset = search.llmRequest ?? null;
+  const inspectedScriptExecutionId = search.scriptExecution ?? null;
   const focusedProcessorKey = search.processor ?? null;
+  const inspectorOpen =
+    inspectedOffset != null ||
+    inspectedLlmRequestOffset != null ||
+    inspectedScriptExecutionId != null;
   const processorsPanelOpen =
-    inspectedOffset == null &&
-    inspectedLlmRequestOffset == null &&
-    (search.panel === true || focusedProcessorKey != null);
-  const eventsSheetOpen = search.events === true && !processorsPanelOpen;
+    !inspectorOpen && (search.panel === true || focusedProcessorKey != null);
+  // Full-panel layouts render inspectors inside the Events sheet. A direct
+  // `?llmRequest=` / `?scriptExecution=` link therefore opens that containing
+  // sheet even when `events=true` was not part of the shared URL.
+  const eventsSheetOpen = !processorsPanelOpen && (search.events === true || inspectorOpen);
   const inspectEvent = useCallback(
     (offset: number) => setSearch({ ...RELEASE_PANEL_EDGE, event: offset }),
     [setSearch],
   );
-  const closeInspector = useCallback(() => setSearch({ event: undefined }), [setSearch]);
+  const closeInspector = useCallback(
+    () =>
+      setSearch({
+        event: undefined,
+        llmRequest: undefined,
+        scriptExecution: undefined,
+      }),
+    [setSearch],
+  );
   const inspectLlmRequest = useCallback(
     (llmRequestOffset: number) =>
       setSearch({ ...RELEASE_PANEL_EDGE, llmRequest: llmRequestOffset }),
     [setSearch],
   );
-  const closeLlmRequestInspector = useCallback(
-    () => setSearch({ llmRequest: undefined }),
+  const inspectScriptExecution = useCallback(
+    (executionId: string) => setSearch({ ...RELEASE_PANEL_EDGE, scriptExecution: executionId }),
     [setSearch],
   );
   const focusProcessor = useCallback(
@@ -276,17 +297,27 @@ export function useStreamViewPanels(): {
     () => setSearch({ events: true, panel: undefined, processor: undefined }),
     [setSearch],
   );
-  const closeEventsSheet = useCallback(() => setSearch({ events: undefined }), [setSearch]);
+  const closeEventsSheet = useCallback(
+    () =>
+      setSearch({
+        event: undefined,
+        events: undefined,
+        llmRequest: undefined,
+        scriptExecution: undefined,
+      }),
+    [setSearch],
+  );
   return {
     inspectedOffset,
     inspectedLlmRequestOffset,
+    inspectedScriptExecutionId,
     focusedProcessorKey,
     processorsPanelOpen,
     eventsSheetOpen,
     inspectEvent,
     closeInspector,
     inspectLlmRequest,
-    closeLlmRequestInspector,
+    inspectScriptExecution,
     focusProcessor,
     openProcessorsOverview,
     closeProcessorsPanel,

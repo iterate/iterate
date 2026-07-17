@@ -25,6 +25,7 @@
 
 import {
   initialAgentUiState,
+  isCurrentAgentUiState,
   reduceAgentUi,
   type AgentUiItem,
   type AgentUiState,
@@ -37,6 +38,14 @@ export const AGENT_KIND_PREFIX = "agent.";
 export const RAW_KIND_PREFIX = "raw.";
 /** Kind of the catch-all grouped raw row. */
 export const RAW_GROUP_KIND = "raw.group";
+
+/**
+ * Clean-cut identity for persisted browser-feed reducer state. Old snapshots
+ * are disposable caches and must be rebuilt, never interpreted as current
+ * state (in particular, they may contain historical ephemeral activity).
+ */
+export const BROWSER_FEED_SCHEMA_VERSION = 3;
+export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */
 function rawSingletonKind(type: string): string | null {
@@ -84,16 +93,30 @@ export type RawSingletonData = {
 export type RawFeedItemData = RawGroupData | RawSingletonData;
 
 export type BrowserFeedState = {
+  schemaVersion: typeof BROWSER_FEED_SCHEMA_VERSION;
   /** Agent lens reduced state: live activity, queued messages, presence, token usage. */
   agent: AgentUiState;
   /** The current open, extendable raw group row, or null when closed. */
   open: OpenGroup | null;
   /** Monotonically increasing next feed_items local_index — THE total feed order. */
   nextLocalIndex: number;
+  /**
+   * Stable row addresses only for activities still awaiting a durable script
+   * correction. Ordinary feed items never need replacement, so retaining an
+   * index for every message would make the processor snapshot grow with the
+   * entire stream a second time.
+   */
+  provisionalAgentItemIndexes: Record<string, number>;
 };
 
 export function initialBrowserFeedState(): BrowserFeedState {
-  return { agent: initialAgentUiState(), open: null, nextLocalIndex: 0 };
+  return {
+    schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
+    agent: initialAgentUiState(),
+    open: null,
+    nextLocalIndex: 0,
+    provisionalAgentItemIndexes: {},
+  };
 }
 
 export type FeedOp =
@@ -112,6 +135,13 @@ export type FeedOp =
       lastOffset: number;
       eventCount: number;
       data: RawGroupData;
+    }
+  | {
+      kind: "replace";
+      localIndex: number;
+      itemKind: string;
+      lastOffset: number;
+      data: AgentUiItem;
     };
 
 /**
@@ -134,6 +164,7 @@ export function planBrowserFeedOps(
   let agent = start.agent;
   let open = start.open;
   let nextLocalIndex = start.nextLocalIndex;
+  const provisionalAgentItemIndexes = { ...start.provisionalAgentItemIndexes };
   const ops: FeedOp[] = [];
   // The op for the row `open` points at, when that row is being mutated within
   // this batch — so we update it in place instead of pushing a fresh op per event.
@@ -148,6 +179,18 @@ export function planBrowserFeedOps(
     const settled = reduceAgentUi(agent, event as unknown as Parameters<typeof reduceAgentUi>[1]);
     agent = settled.endState;
     for (const item of settled.items) {
+      const existingIndex = provisionalAgentItemIndexes[item.id];
+      if (existingIndex !== undefined) {
+        ops.push({
+          kind: "replace",
+          localIndex: existingIndex,
+          itemKind: `${AGENT_KIND_PREFIX}${item.kind}`,
+          lastOffset: event.offset,
+          data: item,
+        });
+        if (!hasInferredScriptOutcome(item)) delete provisionalAgentItemIndexes[item.id];
+        continue;
+      }
       ops.push({
         kind: "insert",
         localIndex: nextLocalIndex,
@@ -157,6 +200,9 @@ export function planBrowserFeedOps(
         eventCount: 1,
         data: item,
       });
+      if (hasInferredScriptOutcome(item)) {
+        provisionalAgentItemIndexes[item.id] = nextLocalIndex;
+      }
       nextLocalIndex += 1;
     }
 
@@ -235,7 +281,104 @@ export function planBrowserFeedOps(
     ops.push(openOp);
   }
 
-  return { ops, endState: { agent, open, nextLocalIndex } };
+  return {
+    ops,
+    endState: {
+      schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
+      agent,
+      open,
+      nextLocalIndex,
+      provisionalAgentItemIndexes: retainCurrentProvisionalIndexes(
+        provisionalAgentItemIndexes,
+        agent,
+      ),
+    },
+  };
+}
+
+/** Rejects old/partial snapshots. They are cache data, not an API to migrate. */
+export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedState {
+  if (!isRecord(value)) return false;
+  const candidate = value as Partial<BrowserFeedState>;
+  if (!isCurrentAgentUiState(candidate.agent)) return false;
+  if (!isOpenGroup(candidate.open)) return false;
+  if (!isNonNegativeSafeInteger(candidate.nextLocalIndex)) return false;
+  if (!isRecord(candidate.provisionalAgentItemIndexes)) return false;
+  const agent = candidate.agent;
+  const nextLocalIndex = candidate.nextLocalIndex;
+  if (
+    !Object.entries(candidate.provisionalAgentItemIndexes).every(
+      ([id, index]) =>
+        id.length > 0 &&
+        isNonNegativeSafeInteger(index) &&
+        index < nextLocalIndex &&
+        Object.hasOwn(agent.provisionalActivities, id),
+    )
+  ) {
+    return false;
+  }
+  return (
+    candidate.schemaVersion === BROWSER_FEED_SCHEMA_VERSION &&
+    (candidate.open === null || candidate.open.localIndex < nextLocalIndex)
+  );
+}
+
+function isOpenGroup(value: unknown): value is OpenGroup | null {
+  if (value === null) return true;
+  if (!isRecord(value)) return false;
+  const events = value.events;
+  if (!Array.isArray(events)) return false;
+  return (
+    isNonNegativeSafeInteger(value.localIndex) &&
+    isNonNegativeSafeInteger(value.firstOffset) &&
+    isNonNegativeSafeInteger(value.lastOffset) &&
+    value.firstOffset <= value.lastOffset &&
+    isNonNegativeSafeInteger(value.eventCount) &&
+    value.eventCount > 0 &&
+    value.eventCount <= MAX_GROUP_EVENTS &&
+    typeof value.eventType === "string" &&
+    value.eventType.length > 0 &&
+    events.length === value.eventCount &&
+    events.every(
+      (event, index) =>
+        isRecord(event) &&
+        event.type === value.eventType &&
+        isNonNegativeSafeInteger(event.offset) &&
+        (index === 0 ||
+          (isRecord(events[index - 1]) &&
+            isNonNegativeSafeInteger(events[index - 1].offset) &&
+            event.offset > events[index - 1].offset)),
+    ) &&
+    events[0]?.offset === value.firstOffset &&
+    events.at(-1)?.offset === value.lastOffset
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function retainCurrentProvisionalIndexes(
+  indexes: Record<string, number>,
+  agent: AgentUiState,
+): Record<string, number> {
+  const retained: Record<string, number> = {};
+  for (const id of Object.keys(agent.provisionalActivities)) {
+    const index = indexes[id];
+    if (index !== undefined) retained[id] = index;
+  }
+  return retained;
+}
+
+function hasInferredScriptOutcome(item: AgentUiItem): boolean {
+  return (
+    item.kind === "activity" &&
+    item.steps.some((step) => step.kind === "code" && step.outcomeSource === "inferred")
+  );
 }
 
 export function rawGroupData(eventType: string, events: readonly StreamEvent[]): RawGroupData {

@@ -171,7 +171,13 @@ function emit(store: WideLogStore) {
 
 /** Runs one logical operation and emits one compact structured event at exit. */
 export async function runWideLog<T>(
-  options: { kind: string; fields?: WideLogFields; parentId?: string },
+  options: {
+    kind: string;
+    fields?: WideLogFields;
+    parentId?: string;
+    /** Classify an expected thrown outcome without turning it into an error log. */
+    classifyError?: (error: unknown) => string | undefined;
+  },
   run: () => T | Promise<T>,
 ): Promise<T> {
   const parentId = options.parentId ?? storage.getStore()?.event.log.id;
@@ -201,7 +207,7 @@ export async function runWideLog<T>(
       return result;
     } catch (error) {
       store.event.error = serializeError(error);
-      store.event.outcome = "error";
+      store.event.outcome = safeSemanticValue(options.classifyError?.(error) ?? "error", "error");
       throw error;
     } finally {
       const endedAt = Date.now();

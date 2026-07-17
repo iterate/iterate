@@ -109,19 +109,57 @@ export async function triggerProjectSearchSync(projectId: string): Promise<void>
  * file mirroring, repo commits): at most one trigger per project per interval
  * per isolate, so passive content becomes searchable in minutes instead of
  * waiting for the hourly schedule. Never creates instances — a project nobody
- * has ever searched keeps costing nothing (the trigger 404s and is swallowed);
- * once a first query/index creates the instance, the passive lanes keep it
- * fresh. Isolate-local state means restarts re-trigger early — harmless, the
- * jobs API itself rate-limits at one per 30s.
+ * has ever searched keeps costing nothing. The namespace is listed before
+ * taking an instance handle, so that expected no-instance state is a clean
+ * no-op; once a first query/index creates the instance, the passive lanes keep
+ * it fresh. Isolate-local state means restarts re-trigger early — harmless,
+ * the jobs API itself rate-limits at one per 30s.
  */
 const lastPassiveSyncTrigger = new Map<string, number>();
 const PASSIVE_SYNC_DEBOUNCE_MS = 120_000;
-export function triggerProjectSearchSyncDebounced(projectId: string): Promise<void> {
+export async function triggerProjectSearchSyncDebounced(projectId: string): Promise<void> {
   const last = lastPassiveSyncTrigger.get(projectId);
   const now = Date.now();
-  if (last !== undefined && now - last < PASSIVE_SYNC_DEBOUNCE_MS) return Promise.resolve();
+  if (last !== undefined && now - last < PASSIVE_SYNC_DEBOUNCE_MS) return;
   lastPassiveSyncTrigger.set(projectId, now);
-  return triggerProjectSearchSync(projectId);
+  const id = projectSearchInstanceId(projectId);
+  try {
+    const { result } = await itxEnv.SEARCH_INSTANCES.list({
+      per_page: 100,
+      search: id,
+    });
+    if (!result.some((instance) => instance.id === id)) return;
+  } catch (error) {
+    // A failed control-plane lookup did not trigger anything, so it must not
+    // consume the debounce window. Let the next passive write retry promptly.
+    lastPassiveSyncTrigger.delete(projectId);
+    console.warn("search sync instance lookup failed", {
+      projectId,
+      error: String(error).slice(0, 200),
+    });
+    return;
+  }
+  await triggerProjectSearchSync(projectId);
+}
+
+// `ctx.exports` remints of a stream's cached project target stay in this
+// isolate, and waitUntil keeps the isolate alive while an index task runs.
+// Keep the tail here rather than on one target instance so a push failure and
+// target remint cannot let two rewrites of the same R2 segment overlap.
+const automaticStreamIndexTails = new Map<string, Promise<void>>();
+
+export function enqueueAutomaticStreamIndex(input: {
+  projectId: string;
+  path: string;
+  run: () => Promise<void>;
+}): Promise<void> {
+  const key = JSON.stringify([input.projectId, input.path]);
+  const previous = automaticStreamIndexTails.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(input.run);
+  automaticStreamIndexTails.set(key, current);
+  return current.finally(() => {
+    if (automaticStreamIndexTails.get(key) === current) automaticStreamIndexTails.delete(key);
+  });
 }
 
 /**
@@ -163,14 +201,16 @@ export async function indexPinnedStreamEvent(input: {
  * batch's events, so the document is complete and the write is idempotent
  * regardless of how delivery batched the offsets.
  *
- * That full re-read is also what makes this safe to run as a first-party step
- * on the shared project-worker delivery (root `processEventBatch`) instead of
- * its own checkpointed lane: the delivery cursor advances on the worker's
- * success, not this side effect, so a transient R2 failure here is healed by
- * the NEXT batch in the same segment (which re-reads and rewrites the whole
- * segment). Only a segment that goes permanently quiet right after a failed
- * write stays short until `itx.search.indexStream`/reindex — acceptable for a
- * derived, rebuildable corpus.
+ * That full re-read is also what makes this safe to run as a best-effort
+ * first-party step on the shared project-worker delivery (root
+ * `processEventBatch`) instead of its own checkpointed lane. An isolate-wide
+ * per-stream tail queues adjacent batches in order under waitUntil, so they
+ * cannot rewrite one R2 object concurrently and indexing does not delay the
+ * delivery acknowledgement. A transient R2 failure is logged; the NEXT batch
+ * in the same segment heals it by re-reading and rewriting the whole segment.
+ * Only a segment that goes permanently quiet right after a failed write stays short until
+ * `itx.search.indexStream`/reindex — acceptable for a derived, rebuildable
+ * corpus.
  */
 export async function indexStreamEventBatch(input: {
   batch: StreamPushEventBatch;
@@ -205,11 +245,9 @@ export async function indexStreamEventBatch(input: {
       segment,
     });
     if (document === null) {
-      // Nothing indexable in the segment (all housekeeping/ephemeral). Delete
-      // rather than skip so a segment that RENDERED before but no longer does
-      // (e.g. after a disallow-list change) self-heals instead of serving a
-      // stale document forever.
-      await itxEnv.SEARCH_BUCKET.delete(key);
+      // Append-only segments containing only housekeeping events never had a
+      // document. R2 reports missing head/delete operations as native errors,
+      // so the ordinary no-document case is simply a no-op.
       continue;
     }
     const { first: firstOffset, last: lastOffset } = segmentOffsetRange(segment);
@@ -226,7 +264,7 @@ export async function indexStreamEventBatch(input: {
 
 /**
  * Re-index a whole stream from offset 0 — the explicit repair verb for the
- * one gap the fire-and-forget per-batch indexing can leave: a segment that
+ * one gap the best-effort per-batch indexing can leave: a segment that
  * went permanently quiet right after a failed write. Paginates the stream in
  * offset order and rewrites every segment document (grouping by segment
  * boundary, so gaps from ephemeral/disallow-listed offsets don't matter).

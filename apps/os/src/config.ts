@@ -94,7 +94,12 @@ export const AppConfig = z.object({
     .object({
       transport: z.enum(["unified", "byok"]).default("byok"),
       id: z.string().trim().min(1).default("default"),
-      responseCacheTtlSeconds: z.coerce.number().int().positive().optional(),
+      responseCacheTtlSeconds: z
+        .preprocess(
+          (value) => (value === "" ? undefined : value),
+          z.coerce.number().int().positive().optional(),
+        )
+        .optional(),
     })
     .prefault({}),
   cloudflare: z

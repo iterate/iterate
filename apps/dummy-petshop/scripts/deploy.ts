@@ -28,7 +28,6 @@ export default async function deploy(
     env?: string;
   } = {},
 ) {
-  writeWranglerConfig();
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/dummy-petshop",
@@ -40,6 +39,7 @@ export default async function deploy(
     optionalSecrets: ["PETSHOP_SEAL_KEY", "PETSHOP_BACKDOOR_SECRET"],
     build: "checked-in-config",
     prepare: (_ctx, secretValues) => {
+      writeWranglerConfig({ forDeployment: true });
       secretValues.PETSHOP_SEAL_KEY ??= randomSealKey();
     },
     smokes: (env) => [

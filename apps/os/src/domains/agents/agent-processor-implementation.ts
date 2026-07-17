@@ -188,7 +188,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   ): undefined {
     const { append, appendTo, blockProcessorWhile, event, previousState, runInBackground, state } =
       args;
-    if (event.type === "events.iterate.com/agent/created") {
+    if (event !== null && event.type === "events.iterate.com/agent/created") {
       blockProcessorWhile(() =>
         appendTo("/", {
           type: "events.iterate.com/agent/created",
@@ -198,9 +198,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       );
     }
     if (state.birthCertificate === null) return;
-    // AT-HEAD reconcile (was `onCaughtUp`): fires only for the last consumed
-    // event of a batch that reached head (`delivery.caughtUp`), so `state` is
-    // the whole fold — drive or settle open LLM obligations, derive the next
+    // AT-HEAD reconcile: `delivery.caughtUp` means `state` is the whole
+    // observed fold. The signal rides the last consumed event, or an eventless
+    // pass when the raw tail contains nothing this processor consumes. Drive
+    // or settle open LLM obligations, derive the next
     // scheduling decision, then announce busy/idle flips. ONE blocking closure
     // so the whole pass is awaited as this head event's own work before its
     // deferred commit; a failure fails the frame and the transport replays it.
@@ -216,6 +217,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         await this.#reconcileStatusAnnouncement(args);
       });
     }
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile
+    // above — which is exactly what drives an obligation stranded because the
+    // stream head is an unconsumed event (subscriber-disconnected, a foreign
+    // fact). This is why the reconcile MUST run without a consumed event.
+    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/agents/web-message-sent": {
         // Files the agent attached to its own message ride the reflection too,
@@ -288,8 +294,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             return;
           }
           await append({
-            type: "events.iterate.com/capability-host/script-execution-requested",
-            idempotencyKey: this.idempotencyKey("script-execution-requested", event),
+            type: "events.iterate.com/capability-host/script-run-requested",
+            idempotencyKey: this.idempotencyKey("script-run-requested", event),
             payload: {
               code: extraction.code,
               executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
@@ -341,7 +347,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (event.payload.phase !== "scheduled") return;
         this.#scheduledRequestTimers.get(event.payload.requestId)?.cancel();
         return;
-      case "events.iterate.com/capability-host/script-execution-completed": {
+      case "events.iterate.com/capability-host/script-run-settled": {
         // Rendering may spill an oversized result into the agent's workspace
         // first (a durable write that can wait on the checkout's first-use
         // clone), so the whole render-then-append runs inside the blocking
@@ -566,8 +572,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   // ---------------------------------------------------------------------------
   // Lane 3: reconciliation. Invoked from `processEvent` under
-  // `delivery.caughtUp` (the last consumed event of a batch that reached
-  // head), so neither pass needs its own mid-refold gate: a catch-up fold can
+  // `delivery.caughtUp` after the scan reaches head, so neither pass needs its
+  // own mid-refold gate: a catch-up fold can
   // never dial env.AI for a long-settled request or journal a false failure.
   // RECOVERY rides this same path: `events.iterate.com/stream/processor-revived` — the
   // fact the keepalive's revival pass journals after an eviction took
@@ -1402,7 +1408,7 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
         pendingTriggerOffset: null,
         pendingTriggerSource: null,
       };
-    case "events.iterate.com/capability-host/script-execution-requested":
+    case "events.iterate.com/capability-host/script-run-requested":
       return state.activeScriptExecutionIds.includes(event.payload.executionId)
         ? state
         : {
@@ -1412,7 +1418,7 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
               event.payload.executionId,
             ],
           };
-    case "events.iterate.com/capability-host/script-execution-completed":
+    case "events.iterate.com/capability-host/script-run-settled":
       return state.activeScriptExecutionIds.includes(event.payload.executionId)
         ? {
             ...state,
@@ -1967,28 +1973,33 @@ function extractAsyncTypescriptSnippet(content: string): SnippetExtraction {
 async function scriptResultAgentInput(
   event: Extract<
     AgentConsumedEvent,
-    { type: "events.iterate.com/capability-host/script-execution-completed" }
+    { type: "events.iterate.com/capability-host/script-run-settled" }
   >,
   writeWorkspaceFile: AgentProcessorDeps["writeWorkspaceFile"],
 ): Promise<string | null> {
   const payload = event.payload;
   if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
-  if (payload.error !== undefined) {
+  const settlement = payload.settlement;
+  if (settlement.status === "failed") {
     // Advertise the recovery tools at the moment of failure — a wrong call
     // is exactly when docs.typecheck's did-you-mean and docs.search's
     // working examples pay off, and nothing else tells the model they exist.
+    const executionNote = settlement.executionMayHaveOccurred
+      ? "The script may have partially executed; inspect state before retrying."
+      : "The script did not execute.";
     return (
-      `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\`\n` +
+      `Your script failed during ${settlement.phase} (${settlement.failureKind}):\n` +
+      `\`\`\`\n${truncateScriptResult(settlement.error)}\n\`\`\`\n${executionNote}\n` +
       `Before retrying: \`await itx.docs.typecheck({ code })\` compiles a script against this ` +
       `scope's real types (typos come back as "did you mean …"), and ` +
       `\`await itx.docs.search({ q: "several related words" })\` finds working examples.`
     );
   }
-  if (payload.result === undefined) return null;
-  const text = stringifyScriptResult(payload.result);
+  if (settlement.result === undefined) return null;
+  const text = stringifyScriptResult(settlement.result);
   // String results are raw text, not JSON — the fence label, the spill
   // file's extension, and the read-it-back recipe all say so honestly.
-  const isRawText = typeof payload.result === "string";
+  const isRawText = typeof settlement.result === "string";
   const fence = isRawText ? "```" : "```json";
   if (text.length > SCRIPT_RESULT_HISTORY_LIMIT && writeWorkspaceFile !== undefined) {
     try {

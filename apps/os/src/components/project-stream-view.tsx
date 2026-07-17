@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
@@ -16,10 +16,12 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
 import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
+import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
-import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
-import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
+import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";
+import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
+import { ScriptExecutionInspectorContent } from "~/components/script-execution-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
   StreamStatePanel,
@@ -47,8 +49,8 @@ type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 /**
  * The stream view: every domain page's main pane. Renders mode-owned feed
  * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
- * with the composer below and right-edge overlays (raw-event inspector,
- * processors sheet) on top.
+ * with the composer below and standard right-edge sheets (inspectors and
+ * processor state) on top.
  *
  * This component is the orchestrator: it owns the two browser-hosted
  * processors that mirror the stream into local SQLite (the raw `events` log
@@ -189,7 +191,7 @@ export function ProjectStreamView({
     `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const agentUiState = useAgentUiReducedState(store.streamDatabase);
+  const agentUiState = useAgentUiReducedState(store.streamDatabase, store, snapshot.liveRevision);
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
   const metrics = useBrowserStreamMetrics(store);
@@ -234,7 +236,10 @@ export function ProjectStreamView({
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy = agentUiState?.live?.steps.some((step) => step.status === "running") ?? false;
+  const agentBusy =
+    agentUiState?.live != null &&
+    (agentUiState.live.phase != null ||
+      agentUiState.live.steps.some((step) => step.status === "running"));
   const presence = agentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,
@@ -275,6 +280,7 @@ export function ProjectStreamView({
       liveState={caps.agentFeed ? agentUiState : null}
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
+      {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
       isPending={agentUiState == null && snapshot.connectionStatus !== "subscribed"}
@@ -283,14 +289,19 @@ export function ProjectStreamView({
 
   const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
 
-  // The feed column — mode body with overlays on top, composer below. One JSX
+  // The feed column — mode body with inspectors on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
   // thing.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {modeBody}
-        <StreamInspectorOverlay caps={caps} panels={panels} database={store.streamDatabase} />
+        <StreamInspectorSheet
+          agentUiState={agentUiState}
+          caps={caps}
+          panels={panels}
+          database={store.streamDatabase}
+        />
       </div>
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
@@ -396,43 +407,154 @@ export function ProjectStreamView({
 }
 
 /**
- * The feed's right-edge inspector, or nothing. At most one inspector holds
+ * The feed's standard right-edge inspector sheet. At most one inspector holds
  * the edge (useStreamViewPanels keeps their URL keys mutually exclusive):
  * the raw-event inspector when the mode offers it and `?event=` is set,
- * else the LLM request inspector when `?llmRequest=` is set — the latter in
- * EVERY mode, so a shared link works regardless of the viewer's tab. Both
- * read the RAW events mirror (not feed_items): the fold reads the journal,
+ * else an LLM or script inspector when its deep-link parameter is set — in
+ * EVERY mode, so a shared link works regardless of the viewer's tab. All
+ * inspectors read the RAW events mirror (not feed_items): the fold reads the journal,
  * the same source the processor read.
  */
-function StreamInspectorOverlay({
+function StreamInspectorSheet({
+  agentUiState,
   caps,
   panels,
   database,
 }: {
+  agentUiState: AgentUiState | null;
   caps: ReturnType<typeof modeCapabilities>;
   panels: ReturnType<typeof useStreamViewPanels>;
   database: StreamBrowserDatabase;
 }) {
-  if (caps.eventInspector && panels.inspectedOffset != null) {
-    return (
-      <RawEventInspectorPanel
-        database={database}
-        offset={panels.inspectedOffset}
-        onNavigate={panels.inspectEvent}
-        onClose={panels.closeInspector}
-      />
-    );
+  const activeInspector = useMemo<
+    | { kind: "event"; offset: number }
+    | { kind: "llm"; offset: number }
+    | { kind: "script"; executionId: string }
+    | null
+  >(() => {
+    if (caps.eventInspector && panels.inspectedOffset != null) {
+      return { kind: "event", offset: panels.inspectedOffset };
+    }
+    if (panels.inspectedLlmRequestOffset != null) {
+      return { kind: "llm", offset: panels.inspectedLlmRequestOffset };
+    }
+    if (panels.inspectedScriptExecutionId != null) {
+      return { kind: "script", executionId: panels.inspectedScriptExecutionId };
+    }
+    return null;
+  }, [
+    caps.eventInspector,
+    panels.inspectedLlmRequestOffset,
+    panels.inspectedOffset,
+    panels.inspectedScriptExecutionId,
+  ]);
+  const activeInspectorContext = useMemo(
+    () =>
+      activeInspector == null
+        ? null
+        : {
+            inspector: activeInspector,
+            database,
+            agentUiState,
+          },
+    [activeInspector, agentUiState, database],
+  );
+  const [retainedInspectorContext, setRetainedInspectorContext] = useState(activeInspectorContext);
+  const activeInspectorKey =
+    activeInspector?.kind === "script"
+      ? `script:${activeInspector.executionId}`
+      : activeInspector == null
+        ? null
+        : `${activeInspector.kind}:${activeInspector.offset}`;
+  // Base UI reports dismissal before TanStack Router commits the URL search
+  // update. Suppress that exact inspector immediately so retained exit content
+  // cannot navigate and write its deep link back during the closing frame.
+  // Keep suppression latched past animation completion if the router is slow;
+  // release it only after the URL actually leaves this selection.
+  const [dismissedInspectorKey, setDismissedInspectorKey] = useState<string | null>(null);
+  const inspectorOpen = activeInspectorKey != null && activeInspectorKey !== dismissedInspectorKey;
+
+  useEffect(() => {
+    if (dismissedInspectorKey != null && activeInspectorKey !== dismissedInspectorKey) {
+      setDismissedInspectorKey(null);
+    }
+  }, [activeInspectorKey, dismissedInspectorKey]);
+
+  // Base UI keeps the popup mounted for its exit transition. Retain the last
+  // target and the stream data it belongs to while URL-driven navigation
+  // closes the sheet, so a stream switch cannot briefly query the new stream
+  // with the previous stream's inspector identifier.
+  useEffect(() => {
+    if (activeInspectorContext != null) setRetainedInspectorContext(activeInspectorContext);
+  }, [activeInspectorContext]);
+
+  const inspectorContext = activeInspectorContext ?? retainedInspectorContext;
+  let content: ReactNode = null;
+  let testId: string | undefined;
+
+  if (inspectorContext != null) {
+    const { inspector } = inspectorContext;
+    if (inspector.kind === "event") {
+      testId = "raw-event-inspector";
+      content = (
+        <RawEventInspectorContent
+          database={inspectorContext.database}
+          navigationEnabled={inspectorOpen && activeInspector?.kind === "event"}
+          offset={inspector.offset}
+          onNavigate={panels.inspectEvent}
+        />
+      );
+    } else if (inspector.kind === "llm") {
+      const liveStep = inspectorContext.agentUiState?.live?.steps.find(
+        (step): step is AgentUiLlmStep =>
+          step.kind === "llm" &&
+          step.llmRequestOffset === inspector.offset &&
+          step.status === "running",
+      );
+      testId = "llm-request-inspector";
+      content = (
+        <LlmRequestInspectorContent
+          database={inspectorContext.database}
+          {...(liveStep == null ? {} : { liveStep })}
+          llmRequestOffset={inspector.offset}
+        />
+      );
+    } else {
+      testId = "script-execution-inspector";
+      content = (
+        <ScriptExecutionInspectorContent
+          database={inspectorContext.database}
+          executionId={inspector.executionId}
+        />
+      );
+    }
   }
-  if (panels.inspectedLlmRequestOffset != null) {
-    return (
-      <LlmRequestInspectorPanel
-        database={database}
-        llmRequestOffset={panels.inspectedLlmRequestOffset}
-        onClose={panels.closeLlmRequestInspector}
-      />
-    );
-  }
-  return null;
+
+  return (
+    <Sheet
+      open={inspectorOpen}
+      onOpenChange={(open) => {
+        if (!open) {
+          setDismissedInspectorKey(activeInspectorKey);
+          panels.closeInspector();
+        }
+      }}
+      onOpenChangeComplete={(open) => {
+        if (!open) {
+          setRetainedInspectorContext(null);
+        }
+      }}
+    >
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
+        data-testid={testId}
+        inert={!inspectorOpen}
+      >
+        {content}
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 /**
@@ -450,7 +572,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
     >
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
+        className="flex w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
         showCloseButton={false}
       >
         <SheetTitle className="sr-only">Stream events for {streamPath}</SheetTitle>
@@ -464,20 +586,22 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
               variant="ghost"
               size="icon"
               title="Search & filter"
+              aria-label="Search and filter stream events"
               aria-expanded={search.filter === true}
               onClick={() => setSearch({ filter: search.filter === true ? undefined : true })}
               className="rounded-full text-muted-foreground"
             >
-              <FilterIcon className="size-3.5" />
+              <FilterIcon aria-hidden="true" className="size-3.5" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               title="Close events"
+              aria-label="Close stream events"
               onClick={closeEventsSheet}
               className="rounded-full text-muted-foreground"
             >
-              <XIcon className="size-3.5" />
+              <XIcon aria-hidden="true" className="size-3.5" />
             </Button>
           </div>
         </div>
@@ -652,13 +776,16 @@ function useAgentInterrupt(args: {
 }
 
 /**
- * The browser-feed projector persists its reduced state — whose `agent` slice
- * holds the live activity with streaming text and the presence roster — to
- * `processor_progress` on every checkpoint; reading it reactively is how the
- * live tail re-renders per delta batch. Null until the projector's first
- * checkpoint lands.
+ * The browser-feed projector persists the durable `agent` slice to
+ * `processor_progress`. Genuinely live ephemeral chunks stay in the store's
+ * in-memory tail; `liveRevision` makes those batches reactive without ever
+ * writing or replaying them. Null until either source has produced state.
  */
-function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState | null {
+function useAgentUiReducedState(
+  database: StreamBrowserDatabase,
+  store: StreamBrowserStore,
+  liveRevision: number,
+): AgentUiState | null {
   const result = useStreamQuery(
     database,
     // subscription_key is part of the primary key, so multiple rows can exist
@@ -668,14 +795,20 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
     [BrowserFeedContract.slug],
   );
   return useMemo(() => {
+    // Volatile live batches do not write SQLite; the revision is the reactive
+    // signal that makes this snapshot read run again.
+    void liveRevision;
+    const live = store.agentUiState();
+    if (live !== null) return live;
     const raw = result.data[0]?.reduced_state;
     if (typeof raw !== "string") return null;
     try {
-      return (JSON.parse(raw) as { agent?: AgentUiState }).agent ?? null;
+      const parsed: unknown = JSON.parse(raw);
+      return isCurrentBrowserFeedState(parsed) ? parsed.agent : null;
     } catch {
       return null;
     }
-  }, [result.data]);
+  }, [liveRevision, result.data, store]);
 }
 
 function useStreamPauseState(database: StreamBrowserDatabase): {

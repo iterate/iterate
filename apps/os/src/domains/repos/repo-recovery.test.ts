@@ -1,7 +1,6 @@
 // Repo artifact readiness as an at-head obligation, plus eviction recovery: the repo
 // processor's `onCaughtUp` reconciliation of the two durable obligations —
-// creation (blocking, NEVER re-run once `repo/ready` folded: the seed
-// force-push would clobber user commits) and GitHub imports (background,
+// creation (blocking, NEVER re-run once `repo/ready` folded) and GitHub imports (background,
 // safely RE-driven: the sync is an idempotent current-head fast-forward).
 //
 // The processor is driven the way production drives it: a REAL
@@ -144,6 +143,8 @@ function makeHarness() {
           projectId: PROJECT_ID,
           path: HOME,
           events,
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
           state: null,
         });
@@ -218,6 +219,8 @@ describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)
       projectId: PROJECT_ID,
       path: HOME,
       events: [requested!],
+      scannedAfterOffset: woken.checkpointOffset,
+      scannedThroughOffset: requested!.offset,
       streamMaxOffset: 2,
       state: null,
     });
@@ -251,8 +254,8 @@ describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)
     // A fresh incarnation replaying the WHOLE journal (durable progress
     // erased): the refold replays `repo/created` with event-time state in
     // which `ready` is still false, but the at-head fold has absorbed the
-    // journaled `repo/ready` fact — createRepoArtifact, whose seeding
-    // force-pushes the seed commit over user commits, must provably not run.
+    // journaled `repo/ready` fact — the completed external creation
+    // obligation must provably not run again.
     h.kv.clear();
     h.crash();
     h.create.impl = () => {
@@ -279,6 +282,8 @@ describe("eviction recovery end to end", () => {
         projectId: PROJECT_ID,
         path: HOME,
         events: h.stream.events.filter((event) => event.offset > woken.checkpointOffset),
+        scannedAfterOffset: woken.checkpointOffset,
+        scannedThroughOffset: h.head(),
         streamMaxOffset: h.head(),
         state: null,
       }),

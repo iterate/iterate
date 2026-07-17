@@ -7,6 +7,22 @@ export function errorMessage(error: unknown): string {
 }
 
 /**
+ * Whether a failed stream RPC proves that its transport session was torn
+ * down. `kill requested` is the Stream Durable Object's explicit abort reason
+ * (`StreamDurableObject.kill`); in-flight appends are idempotent and must
+ * reconnect/retry across that control-plane restart rather than surfacing it
+ * as an application rejection.
+ */
+export function isStreamSessionBrokenError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return (
+    message.includes("websocket") ||
+    message.includes("rpc session") ||
+    message.includes("kill requested")
+  );
+}
+
+/**
  * The deadline lane's own error class, so catch blocks can tell "the far side
  * answered nothing" (transport suspect — a half-open socket swallows calls
  * forever) apart from "the far side answered with a failure" (transport fine,

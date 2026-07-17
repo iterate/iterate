@@ -1,26 +1,30 @@
-import { StreamProcessor } from "../../../stream-processor.ts";
-import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import {
-  browserProcessorProgressRewindStatements,
-  deleteBrowserProcessorState,
-  ensureBrowserProcessorProgressSchema,
-} from "../../browser/processor-state-storage.ts";
+  initialAgentUiState,
+  reduceAgentUi,
+  type AgentUiActivity,
+  type AgentUiState,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { StreamProcessor } from "../../../stream-processor.ts";
+import type { StreamEvent } from "../../../schemas.ts";
+import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
+import { ensureBrowserProcessorProgressSchema } from "../../browser/processor-state-storage.ts";
 import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserFeedContract } from "./contract.ts";
 import {
   planBrowserFeedOps,
   RAW_GROUP_KIND,
+  isAgentActivity,
   type BrowserFeedState,
   type FeedOp,
 } from "./projector.ts";
 export { BrowserFeedContract } from "./contract.ts";
+export { BROWSER_FEED_SCHEMA_VERSION } from "./projector.ts";
 
 /** The table this processor owns — the ONLY rendered-feed table in the mirror. */
 export const BROWSER_FEED_TABLE = "feed_items";
 
-/** Bumped into the writer-lock name (and mirror meta) so a schema/projection change rebuilds the mirror. */
-export const BROWSER_FEED_SCHEMA_VERSION = 1;
+type VolatileAgentState = { state: AgentUiState; throughOffset: number };
 
 /**
  * Folds stream events into the single `feed_items` projection for the browser
@@ -40,6 +44,11 @@ export const BROWSER_FEED_SCHEMA_VERSION = 1;
  */
 export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, { sql: SqlClient }> {
   readonly contract = BrowserFeedContract;
+  #volatileAgentState: VolatileAgentState | null = null;
+  readonly #pendingActivityRows = new Map<
+    number,
+    { activity: AgentUiActivity; sourceOffset: number }
+  >();
 
   /** Shared with the progress store — see the class doc. One per instance. */
   readonly projectionBuffer = new BrowserProjectionWriteBuffer();
@@ -47,6 +56,54 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   /** Projection schema for the progress store's first-open (prepare() successor). */
   ensureProjectionSchema(sql: SqlClient): Promise<void> {
     return ensureBrowserFeedSchema(sql);
+  }
+
+  /**
+   * Build (without publishing) the transient agent-tail candidate for one
+   * genuinely live frame. The durable runners still receive only durable
+   * events; this overlay folds the original event order so a chunk before a
+   * completion cannot be replayed after that completion. A frame with no
+   * ephemeral event starts no overlay, while later durable frames continue an
+   * already-live overlay until reconnect clears it.
+   */
+  prepareVolatileFrame(args: {
+    events: readonly StreamEvent[];
+    persistedState: unknown;
+    persistedThroughOffset: number;
+    scannedThroughOffset: number;
+  }): VolatileAgentState | null {
+    if (
+      this.#volatileAgentState === null &&
+      !args.events.some((event) => event.ephemeral === true)
+    ) {
+      return null;
+    }
+    const persistedState = BrowserFeedContract.stateSchema.parse(args.persistedState);
+    let state = this.#volatileAgentState?.state ?? persistedState.agent;
+    const afterOffset = this.#volatileAgentState?.throughOffset ?? args.persistedThroughOffset;
+    for (const event of args.events) {
+      if (event.offset <= afterOffset) continue;
+      state = reduceAgentUi(
+        state,
+        event as unknown as Parameters<typeof reduceAgentUi>[1],
+      ).endState;
+    }
+    return {
+      state,
+      throughOffset: Math.max(afterOffset, args.scannedThroughOffset),
+    };
+  }
+
+  commitVolatileFrame(candidate: VolatileAgentState | null): void {
+    if (candidate !== null) this.#volatileAgentState = candidate;
+  }
+
+  get volatileAgentUiState(): AgentUiState | null {
+    return this.#volatileAgentState?.state ?? null;
+  }
+
+  clearVolatileState(): void {
+    this.#volatileAgentState = null;
   }
 
   protected override reduce(
@@ -58,13 +115,52 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   protected override processEvent(
     args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
   ): undefined {
-    const { ops } = planBrowserFeedOps(args.previousState, [args.event]);
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+    const { event } = args;
+    if (event === null) return;
+    const { ops } = planBrowserFeedOps(args.previousState, [event]);
+    // A drained buffer means a new frame has started. Pending rows exist only
+    // to make late corrections inside ONE uncommitted frame visible; SQLite
+    // is authoritative after the preceding frame commits.
+    if (this.projectionBuffer.pendingCount === 0) this.#pendingActivityRows.clear();
+
+    const executionId =
+      event.type === "events.iterate.com/capability-host/script-run-settled"
+        ? readExecutionId(event.payload)
+        : null;
+    const alreadyCorrected =
+      executionId !== null &&
+      ops.some(
+        (op) =>
+          op.kind === "replace" &&
+          isAgentActivity(op.data) &&
+          activityHasDurableExecution(op.data, executionId),
+      );
+    if (executionId !== null && !alreadyCorrected) {
+      args.blockProcessorWhile(async () => {
+        const correction = await this.#findPrunedActivityCorrection(event, executionId);
+        this.#appendOps(
+          event.offset,
+          correction === null ? ops : [...ops, correction],
+          args.state.open,
+        );
+      });
+      return;
+    }
+    this.#appendOps(event.offset, ops, args.state.open);
+  }
+
+  #appendOps(offset: number, ops: readonly FeedOp[], open: BrowserFeedState["open"]): void {
     if (ops.length === 0) return;
-    const open = args.state.open;
+    for (const op of ops) {
+      if ((op.kind === "insert" || op.kind === "replace") && isAgentActivity(op.data)) {
+        this.#pendingActivityRows.set(op.localIndex, { activity: op.data, sourceOffset: offset });
+      }
+    }
     this.projectionBuffer.append(
-      args.event.offset,
+      offset,
       ops.map((op) => {
-        if (open === null || op.localIndex !== open.localIndex) {
+        if (op.kind === "replace" || open === null || op.localIndex !== open.localIndex) {
           // Settled rows (agent items, raw singletons, groups closed within
           // this event): one immutable statement each.
           return { build: () => feedOpToStatement(op) };
@@ -93,6 +189,102 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
       }),
     );
   }
+
+  async #findPrunedActivityCorrection(
+    event: StreamEvent,
+    executionId: string,
+  ): Promise<FeedOp | null> {
+    const pending = findInferredActivityRow(
+      new Map(
+        [...this.#pendingActivityRows].map(([localIndex, row]) => [localIndex, row.activity]),
+      ),
+      executionId,
+    );
+    const matched = pending ?? (await readInferredActivityRow(this.deps.sql, executionId));
+    if (matched === null) return null;
+    const start = initialAgentUiState();
+    const reduced = reduceAgentUi(
+      { ...start, provisionalActivities: { [matched.activity.id]: matched.activity } },
+      event as unknown as Parameters<typeof reduceAgentUi>[1],
+    );
+    const corrected = reduced.items.find(
+      (item): item is AgentUiActivity =>
+        item.kind === "activity" && item.id === matched.activity.id,
+    );
+    if (corrected === undefined) return null;
+    return {
+      kind: "replace",
+      localIndex: matched.localIndex,
+      itemKind: `agent.${corrected.kind}`,
+      lastOffset: event.offset,
+      data: corrected,
+    };
+  }
+}
+
+function activityHasDurableExecution(activity: AgentUiActivity, executionId: string): boolean {
+  return activity.steps.some(
+    (step) =>
+      step.kind === "code" && step.executionId === executionId && step.outcomeSource === "durable",
+  );
+}
+
+function findInferredActivityRow(
+  rows: ReadonlyMap<number, AgentUiActivity>,
+  executionId: string,
+): { localIndex: number; activity: AgentUiActivity } | null {
+  for (const [localIndex, activity] of rows) {
+    if (
+      activity.steps.some(
+        (step) =>
+          step.kind === "code" &&
+          step.executionId === executionId &&
+          step.outcomeSource === "inferred",
+      )
+    ) {
+      return { localIndex, activity };
+    }
+  }
+  return null;
+}
+
+async function readInferredActivityRow(
+  sql: SqlClient,
+  executionId: string,
+): Promise<{ localIndex: number; activity: AgentUiActivity } | null> {
+  const [row] = await sql.exec(
+    `SELECT local_index, json(data) AS data
+     FROM feed_items
+     WHERE kind = 'agent.activity'
+       AND EXISTS (
+         SELECT 1
+         FROM json_each(json_extract(data, '$.steps')) AS step
+         WHERE json_extract(step.value, '$.kind') = 'code'
+           AND json_extract(step.value, '$.executionId') = ?
+           AND json_extract(step.value, '$.outcomeSource') = 'inferred'
+       )
+     ORDER BY local_index DESC
+     LIMIT 1`,
+    [executionId],
+  );
+  const localIndex = row?.local_index;
+  const raw = row?.data;
+  if (!Number.isSafeInteger(localIndex) || typeof raw !== "string") return null;
+  try {
+    const activity: unknown = JSON.parse(raw);
+    return isAgentActivity(activity) ? { localIndex: localIndex as number, activity } : null;
+  } catch {
+    return null;
+  }
+}
+
+function readExecutionId(payload: unknown): string | null {
+  return payload !== null &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    typeof (payload as Record<string, unknown>).executionId === "string"
+    ? ((payload as Record<string, unknown>).executionId as string)
+    : null;
 }
 
 function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
@@ -116,6 +308,12 @@ function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
       ],
     };
   }
+  if (op.kind === "replace") {
+    return {
+      sql: `UPDATE feed_items SET kind = ?, last_offset = ?, data = jsonb(?) WHERE local_index = ?`,
+      params: [op.itemKind, op.lastOffset, JSON.stringify(op.data), op.localIndex],
+    };
+  }
   return {
     sql: `UPDATE feed_items SET last_offset = ?, event_count = ?, data = jsonb(?) WHERE local_index = ?`,
     params: [op.lastOffset, op.eventCount, JSON.stringify(op.data), op.localIndex],
@@ -132,30 +330,8 @@ export const ensureBrowserFeedSchema = createSchemaEnsurer({
     // Version resets ride the store's resetOnSchemaVersionChange lane
     // (mirror meta keyed by slug) instead.
     //
-    // Pre-unification cleanup: mirrors built before browser-feed carry the
-    // retired agent-ui processor's agent_feed_items table and a feed_items
-    // with a `component` column. Both are disposable projections — drop them
-    // (the old-shape feed_items is detected by its missing `kind` column) and
-    // clear the retired processors' checkpoints so the mirror is exactly
-    // events + feed_items plus the shared progress bookkeeping.
-    const columns = await sql.exec(`SELECT name FROM pragma_table_info('feed_items')`);
-    const isLegacyFeedItems =
-      columns.length > 0 && !columns.some((column) => column.name === "kind");
     await sql.batch(
       [
-        { sql: `DROP TABLE IF EXISTS agent_feed_items` },
-        ...(isLegacyFeedItems
-          ? [
-              // Dropping the old-shaped table MUST rewind browser-feed's own
-              // cursor in the SAME transaction: a rollback build recreates the
-              // old shape without touching processor_progress, so a surviving
-              // acknowledgement at N over the recreated-empty table would
-              // resume delivery at N+1 and leave feed rows 1..N permanently
-              // missing.
-              ...browserProcessorProgressRewindStatements(BrowserFeedContract.slug),
-              { sql: `DROP TABLE IF EXISTS feed_items` },
-            ]
-          : []),
         {
           sql: `
             -- One row per rendered Feed Item, pretty and raw interleaved in ONE
@@ -182,7 +358,5 @@ export const ensureBrowserFeedSchema = createSchemaEnsurer({
       ],
       { transaction: true },
     );
-    await deleteBrowserProcessorState({ sql, processorSlug: "agent-ui" });
-    await deleteBrowserProcessorState({ sql, processorSlug: "browser-event-feed" });
   },
 });

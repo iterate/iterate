@@ -4,10 +4,29 @@ import { envs } from "../../../envs.ts";
 import {
   builderConfig,
   config,
+  localDevAuthJwks,
   localAuthServiceBinding,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
+  envShapedVars,
 } from "./generate-wrangler-config.ts";
+
+it("does not emit the local forge JWKS into deployed builds", () => {
+  const forgePrivateJwk = JSON.stringify({
+    kty: "OKP",
+    kid: "test-forge",
+    crv: "Ed25519",
+    x: "public-key",
+    d: "private-key",
+  });
+
+  expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: "prd" })).toBeUndefined();
+  expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: undefined })).toBe(
+    JSON.stringify({
+      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", x: "public-key" }],
+    }),
+  );
+});
 
 it.each([
   "APP_CONFIG_LOGS",
@@ -119,6 +138,19 @@ it("selects the matching remote auth worker for local dev and the local worker f
 it("never ships the old shared auth service token to OS", () => {
   expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
   expect(config.secrets.required).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
+});
+
+it("emits the AI response-cache key for every deployment while keeping production disabled", () => {
+  expect(envShapedVars(envs.prd)).toMatchObject({
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: "",
+  });
+  expect(envShapedVars(envs.preview_6)).toMatchObject({
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
+  });
+});
+
+it("does not retain a reconciled Durable Object tombstone", () => {
+  expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
 });
 
 it("routes public event docs hosts to the os worker", () => {

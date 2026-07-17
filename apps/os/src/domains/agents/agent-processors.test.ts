@@ -220,6 +220,24 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
   });
 }
 
+function scriptSucceeded(result?: unknown) {
+  return {
+    status: "succeeded" as const,
+    ...(result === undefined ? {} : { result }),
+  };
+}
+
+function scriptFailed(error: string) {
+  return {
+    status: "failed" as const,
+    error,
+    failureKind: "runtime" as const,
+    phase: "execution" as const,
+    executionMayHaveOccurred: true,
+    cancellation: "external-work-may-continue" as const,
+  };
+}
+
 describe("minimal web-chat agent processors", () => {
   it("feeds a returned script result back as input and schedules another turn", async () => {
     const stream = agentStream();
@@ -228,8 +246,11 @@ describe("minimal web-chat agent processors", () => {
     const deliver = () => runner.catchUp();
 
     await stream.append(systemContext(), {
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: { inbox: ["a", "b"] } },
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: {
+        executionId: "agent-output:7",
+        settlement: scriptSucceeded({ inbox: ["a", "b"] }),
+      },
     });
     await deliver();
     expect(reduceAgentEvents(stream.events).pendingTriggerSource).toBe("agent-loop");
@@ -255,8 +276,11 @@ describe("minimal web-chat agent processors", () => {
     const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: 'line one\nline "two"' },
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: {
+        executionId: "agent-output:7",
+        settlement: scriptSucceeded('line one\nline "two"'),
+      },
     });
     await agentRunner(agent, stream).catchUp();
 
@@ -285,8 +309,8 @@ describe("minimal web-chat agent processors", () => {
 
     const result = { items: "x".repeat(50_000) };
     await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result },
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: { executionId: "agent-output:7", settlement: scriptSucceeded(result) },
     });
     await agentRunner(agent, stream).catchUp();
 
@@ -328,8 +352,8 @@ describe("minimal web-chat agent processors", () => {
     // file to R2 itself, so no splitting happens here.
     const result = "x".repeat(9_200_000);
     await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result },
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: { executionId: "agent-output:7", settlement: scriptSucceeded(result) },
     });
     await agentRunner(agent, stream).catchUp();
 
@@ -351,8 +375,11 @@ describe("minimal web-chat agent processors", () => {
     });
 
     await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: { items: "x".repeat(50_000) } },
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: {
+        executionId: "agent-output:7",
+        settlement: scriptSucceeded({ items: "x".repeat(50_000) }),
+      },
     });
     await agentRunner(agent, stream).catchUp();
 
@@ -378,8 +405,8 @@ describe("minimal web-chat agent processors", () => {
     });
 
     await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", result: { ok: true } },
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: { executionId: "agent-output:7", settlement: scriptSucceeded({ ok: true }) },
     });
     await agentRunner(agent, stream).catchUp();
 
@@ -393,13 +420,13 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
-  it("feeds a thrown script error back as input", async () => {
+  it("feeds a failed script settlement back as input", async () => {
     const stream = agentStream();
     const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "agent-output:7", error: "gmail exploded" },
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: { executionId: "agent-output:7", settlement: scriptFailed("gmail exploded") },
     });
     await agentRunner(agent, stream).catchUp();
 
@@ -408,7 +435,7 @@ describe("minimal web-chat agent processors", () => {
         event.type === "events.iterate.com/agents/context-added" &&
         event.payload?.role === "developer",
     );
-    expect(input?.payload?.content).toContain("Your script threw");
+    expect(input?.payload?.content).toContain("Your script failed during execution (runtime)");
     expect(input?.payload?.content).toContain("gmail exploded");
   });
 
@@ -418,15 +445,18 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append(
       // The agent's own script returned undefined — the completion event
-      // carries no `result` key (see CapabilityHostProcessor#executeScript).
+      // carries a success settlement without `result`.
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: { executionId: "agent-output:7" },
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "agent-output:7", settlement: scriptSucceeded() },
       },
       // A non-agent execution (e.g. a Slack bang command) on the same stream.
       {
-        type: "events.iterate.com/capability-host/script-execution-completed",
-        payload: { executionId: "slack-bang-command-9", result: { noisy: true } },
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId: "slack-bang-command-9",
+          settlement: scriptSucceeded({ noisy: true }),
+        },
       },
     );
     await agentRunner(agent, stream).catchUp();
@@ -527,7 +557,7 @@ describe("minimal web-chat agent processors", () => {
         "events.iterate.com/agent/llm-request-started",
         "events.iterate.com/agents/context-added",
         "events.iterate.com/agent/llm-request-completed",
-        "events.iterate.com/capability-host/script-execution-requested",
+        "events.iterate.com/capability-host/script-run-requested",
       ]),
     );
     expect(aiCalls).toHaveLength(1);
@@ -571,7 +601,7 @@ describe("minimal web-chat agent processors", () => {
     await agentRunner(agent, stream).catchUp();
 
     const requested = stream.events.find(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(requested?.payload?.code).toBe(script);
   });
@@ -589,7 +619,7 @@ describe("minimal web-chat agent processors", () => {
     await agentRunner(agent, stream).catchUp();
 
     expect(
-      eventsOfType(stream, "events.iterate.com/capability-host/script-execution-requested"),
+      eventsOfType(stream, "events.iterate.com/capability-host/script-run-requested"),
     ).toHaveLength(0);
   });
 
@@ -608,7 +638,7 @@ describe("minimal web-chat agent processors", () => {
     await agentRunner(agent, stream).catchUp();
 
     const requested = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(requested).toHaveLength(0);
     const corrective = stream.events.find(
@@ -640,7 +670,7 @@ describe("minimal web-chat agent processors", () => {
 
     expect(
       stream.events.filter(
-        (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+        (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
       ),
     ).toHaveLength(0);
     expect(
@@ -668,7 +698,7 @@ describe("minimal web-chat agent processors", () => {
     await runner.catchUp();
 
     const requested = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(requested).toHaveLength(0);
     const corrective = stream.events.find(
@@ -861,8 +891,18 @@ describe("minimal web-chat agent processors", () => {
     // wake-lane sink (openDelivery) so the runner's own offset bookkeeping —
     // not the test — decides what "behind" means.
     const { sink } = await agentRunner(agent, stream).openDelivery();
-    await sink({ events: stream.events.slice(0, 2), streamMaxOffset: 3 });
-    await sink({ events: stream.events.slice(2, 3), streamMaxOffset: 3 });
+    await sink({
+      events: stream.events.slice(0, 2),
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 3,
+    });
+    await sink({
+      events: stream.events.slice(2, 3),
+      scannedAfterOffset: 2,
+      scannedThroughOffset: 3,
+      streamMaxOffset: 3,
+    });
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -3126,8 +3166,9 @@ describe("busy/idle status announcements", () => {
       // The busy trigger lands, with a successor event so its frame is not
       // the final page; the parked pull reduces AND COMMITS it, then holds
       // before the at-head pass. The successor is a CONSUMED lifecycle
-      // re-check (`stream/woken`): the at-head reconcile fires only on a
-      // consumed event delivered at head, and this is that event.
+      // re-check (`stream/woken`), so this scenario exercises the normal
+      // consumed-event at-head pass. A final scan containing no consumed event
+      // would instead exercise the runner's eventless at-head pass.
       const [busyMessage] = await stream.append(userMessage());
       await stream.append({
         type: "events.iterate.com/stream/woken",
@@ -3336,7 +3377,7 @@ describe("busy/idle status announcements", () => {
     // The turn hands off to a script: busy stays true but the phase flips,
     // so surfaces switch from "making an LLM request" to "running a script".
     const [script] = await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-requested",
+      type: "events.iterate.com/capability-host/script-run-requested",
       payload: { code: "async () => {}", executionId: "script-1", expiresAt: Date.now() + 60_000 },
     });
     await deliver();
@@ -3436,7 +3477,7 @@ describe("busy/idle status announcements", () => {
     // The script request arrives: busy again.
     const withScript = [
       ...journal,
-      at(6, "events.iterate.com/capability-host/script-execution-requested", {
+      at(6, "events.iterate.com/capability-host/script-run-requested", {
         code: "async () => {}",
         executionId: "script-6",
         expiresAt: Date.now() + 60_000,
@@ -3448,9 +3489,9 @@ describe("busy/idle status announcements", () => {
     // then the re-queued loop turns the activity back to thinking.
     const nextTurn = [
       ...withScript,
-      at(7, "events.iterate.com/capability-host/script-execution-completed", {
+      at(7, "events.iterate.com/capability-host/script-run-settled", {
         executionId: "script-6",
-        result: null,
+        settlement: scriptSucceeded(null),
       }),
       at(8, "events.iterate.com/agents/context-added", {
         role: "developer",

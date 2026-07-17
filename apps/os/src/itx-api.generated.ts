@@ -64,8 +64,6 @@ export interface Session {
   streams: StreamCollection;
   /** Deployment-wide repos (admin only; projectId: null). */
   repos: RepoCollection;
-  /** Admin-only exact-offset Stream Durable Object recovery. */
-  streamRecovery: StreamRecoveryCollection;
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
   projects: ProjectCollection;
 }
@@ -196,11 +194,6 @@ export interface RepoCollection {
   create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
-}
-
-/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
-export interface StreamRecoveryCollection {
-  get(input: { projectId: string | null; path: string }): StreamRecovery;
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
@@ -1312,8 +1305,9 @@ export interface Stream {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
-   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`
-   * events too — remember their rows may be evicted if you record the offset.
+   * Durable rows after `afterOffset` are replayed. It can also match an
+   * `ephemeral: true` event appended after this wait opens, but historical
+   * ephemeral rows are never replayed.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -1351,8 +1345,10 @@ export interface Stream {
   /**
    * Session-scoped live event delivery (the "ephemeral" subscription lane —
    * also the only lane that receives `ephemeral: true` events):
-   * `processEventBatch` is called for every committed batch (optionally
-   * replayed from `replayAfterOffset`); returns an unsubscribe handle.
+   * `processEventBatch` first receives durable history after
+   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
+   * when appended after this exact subscription opens and are never replayed.
+   * Returns an unsubscribe handle.
    * Forgotten on disconnect — durable delivery is configured as data instead,
    * by appending a `subscription-configured` event (wake or push mode) to the
    * stream.
@@ -1361,6 +1357,17 @@ export interface Stream {
     subscriptionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /**
+     * Atomically bind this open to the stream identity observed during
+     * catch-up. `null` means the caller observed a stream with no committed
+     * creation fact yet. A mismatch rejects before replacing any connection.
+     */
+    expectedIncarnation?: string | null;
+    /**
+     * Atomically reject instead of opening when the current raw-log head is
+     * more than this many offsets beyond `replayAfterOffset`.
+     */
+    maxReplayOffsetGap?: number;
     /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
     selector?: { eventTypes?: string[]; condition?: string };
@@ -1416,28 +1423,6 @@ export interface Stream {
   }): Promise<StreamEvent>;
   /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
-}
-
-/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
-export interface StreamRecovery {
-  exportForRecovery(args?: {
-    afterOffset?: number;
-    limit?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportPage>;
-  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
-  exportToRecovery(args: {
-    sink: StreamRecoveryExportSink;
-    afterOffset?: number;
-    limit?: number;
-    maxPages?: number;
-    throughOffset?: number;
-  }): Promise<StreamRecoveryExportSummary>;
-  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
-    restoredEventCount: number;
-    lastImportedOffset: number;
-    currentMaxOffset: number;
-  }>;
 }
 
 /**
@@ -1753,8 +1738,10 @@ export type ProjectDescription = Description & {
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
  * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug` — the inspection half of
- * this node reads the host's main processor.
+ * processor wakes from the request's `processorSlug`. Each public domain
+ * surface selects that same named processor for inspection, so
+ * `agent.processor`, `agent.slack.processor`, and other siblings expose their
+ * own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
@@ -2823,6 +2810,10 @@ export type SandboxInstanceType =
  *   and tears down now instead of waiting for `sleepAfter` (the SDK's
  *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;
  *   `destroy()` is permanent — the name is retired.
+ * - Top-level `exec()` is sessionless: every call gets a fresh shell, and a
+ *   timeout terminates the complete Linux process group before resolving an
+ *   exit-code-124 result. Use the SDK's explicit session APIs when commands
+ *   intentionally need shared shell state.
  * - `__describe()` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
@@ -3273,109 +3264,11 @@ export type StreamSubscriberPing = (
 export type StreamSubscriptionHandle = Disposable & {
   /** Stable identity of this subscription connection. */
   subscriptionKey: SubscriptionKey;
-  /** The stream's max offset at subscribe time (replay starts behind it). */
+  /** The stream's max offset at subscribe time (durable replay starts behind it). */
   streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
   unsubscribe(): void;
-};
-
-/** One bounded page of a stream's storage-level recovery export. */
-export type StreamRecoveryExportPage = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  events: {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          crossPostedFrom?:
-            | {
-                subscriptionKey: string;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  }[];
-  throughOffset: number;
-  complete: boolean;
-};
-
-/** Acknowledged page sink used by one long-running recovery export RPC. */
-export type StreamRecoveryExportSink = {
-  write(page: StreamRecoveryExportPage): Promise<void>;
-};
-
-/** Small result returned after every exported page has been acknowledged. */
-export type StreamRecoveryExportSummary = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  throughOffset: number;
-  exportedEventCount: number;
-  pageCount: number;
-  lastExportedOffset: number;
-  complete: boolean;
-};
-
-/** A complete normalized stream log accepted by storage-level recovery restore. */
-export type StreamRecoveryRestoreInput = {
-  format: "iterate-stream-recovery";
-  version: 1;
-  stream: { projectId: string | null; path: string };
-  events: {
-    type: string;
-    payload?: Record<string, unknown> | undefined;
-    metadata?: Record<string, unknown> | undefined;
-    source?:
-      | {
-          processor?:
-            | {
-                slug: string;
-                version: string;
-                stream: { path: string; projectId: string | null };
-                whileProcessing?: { offset: number; type: string } | undefined;
-              }
-            | undefined;
-          crossPostedFrom?:
-            | {
-                subscriptionKey: string;
-                createdAt: string;
-                offset: number;
-                path: string;
-                projectId: string | null;
-                type: string;
-              }[]
-            | undefined;
-        }
-      | undefined;
-    idempotencyKey?: string | undefined;
-    ephemeral?: true | undefined;
-    offset: number;
-    createdAt: string;
-    path: string;
-  }[];
-  highestAssignedOffset: number;
 };
 
 /**
@@ -3774,6 +3667,10 @@ export type StreamEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
+  /** Exclusive raw-log cursor from which this delivery scan began. */
+  scannedAfterOffset: number;
+  /** Inclusive raw-log cursor through which this delivery scan completed. */
+  scannedThroughOffset: number;
   streamMaxOffset: number;
   state: unknown;
 };

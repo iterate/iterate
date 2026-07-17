@@ -1,4 +1,4 @@
-import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 
 /**
  * A wall-clock subscribed via `useSyncExternalStore`, not `useState` +
@@ -42,14 +42,6 @@ function createTickingClock(intervalMs: number) {
       };
     },
     getSnapshot() {
-      // Idle clock: refresh only when wall time has moved by a full tick so
-      // the first render after a long idle is current, but consecutive
-      // getSnapshot calls in the same tick stay Object.is-stable (avoids
-      // useSyncExternalStore infinite re-render loops).
-      if (timer == null) {
-        const wall = Date.now();
-        if (wall - now >= intervalMs) now = wall;
-      }
       return now;
     },
   };
@@ -69,29 +61,46 @@ function clockFor(intervalMs: number) {
 
 /**
  * Live wall-clock milliseconds. Ticks every `intervalMs` while `enabled` is
- * true; when disabled, returns a frozen snapshot and holds no timer.
+ * true. When `stopAtMs` is reached, the returned value freezes at that
+ * boundary and this subscriber detaches from the shared timer. When disabled,
+ * returns a frozen snapshot and holds no timer.
  */
-export function useTickingNowMs(intervalMs: number, enabled = true): number {
+export function useTickingNowMs(
+  intervalMs: number,
+  enabled = true,
+  stopAtMs: number | null = null,
+): number {
   const clock = clockFor(intervalMs);
-  // Stable freeze while disabled so getSnapshot does not return a fresh
-  // Date.now() every call (that would infinite-loop useSyncExternalStore).
-  const frozenWhileDisabledRef = useRef(Date.now());
-  if (enabled) {
-    frozenWhileDisabledRef.current = clock.getSnapshot();
-  }
+  const snapshot = useCallback(
+    () => Math.min(clock.getSnapshot(), stopAtMs ?? Number.POSITIVE_INFINITY),
+    [clock, stopAtMs],
+  );
+  // Server rendering never subscribes, so it needs a snapshot from this
+  // render rather than the shared clock's last browser tick. A lazy immutable
+  // state value is render-pure and remains Object.is-stable for hydration.
+  const [initialNowMs] = useState(Date.now);
+  const serverSnapshot = useCallback(
+    () => Math.min(initialNowMs, stopAtMs ?? Number.POSITIVE_INFINITY),
+    [initialNowMs, stopAtMs],
+  );
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       if (!enabled) return () => {};
-      return clock.subscribe(onStoreChange);
+      let unsubscribe = () => {};
+      const notifyUntilBoundary = () => {
+        onStoreChange();
+        if (stopAtMs != null && clock.getSnapshot() >= stopAtMs) unsubscribe();
+      };
+      unsubscribe = clock.subscribe(notifyUntilBoundary);
+      if (stopAtMs != null && clock.getSnapshot() >= stopAtMs) unsubscribe();
+      return unsubscribe;
     },
-    [clock, enabled],
+    [clock, enabled, stopAtMs],
   );
 
-  const getSnapshot = useCallback(() => {
-    if (!enabled) return frozenWhileDisabledRef.current;
-    return clock.getSnapshot();
-  }, [clock, enabled]);
-
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // The clock snapshot is mutated only by the external store. With no live
+  // subscription it remains stable, so disabled consumers freeze without a
+  // render-time ref write.
+  return useSyncExternalStore(subscribe, snapshot, serverSnapshot);
 }

@@ -91,13 +91,12 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: env.cloudflareAiGatewayTransport,
-    ...(env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
-      ? {}
-      : {
-          APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(
-            env.cloudflareAiGatewayResponseCacheTtlSeconds,
-          ),
-        }),
+    // Wrangler inherits missing top-level vars into env blocks. Keep the key
+    // explicit everywhere; an empty value means the response cache is off.
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS:
+      env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
+        ? ""
+        : String(env.cloudflareAiGatewayResponseCacheTtlSeconds),
   };
 }
 
@@ -199,10 +198,6 @@ const DO_EXPORTS = {
       { type: "durable-object", storage: "sqlite" },
     ]),
   ),
-  // Sandboxes became pets with one container class per instance type (#1747);
-  // the old implicit-size class is retired (old sandboxes were ephemeral by
-  // design and their R2 snapshots age out).
-  CloudflareSandboxDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -481,7 +476,10 @@ function localDevBindings() {
     accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     ...authBinding,
   });
-  const localAuthJwks = localDevAuthJwks();
+  const localAuthJwks = localDevAuthJwks({
+    forgePrivateJwk: process.env.AUTH_FORGE_PRIVATE_JWK,
+    deployedEnv: process.env.CLOUDFLARE_ENV,
+  });
   return {
     ...bindings,
     vars: {
@@ -503,8 +501,18 @@ function localDevBindings() {
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
 
-function localDevAuthJwks() {
-  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+export function localDevAuthJwks(input: {
+  forgePrivateJwk: string | undefined;
+  deployedEnv: string | undefined;
+}) {
+  // The forge key is inherited from _shared in deployed Doppler configs, but
+  // this derived public JWKS is only a local-dev binding. Emitting it at the
+  // top level during a CLOUDFLARE_ENV build makes Wrangler correctly warn
+  // that the selected env does not inherit it; deployed workers receive the
+  // freshly baked JWKS atomically via --secrets-file in deploy.ts instead.
+  if (input.deployedEnv) return undefined;
+
+  const forgePrivateJwk = input.forgePrivateJwk?.trim();
   if (!forgePrivateJwk) return undefined;
 
   const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<

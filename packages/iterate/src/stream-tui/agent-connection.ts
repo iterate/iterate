@@ -22,7 +22,8 @@ const MAX_RECONNECT_DELAY_MS = 15_000;
 export type AgentConnectionStatus =
   | { kind: "connecting" }
   | { kind: "live" }
-  | { kind: "reconnecting"; detail: string };
+  | { kind: "reconnecting"; detail: string }
+  | { kind: "failed"; detail: string };
 
 /**
  * Resolve itx credentials for the TUI, in priority order: an admin API secret
@@ -71,6 +72,8 @@ export function connectAgentFeed(input: {
   let agent: RpcStub<Agent> | undefined;
   let subscription: Disposable | undefined;
   let consecutiveFailures = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let terminalFailure = false;
 
   const disposeAgent = () => {
     try {
@@ -83,13 +86,29 @@ export function connectAgentFeed(input: {
     agent = undefined;
   };
 
-  const scheduleReconnect = (detail: string) => {
-    if (disposed) return;
+  const scheduleReconnect = (error: unknown) => {
+    if (disposed || terminalFailure) return;
+    const detail = error instanceof Error ? error.message : String(error);
+    if (isAuthenticationFailure(error)) {
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      terminalFailure = true;
+      disposeAgent();
+      input.onStatus({
+        kind: "failed",
+        detail: "authentication expired; restart iterate chat",
+      });
+      return;
+    }
+    if (reconnectTimer !== undefined) return;
     disposeAgent();
     consecutiveFailures += 1;
     const delay = Math.min(RECONNECT_DELAY_MS * consecutiveFailures, MAX_RECONNECT_DELAY_MS);
     input.onStatus({ kind: "reconnecting", detail });
-    setTimeout(() => void establish(), delay);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void establish();
+    }, delay);
   };
 
   async function establish(): Promise<void> {
@@ -106,7 +125,7 @@ export function connectAgentFeed(input: {
     (nextAgent as { onRpcBroken?: (cb: (error: unknown) => void) => void }).onRpcBroken?.(
       (error) => {
         if (agent !== nextAgent) return;
-        scheduleReconnect(errorMessage(error));
+        scheduleReconnect(error);
       },
     );
     try {
@@ -126,7 +145,7 @@ export function connectAgentFeed(input: {
       consecutiveFailures = 0;
       input.onStatus({ kind: "live" });
     } catch (error) {
-      if (agent === nextAgent) scheduleReconnect(errorMessage(error));
+      if (agent === nextAgent || isAuthenticationFailure(error)) scheduleReconnect(error);
     }
   }
 
@@ -139,13 +158,16 @@ export function connectAgentFeed(input: {
     },
     dispose() {
       disposed = true;
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
       disposeAgent();
     },
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function isAuthenticationFailure(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)).includes(
+    "missing or invalid auth",
+  );
 }
 
 function readEnv(name: string): string | undefined {

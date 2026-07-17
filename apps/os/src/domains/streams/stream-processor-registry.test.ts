@@ -194,6 +194,8 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
           projectId: null,
           path: HOME,
           events,
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
           state: null,
         });
@@ -402,6 +404,8 @@ describe("wakeStreamSubscriber", () => {
       projectId: null,
       path: HOME,
       events: h.stream.events.slice(),
+      scannedAfterOffset: woken.checkpointOffset,
+      scannedThroughOffset: h.head(),
       streamMaxOffset: h.head(),
       state: null,
     });

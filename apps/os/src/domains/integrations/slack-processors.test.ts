@@ -818,7 +818,7 @@ describe("SlackAgentProcessor", () => {
     await deliver();
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain("await itx.whoami()");
@@ -1143,10 +1143,10 @@ describe("SlackAgentProcessor", () => {
     // announcements at all. The repaint must not lose it OR run per behind
     // frame: exactly one clear pair, painted at the at-head pulse. Without
     // the carry, Slack keeps "is thinking..." and the eyes reaction forever.
-    // The at-head pulse is `processEvent` under `delivery.caughtUp`, so the
-    // trailing event must be CONSUMED — the platform's revival fact is
-    // exactly that guaranteed at-head turn (an unconsumed tail defers the
-    // repaint to the next consumed head event).
+    // The at-head pulse is `processEvent` under `delivery.caughtUp`. This
+    // scenario uses a consumed revival fact, so it exercises the normal
+    // per-event pass; an unconsumed tail would exercise the runner's eventless
+    // at-head pass and repaint from the same final fold.
     const { deliver, slackCalls, stream } = setup({ readPageSize: 1 });
 
     await stream.append({
@@ -1341,7 +1341,7 @@ describe("SlackAgentProcessor", () => {
     await deliver();
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({
@@ -1564,7 +1564,7 @@ describe("SlackAgentProcessor", () => {
 
     const scripts = stream.events.filter(
       (streamEvent) =>
-        streamEvent.type === "events.iterate.com/capability-host/script-execution-requested",
+        streamEvent.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain(
@@ -1592,7 +1592,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-run-requested";
       }),
     ).toHaveLength(0);
     expect(
@@ -1622,7 +1622,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-run-requested";
       }),
     ).toHaveLength(0);
     expect(

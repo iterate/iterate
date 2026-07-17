@@ -528,6 +528,11 @@ describe("useItxSubscription liveness", () => {
       subscribe,
       status: () => container.querySelector("output")?.getAttribute("data-status"),
       advance: (ms: number) => act(async () => vi.advanceTimersByTimeAsync(ms)),
+      act: (fn: () => void) =>
+        act(async () => {
+          fn();
+          await vi.advanceTimersByTimeAsync(0);
+        }),
       unmount: () => act(async () => root.unmount()),
     };
   }
@@ -546,6 +551,52 @@ describe("useItxSubscription liveness", () => {
     await harness.advance(INTERVAL * 3);
     expect(pings).toBe(3);
     expect(harness.subscribe).toHaveBeenCalledTimes(1); // never re-subscribed
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("a socket close after subscribing re-dials and re-subscribes", async () => {
+    const harness = await mountSubscription(() => ({
+      ping: () => true,
+      unsubscribe: vi.fn(),
+    }));
+    const firstSocket = FakeWebSocket.instances.at(-1)!;
+
+    expect(harness.status()).toBe("live");
+    await harness.act(() => firstSocket.fire("close"));
+    const secondSocket = FakeWebSocket.instances.at(-1)!;
+    expect(secondSocket).not.toBe(firstSocket); // auto-redialed
+
+    await harness.act(() => secondSocket.fire("open"));
+    await harness.advance(0);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2); // fresh generation re-subscribed
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("a subscribe call that never settles times out, reports suspicion, and retries", async () => {
+    // A transport can disappear after the server accepted subscribe but before
+    // the handle arrives — no handle means no watchdog, so without the timeout
+    // the UI would sit "connecting" forever. The hook REPORTS the suspicion
+    // (the verifier probes; here the mock answers alive, so the healthy socket
+    // is left alone) and retries on the subscribe-retry delay.
+    let attempts = 0;
+    const harness = await mountSubscription(
+      () => ({ ping: () => true, unsubscribe: vi.fn() }),
+      async (handle) => {
+        attempts += 1;
+        if (attempts === 1) return new Promise<never>(() => {}); // never settles
+        return handle;
+      },
+    );
+
+    expect(harness.status()).toBe("connecting");
+    await harness.advance(15_000); // SUBSCRIBE_TIMEOUT_MS
+    expect(harness.status()).toBe("error");
+    expect(FakeWebSocket.instances).toHaveLength(1); // alive socket NOT torn down
+
+    await harness.advance(10_000); // SUBSCRIBE_RETRY_MS
+    expect(harness.subscribe).toHaveBeenCalledTimes(2);
     expect(harness.status()).toBe("live");
     await harness.unmount();
   });

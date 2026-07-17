@@ -125,12 +125,14 @@ export class TelegramAgentProcessor extends StreamProcessor<
   protected override processEvent(
     args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0],
   ): undefined {
-    if (args.event.type === "events.iterate.com/telegram-agent/created") return;
+    if (args.event !== null && args.event.type === "events.iterate.com/telegram-agent/created") {
+      return;
+    }
     if (args.state.birthCertificate === null) return;
     this.#perEventSideEffects(args);
-    // The at-head typing repaint (was `onCaughtUp`): fires only for the last
-    // consumed event of a batch that reached head (`delivery.caughtUp`), and
-    // only AFTER the per-event switch above, so a typing-worthy head event has
+    // The at-head typing repaint fires after the scan reaches head, on the
+    // last consumed event or the runner's eventless pass. It runs only AFTER
+    // the per-event switch above, so a typing-worthy head event has
     // already landed in the memo when the repaint reads it. ONE blocking
     // closure registered here; the former inner
     // `blockProcessorWhile(#sendTyping…)` is a direct await inside it — a
@@ -152,6 +154,8 @@ export class TelegramAgentProcessor extends StreamProcessor<
     event,
     state,
   }: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0]): undefined {
+    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);
@@ -169,7 +173,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
           // NOT ported — /debug only for now.)
           blockProcessorWhile(async () => {
             await append({
-              type: "events.iterate.com/capability-host/script-execution-requested",
+              type: "events.iterate.com/capability-host/script-run-requested",
               idempotencyKey: `telegram-agent:debug-command:${event.offset}`,
               payload: {
                 code: compileTelegramDebugScript(this.path),
@@ -292,7 +296,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
         });
         return;
       }
-      // llm-request-requested / script-execution-requested drive the "still
+      // llm-request-requested / script-run-requested drive the "still
       // working" typing repaint — handled once per at-head pass in
       // #repaintTypingAtHead (processEvent under `delivery.caughtUp`), not
       // per-event, so a refold cannot replay every historical flip. Per event
@@ -430,7 +434,7 @@ function coerceTelegramId(id: string): number | string {
 function isTelegramTypingLifecycleFact(event: { type: string }): boolean {
   return (
     event.type === "events.iterate.com/agent/llm-request-requested" ||
-    event.type === "events.iterate.com/capability-host/script-execution-requested"
+    event.type === "events.iterate.com/capability-host/script-run-requested"
   );
 }
 

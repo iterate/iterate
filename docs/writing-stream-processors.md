@@ -11,7 +11,7 @@ half that doctrine document takes for granted: side effects, recovery,
 staleness, and how to test all of it in plain node
 (`apps/os/src/domains/streams/test-helpers.ts`).
 
-## The model: a processor is a reconciler
+## The model: some processors reconcile obligations
 
 A processor is two halves plus a comparison:
 
@@ -21,24 +21,23 @@ A processor is two halves plus a comparison:
 - **Actual state** — the incarnation. Live executions, open sockets, armed
   timers. In-memory, dies with every eviction, **and that is fine** — it is
   never the source of truth.
-- **Reconciliation** — the `reconcile` hook compares the two and acts: start
-  attempts for desired work nobody is driving, settle work whose driver died,
-  and do it all through idempotent appends so replays converge. The base
-  class calls `reconcile` only for AT-HEAD batches (`checkpointOffset >=
-streamMaxOffset`), so overrides never need their own gate: a mid-catch-up
-  fold shows obligations whose outcomes sit in the next page, and acting on
-  it would re-drive real vendor calls. The final catch-up page qualifies by
-  construction; wake-lane push batches are consumes-filtered yet stamped with
-  the raw head, so the host runs a trailing unfiltered catch-up after any
-  behind batch — recovery always gets its pass. (Older processors spell the
-  same thing as a `processEventBatch` override with a hand-written at-head
-  gate; the gate semantics are identical, and they should migrate to
-  `reconcile` when touched.)
+- **Reconciliation** — ordinary `processEvent` code under
+  `delivery.caughtUp` compares the two and acts: start attempts for desired
+  work nobody is driving, settle work whose driver died, and do it all through
+  idempotent appends so replays converge. There is no separate reconcile hook.
+  A mid-catch-up fold can still contain obligations whose outcomes sit in the
+  next page, so it must not act. Normally `caughtUp` is true on the last
+  consumed event in a scan that reaches the observed raw head. If that scan
+  contains no consumed event, the runner calls `processEvent` once with
+  `event: null`, the final fold, and `caughtUp: true`; per-event dispatch must
+  therefore guard `event !== null`. Consumes-filtered wake frames get a
+  trailing unfiltered self-pull so an omitted or unconsumed raw tail cannot
+  strand an obligation.
 
-The reference implementations, in reading order:
-`AgentProcessor.reconcile` (the canonical obligation reconciler: drive/settle
-LLM obligations, then derive scheduling — plus a last-resort backstop) and
-`CapabilityHostProcessor` (scripts — same shape, different settle policy).
+The reference implementations, in reading order: the `delivery.caughtUp`
+branch in `AgentProcessor.processEvent` (drive/settle LLM obligations, then
+derive scheduling) and `CapabilityHostProcessor` (scripts — same shape,
+different settle policy).
 
 ## Two primitives, two guarantees
 
@@ -83,7 +82,7 @@ reconciler**:
 2. **Attempt**: `runInBackground`, registered in an in-memory live-set
    _synchronously, before any await_, so the same pass never classifies its
    own attempt as undriven.
-3. **Reconciler**: at the end of _every_ batch, walk the fold's open
+3. **Reconciler**: whenever `delivery.caughtUp` is true, walk the fold's open
    obligations against the live-set:
    - `requested` + nobody driving + not expired → **start** (this is both the
      normal start and the lost-before-started recovery — indistinguishable on
@@ -107,12 +106,16 @@ a deploy, or days after a crash loop finally met its antidote. **Do not enact
 side effects blindly**: check how old the intent is (and, for cross-checks,
 how far your fold sits from the stream head) before starting anything.
 
-- **`expiresAt` on the requested event.** The requester stamps it; the
-  reconciler refuses to _start_ past it and settles the obligation as expired
-  instead (_only-settle-past-expiry_). This is what makes late wakes safe by
-  construction: an agent revived a week late reports a failure, it does not
-  answer a week-old prompt. Every new obligation type should carry it
-  (defaults derive from `createdAt` when raw appends omit it).
+- **`expiresAt` on the requested event.** The requester stamps it as the
+  deadline for the **whole obligation**, including its terminal settlement;
+  it is not merely a latest-start time. The reconciler refuses to start past
+  it and settles the obligation as expired instead. A started attempt must
+  bound every phase to the remaining budget and reserve a short final window
+  for journaling its terminal outcome. This makes late wakes and wedged RPCs
+  safe by construction: an agent revived a week late reports a failure, it
+  does not answer a week-old prompt, and an attempt cannot run unbounded after
+  the intent expired. Every new obligation type should carry an explicit
+  expiry.
 - **Vendor idempotency for dangerous effects.** For a payment-shaped effect,
   the obligation key must ride to the vendor (e.g. a Stripe idempotency key)
   so at-least-once attempts collapse server-side. Dangerous **and**
@@ -125,14 +128,14 @@ how far your fold sits from the stream head) before starting anything.
   latency, never the request, because the settle logic re-derives it from
   the fold).
 
-## Refold safety: the whole journal will be replayed at you
+## Reprocessing safety: the whole journal can be replayed at you
 
-The checkpoint is a disposable CACHE of the fold. Whenever a stored snapshot
-stops parsing against the current state schema — the **normal aftermath of
-deploying a state-shape change** — the processor discards it and refolds from
-offset 0 (`StreamProcessor.#loadState`). That means `processEvent` runs again
-for every historical event, with **event-time state**: at each event, `state`
-is the fold up to that offset, not current truth.
+The reduction checkpoint is a disposable cache of the fold. A reducer-version
+change refolds with `reduce` only; it does **not** rerun `processEvent`. The
+processing cursor is separate and authoritative. But a new subscriber, an
+operator-requested `reprocessFrom`, or an at-least-once redelivery can still
+run `processEvent` over historical events, with **event-time state**: at each
+event, `state` is the fold up to that offset, not current truth.
 
 The explicit-birth guard is therefore NOT a refold-safety guard. It only says
 whether the processor exists at this point in its history. Once the birth has
@@ -151,9 +154,9 @@ Every side effect in a `process*` hook must be one of exactly three shapes:
 2. **An obligation reconciled from the AT-HEAD fold** (the pattern above).
    Safe because the final fold has absorbed every journaled completion:
    requested-and-completed pairs cancel out _before_ the reconciler acts.
-   `RepoProcessor.processEventBatch` is the minimal creation example—fold
-   `birthCertificate` and `repo/ready`, then provision only when the at-head
-   state is born but not ready.
+   The `delivery.caughtUp` branch in `RepoProcessor.processEvent` is the
+   minimal creation example—fold `birthCertificate` and `repo/ready`, then
+   provision only when the at-head state is born but not ready.
 3. **An acknowledgement/cosmetic lane gated on FRESHNESS** — compare
    `event.createdAt` against an injected `now`. Acks mean "your message was
    just picked up"; they are only meaningful near arrival, so stale replays
@@ -192,19 +195,19 @@ few lines, and it doubles as scenario 4 below:
 References: the "refold: …" tests in `slack-processors.test.ts` (agent
 status/ack + router ack/forwards) and `github-agent.test.ts` (repo creation).
 
-## What the host gives you for free (and what it demands)
+## What the runner registry gives you for free (and what it demands)
 
-`createStreamProcessorHost` backs both primitives with a **keepalive**
-(`stream-processor-keepalive.ts`): while any registered work is in flight, a
+`createStreamProcessorRegistry` wires each durable runner to a **keepalive**
+(`stream-processor-keepalive.ts`): while registered work is in flight, a
 durable DO alarm sits ~10s ahead of it. An incarnation that dies owing work
-gets its alarm fired in a fresh incarnation, which **revives** the host:
+gets its alarm fired in a fresh incarnation, which revives the processor:
 
-1. append one `events.iterate.com/stream-processor-host/revived` fact to the
+1. append one `events.iterate.com/stream/processor-revived` fact to the
    stream (journaled evidence; also cold-boots the stream DO, whose `woken`
    fan-out restores the spine's deliveries);
-2. pull every hosted processor through its pending events (unfiltered, unlike
-   wake-mode push) — the fact guarantees at least one batch, so **every
-   reconciler runs**.
+2. let its ordinary delivery drive the named processor through the runner;
+   the consumed fact guarantees a turn, and the runner guarantees the final
+   at-head pass even if a later unconsumed raw event has reached the stream.
 
 Recovery therefore has exactly one entrypoint — batch delivery — and the
 journal narrates the whole episode: `…llm-request-requested` →
@@ -227,10 +230,10 @@ not enforcement.
 What hosting code must do:
 
 - **Wire `alarm()`** on every DO class that hosts processors:
-  `alarm() { return this.#processorHost.handleAlarm(); }`. A host without it
+  `alarm() { return this.#registry.handleAlarm(); }`. A registry without it
   has no revival.
 - **Share the alarm through slices** if the DO schedules its own work: state
-  desires via `host.setAlarmSlice(name, atMs)`; tolerate early fires; re-arm
+  desires via the registry's alarm slices; tolerate early fires; re-arm
   inside your handler (see `SchedulerDurableObject`).
 - **Worker-hosted processors** (push-lane subscribers with stream-owned
   cursors, e.g. the project worker) have no alarm and no keepalive: their
@@ -240,42 +243,12 @@ What hosting code must do:
 
 ## Testing: every failure above is a few lines of plain node
 
-The harness (`createProcessorHostHarness` in
-`apps/os/src/domains/streams/test-helpers.ts`) boots the REAL host and REAL
-processors over fake substrates: an in-memory journal, a fake
-`DurableObjectState`, a mutable virtual clock, and eviction as an operator.
-
-```ts
-const h = createProcessorHostHarness({
-  build: (host, ctx) => ({
-    agent: host.add(
-      (deps) =>
-        new AgentProcessor({
-          ...deps,
-          now: () => ctx.clock.now,
-          // incarnation 1 hangs (the request the deploy kills); incarnation 2 answers
-          ai: {
-            run: async () =>
-              ctx.incarnation === 1 ? new Promise(() => {}) : { response: "recovered!" },
-          },
-        }),
-    ),
-  }),
-});
-
-await h.stream.append(
-  {
-    type: "events.iterate.com/agent/created",
-    idempotencyKey: "agent/created:test",
-    payload: { config: { systemPrompt: "Test agent", llm: { model: TEST_MODEL } } },
-  },
-  userMessage("hello?"),
-);
-await h.stream.waitForEvent({ eventTypes: [llmRequestStarted], timeoutMs: 5000 });
-h.crash(); // THE DEPLOY: memory dies; journal, checkpoints, alarm survive
-await h.advance(15_000); // the alarm fires; the real revival pass runs
-await h.stream.waitForEvent({ eventTypes: [outputAdded], timeoutMs: 5000 });
-```
+The recovery suites boot the real `createStreamProcessorRegistry`, runner,
+durability adapter, and processors over an in-memory journal, fake
+`DurableObjectState`, and mutable virtual clock. Start with
+`agent-eviction-recovery.test.ts` and
+`capability-host-recovery.test.ts`; the registry's own isolation harness is
+`stream-processor-registry.test.ts`.
 
 The rules that keep these tests honest:
 
@@ -329,7 +302,7 @@ Scenarios every obligation-carrying processor should have (crib from
 - [ ] Every `runInBackground` answers "what recovers the outcome?"
 - [ ] Obligations: requested/started/completed events; fold carries what an
       attempt needs; terminal events delete the entry.
-- [ ] End-of-batch reconciler: start undriven fresh work, settle orphans and
+- [ ] `delivery.caughtUp` reconciler: start undriven fresh work, settle orphans and
       expired intent, idempotency keys shared with the normal path.
 - [ ] `expiresAt` stamped by the requester; reconciler honors it (and the
       `createdAt + DEFAULT` fallback covers raw appends).
@@ -340,5 +313,5 @@ Scenarios every obligation-carrying processor should have (crib from
       freshness-gated ack — never guarded by event-time state alone.
 - [ ] The refold test: a fresh instance fed the full journal re-executes no
       vendor work, appends nothing new, and converges to the same state.
-- [ ] Hosting DO wires `alarm()` (and alarm slices if it schedules).
+- [ ] Hosting DO wires `alarm()` to its registry (and alarm slices if it schedules).
 - [ ] Harness scenarios 1–6 above.

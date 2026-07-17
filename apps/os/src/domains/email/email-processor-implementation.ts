@@ -126,6 +126,8 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     previousState,
     state,
   }: Parameters<StreamProcessor<typeof EmailProcessorContract>["processEvent"]>[0]): undefined {
+    // Event-less at-head pass: this processor has no at-head work.
+    if (event === null) return;
     if (event.type === "events.iterate.com/email/created") return;
     if (state.birthCertificate === null) return;
     if (event.type !== "events.iterate.com/email/received") return;

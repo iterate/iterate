@@ -182,7 +182,7 @@ return await itx.projects.get(pid).__describe();
     id: "run-script",
     title: "Run a script server-side with itx.runScript",
     description:
-      "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-execution-requested/-completed) on the scope's stream.",
+      "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-run-requested/-completed) on the scope's stream.",
     runtimes: ["browser", "node", "cli", "project-worker"],
     fn: async (itx) => {
       const execution = await itx.capabilityHost.runScript(`async (itx) => {
@@ -606,13 +606,8 @@ return await itx.projects.get(pid).__describe();
         changes: [{ path, content: "# Edit example\n\n" + beforeText }],
       });
 
-      // commitFiles is durable when it returns, but a freshly-created repo's first
-      // reads can race its bootstrap; poll briefly rather than flake.
-      let before = await repo.readFile({ path });
-      for (let attempt = 0; attempt < 25 && before === null; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        before = await repo.readFile({ path });
-      }
+      // create waits for repo/ready, and commitFiles is a read-your-write boundary.
+      const before = await repo.readFile({ path });
       if (before === null) throw new Error("Expected seeded file to exist.");
 
       const edit = await repo.edit({
@@ -622,17 +617,8 @@ return await itx.projects.get(pid).__describe();
         newString: afterText,
       });
 
-      // The same bootstrap race can serve a pre-edit snapshot right after the
-      // commit; poll until the read reflects the edit.
-      let after = await repo.readFile({ path });
-      for (
-        let attempt = 0;
-        attempt < 25 && (after === null || after.content === before.content);
-        attempt += 1
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        after = await repo.readFile({ path });
-      }
+      // edit has the same read-your-write guarantee.
+      const after = await repo.readFile({ path });
       if (after === null) throw new Error("Expected edited file to exist.");
 
       return {

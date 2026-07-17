@@ -885,7 +885,10 @@ function useReconnectableItxEffect(
 
 /** How long useItxSubscription waits before retrying a transport-failed subscribe. */
 const SUBSCRIBE_RETRY_MS = 10_000;
+/** A subscribe RPC must either establish or give recovery ownership back to the hook. */
+const SUBSCRIBE_TIMEOUT_MS = 15_000;
 const PING_TIMED_OUT = Symbol("itx-ping-timed-out");
+const SUBSCRIBE_TIMED_OUT = Symbol("itx-subscribe-timed-out");
 
 /**
  * Poll a subscription handle's `ping()` until it stops answering `true`, then
@@ -1033,7 +1036,43 @@ export function useItxSubscription(
 
       let subscription: ItxLiveSubscriptionHandle;
       try {
-        subscription = await subscribe(effectItx);
+        const pending = subscribe(effectItx);
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const result = await Promise.race([
+          pending,
+          new Promise<typeof SUBSCRIBE_TIMED_OUT>((resolve) => {
+            timeout = setTimeout(() => resolve(SUBSCRIBE_TIMED_OUT), SUBSCRIBE_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(timeout));
+        if (result === SUBSCRIBE_TIMED_OUT) {
+          // A transport can disappear after the server accepted subscribe but
+          // before the browser receives its handle. No handle means no ping
+          // watchdog, and a half-open WebSocket emits no close event: without
+          // this bound the UI stays "connecting" forever. REPORT the suspicion
+          // (never close the shared socket ourselves — the verifier two-strikes
+          // and, if genuinely half-open, re-dials, whose generation re-runs this
+          // effect); a straggler handle is unsubscribed AND disposed.
+          void pending.then(
+            (late) => {
+              void Promise.resolve()
+                .then(() => late.unsubscribe())
+                .catch(() => {})
+                .finally(() => late[Symbol.dispose]?.());
+            },
+            () => {},
+          );
+          if (signal.disposed) return;
+          reportTransportSuspicion();
+          setState({
+            status: "error",
+            error: `itx subscription did not establish within ${SUBSCRIBE_TIMEOUT_MS}ms`,
+          });
+          // Retry regardless of the verifier's verdict: a wedged-but-alive
+          // server (cold DO) recovers on the next attempt, not on a re-dial.
+          const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
+          return () => clearTimeout(retry);
+        }
+        subscription = result;
       } catch (error) {
         // The ONE cancellation signal: a run superseded mid-await (unmount,
         // deps, reconnect) must not touch state its successor now owns.
