@@ -10,14 +10,18 @@ import {
   PaperclipIcon,
   PauseIcon,
   PlayIcon,
+  RefreshCwIcon,
 } from "lucide-react";
-import type {
-  AgentUiActivity,
-  AgentUiFileAttachment,
-  AgentUiItem,
-  AgentUiMessageItem,
-  AgentUiMessageVia,
-  AgentUiStep,
+import {
+  formatAgentUiActivitySummary,
+  isAgentUiActivityWorking,
+  summarizeAgentUiActivity,
+  type AgentUiActivity,
+  type AgentUiFileAttachment,
+  type AgentUiItem,
+  type AgentUiMessageItem,
+  type AgentUiMessageVia,
+  type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
   Message,
@@ -275,10 +279,8 @@ function AgentActivityRow({
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
-  const interrupted = activity.steps.some(
-    (step) => step.kind === "llm" && step.outcome === "cancelled",
-  );
-  const failed = activity.steps.some(stepHasFailure);
+  const summary = summarizeAgentUiActivity(activity);
+  const failed = summary.outcome === "failed" || summary.outcome === "restart-failed";
 
   return (
     <div className="flex flex-col py-0.5">
@@ -294,18 +296,21 @@ function AgentActivityRow({
         )}
       >
         {failed ? (
-          <CircleAlertIcon className="size-3 text-destructive" />
-        ) : interrupted ? (
-          <BanIcon className="size-3 text-red-600 dark:text-red-400" />
+          <CircleAlertIcon data-icon="inline-start" className="text-destructive" />
+        ) : summary.outcome === "interrupted" ? (
+          <BanIcon data-icon="inline-start" className="text-destructive" />
+        ) : summary.outcome === "recovered" ? (
+          <RefreshCwIcon data-icon="inline-start" />
         ) : (
-          <CodeIcon className="size-3 text-muted-foreground/60" />
+          <CodeIcon data-icon="inline-start" className="text-muted-foreground/60" />
         )}
-        {activitySummary(activity)}
+        {formatAgentUiActivitySummary(activity, {
+          summary,
+          interruptedPartialHint: "click to see partial response",
+        })}
         <ChevronRightIcon
-          className={cn(
-            "size-2.5 text-muted-foreground/50 transition-transform",
-            expanded && "rotate-90",
-          )}
+          data-icon="inline-end"
+          className={cn("text-muted-foreground/50 transition-transform", expanded && "rotate-90")}
         />
       </Button>
       {expanded ? (
@@ -479,40 +484,6 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   );
 }
 
-function codeStepCount(steps: readonly AgentUiStep[]): number {
-  return steps.filter((step) => step.kind === "code").length;
-}
-
-function activitySummary(
-  activity: AgentUiActivity,
-  steps: readonly AgentUiStep[] = activity.steps,
-): string {
-  const codeCount = codeStepCount(steps);
-  const requestCount = steps.filter((step) => step.kind === "llm").length;
-  const interrupted = steps.some((step) => step.kind === "llm" && step.outcome === "cancelled");
-  const interruptedWithPartialResponse = steps.some(
-    (step) =>
-      step.kind === "llm" &&
-      step.outcome === "cancelled" &&
-      (step.thinkingText !== "" || step.responseText !== ""),
-  );
-  const parts: string[] = [];
-  if (codeCount > 0) parts.push(`Ran code ${codeCount}×`);
-  parts.push(`${requestCount} request${requestCount === 1 ? "" : "s"}`);
-  if (interrupted) {
-    parts.push(
-      interruptedWithPartialResponse
-        ? "interrupted (click to see partial response)"
-        : "interrupted",
-    );
-  }
-  if (steps.some(stepHasFailure)) parts.push("failed");
-  const totalMs =
-    activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
-  if (totalMs != null && totalMs > 0) parts.push(formatSeconds(totalMs));
-  return parts.join(" · ");
-}
-
 // ---------------------------------------------------------------------------
 // Steps: condensed LLM request and code-run rows that open their inspectors
 // ---------------------------------------------------------------------------
@@ -526,7 +497,8 @@ function AgentActivityStep({
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
-  const failed = stepHasFailure(step);
+  const failed = step.kind === "code" ? step.success === false : step.outcome === "failed";
+  const cancelReason = step.kind === "llm" ? step.cancelReason : undefined;
   const inspect =
     step.kind === "llm"
       ? onInspectLlmRequest == null
@@ -536,34 +508,48 @@ function AgentActivityStep({
         ? undefined
         : () => onInspectScriptExecution(step.executionId);
   return (
-    <Button
-      variant="ghost"
-      size="xs"
-      title={
-        step.kind === "llm" ? "Open this LLM request trace" : "Open this script's code and result"
-      }
-      data-testid={
-        step.kind === "llm"
-          ? "agent-feed-inspect-llm-request"
-          : "agent-feed-inspect-script-execution"
-      }
-      onClick={inspect}
-      className={cn(
-        "-ml-2 self-start font-normal",
-        failed && "text-destructive hover:text-destructive",
-      )}
-    >
-      {step.kind === "llm" ? (
-        <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
-      ) : (
-        <CodeIcon className="size-3 text-muted-foreground" />
-      )}
-      <span className={cn("font-mono text-xs text-foreground/70", failed && "text-destructive")}>
-        {stepLabel(step)}
-      </span>
-      <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
-      <ChevronRightIcon className="size-2 text-muted-foreground/50" aria-hidden="true" />
-    </Button>
+    <div className="flex flex-col items-start">
+      <Button
+        variant="ghost"
+        size="xs"
+        title={
+          step.kind === "llm" ? "Open this LLM request trace" : "Open this script's code and result"
+        }
+        data-testid={
+          step.kind === "llm"
+            ? "agent-feed-inspect-llm-request"
+            : "agent-feed-inspect-script-execution"
+        }
+        onClick={inspect}
+        className={cn(
+          "-ml-2 self-start font-normal",
+          failed && "text-destructive hover:text-destructive",
+        )}
+      >
+        {cancelReason === "durable-object-crashed" ? (
+          <RefreshCwIcon data-icon="inline-start" />
+        ) : step.kind === "llm" && step.outcome === "cancelled" ? (
+          <BanIcon data-icon="inline-start" className="text-destructive" />
+        ) : step.kind === "llm" ? (
+          <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
+        ) : (
+          <CodeIcon data-icon="inline-start" className="text-muted-foreground" />
+        )}
+        <span className={cn("font-mono text-xs text-foreground/70", failed && "text-destructive")}>
+          {stepLabel(step)}
+        </span>
+        <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
+        <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
+      </Button>
+      {cancelReason === "durable-object-crashed" ? (
+        <span
+          className="ml-3 text-[11px] text-muted-foreground"
+          data-testid="agent-feed-recovery-reason"
+        >
+          Platform restarted this agent.
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -572,11 +558,10 @@ function stepLabel(step: AgentUiStep): string {
     if (step.status === "running") return "Running code";
     return step.success === false ? "Code failed" : "Ran code";
   }
+  if (step.cancelReason === "durable-object-crashed") return "Agent restarted";
+  if (step.cancelReason === "interrupted-by-user-input") return "Stopped for your new message";
+  if (step.outcome === "cancelled") return "Request cancelled";
   return step.model ?? "LLM request";
-}
-
-function stepHasFailure(step: AgentUiStep): boolean {
-  return step.kind === "code" ? step.success === false : step.outcome === "failed";
 }
 
 function stepMeta(step: AgentUiStep): string {
@@ -586,6 +571,7 @@ function stepMeta(step: AgentUiStep): string {
     return parts.join(" · ");
   }
   const parts: string[] = [];
+  if (step.cancelReason != null && step.model != null) parts.push(step.model);
   if (step.inputTokens != null || step.outputTokens != null) {
     parts.push(`${formatTokens(step.inputTokens)} → ${formatTokens(step.outputTokens)} tok`);
   }
@@ -619,7 +605,10 @@ export function AgentLiveActivity({
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
-  const working = live.phase != null || runningSteps.length > 0;
+  const summary = summarizeAgentUiActivity(live);
+  const doneSummary = summarizeAgentUiActivity(live, doneSteps);
+  const recovering = summary.restartPending;
+  const working = isAgentUiActivityWorking(live);
   const activityToggleId = `live-activity:${live.id}`;
   const activityExpanded = toggledIds.has(activityToggleId);
   const toggleActivity = useCallback(
@@ -634,15 +623,19 @@ export function AgentLiveActivity({
   const phaseKind = live.phase === "script" ? "code" : live.phase === "llm" ? "llm" : null;
   const phaseStep =
     phaseKind == null ? liveStep : runningSteps.findLast((step) => step.kind === phaseKind);
-  const basePhaseLabel =
-    live.phase === "script"
+  const recoveringBetweenPhases = recovering && live.phase == null && phaseStep == null;
+  const basePhaseLabel = recoveringBetweenPhases
+    ? "Restarted — continuing…"
+    : live.phase === "script"
       ? "Running code"
       : live.phase === "llm"
         ? phaseStep?.kind === "llm"
           ? liveActivityLabel([phaseStep])
           : "Waiting for a response"
         : liveActivityLabel(phaseStep == null ? [] : [phaseStep]);
-  const phaseStartedAtMs = live.phaseStartedAtMs ?? phaseStep?.startedAtMs ?? live.startedAtMs;
+  const phaseStartedAtMs = recoveringBetweenPhases
+    ? summary.recoveryStartedAtMs
+    : (live.phaseStartedAtMs ?? phaseStep?.startedAtMs ?? live.startedAtMs);
   const inspectCurrentPhase =
     phaseStep?.kind === "llm"
       ? onInspectLlmRequest == null
@@ -678,12 +671,17 @@ export function AgentLiveActivity({
           className="-ml-2.5 self-start font-mono text-xs font-normal text-muted-foreground"
           data-testid="agent-live-summary"
         >
-          {codeStepCount(doneSteps) > 0 ? (
+          {doneSummary.codeCount > 0 ? (
             <CodeIcon className="size-3 shrink-0 text-muted-foreground/60" aria-hidden="true" />
           ) : (
             <span className="shrink-0 text-[11px] leading-none text-muted-foreground/60">✦</span>
           )}
-          <span>{activitySummary(live, doneSteps)}</span>
+          <span>
+            {formatAgentUiActivitySummary(live, {
+              summary: doneSummary,
+              interruptedPartialHint: "click to see partial response",
+            })}
+          </span>
           <ChevronRightIcon
             className={cn(
               "size-2.5 text-muted-foreground/50 transition-transform",

@@ -77,7 +77,7 @@ test("summarizes a settled activity", () => {
     event(5, "events.iterate.com/agents/web-message-sent", { message: "ok" }),
   ]);
   const activity = feed.items[0] as AgentUiActivity;
-  expect(summarizeActivity(activity)).toMatch(/^Ran code 1× · 1 request · \d+(\.\d+)?s$/);
+  expect(summarizeActivity(activity)).toBe("Ran code 1× · 1 request · 4 s");
 });
 
 function event(offset: number, type: string, payload: Record<string, unknown>): StreamEvent {
