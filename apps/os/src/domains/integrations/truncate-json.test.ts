@@ -71,6 +71,71 @@ describe("truncateJsonToBytes", () => {
     expect(compacted.payload).toMatch(/\[truncated from \d+ JSON bytes\]$/);
   });
 
+  it("keeps exact JSON escaping at the truncation boundary", () => {
+    const value = {
+      payload: `line\nquote"slash\\${"😀".repeat(100)}\ud800${"x".repeat(10_000)}`,
+    };
+
+    const result = truncateJsonToBytes(value, 257);
+
+    expect(result.bytes).toBe(jsonBytes(result.value));
+    expect(result.bytes).toBeLessThanOrEqual(257);
+    expect((result.value as typeof value).payload).not.toContain("�");
+  });
+
+  it("matches native byte accounting across normalized JSON shapes and budgets", () => {
+    const values: unknown[] = [
+      `ascii\nquote"slash\\${"é".repeat(20)}${"😀".repeat(20)}\ud800`,
+      [undefined, Number.NaN, Number.POSITIVE_INFINITY, -0, true, "x".repeat(500)],
+      {
+        control: "\u0000\b\t\n\f\r",
+        nested: [{ alpha: "a".repeat(300) }, { omega: "ω".repeat(300) }],
+      },
+      {
+        $iterate_truncated: "occupied",
+        ...Object.fromEntries(
+          Array.from({ length: 100 }, (_, index) => [`field_${index}`, `value_${index}`]),
+        ),
+      },
+      { toJSON: () => ({ normalized: true, payload: "z".repeat(500) }) },
+    ];
+    const budgets = [13, 14, 31, 64, 127, 256, 512, 1_024];
+
+    for (const value of values) {
+      for (const maxBytes of budgets) {
+        const result = truncateJsonToBytes(value, maxBytes);
+        expect(result.originalBytes).toBe(jsonBytes(value));
+        expect(result.bytes).toBe(jsonBytes(result.value));
+        expect(result.bytes).toBeLessThanOrEqual(maxBytes);
+      }
+    }
+  });
+
+  it("bounds a deeply nested 10 MB result without repeatedly copying the discarded tail", () => {
+    const value = {
+      type: "events.iterate.com/capability-host/script-run-settled",
+      payload: {
+        settlement: {
+          status: "succeeded",
+          result: { blob: "x".repeat(10_000_000), marker: "tail" },
+        },
+      },
+    };
+
+    const result = truncateJsonToBytes(value, 100 * 1_024);
+
+    expect(result.originalBytes).toBe(jsonBytes(value));
+    expect(result.bytes).toBe(jsonBytes(result.value));
+    expect(result.bytes).toBe(100 * 1_024);
+    expect(result.value).toMatchObject({
+      type: value.type,
+      payload: { settlement: { status: "succeeded", result: { marker: "tail" } } },
+    });
+    expect((result.value as typeof value).payload.settlement.result.blob).toMatch(
+      /\[truncated from \d+ JSON bytes\]$/,
+    );
+  });
+
   it("chops a wide object when no individual value is large", () => {
     const value = Object.fromEntries(
       Array.from({ length: 1_000 }, (_, index) => [`field_${index}`, index]),
