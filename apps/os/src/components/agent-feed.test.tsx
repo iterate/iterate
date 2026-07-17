@@ -214,14 +214,15 @@ test("known and unknown cancellations stay visibly distinct from restart failure
   expect(restartFailed.querySelector("svg.lucide-circle-alert")).not.toBeNull();
 });
 
-test("a crash-cancel remains visibly busy while its replacement is pending", () => {
+test("an earlier failure does not mask a pending crash recovery", () => {
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 16, 14, 41, 28);
   vi.setSystemTime(now);
   const live = activity({
     status: "running",
-    startedAtMs: now - 5_000,
+    startedAtMs: now - 7_000,
     steps: [
+      llmStep(0, now - 7_000, { outcome: "failed" }),
       llmStep(1, now - 5_000, {
         outcome: "cancelled",
         cancelReason: "durable-object-crashed",
@@ -232,7 +233,7 @@ test("a crash-cancel remains visibly busy while its replacement is pending", () 
   const container = renderLiveActivity(live);
 
   expect(container.querySelector('[data-testid="agent-live-summary"]')?.textContent).toContain(
-    "0 requests · 1 retry",
+    "1 request · 1 retry · failed",
   );
   expect(container.querySelector('[data-testid="agent-live-status"]')?.textContent).toContain(
     "Restarted — continuing… 0.0s",
@@ -353,7 +354,7 @@ test("failed script outcomes are explicit in both collapsed and expanded activit
   const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
   const failed = activity({
     startedAtMs,
-    endedAtMs: startedAtMs + 5_000,
+    endedAtMs: startedAtMs + 119_500,
     steps: [
       {
         kind: "code",
@@ -364,15 +365,15 @@ test("failed script outcomes are explicit in both collapsed and expanded activit
         success: false,
         errorMessage: "boom",
         startedAtMs,
-        durationMs: 5_000,
-        expiresAtMs: startedAtMs + 60_000,
+        durationMs: 119_500,
+        expiresAtMs: startedAtMs + 120_000,
       },
     ],
   });
   const container = renderActivity(failed);
 
-  expect(container.textContent).toContain("Ran code 1× · 0 requests · failed · 5 s");
+  expect(container.textContent).toContain("Ran code 1× · 0 requests · failed · 2m 0s");
   expect(
     container.querySelector('[data-testid="agent-feed-inspect-script-execution"]')?.textContent,
-  ).toContain("Code failed");
+  ).toMatch(/Code failedStarted .* · 2m 0s/);
 });

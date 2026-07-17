@@ -327,7 +327,7 @@ function LiveActivity(props: { activity: AgentUiActivity }) {
   );
   const nowMs = useSyncExternalStore(subscribe, getLiveCodeClockSnapshot, getLiveCodeClockSnapshot);
 
-  const lastStep = props.activity.steps[props.activity.steps.length - 1];
+  const lastStep = props.activity.steps.findLast((step) => step.status === "running");
   const thinking = lastStep?.kind === "llm" ? streamingTail(lastStep.thinkingText) : "";
   const streamed =
     lastStep?.kind === "llm"

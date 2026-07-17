@@ -607,7 +607,7 @@ export function AgentLiveActivity({
   const doneSteps = live.steps.filter((step) => step.status === "done");
   const summary = summarizeAgentUiActivity(live);
   const doneSummary = summarizeAgentUiActivity(live, doneSteps);
-  const recovering = summary.outcome === "recovering";
+  const recovering = summary.restartPending;
   const working = isAgentUiActivityWorking(live);
   const activityToggleId = `live-activity:${live.id}`;
   const activityExpanded = toggledIds.has(activityToggleId);

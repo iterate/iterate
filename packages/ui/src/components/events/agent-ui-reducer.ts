@@ -176,7 +176,7 @@ export function formatAgentUiActivitySummary(
   return parts.join(" · ");
 }
 
-function formatAgentUiDuration(durationMs: number): string {
+export function formatAgentUiDuration(durationMs: number): string {
   if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
   if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1).replace(/\.0$/, "")} s`;
   const seconds = Math.round(durationMs / 1000);

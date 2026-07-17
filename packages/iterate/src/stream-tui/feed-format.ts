@@ -58,7 +58,7 @@ export function formatLiveActivityLabel(
   const llm = running.findLast((step) => step.kind === "llm");
   if (llm == null || llm.kind !== "llm") {
     if (activity.phase === "llm") return "Waiting for a response";
-    if (summarizeAgentUiActivity(activity).outcome === "recovering") {
+    if (summarizeAgentUiActivity(activity).restartPending) {
       return "Restarted — continuing…";
     }
     return "Working…";
