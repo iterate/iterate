@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 
 test("the embedded iterate/sdk runtime is loader-ready plain JavaScript", async () => {
@@ -22,3 +22,128 @@ test("the embedded iterate/sdk runtime is loader-ready plain JavaScript", async 
   expect(ITERATE_SDK_VIRTUAL_MODULE).not.toContain("import type");
   expect(ITERATE_SDK_VIRTUAL_MODULE).not.toContain("export type");
 });
+
+test("project auth is a body-safe partial fetch in the embedded worker runtime", async () => {
+  const { IterateWorkerEntrypoint } = await loadEmbeddedSdk();
+  const requests: (Request | ProjectAuthMetadata)[] = [];
+  const dispose = vi.fn();
+  const remoteAuth = {
+    async fetch(request: Request | ProjectAuthMetadata): Promise<Response | null> {
+      requests.push(request);
+      if (!(request instanceof Request)) return null;
+      expect(await request.text()).toBe("callback-token");
+      return new Response("auth-owned");
+    },
+    get: vi.fn(() => remoteAuth),
+  };
+  const describeImplementation = vi.fn(async function () {
+    return { projectId: "prj_demo" };
+  });
+  const describe = new Proxy(describeImplementation, {
+    get(target, property, receiver) {
+      if (property === "bind") {
+        throw new Error('The RPC receiver does not implement the method "bind".');
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const snapshot = vi.fn(async () => ({ offset: 42 }));
+  const processor = new Proxy(() => undefined, {
+    get(_target, property) {
+      if (property === "snapshot") return snapshot;
+      if (property === "bind") {
+        throw new Error('The RPC receiver does not implement the method "bind".');
+      }
+      return undefined;
+    },
+  });
+  const remoteItx = {
+    __describe: describe,
+    auth: remoteAuth,
+    processor,
+    [Symbol.dispose]: dispose,
+  };
+  const rawBinding = {
+    fetch: vi.fn(),
+    get: vi.fn(async () => remoteItx),
+  };
+  const worker = new IterateWorkerEntrypoint({}, { ITX: rawBinding }) as {
+    env: {
+      ITX: {
+        get(): Promise<{
+          __describe(): Promise<{ projectId: string }>;
+          auth: TestProjectAuth;
+          processor: { snapshot(): Promise<{ offset: number }> };
+          [Symbol.dispose](): void;
+        }>;
+      };
+    };
+  };
+  const itx = await worker.env.ITX.get();
+
+  const appRequest = new Request("https://internal--demo.iterate.app/echo", {
+    body: "app-owned-body",
+    headers: { cookie: "iterate-project-auth=signed-token" },
+    method: "POST",
+  });
+  await expect(itx.auth.get({ policy: "project-member" }).fetch(appRequest)).resolves.toBeNull();
+  expect(requests[0]).not.toBeInstanceOf(Request);
+  expect(requests[0]).toMatchObject({
+    method: "POST",
+    url: appRequest.url,
+  });
+  expect(requests[0]).not.toHaveProperty("body");
+  expect(new Headers((requests[0] as ProjectAuthMetadata).headers).get("cookie")).toBe(
+    "iterate-project-auth=signed-token",
+  );
+  expect(appRequest.bodyUsed).toBe(false);
+  await expect(appRequest.text()).resolves.toBe("app-owned-body");
+
+  const callback = new Request("https://internal--demo.iterate.app/_iterate/auth/callback", {
+    body: "callback-token",
+    method: "POST",
+  });
+  const callbackResponse = await itx.auth.get({ policy: "project-member" }).fetch(callback);
+  expect(await callbackResponse?.text()).toBe("auth-owned");
+  expect(requests[1]).toBe(callback);
+  expect(callback.bodyUsed).toBe(true);
+
+  await expect(itx.__describe()).resolves.toEqual({ projectId: "prj_demo" });
+  expect(describeImplementation).toHaveBeenCalledOnce();
+  await expect(itx.processor.snapshot()).resolves.toEqual({ offset: 42 });
+  expect(snapshot).toHaveBeenCalledOnce();
+
+  itx[Symbol.dispose]();
+  expect(dispose).toHaveBeenCalledOnce();
+});
+
+type ProjectAuthMetadata = {
+  headers: [string, string][];
+  method: string;
+  url: string;
+};
+
+type TestProjectAuth = {
+  get(policy: { policy: "project-member" }): TestProjectAuth;
+  fetch(request: Request): Promise<Response | null>;
+};
+
+async function loadEmbeddedSdk(): Promise<{
+  IterateWorkerEntrypoint: new (ctx: unknown, env: unknown) => unknown;
+}> {
+  const cloudflareImport = 'import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";';
+  const testRuntime = `
+    class WorkerEntrypoint {
+      constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+    }
+    class DurableObject {
+      constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+    }
+  `;
+  const source = ITERATE_SDK_VIRTUAL_MODULE.replace(cloudflareImport, testRuntime);
+  expect(source).not.toBe(ITERATE_SDK_VIRTUAL_MODULE);
+  const url = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  return (await import(url)) as {
+    IterateWorkerEntrypoint: new (ctx: unknown, env: unknown) => unknown;
+  };
+}
