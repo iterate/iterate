@@ -218,6 +218,11 @@ or removed through the normal lifecycle. `includeEphemeral` is a generic
 push/webhook option rather than a private platform power.
 `itx.integrations.posthog` is a fixed first-party receiver with deployment
 credentials; projects do not configure their own PostHog connection.
+The subscription itself remains ordinary. The host does, however, mint a
+`stream-delivery` purpose while the delivery spine evaluates its expression;
+the receiver rejects the userspace purpose so a project script cannot submit a
+fabricated batch directly. This is a receiver trust boundary, not protected
+subscription configuration: projects may still replace or remove the fact.
 
 Fresh project streams append both platform subscriptions during their ordinary
 first-boot birth sequence, before the first user event can land. Neither the
@@ -257,16 +262,18 @@ Each occurrence also contains indexed coordinates:
 
 Every occurrence carries PostHog's first-class `$groups: { project: <id> }`.
 The group key is the immutable project id, following PostHog's requirement that
-group keys be unique identifiers rather than display names. The authentic root
-`project/created` birth certificate additionally emits one idempotent
-`$groupidentify` occurrence for that same key. Its `$group_set` records the id,
-creation-time slug, and that slug as PostHog's display `name`, so operators can
-find one project group by either identifier without creating parallel entities.
+group keys be unique identifiers rather than display names. An authentic
+`stream/created` row emits an idempotent `$groupidentify` with that id, ensuring
+the group exists before the stream's grouped occurrences arrive even when the
+project predates this feed. The authentic root `project/created` birth
+certificate enriches that same group with the creation-time slug and that slug
+as PostHog's display `name`, so operators can find one project group by either
+identifier without creating parallel entities.
 Project slugs are mutable; synchronizing a later rename needs an authoritative
 directory event and is not falsely claimed by this birth-only feed. The event
 must be first-hand,
 durable, unannotated, on `/`, and carry the `project-created:<id>` idempotency
-key; lookalike or cross-posted events cannot write group properties. No
+key; lookalike or cross-posted events cannot write label properties. No
 directory lookup, mutable alias, or per-batch group update exists. The regular
 stream occurrence still contains the complete project birth payload.
 
@@ -437,6 +444,9 @@ alarm actions. Possible later operation adapters are:
 - [ ] Every fresh project stream receives the ordinary PostHog subscription
       during its birth sequence; there is no legacy scan, backfill, or
       compatibility path.
+- [ ] A normal project script cannot call the first-party receiver directly;
+      only the host-minted delivery purpose can resolve it, without protecting
+      the subscription's key or lifecycle.
 - [ ] Every durable and ephemeral row is submitted as one project-grouped
       occurrence; no type, success/error, or sampling selector exists.
 - [ ] Only public-batch HTTP acceptance gates the durable cursor; transport
