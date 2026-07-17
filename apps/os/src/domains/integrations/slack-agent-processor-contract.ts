@@ -26,8 +26,8 @@ import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-proc
  * bang-command codemode scripts, and painting the agent's announced busy/idle
  * status onto the Slack assistant status through host-provided dependencies.
  *
- * LLM turns are mention-gated (mirrors github-agent): a human must @mention the
- * bot (or Slack must deliver `app_mention`) before the agent is woken. After
+ * LLM turns are mention-gated: a human must @mention the bot (or Slack must
+ * deliver `app_mention`) before the agent is woken. After
  * that activation, later messages in the same thread also queue turns so
  * multi-turn conversation does not require re-mentioning on every reply.
  * Unmentioned traffic before activation is still transcribed as
@@ -53,8 +53,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     channel: z.string().optional(),
     /**
      * True after this thread has seen an @mention / app_mention of our bot.
-     * Unlocks follow-up turns without re-mentioning (same shape as
-     * github-agent's conversationActive).
+     * Unlocks follow-up turns without re-mentioning.
      */
     conversationActive: z.boolean().default(false),
     latestMessageTs: z.string().optional(),

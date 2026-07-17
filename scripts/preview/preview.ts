@@ -18,6 +18,7 @@ import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
+  OS_TUI_LANE_TIMEOUT_SECS,
 } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
   parseWorkerSizeFromDeployOutput,
@@ -1323,7 +1324,7 @@ export type CloudflarePreviewApp = {
 
 /**
  * Aggregated retry telemetry for one app's preview e2e lane: every test that
- * needed a re-roll, whichever sub-lane (vitest, playwright specs) it ran in.
+ * needed a re-roll, whichever sub-lane (TUI, Vitest, Playwright) it ran in.
  * Why this exists: with one CI retry, a rare real race turns a run red about
  * once in 400 runs, but shows up here about once in 20 — the count, not the
  * run status, is the detector for probabilistic bugs.
@@ -1345,12 +1346,17 @@ export type PreviewRetrySummary = {
  * (marathon loops) can't leak stale telemetry.
  */
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+/** Same JSON shape, written by the Microsoft TUI Test wrapper. */
+const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
 const streamsExampleVitestRetryTelemetryFile =
   "/tmp/os-preview-streams-example-vitest-retries.json";
 
-/** Reads the JSON written by RetryTelemetryReporter (vitest sub-lane). */
-async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetrySummary["retried"]> {
+/** Reads the shared retry JSON written by a Vitest or TUI sub-lane. */
+async function readVitestRetryTelemetry(
+  filePath: string,
+  lane = "vitest",
+): Promise<PreviewRetrySummary["retried"]> {
   const TelemetryFile = z.object({
     retried: z.array(
       z.object({
@@ -1362,7 +1368,7 @@ async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetryS
   });
   const parsed = TelemetryFile.parse(JSON.parse(await readFile(filePath, "utf8")));
   return parsed.retried.map((record) => ({
-    lane: "vitest",
+    lane,
     name: record.fullName,
     retryCount: record.retryCount,
     passedAfterRetry: record.passedAfterRetry,
@@ -1525,6 +1531,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewReadyWorkerVersion: { stableForMs: 10_000 },
     paths: [
       "apps/os/**",
+      // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
+      ".bun-version",
+      // OS imports iterate/react, and its preview e2e lane builds and runs the
+      // iterate TUI artifact. A CLI-only change therefore still needs the OS
+      // deployment and post-deploy PTY proof.
+      "packages/iterate/**",
       "apps/auth/**",
       "apps/auth-contract/**",
       "apps/dummy-petshop/**",
@@ -1558,7 +1570,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
-        `rm -f ${osVitestRetryTelemetryFile} ../../test-results/playwright-results.json`,
+        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
         // let it overlap the smoke and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
@@ -1576,10 +1588,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // an RPC wedge before waitForEvent's 90s greeting timeout produced no
         // suite output and survived until Depot killed the entire 10m job.
         `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
-        // The e2e vitest lane and the Playwright specs hit the same slot but
-        // provision independent projects, so they run concurrently: the vitest
-        // lane in the background, the specs in the foreground. The vitest log
-        // is replayed once the specs finish.
+        // The built-package PTY spec, e2e vitest lane, and Playwright specs hit
+        // the same slot but provision independent projects, so they run
+        // concurrently: TUI + vitest in the background, specs in the
+        // foreground. Their logs are replayed once the specs finish.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -1591,10 +1603,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // rc=124 auto-retry used to live here; it fired zero times in ~200
         // Depot runs and was the one place retry layers could stack.
         //
-        // Retry telemetry: the vitest lane writes its retry JSON (stale
-        // files were removed at the top of this script) for preview.ts to
-        // fold into the PR body alongside Playwright's
-        // playwright-results.json.
+        // Retry telemetry: the TUI and vitest lanes write the same compact
+        // JSON shape (stale files were removed at the top of this script) for
+        // preview.ts to fold into the PR body alongside Playwright's report.
+        `E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts > /tmp/os-preview-tui.log 2>&1 & TUI_PID=$!`,
         `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
@@ -1602,14 +1614,19 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // hide (or orphan) the vitest results.
         `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
+        'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         "cat /tmp/os-preview-vitest.log",
-        '[ "$E2E_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
+        "cat /tmp/os-preview-tui.log",
+        '[ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
     collectRetryTelemetry: async ({ repositoryRoot }) => {
-      const [vitest, specs] = await Promise.all([
+      const [vitest, tui, specs] = await Promise.all([
         readRetryTelemetryLane("os vitest lane", () =>
           readVitestRetryTelemetry(osVitestRetryTelemetryFile),
+        ),
+        readRetryTelemetryLane("os TUI lane", () =>
+          readVitestRetryTelemetry(osTuiRetryTelemetryFile, "tui"),
         ),
         readRetryTelemetryLane("os playwright specs", () =>
           readPlaywrightRetryTelemetry(
@@ -1617,7 +1634,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
           ),
         ),
       ]);
-      return { retried: [...vitest, ...specs] };
+      return { retried: [...vitest, ...tui, ...specs] };
     },
   },
   semaphore: {

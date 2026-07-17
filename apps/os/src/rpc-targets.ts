@@ -79,7 +79,10 @@ import {
   assertValidSleepAfter,
   sandboxPathFor,
 } from "./domains/sandboxes/utils.ts";
-import { SandboxProcessorContract } from "./domains/sandboxes/sandbox-processor-contract.ts";
+import {
+  SandboxProcessorContract,
+  type SandboxProcessorState,
+} from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import { isRootWorkspacePath, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
@@ -257,6 +260,13 @@ import type {
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
+import {
+  handleProjectAuthFetch,
+  parseProjectAuthPolicy,
+  projectAuthRequestFromRpc,
+  type ProjectAuthPolicy,
+  type ProjectAuthRpcMetadata,
+} from "./auth/project-auth.ts";
 import type {
   McpBeginOAuthInput,
   McpBeginOAuthResult,
@@ -1469,11 +1479,13 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy()/kill() and __describe() like every node. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
+        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/restart()/destroy()/kill() and __describe() like every node. processor(path) and liveState(path) expose its hosted reducer and push-driven lifecycle projection (including `running`). The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
       children: {
         create: "Create a sandbox (strict: existing/destroyed names are errors). Returns { path }.",
         get: "The sandbox at a created path (boots the container on first use).",
         list: "Every sandbox stream path in the project (including destroyed sandboxes' streams — the stream is the history).",
+        liveState: "Push-driven reduced lifecycle state for a sandbox path.",
+        processor: "The sandbox path's hosted lifecycle reducer.",
       },
       parent: "a project itx (itx.sandboxes)",
     });
@@ -1526,6 +1538,40 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     };
   }
 
+  /** Resolve the claimed container namespace without requiring the pet to be
+   * usable. Processor delivery and state inspection must keep working after
+   * the sandbox's public command door has been tombstoned. */
+  async #claimedStub(path: string) {
+    const asserted = assertSandboxPath(path);
+    const claim = await this.#claim(asserted);
+    if (claim === undefined) {
+      throw new Error(
+        `sandbox "${asserted}" does not exist — sandboxes are created explicitly: itx.sandboxes.create({ name, instanceType })`,
+      );
+    }
+    return { path: asserted, stub: this.#stub(asserted, claim.instanceType) };
+  }
+
+  /** The sandbox's hosted reducer. Kept on the collection as an isolate-side
+   * relay because `get(path)` deliberately returns the bare SDK stub, and a
+   * Workers RPC property read cannot itself be pipelined through. */
+  processor(path: string): WakeableStreamProcessorRpc<SandboxProcessorState> {
+    return new ProcessorRelayRpcTarget<SandboxProcessorState>({
+      auth: this.props.auth,
+      host: async () => (await this.#claimedStub(path)).stub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** Push-driven reduced lifecycle state for one sandbox, including a
+   * destroyed sandbox whose command door is no longer usable. */
+  liveState(path: string): LiveStateRpc<SandboxProcessorState> {
+    return new LiveStateRelayRpcTarget<SandboxProcessorState>(
+      async () =>
+        (await this.#claimedStub(path))
+          .stub as unknown as LiveStateDurableObjectStub<SandboxProcessorState>,
+    );
+  }
+
   /** Create a sandbox. Strict: an existing or destroyed path is an error.
    * Returns the path to `get`. */
   async create(
@@ -1562,34 +1608,43 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     if (claim === undefined) {
       throw new Error(`sandbox "${path}": the catalogue append returned no event`);
     }
-    const claimedType = SandboxInstanceType.parse(
-      (claim.payload as { instanceType: string }).instanceType,
-    );
+    const parsedClaim = SandboxProcessorContract.parseEvent(claim);
+    if (parsedClaim.type !== "events.iterate.com/sandbox/create-requested") {
+      throw new Error(
+        `sandbox "${path}": catalogue claim has unexpected type "${parsedClaim.type}"`,
+      );
+    }
+    if (parsedClaim.payload.path !== path) {
+      throw new Error(`sandbox "${path}": catalogue claim points at "${parsedClaim.payload.path}"`);
+    }
+    const claimedType = parsedClaim.payload.instanceType;
     if (claimedType !== instanceType) {
       throw new Error(
         `sandbox "${path}" was already requested as instance type "${claimedType}" — names are unique per project; pick a new name`,
       );
     }
+    const claimedEnv =
+      parsedClaim.payload.env === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(parsedClaim.payload.env).map(([key, value]) => [
+              key,
+              value ?? undefined,
+            ]),
+          );
     return await this.#stub(path, instanceType).create({
-      env: input.env,
+      env: claimedEnv,
       instanceType,
-      keepAlive: input.keepAlive,
+      keepAlive: parsedClaim.payload.keepAlive,
       path,
       projectId: this.props.projectId,
-      sleepAfter: input.sleepAfter,
+      sleepAfter: parsedClaim.payload.sleepAfter,
     });
   }
 
   /** The sandbox at a path. Throws unless the path was created (and not destroyed). */
   async get(path: string): Promise<CloudflareSandbox> {
-    const asserted = assertSandboxPath(path);
-    const claim = await this.#claim(asserted);
-    if (claim === undefined) {
-      throw new Error(
-        `sandbox "${asserted}" does not exist — sandboxes are created explicitly: itx.sandboxes.create({ name, instanceType })`,
-      );
-    }
-    const stub = this.#stub(asserted, claim.instanceType);
+    const { path: asserted, stub } = await this.#claimedStub(path);
     // Getting never creates: the sandbox proves it was created (and not
     // destroyed) before the stub reaches the caller. Container runtimes do
     // not reliably surface `ctx.id.name`, so this call also re-asserts the
@@ -5153,6 +5208,35 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
     });
   }
 }
+
+/** A partial fetch: return its response, or continue the app when it returns null. */
+class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  /** Bind a project-member gate to this itx's project. */
+  get(policy: ProjectAuthPolicy): ProjectAuthRpcTarget {
+    parseProjectAuthPolicy(policy);
+    return this;
+  }
+
+  /**
+   * Own login, callback, logout, and the host-only cookie. Returns null only
+   * when this request belongs to a current project member. Like any partial
+   * fetch, a null result leaves the request body untouched for the app.
+   */
+  fetch(request: Request): Promise<Response | null>;
+  async fetch(request: ProjectAuthRpcMetadata | Request): Promise<Response | null> {
+    return await handleProjectAuthFetch({
+      osBaseUrl: parseConfig(env).baseUrl,
+      projectId: this.props.projectId,
+      request: projectAuthRequestFromRpc(request),
+      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+    });
+  }
+}
 /**
  * THE one table of project built-ins: member name -> one-line blip. The
  * `children` map in `__describe()` derives from it, so adding a built-in is
@@ -5161,6 +5245,7 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
   ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
+  auth: 'Project-member web auth: auth.get({ policy: "project-member" }).fetch(request).',
   browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
@@ -5374,6 +5459,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
     return new AiRpcTarget();
+  }
+
+  /** Browser auth for project-host web apps. */
+  get auth(): ProjectAuthRpcTarget {
+    return new ProjectAuthRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
   }
 
   /** Cloudflare Browser Run: quickAction() and raw fetch(). */
@@ -6614,12 +6707,12 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   implements WakeableStreamProcessorRpc<State>
 {
   readonly #auth: ItxAuth;
-  readonly #host: () => Host;
+  readonly #host: () => Host | PromiseLike<Host>;
   readonly #processorFacade: (host: Host) => PromiseLike<unknown>;
 
   constructor(args: {
     auth: ItxAuth;
-    host: () => Host;
+    host: () => Host | PromiseLike<Host>;
     processorFacade?: (host: Host) => PromiseLike<unknown>;
   }) {
     super();
@@ -6629,7 +6722,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 
   async #processor(): Promise<StreamProcessorRpc<State>> {
-    return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
+    return (await this.#processorFacade(await this.#host())) as StreamProcessorRpc<State>;
   }
 
   #disposeProcessor(processor: StreamProcessorRpc<State>): void {
@@ -6770,13 +6863,13 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */
-  wakeStreamSubscriber(
+  async wakeStreamSubscriber(
     request: StreamSubscriberWakeRequest,
   ): Promise<StreamSubscriberWakeResponse> {
     if (this.#auth.principal !== "trusted-internal") {
       throw new Error("wakeStreamSubscriber is dialed by stream delivery spines, not sessions");
     }
-    return this.#host().wakeStreamSubscriber(request);
+    return (await this.#host()).wakeStreamSubscriber(request);
   }
 }
 
@@ -6846,21 +6939,25 @@ class LiveStateRelayRpcTarget<State>
   extends IterateRpcRelay<"LiveStateRpc">
   implements LiveStateRpc<State>
 {
-  readonly #stub: () => LiveStateDurableObjectStub<State>;
+  readonly #stub: () =>
+    | LiveStateDurableObjectStub<State>
+    | PromiseLike<LiveStateDurableObjectStub<State>>;
 
-  constructor(stub: () => LiveStateDurableObjectStub<State>) {
+  constructor(
+    stub: () => LiveStateDurableObjectStub<State> | PromiseLike<LiveStateDurableObjectStub<State>>,
+  ) {
     super();
     this.#stub = stub;
   }
 
   async get(): Promise<State> {
-    return await (await this.#stub().liveState).get();
+    return await (await (await this.#stub()).liveState).get();
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    return await (await this.#stub().liveState).subscribe(onUpdate);
+    return await (await (await this.#stub()).liveState).subscribe(onUpdate);
   }
 }
 

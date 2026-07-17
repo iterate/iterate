@@ -47,6 +47,18 @@ export type OAuthAccessTokenIntrospectionResult =
       role: string | null;
     };
 
+export type MintProjectAppSessionInput = {
+  audience: string;
+  projectId: string;
+  userId: string;
+};
+
+export type ValidateProjectAppSessionInput = {
+  audience: string;
+  projectId: string;
+  token: string;
+};
+
 /**
  * The RPC contract of auth's default Worker entrypoint. Auth also implements
  * public HTTP `fetch`, but it is deliberately absent from this client contract.
@@ -59,6 +71,12 @@ export abstract class AuthWorker<Env = unknown> extends WorkerEntrypoint<Env> {
   ): Promise<ProjectCreationResult>;
   abstract getProjectBySlug(input: ProjectInput): Promise<ProjectRecord | null>;
   abstract listProjectsForUser(input: { userId: string }): Promise<UserProjectRecord[]>;
+  abstract mintProjectAppSession(
+    input: MintProjectAppSessionInput,
+  ): Promise<{ token: string } | null>;
+  abstract validateProjectAppSession(
+    input: ValidateProjectAppSessionInput,
+  ): Promise<{ expiresAt: number } | null>;
   abstract mintProjectId(): Promise<{ id: string }>;
   abstract introspectAccessToken(
     input: InternalIntrospectOAuthAccessTokenInput,

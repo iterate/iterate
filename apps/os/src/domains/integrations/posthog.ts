@@ -19,16 +19,21 @@ const ProjectGroupBirthPayload = z.object({
 export function posthogSubscriptionEvent() {
   return {
     type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: "iterate-platform-posthog-subscription-v1",
+    // Bump when the subscription payload changes so new stream births land
+    // the revised config. Existing streams still rely on capture-side filtering
+    // until they are recreated or reconfigured.
+    idempotencyKey: "iterate-platform-posthog-subscription-v2",
     payload: {
       subscriptionKey: "iterate-platform-posthog",
-      description: "Iterate's first-party, all-event PostHog feed",
+      description: "Iterate's first-party durable-event PostHog feed",
       delivery: {
         mode: "push",
         expression: ["integrations", "posthog", "processEventBatch"],
       },
       deliver: "all",
-      includeEphemeral: true,
+      // High-volume transient rows (LLM chunks, progress ticks) stay off the
+      // analytics feed; durable product facts are what PostHog should index.
+      includeEphemeral: false,
       onPoison: "park",
     } satisfies SubscriptionConfiguredPayload,
   };
@@ -137,7 +142,11 @@ function posthogEvents(args: {
     projectId,
   ])}`;
   const streamId = posthogUuid(["stream-v1", workerName, projectId, batch.path]);
-  const occurrences = batch.events.map((event) => {
+  // Capture-side filter is deliberate defense in depth: subscriptions born
+  // before includeEphemeral flipped to false may still deliver ephemeral rows.
+  // Never index those in PostHog.
+  const durableEvents = batch.events.filter((event) => event.ephemeral !== true);
+  const occurrences = durableEvents.map((event) => {
     const createdAt = normalizeEventTimestamp(event.createdAt);
     const streamEvent = truncateJsonToBytes(event, POSTHOG_STREAM_EVENT_MAX_JSON_BYTES);
     const eventUuid = eventIdentity(workerName, projectId, batch.path, {
@@ -216,6 +225,13 @@ export async function capturePosthogStreamEventBatch(
     // keeping it observable prevents a future regression from appearing as
     // unexplained time in the parent Stream.append invocation.
     const events = posthogEvents(args);
+    const durableCount = events.filter((event) => event.event === "stream:append").length;
+    span.setAttribute("iterate.stream.durable_event_count", durableCount);
+    // An all-ephemeral delivery (or one that yields no PostHog rows) is a
+    // successful no-op — do not fail the subscriber or call the capture API.
+    if (events.length === 0) {
+      return;
+    }
 
     const response = await (deps.fetch ?? fetch)("https://eu.i.posthog.com/batch/", {
       // Deliberately omit optional `sent_at`: these are server-authoritative

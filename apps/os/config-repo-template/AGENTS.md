@@ -12,12 +12,12 @@ The project worker entrypoint is `worker.ts` (TypeScript). Its default export
 handles HTTP for the project's hosts, receives every committed event on every
 stream in the project through `processEvent(event)` (checkpointed,
 at-least-once, per-stream order — `event.path` says which stream), and reaches
-the project's capabilities through `await this.env.ITX.get()`. Small local
-modules are fine when logic deserves focused tests; the seeded GitHub review
-mechanics live in `github-reviews.ts`, while repository scope and labels stay
-obvious in `worker.ts`. The worker is built by the
-platform's worker build pipeline: multi-file TypeScript works (the bundler
-follows imports), and npm dependencies declared in `package.json` are
+the project's capabilities through `await this.env.ITX.get()`. The seeded
+GitHub pull-request router and structural-review policy are deliberately
+inline in `worker.ts`: it is a complete, copyable userspace example. Extract
+local modules only when project-specific logic earns them. The worker is built
+by the platform's worker build pipeline: multi-file TypeScript works (the
+bundler follows imports), and npm dependencies declared in `package.json` are
 installed at build time. The platform's capability types and worker base
 classes come from the `iterate` package — `import { IterateWorkerEntrypoint,
 IterateDurableObject, type StreamEvent } from "iterate/sdk"`. It's a
@@ -35,7 +35,9 @@ into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
 The example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless, extends
-`IterateWorkerEntrypoint`) and `CounterApp` (stateful, extends
+`IterateWorkerEntrypoint`), `InternalApp` (stateless and protected by
+`itx.auth.get({ policy: "project-member" }).fetch(request)`), and
+`CounterApp` (stateful, extends
 `IterateDurableObject` — a mini client-side app whose count updates live over
 a WebSocket at `/ws`).
 The router dispatches every app request through `this.fetchDynamicWorker(req,

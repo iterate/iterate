@@ -13,13 +13,8 @@ import { useLiveState } from "iterate/react";
 import { normalizePath } from "~/domains/durable-object-names.ts";
 import { StreamTree } from "~/components/stream-tree.tsx";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
-import { streamPathParent } from "~/lib/stream-links.ts";
+import { StreamPath, streamPathParent } from "~/lib/stream-links.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-
-// A full canonical StreamPath of at least one segment: leading slash, lowercase
-// segments separated by single slashes, no trailing slash. `~` is legal — GitHub
-// agent paths use g~<hex> (must stay aligned with StreamPath in stream-links).
-const STREAM_PATH_PATTERN = /^(?:\/[a-z0-9_~-]+)+$/;
 
 // The "what's happening right now" window for the default ⌘K list.
 const RECENT_WINDOW_MS = 5 * 60_000;
@@ -43,7 +38,8 @@ function normalizeDestination(raw: string): string | null {
   const trimmed = raw.trim();
   if (trimmed === "" || trimmed.endsWith("/")) return null;
   const candidate = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return STREAM_PATH_PATTERN.test(candidate) ? candidate : null;
+  const parsed = StreamPath.safeParse(candidate);
+  return parsed.success && parsed.data !== "/" ? parsed.data : null;
 }
 
 // How many characters of the pre-match "head" to keep when it's too long to fit

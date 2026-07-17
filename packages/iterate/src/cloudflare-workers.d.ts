@@ -4,10 +4,12 @@ declare module "cloudflare:workers" {
     protected ctx: {
       props: Props;
     };
+    constructor(ctx: unknown, env: Env);
   }
   export abstract class DurableObject<Env = unknown> {
     protected env: Env;
     protected ctx: unknown;
+    constructor(ctx: unknown, env: Env);
   }
 }
 

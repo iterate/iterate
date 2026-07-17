@@ -4,10 +4,12 @@
 // (a distributed App gets webhooks for orgs no project has claimed): validly
 // signed but unroutable → 200-drop, bad signature → 401, unconfigured → 503.
 // WebCrypto HMAC — same primitive as the Slack door and the Secret DO's hmac()
-// (design R6); no @octokit/webhooks (it would only duplicate this).
+// (design R6). The small association extractor is typed from Octokit's
+// generated event-name union, but signature verification stays at this door.
 
 import { computeHmacHex, timingSafeStringEqual } from "../secrets/utils.ts";
 import { routeIntegrationWebhook } from "./integration-streams.ts";
+import { githubWebhookAssociations } from "./github-webhook-associations.ts";
 import { GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE, parseJsonRecord } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -33,24 +35,33 @@ export async function fetchGithubWebhook(input: {
   });
   if (!verified) return Response.json({ error: "Invalid GitHub signature." }, { status: 401 });
 
+  const delivery = input.request.headers.get("x-github-delivery")?.trim();
+  const eventName = input.request.headers.get("x-github-event")?.trim();
+  if (!delivery || !eventName) {
+    return Response.json(
+      { error: "Missing required GitHub webhook delivery headers." },
+      { status: 400 },
+    );
+  }
+
   const payload = parseJsonRecord(body);
   if (!payload) return Response.json({ ignored: "unparseable-payload", ok: true });
 
   const installationId = githubWebhookExternalId(payload);
   if (!installationId) return Response.json({ ignored: "no-installation", ok: true });
 
-  const delivery = input.request.headers.get("x-github-delivery");
   const result = await routeIntegrationWebhook({
     event: {
-      idempotencyKey: `github-webhook:${delivery ?? crypto.randomUUID()}`,
+      idempotencyKey: `github-webhook:${delivery}`,
       payload: {
         ...(input.config.integrations.github?.appSlug === undefined
           ? {}
           : { appSlug: input.config.integrations.github.appSlug }),
+        associations: githubWebhookAssociations({ id: delivery, name: eventName, payload }),
         body: payload,
-        headers: {
-          githubDelivery: delivery,
-          githubEvent: input.request.headers.get("x-github-event"),
+        delivery: {
+          id: delivery,
+          name: eventName,
         },
         installationId,
       },

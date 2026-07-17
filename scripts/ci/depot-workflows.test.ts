@@ -123,6 +123,12 @@ describe("Depot deployment safety", () => {
     expect(workflow.on?.push?.paths).toContain(".depot/workflows/deploy-tunnels.yml");
   });
 
+  it("redeploys OS when its iterate/react workspace dependency changes", () => {
+    const workflow = loadWorkflow(".depot/workflows/deploy-os.yml");
+
+    expect(workflow.on?.push?.paths).toContain("packages/iterate/**");
+  });
+
   it.each([
     ".depot/workflows/deploy-semaphore.yml",
     ".depot/workflows/deploy-streams-example-app.yml",

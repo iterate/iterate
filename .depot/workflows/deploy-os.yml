@@ -19,6 +19,7 @@ on:
       - envs.ts
       - scripts/lib/**
       - apps/os/**
+      - packages/iterate/**
       - apps/auth/**
       - apps/auth-contract/**
       - apps/os/src/domains/streams/**

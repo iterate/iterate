@@ -16,6 +16,8 @@ import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerRef,
   ItxBinding,
+  Project,
+  ProjectAuthPolicy,
   StreamEvent,
   StreamPushEventBatch,
 } from "./itx-api.generated.ts";
@@ -28,6 +30,85 @@ export type * from "./itx-api.generated.ts";
 /** The one binding the platform supplies to every dynamic worker: `get()`
  * for capability method calls, `fetch()` for HTTP into sibling workers. */
 type IterateEnv = { ITX: ItxBinding };
+
+/**
+ * The remote auth target cannot receive an ordinary Request just to inspect
+ * its metadata: Workers RPC transfers the body stream even when the target
+ * never reads it. Keep the normal partial-fetch contract local instead.
+ */
+type ProjectAuthMetadata = {
+  headers: [string, string][];
+  method: string;
+  url: string;
+};
+
+type RemoteProjectAuth = {
+  get(policy: ProjectAuthPolicy): RemoteProjectAuth;
+  fetch(request: ProjectAuthMetadata | Request): Promise<Response | null>;
+};
+
+function requestMetadata(request: Request): ProjectAuthMetadata {
+  const headers: [string, string][] = [];
+  request.headers.forEach((value, name) => headers.push([name, value]));
+  return {
+    headers,
+    method: request.method,
+    url: request.url,
+  };
+}
+
+function wrapProjectAuth(remote: RemoteProjectAuth): Project["auth"] {
+  return {
+    get(policy) {
+      return wrapProjectAuth(remote.get(policy));
+    },
+    async fetch(request) {
+      // The callback POST belongs to auth and its body is the token, so auth
+      // deliberately consumes it and always answers. Every other path sends
+      // metadata only; a null answer therefore leaves the original Request
+      // byte-for-byte available to the app.
+      return await remote.fetch(
+        request.method === "POST" && new URL(request.url).pathname === "/_iterate/auth/callback"
+          ? request
+          : requestMetadata(request),
+      );
+    },
+  };
+}
+
+function wrapProject(itx: Project & Disposable): Project & Disposable {
+  let auth: Project["auth"] | undefined;
+  return new Proxy(itx, {
+    get(target, property) {
+      if (property === "auth") {
+        auth ??= wrapProjectAuth(
+          Reflect.get(target, property, target) as unknown as RemoteProjectAuth,
+        );
+        return auth;
+      }
+      if (property === Symbol.dispose) {
+        const dispose = Reflect.get(target, property, target) as (() => void) | undefined;
+        return dispose === undefined ? undefined : () => Reflect.apply(dispose, target, []);
+      }
+      // Cap'n Web uses the same callable proxy shape for methods, nested
+      // capabilities, and property promises. Preserve that proxy verbatim;
+      // wrapping callable values would erase paths such as
+      // `itx.processor.snapshot()`.
+      return Reflect.get(target, property, target) as unknown;
+    },
+  });
+}
+
+function wrapItxBinding(binding: ItxBinding): ItxBinding {
+  return {
+    fetch: (request) => binding.fetch(request),
+    get: async () => wrapProject(await binding.get()),
+  };
+}
+
+function wrapIterateEnv<Env extends IterateEnv>(env: Env): Env {
+  return { ...env, ITX: wrapItxBinding(env.ITX) };
+}
 
 /**
  * Forward a request to one of the project's dynamic workers (an "app") —
@@ -112,6 +193,11 @@ async function invokeCapability(
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
 > extends WorkerEntrypoint<Env> {
+  constructor(ctx: ConstructorParameters<typeof WorkerEntrypoint<Env>>[0], env: Env) {
+    super(ctx, env);
+    this.env = wrapIterateEnv(env);
+  }
+
   /** See `fetchDynamicWorker` at module level: a real fetch hop into a
    * sibling dynamic worker — the only lane that can carry WebSocket upgrades
    * and streaming bodies (RPC serializes; sockets can't cross it). */
@@ -149,6 +235,11 @@ export class IterateWorkerEntrypoint<
  * across requests and WebSockets can be served from `fetch`.
  */
 export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends DurableObject<Env> {
+  constructor(ctx: ConstructorParameters<typeof DurableObject<Env>>[0], env: Env) {
+    super(ctx, env);
+    this.env = wrapIterateEnv(env);
+  }
+
   /** A real fetch hop into a sibling dynamic worker — see
    * `IterateWorkerEntrypoint.fetchDynamicWorker`. */
   protected async fetchDynamicWorker(
