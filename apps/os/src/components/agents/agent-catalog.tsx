@@ -86,7 +86,9 @@ export function AgentCatalog({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 sm:px-6">
         <div className="mx-auto w-full max-w-3xl py-2">
-          {agents === undefined ? null : rows.length === 0 ? (
+          {agents === undefined ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading agents…</p>
+          ) : rows.length === 0 ? (
             <Empty className="my-4 min-h-52 rounded-lg border">
               <EmptyHeader>
                 <EmptyTitle>{agentCount === 0 ? "No agents yet" : "No matches"}</EmptyTitle>
