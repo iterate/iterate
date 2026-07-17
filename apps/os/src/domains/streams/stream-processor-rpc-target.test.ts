@@ -1,6 +1,278 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProcessorRelayRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import {
+  ProcessorRelayRpcTarget,
+  StreamProcessorRpcTarget,
+  StreamRpcTarget,
+} from "../../rpc-targets.ts";
+import type { StreamEvent } from "./schemas.ts";
 import type { ProcessorReads } from "./stream-processor.ts";
+
+describe("StreamRpcTarget", () => {
+  it("re-acquires when a remote stream waiter is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<StreamEvent>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/agents/onboarding",
+      type: "events.iterate.com/test/recovered",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          waitForEvent: () => (acquisitions === 1 ? firstWait.promise : Promise.resolve(event)),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/agents/onboarding",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      afterOffset: 8,
+      eventTypes: [event.type],
+      timeoutMs: 30_000,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(acquisitions).toBe(2);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstWait.reject(new Error("late rejection from superseded stream waiter"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a late ephemeral match from a superseded waiter", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<StreamEvent>();
+    const secondWait = Promise.withResolvers<StreamEvent>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      ephemeral: true,
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/ephemeral",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+    const remoteTimeouts: number[] = [];
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          waitForEvent: (input: { timeoutMs: number }) => {
+            remoteTimeouts.push(input.timeoutMs);
+            return acquisitions === 1 ? firstWait.promise : secondWait.promise;
+          },
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      afterOffset: 8,
+      eventTypes: [event.type],
+      timeoutMs: 30_000,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(acquisitions).toBe(2);
+      expect(remoteTimeouts).toEqual([20_000, 20_000]);
+
+      firstWait.resolve(event);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstWait.resolve(event);
+      secondWait.reject(new Error("late rejection after the ephemeral match"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("pins a cursor-less wait so a durable event in the re-arm gap is replayed", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<StreamEvent>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/in-rearm-gap",
+    } satisfies StreamEvent;
+    const waitInputs: { afterOffset?: number; timeoutMs: number }[] = [];
+    let headReads = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return {
+          getMaxOffset: () => {
+            headReads += 1;
+            return 8;
+          },
+          waitForEvent: (input: { afterOffset?: number; timeoutMs: number }) => {
+            waitInputs.push(input);
+            if (waitInputs.length === 1) return firstWait.promise;
+            return input.afterOffset === 8
+              ? Promise.resolve(event)
+              : new Promise<StreamEvent>(() => undefined);
+          },
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      eventTypes: [event.type],
+      timeoutMs: 30_000,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(headReads).toBe(1);
+      expect(waitInputs).toHaveLength(2);
+      expect(waitInputs.map(({ afterOffset }) => afterOffset)).toEqual([8, 8]);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstWait.reject(new Error("late rejection from superseded cursor-less wait"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-acquires when the cursor-pinning head read is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstHead = Promise.withResolvers<number>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/after-orphaned-head-read",
+    } satisfies StreamEvent;
+    let headReads = 0;
+    let waits = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return {
+          getMaxOffset: () => {
+            headReads += 1;
+            return headReads === 1 ? firstHead.promise : 8;
+          },
+          waitForEvent: () => {
+            waits += 1;
+            return Promise.resolve(event);
+          },
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({ eventTypes: [event.type], timeoutMs: 30_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(headReads).toBe(2);
+      expect(waits).toBe(1);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstHead.reject(new Error("late rejection from superseded head read"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates stream predicate failures without retrying", async () => {
+    const predicateError = new Error("predicate failed");
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => Promise.reject(predicateError) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.waitForEvent({ afterOffset: 0, predicate: () => true, timeoutMs: 30_000 }),
+    ).rejects.toBe(predicateError);
+    expect(acquisitions).toBe(1);
+  });
+
+  it("tags an explicit stream lifecycle rejection without hiding it behind recovery", async () => {
+    const lifecycleError = Object.assign(new Error("kill requested"), {
+      durableObjectReset: true,
+    });
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => Promise.reject(lifecycleError) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.waitForEvent({ afterOffset: 0, timeoutMs: 30_000 })).rejects.toThrow(
+      "stream-unavailable: kill requested",
+    );
+    expect(acquisitions).toBe(1);
+  });
+
+  it("keeps one public timeout across orphaned stream waiters", async () => {
+    vi.useFakeTimers();
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => new Promise<StreamEvent>(() => undefined) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/test/absent"],
+      timeoutMs: 30_000,
+    });
+    const rejected = expect(waiting).rejects.toThrow(
+      "stream-wait-timeout: Timed out waiting for stream event after 30000ms",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(acquisitions).toBe(3);
+    } finally {
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("StreamProcessorRpcTarget", () => {
   it("lets the runner waiter own the complete waitUntilProcessed timeout", async () => {
@@ -233,6 +505,166 @@ describe("ProcessorRelayRpcTarget", () => {
       expect(processor[Symbol.dispose]).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
+    }
+  });
+
+  it("re-acquires when a remote processor waiter is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<void>();
+    const disposals: number[] = [];
+    let acquisitions = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        const acquisition = acquisitions;
+        return Promise.resolve({
+          [Symbol.dispose]: () => disposals.push(acquisition),
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => ({ offset: 0, state: {} }),
+          waitUntilProcessed: () =>
+            acquisition === 1 ? firstWait.promise : Promise.resolve(undefined),
+        });
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(acquisitions).toBe(2);
+      await expect(waiting).resolves.toBeUndefined();
+      expect(disposals).toEqual([1, 2]);
+    } finally {
+      firstWait.reject(new Error("late rejection from superseded waiter"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds facade acquisition and releases a facade that arrives late", async () => {
+    vi.useFakeTimers();
+    const disposals: number[] = [];
+    let acquisitions = 0;
+    const processor = (acquisition: number) => ({
+      [Symbol.dispose]: () => disposals.push(acquisition),
+      getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+      snapshot: async () => ({ offset: 0, state: {} }),
+      waitUntilProcessed: async () => undefined,
+    });
+    const firstAcquisition = Promise.withResolvers<ReturnType<typeof processor>>();
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        return acquisitions === 1
+          ? firstAcquisition.promise
+          : Promise.resolve(processor(acquisitions));
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(waiting).resolves.toBeUndefined();
+      expect(acquisitions).toBe(2);
+      expect(disposals).toEqual([2]);
+
+      firstAcquisition.resolve(processor(1));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(disposals).toEqual([2, 1]);
+    } finally {
+      firstAcquisition.resolve(processor(1));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a processor call when acquisition consumes the wait slice", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const waitUntilProcessed = vi.fn(async () => undefined);
+    const dispose = vi.fn();
+    const processor = {
+      [Symbol.dispose]: dispose,
+      getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+      snapshot: async () => ({ offset: 0, state: {} }),
+      waitUntilProcessed,
+    };
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: async () => {
+        now = 1_100;
+        return processor;
+      },
+    });
+
+    try {
+      await expect(relay.waitUntilProcessed({ offset: 3, timeoutMs: 100 })).rejects.toThrow(
+        "waitUntilProcessed timed out after 100ms waiting for offset 3",
+      );
+      expect(waitUntilProcessed).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("keeps one public timeout across orphaned wait slices", async () => {
+    vi.useFakeTimers();
+    const disposals: number[] = [];
+    let acquisitions = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        const acquisition = acquisitions;
+        return Promise.resolve({
+          [Symbol.dispose]: () => disposals.push(acquisition),
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => ({ offset: 0, state: {} }),
+          waitUntilProcessed: () => new Promise<void>(() => undefined),
+        });
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 });
+    const rejected = expect(waiting).rejects.toThrow(
+      "waitUntilProcessed timed out after 30000ms waiting for offset 3",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(acquisitions).toBe(3);
+      expect(disposals).toEqual([1, 2, 3]);
+    } finally {
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
     }
   });
 });
