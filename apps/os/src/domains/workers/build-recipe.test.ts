@@ -81,12 +81,13 @@ describe("workerBuildRecipe", () => {
       options: { entryPoint: "swr/probe.ts" },
     });
     expect(recipe.files[".iterate-build.entry.ts"]).toContain('export * from "./swr/probe.ts"');
-    expect(recipe.files[".iterate-build.entry.ts"]).toContain("entry.default ?? {}");
+    expect(recipe.files[".iterate-build.entry.ts"]).toContain(".default ?? {}");
     expect(recipe.mainModule).toBe(".iterate-build.entry.js");
   });
 
   it("defaults the entry to worker.ts and rejects a missing entry", () => {
-    expect(workerBuildRecipe({ files: templateFiles, options: {} }).mainModule).toBe("worker.js");
+    const recipe = workerBuildRecipe({ files: templateFiles, options: {} });
+    expect(recipe.files[".iterate-build.entry.ts"]).toContain('export * from "./worker.ts"');
     expect(() =>
       workerBuildRecipe({ files: templateFiles, options: { entryPoint: "missing.ts" } }),
     ).toThrow(/not in the worker source files/);
@@ -125,16 +126,19 @@ describe("collectRecipeOutputs", () => {
 
   it("keeps JS modules, drops sourcemaps and wrangler's README", () => {
     const collected = collectRecipeOutputs(recipe, {
-      "worker.js": "bundled",
-      "worker.js.map": "{}",
+      ".iterate-build.entry.js": "bundled",
+      ".iterate-build.entry.js.map": "{}",
       "README.md": "wrangler notes",
     });
-    expect(collected).toEqual({ mainModule: "worker.js", modules: { "worker.js": "bundled" } });
+    expect(collected).toEqual({
+      mainModule: ".iterate-build.entry.js",
+      modules: { ".iterate-build.entry.js": "bundled" },
+    });
   });
 
   it("refuses non-text output rather than storing it corrupted", () => {
     expect(() =>
-      collectRecipeOutputs(recipe, { "worker.js": "bundled", "data.wasm": "\0\0" }),
+      collectRecipeOutputs(recipe, { ".iterate-build.entry.js": "bundled", "data.wasm": "\0\0" }),
     ).toThrow(/unsupported format/);
   });
 
