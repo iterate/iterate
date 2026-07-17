@@ -225,6 +225,36 @@ describe("resolveWorkerSource serve matrix", () => {
     expect(h.state.buildCalls.length).toBe(callsAfterBlip + 1);
   });
 
+  test("a blocking same-key retry replays the recorded failure without a rebuild", async () => {
+    // The at-least-once delivery loop retries blocked builds indefinitely; a
+    // deterministically broken source must not boot a builder container per
+    // attempt (that churn starved preview's whole container capacity). Within
+    // the failure record's TTL the retry replays it; a fix commits a new head
+    // and therefore a new key.
+    setCommit("c1", "repo-i-v1", "I1");
+    h.state.failBuilds = true;
+    try {
+      const first = resolveWorkerSource({
+        projectId: "prj_i",
+        source: repoSource("/repos/i"),
+        waitUntil,
+      });
+      await expect(first).rejects.toSatisfy(isWorkerBuildFailedError);
+      const callsAfterFirst = h.state.buildCalls.length;
+
+      const retry = resolveWorkerSource({
+        projectId: "prj_i",
+        source: repoSource("/repos/i"),
+        waitUntil,
+      });
+      await expect(retry).rejects.toSatisfy(isWorkerBuildFailedError);
+      await expect(retry).rejects.toThrow("esbuild exploded");
+      expect(h.state.buildCalls.length).toBe(callsAfterFirst);
+    } finally {
+      h.state.failBuilds = false;
+    }
+  });
+
   test("a bare repo ref and the canonical default-masked ref share one build key", async () => {
     // The template's app refs omit exclude masks while defaultProjectWorkerRef
     // spells them out — resolveFileSource canonicalizes the default so both

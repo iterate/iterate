@@ -211,6 +211,16 @@ async function resolveThroughBuilder(input: {
     if (await store.isBuildInFlight(buildKey)) {
       throw new WorkerBuildInProgressError("This worker is still building.");
     }
+  } else {
+    // Blocking callers REPLAY a recorded failure within its TTL instead of
+    // re-running the build. Same-key retries — the at-least-once event
+    // delivery loop above all — would otherwise boot a builder container per
+    // attempt for a deterministically broken source, and enough broken-head
+    // projects churning that way starves the deployment's whole container
+    // capacity (observed live on preview e2e). A fix always commits a NEW
+    // head → new key, so healing is never gated on the TTL.
+    const recorded = await store.getBuildFailure(buildKey);
+    if (recorded !== null) throw new WorkerBuildFailedError(recorded.message);
   }
 
   return freshServe(await runBuild(store, context, buildKey), resolved);
