@@ -6,10 +6,10 @@ type ParsedProjectPlatformHost = {
   projectIdentifier: string;
 };
 
-export function parseProjectPlatformHosts(input: {
+export function parseProjectPlatformHost(input: {
   bases: readonly string[];
   host: string;
-}): ParsedProjectPlatformHost[] {
+}): ParsedProjectPlatformHost | null {
   const host = normalizeIngressHost(input.host);
 
   for (const rawBase of input.bases) {
@@ -23,33 +23,28 @@ export function parseProjectPlatformHosts(input: {
     }
     if (labels.length === 2) {
       const [appSlug, projectIdentifier] = labels;
-      if (!appSlug || !projectIdentifier) return [];
-      return [{ appSlug, projectIdentifier }];
+      if (!appSlug || !projectIdentifier) return null;
+      return { appSlug, projectIdentifier };
     }
   }
 
-  return [];
+  return null;
 }
 
-function parseSingleLabelPlatformPrefix(prefix: string): ParsedProjectPlatformHost[] {
-  if (!prefix) return [];
+function parseSingleLabelPlatformPrefix(prefix: string): ParsedProjectPlatformHost | null {
+  if (!prefix) return null;
 
-  // `<app>--<project>` (canonical) and the older `<app>__<project>` both
-  // select an app inside a project from a single hostname label. The bare
-  // label stays a candidate too: a project slug may legitimately contain
-  // the separator.
-  for (const separator of ["--", "__"]) {
-    const separatorIndex = prefix.indexOf(separator);
-    if (separatorIndex <= 0) continue;
-
+  // `--` is the reserved, unambiguous app/project separator. Project slugs
+  // are produced by slugify(), which collapses consecutive hyphens, so a
+  // canonical app host must never incur a speculative whole-label lookup.
+  const separator = "--";
+  const separatorIndex = prefix.indexOf(separator);
+  if (separatorIndex >= 0) {
     const appSlug = prefix.slice(0, separatorIndex);
     const projectIdentifier = prefix.slice(separatorIndex + separator.length);
-    if (!appSlug || !projectIdentifier) continue;
-    return [
-      { appSlug: null, projectIdentifier: prefix },
-      { appSlug, projectIdentifier },
-    ];
+    if (!appSlug || !projectIdentifier) return null;
+    return { appSlug, projectIdentifier };
   }
 
-  return [{ appSlug: null, projectIdentifier: prefix }];
+  return { appSlug: null, projectIdentifier: prefix };
 }

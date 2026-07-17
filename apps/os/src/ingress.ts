@@ -27,7 +27,7 @@
  * project-directory.ts (KV in front of the auth worker).
  */
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
-import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
+import { parseProjectPlatformHost } from "~/ingress/project-platform-host-routing.ts";
 import { isEventDocsHostname } from "~/lib/event-docs-host.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 
@@ -86,17 +86,19 @@ export async function decideIngressRoute(input: {
     return { lane: "os", hostKind: osHostKind };
   }
 
-  for (const candidate of parseProjectPlatformHosts({ bases, host })) {
+  const candidate = parseProjectPlatformHost({ bases, host });
+  if (candidate) {
     const projectId = await input.resolvers.projectIdBySlug(candidate.projectIdentifier);
-    if (!projectId) continue;
-    return projectRoute({
-      appSlug: candidate.appSlug,
-      headers,
-      hostKind: "platform",
-      method: input.method,
-      projectId,
-      url: input.url,
-    });
+    if (projectId) {
+      return projectRoute({
+        appSlug: candidate.appSlug,
+        headers,
+        hostKind: "platform",
+        method: input.method,
+        projectId,
+        url: input.url,
+      });
+    }
   }
 
   const custom = await input.resolvers.projectByHostname(host);

@@ -169,10 +169,9 @@ export class CounterApp extends IterateDurableObject {
 
     // A mini client-side app: the count renders server-side, the button
     // POSTs /increment, and the WebSocket pushes every new value to every
-    // open tab. The button stays disabled — with a visible "connecting…"
-    // state — until the socket is open, so a click always has a live update
-    // lane and anyone (tests included) can SEE why the button isn't ready
-    // yet.
+    // open tab. The status line makes both waits visible: connecting the live
+    // lane and committing an increment. A failed POST or dropped socket stays
+    // visible instead of leaving a silently inert button.
     return new Response(
       `<!doctype html>
         <html>
@@ -184,10 +183,26 @@ export class CounterApp extends IterateDurableObject {
             </main>
             <script>
               const button = document.getElementById("b");
-              button.onclick = () => fetch("${prefix}/increment", { method: "POST" });
+              const status = document.getElementById("s");
+              button.onclick = async () => {
+                button.disabled = true;
+                status.textContent = "incrementing…";
+                try {
+                  const response = await fetch("${prefix}/increment", { method: "POST" });
+                  if (!response.ok) throw new Error("increment failed: " + response.status);
+                } catch (error) {
+                  status.textContent = error instanceof Error ? error.message : "increment failed";
+                  button.disabled = false;
+                }
+              };
               const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
-              ws.onopen = () => { button.disabled = false; document.getElementById("s").remove(); };
-              ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
+              ws.onopen = () => { button.disabled = false; status.textContent = ""; };
+              ws.onmessage = (event) => {
+                document.getElementById("n").textContent = event.data;
+                button.disabled = false;
+                status.textContent = "";
+              };
+              ws.onclose = () => { button.disabled = true; status.textContent = "disconnected"; };
             </script>
           </body>
         </html>`,

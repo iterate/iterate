@@ -193,15 +193,6 @@ test.for([
     expected: { lane: "project", resolved: { projectId: "prj_1", appSlug: "counter" } },
   },
   {
-    // A project legitimately named "hello--demo" wins over app "hello" in
-    // project "demo" — the bare label is the first candidate.
-    name: "prefers a whole-label slug over an app split when both resolve",
-    config: PREVIEW_CONFIG,
-    resolvers: slugResolvers({ "hello--demo": "prj_whole", demo: "prj_1" }),
-    url: "https://hello--demo.iterate-preview-2.app/",
-    expected: { lane: "project", resolved: { projectId: "prj_whole", appSlug: null } },
-  },
-  {
     name: "deletes a spoofed x-iterate-app when the host selects no app",
     config: PREVIEW_CONFIG,
     headers: { "x-iterate-app": "spoofed" },
@@ -279,6 +270,28 @@ test.for([
     }
   },
 );
+
+test("resolves a canonical app host without probing the whole hostname label as a project", async () => {
+  const projectIdentifiers: string[] = [];
+  const route = await decideIngressRoute({
+    config: PREVIEW_CONFIG,
+    method: "GET",
+    resolvers: {
+      projectIdBySlug: (identifier) => {
+        projectIdentifiers.push(identifier);
+        return Promise.resolve(identifier === "demo" ? "prj_1" : null);
+      },
+      projectByHostname: () => Promise.resolve(null),
+    },
+    url: "https://hello--demo.iterate-preview-2.app/",
+  });
+
+  expect(route).toMatchObject({
+    lane: "project",
+    resolved: { appSlug: "hello", projectId: "prj_1" },
+  });
+  expect(projectIdentifiers).toEqual(["demo"]);
+});
 
 function resolversThatShouldNotBeUsed(): IngressResolvers {
   return {

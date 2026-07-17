@@ -26,6 +26,11 @@ test(
       });
 
     await stream.waitForEvent({
+      // The execution is intentionally started first and may append before
+      // this second WebSocket finishes opening. Replay durable history so the
+      // test synchronizes on its unique marker instead of racing connection
+      // establishment (the default starts at the stream's current head).
+      afterOffset: 0,
       eventTypes: [SCRIPT_STARTED],
       predicate: (event) =>
         event.payload !== null &&
