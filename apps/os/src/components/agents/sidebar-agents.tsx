@@ -7,7 +7,6 @@ import {
   SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { AgentSidebarRow } from "./agent.tsx";
-import { patchAgentMetadata } from "./agent-metadata.ts";
 import { buildAgentForest, pinnedAgentShortcuts } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
@@ -16,17 +15,16 @@ const PINNED_LIMIT = 5;
 const ROOT_LIMIT = 8;
 
 /**
- * The sidebar is navigation, not a dashboard: a short list of one-line
+ * The sidebar is navigation, not a dashboard: a short list of two-line
  * shortcuts (pinned first, then the busiest roots) and a link to the full
- * catalog. Trees, counts, and timestamps live on the agents page.
+ * catalog. Pinning, trees, and counts live on the agents page and the agent
+ * state sheet.
  */
 export function SidebarAgents({
   agents,
-  projectId,
   projectSlug,
 }: {
   agents: Record<string, AgentRecord>;
-  projectId: string;
   projectSlug: string;
 }) {
   const navigate = useNavigate();
@@ -52,11 +50,6 @@ export function SidebarAgents({
               key={node.agent.path}
               node={node}
               onOpen={() => void navigate(linkOptionsForStreamPath(projectSlug, node.agent.path))}
-              onTogglePinned={() =>
-                patchAgentMetadata(projectId, node.agent.path, {
-                  pinned: !node.agent.metadata.pinned,
-                })
-              }
             />
           ))}
           <Link

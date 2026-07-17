@@ -59,8 +59,13 @@ describe("Agent presentation family", () => {
     expect(agentCommandAccessibleLabel(node, false, true)).toContain("Shift+P to unpin");
   });
 
-  test("the sidebar row is a one-line shortcut: title only, no metadata spill", () => {
+  test("the sidebar row is a two-line shortcut: title and live activity, nothing else", () => {
     const agent = record("/agents/inbox", {
+      binding: {
+        type: "email_thread",
+        threadId: "t-onboarding",
+        subject: "Enterprise onboarding",
+      },
       metadata: {
         pinned: true,
         title: "Customer inbox",
@@ -71,15 +76,15 @@ describe("Agent presentation family", () => {
     const [node] = buildAgentForest({ [agent.path]: agent });
     if (node === undefined) throw new Error("missing test node");
 
-    const markup = renderToStaticMarkup(
-      <AgentSidebarRow node={node} onOpen={() => undefined} onTogglePinned={() => undefined} />,
-    );
+    const markup = renderToStaticMarkup(<AgentSidebarRow node={node} onOpen={() => undefined} />);
 
     expect(markup).toContain("Customer inbox");
+    expect(markup).toContain("Triaging customer mail");
     expect(markup).toContain('data-agent-variant="sidebar"');
-    expect(markup).not.toContain("Triaging customer mail");
     expect(markup).not.toContain("never render in the sidebar");
     expect(markup).not.toContain("<time");
+    // Pinning has no sidebar affordance; grouping order carries it instead.
+    expect(markup).not.toContain("Unpin agent");
   });
 
   test("a collapsed catalog row aggregates its subtree into the dot and a subagent count", () => {

@@ -5,7 +5,12 @@ import { Input } from "@iterate-com/ui/components/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { AGENT_DISPLAY_STATE_PRESENTATION } from "./agent-presentation.ts";
+import {
+  AGENT_DISPLAY_STATE_PRESENTATION,
+  bindingIcon,
+  bindingLabel,
+  bindingUrl,
+} from "./agent-presentation.ts";
 import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-tree.ts";
 import {
   deriveAgentDisplayState,
@@ -16,50 +21,49 @@ import {
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 
 /**
- * One-line sidebar shortcut: dot, title, and a hover-revealed pin toggle.
- * Everything else (state text, activity, counts) lives in the catalog and
- * detail surfaces.
+ * Two-line sidebar shortcut: channel icon, title, live activity, and the
+ * attention dot on the right. Pinning and every other control live in the
+ * catalog and the agent state sheet; the full stream path is the tooltip.
  */
-export function AgentSidebarRow({
-  node,
-  onOpen,
-  onTogglePinned,
-}: {
-  node: AgentTreeNode;
-  onOpen: () => void;
-  onTogglePinned: () => void | Promise<unknown>;
-}) {
+export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen: () => void }) {
   const agent = node.agent;
   const displayState = agentNodeDisplayState(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
+  const BindingIcon = bindingIcon(agent.binding);
   return (
-    <div
-      className="group/agent relative"
-      data-agent-path={agent.path}
-      data-agent-state={displayState}
-      data-agent-variant="sidebar"
-    >
-      <button
-        type="button"
-        onClick={onOpen}
-        title={agent.path}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-      >
-        <StateDot state={state} className="size-1.5" />
-        <span className="min-w-0 flex-1 truncate">{agentTitle(agent)}</span>
-        {agent.metadata.pinned ? (
-          <Star
-            className="size-3 shrink-0 fill-amber-400 text-amber-500 group-hover/agent:opacity-0"
-            aria-hidden
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            onClick={onOpen}
+            className="flex w-full items-start gap-2 rounded-md px-2 py-1 text-left hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            data-agent-path={agent.path}
+            data-agent-state={displayState}
+            data-agent-variant="sidebar"
           />
-        ) : null}
-      </button>
-      <PinButton
-        pinned={agent.metadata.pinned}
-        onToggle={onTogglePinned}
-        className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 focus-visible:opacity-100 group-hover/agent:opacity-100"
-      />
-    </div>
+        }
+      >
+        <BindingIcon className="mt-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm">{agentTitle(agent)}</span>
+            <StateDot state={state} className="size-1.5" />
+          </span>
+          {agent.metadata.activity === undefined ? null : (
+            <span
+              className={cn(
+                "block truncate text-[11px] text-muted-foreground",
+                state.active && "motion-safe:animate-pulse",
+              )}
+            >
+              {agent.metadata.activity}
+            </span>
+          )}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right">{agent.path}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -391,7 +395,7 @@ export function AgentCommandPresentation({
   );
 }
 
-function StateDot({
+export function StateDot({
   state,
   className,
 }: {
@@ -526,31 +530,4 @@ function BindingLink({
       {label}
     </a>
   );
-}
-
-function bindingLabel(binding: AgentBinding): string {
-  switch (binding.type) {
-    case "slack_thread":
-      return `Slack · ${binding.channelName ?? binding.channelId}`;
-    case "telegram_thread":
-      return `Telegram · ${binding.chatId}`;
-    case "email_thread":
-      return `Email · ${binding.subject ?? binding.counterpart ?? binding.threadId}`;
-    case "github_pull_request":
-      return `GitHub · ${binding.owner}/${binding.repo} #${binding.number}`;
-    case "github_check_run":
-      return `GitHub check · ${binding.owner}/${binding.repo} #${binding.number}`;
-  }
-}
-
-function bindingUrl(binding: AgentBinding): string | undefined {
-  switch (binding.type) {
-    case "slack_thread":
-    case "github_pull_request":
-    case "github_check_run":
-      return binding.url;
-    case "telegram_thread":
-    case "email_thread":
-      return undefined;
-  }
 }

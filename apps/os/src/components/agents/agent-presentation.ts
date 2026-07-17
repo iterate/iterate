@@ -1,5 +1,6 @@
+import { Bot, Github, Mail, Send, Slack, type LucideIcon } from "lucide-react";
 import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-tree.ts";
-import type { AgentDisplayState } from "~/domains/agents/agent-presence.ts";
+import type { AgentBinding, AgentDisplayState } from "~/domains/agents/agent-presence.ts";
 
 /**
  * The dot encodes attention priority, not the full state taxonomy: green =
@@ -22,6 +23,42 @@ export const AGENT_DISPLAY_STATE_PRESENTATION: Record<
   waiting_for_timer: { label: "Waiting for timer", active: false, dot: "bg-muted-foreground/40" },
   idle: { label: "Idle", active: false, dot: "bg-muted-foreground/25" },
 };
+
+export function bindingIcon(binding: AgentBinding | undefined): LucideIcon {
+  if (binding?.type === "slack_thread") return Slack;
+  if (binding?.type === "telegram_thread") return Send;
+  if (binding?.type === "email_thread") return Mail;
+  if (binding?.type === "github_pull_request" || binding?.type === "github_check_run")
+    return Github;
+  return Bot;
+}
+
+export function bindingLabel(binding: AgentBinding): string {
+  switch (binding.type) {
+    case "slack_thread":
+      return `Slack · ${binding.channelName ?? binding.channelId}`;
+    case "telegram_thread":
+      return `Telegram · ${binding.chatId}`;
+    case "email_thread":
+      return `Email · ${binding.subject ?? binding.counterpart ?? binding.threadId}`;
+    case "github_pull_request":
+      return `GitHub · ${binding.owner}/${binding.repo} #${binding.number}`;
+    case "github_check_run":
+      return `GitHub check · ${binding.owner}/${binding.repo} #${binding.number}`;
+  }
+}
+
+export function bindingUrl(binding: AgentBinding): string | undefined {
+  switch (binding.type) {
+    case "slack_thread":
+    case "github_pull_request":
+    case "github_check_run":
+      return binding.url;
+    case "telegram_thread":
+    case "email_thread":
+      return undefined;
+  }
+}
 
 export function agentCommandAccessibleLabel(
   node: AgentTreeNode,

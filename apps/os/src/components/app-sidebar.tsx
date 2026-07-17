@@ -662,7 +662,7 @@ function ProjectSidebarGroup({
       {/* The capped live agent hierarchy shares one project projection. */}
       {projectId === null ? null : (
         <DeferredSurface active={showAgentRows}>
-          <SidebarAgents agents={agents} projectId={projectId} projectSlug={projectSlug} />
+          <SidebarAgents agents={agents} projectSlug={projectSlug} />
         </DeferredSurface>
       )}
     </>
