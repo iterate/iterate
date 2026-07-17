@@ -68,13 +68,59 @@ test("retained exit content cannot navigate and reopen the raw-event inspector",
   };
 
   await render(true);
-  window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
   expect(onNavigate).toHaveBeenCalledWith(3);
 
   onNavigate.mockClear();
   await render(false);
-  window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
   host.querySelectorAll("button")[1]?.click();
   expect(onNavigate).not.toHaveBeenCalled();
   expect([...host.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
+});
+
+test("arrow keys still page when a Base UI sheet would stopPropagation on bubble", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mountedRoots.push(root);
+  const onNavigate = vi.fn();
+
+  await act(async () => {
+    root.render(
+      <RawEventInspectorContent
+        database={{} as never}
+        navigationEnabled
+        offset={2}
+        onNavigate={onNavigate}
+      />,
+    );
+  });
+
+  // Mimic @base-ui/react DialogPopup: composite keys are stopPropagated on the
+  // popup so nested composites do not leak. A bubble-only window listener never
+  // sees the event; capture-phase is required.
+  const stopCompositeKeys = (event: KeyboardEvent) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") event.stopPropagation();
+  };
+  host.addEventListener("keydown", stopCompositeKeys);
+
+  const nextButton = host.querySelectorAll("button")[1];
+  expect(nextButton).toBeTruthy();
+  nextButton?.focus();
+  nextButton?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+  );
+  expect(onNavigate).toHaveBeenCalledWith(3);
+
+  onNavigate.mockClear();
+  const prevButton = host.querySelectorAll("button")[0];
+  prevButton?.focus();
+  prevButton?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
+  );
+  expect(onNavigate).toHaveBeenCalledWith(1);
+
+  host.removeEventListener("keydown", stopCompositeKeys);
+  host.remove();
 });
