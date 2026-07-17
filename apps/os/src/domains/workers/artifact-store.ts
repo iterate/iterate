@@ -156,6 +156,14 @@ export class KvWorkerBuildArtifactStore {
     });
   }
 
+  /** The marker means "a build is actually running": a failed build clears it
+   * so budgeted callers retry (or serve the recorded failure) instead of
+   * waiting out a marker TTL that outlives the shorter-lived failure record.
+   * Best-effort — the TTL remains the backstop for a crashed builder. */
+  async clearBuildInFlight(buildKey: string): Promise<void> {
+    await this.kv.delete(inFlightKey(buildKey));
+  }
+
   async getBuildFailure(buildKey: string): Promise<WorkerBuildFailure | null> {
     return await this.kv.get<WorkerBuildFailure>(buildFailureKey(buildKey), "json");
   }

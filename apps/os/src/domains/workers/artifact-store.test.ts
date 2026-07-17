@@ -25,6 +25,10 @@ class FakeKv {
     this.putTtls.push(options?.expirationTtl);
     this.data.set(key, value);
   }
+
+  async delete(key: string): Promise<void> {
+    this.data.delete(key);
+  }
 }
 
 const artifact: WorkerBuildArtifact = {
@@ -83,6 +87,14 @@ describe("KvWorkerBuildArtifactStore", () => {
     for (const key of kv.data.keys()) {
       expect(key.startsWith(`${PREFIX}/`)).toBe(true);
     }
+  });
+
+  it("a failed build clears the in-flight marker so callers never outwait a dead build", async () => {
+    const kv = new FakeKv();
+    await store(kv).markBuildInFlight("abc123");
+    expect(await store(kv).isBuildInFlight("abc123")).toBe(true);
+    await store(kv).clearBuildInFlight("abc123");
+    expect(await store(kv).isBuildInFlight("abc123")).toBe(false);
   });
 
   it("round-trips a build failure with a short TTL", async () => {
