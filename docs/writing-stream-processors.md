@@ -19,6 +19,19 @@ into every dynamic worker build, and the config-repo template's guestbook
 (`apps/os/config-repo-template/guestbook.ts` + `GuestbookApp` in its
 worker.ts) is the reference for that userspace hosting shape.
 
+## Expose the processor vocabulary directly
+
+A domain object's ordinary write door should be a typed `append(...)`, with
+its input derived mechanically as `ConsumedInput<typeof ProcessorContract>`
+and its runtime boundary validated by
+`ProcessorContract.parseConsumedInput(...)`. Do not hand-copy the event union,
+and do not replace this door with one wrapper method per event type. A named
+method is justified only when it adds real semantics such as encryption,
+external I/O, provenance, multi-stream coordination, or birth/readiness
+barriers. See
+[Prefer a typed append door to one-event wrapper methods](domain-objects-and-stream-processors.md#prefer-a-typed-append-door-to-one-event-wrapper-methods)
+for the reference implementation and raw-stream escape hatch.
+
 ## The model: some processors reconcile obligations
 
 A processor is two halves plus a comparison:
@@ -298,7 +311,8 @@ Scenarios every obligation-carrying processor should have (crib from
 
 ## Checklist for a new processor
 
-- [ ] A distinct `*/created` event with `{ config }`; nullable
+- [ ] A distinct `*/created` event whose payload contains only immutable facts
+      required for existence (and may be `{}`); nullable
       `state.birthCertificate` stores its exact payload.
 - [ ] The created reduce arm throws if `birthCertificate` is already set.
       Stable append idempotency handles command retries; the reducer never
@@ -308,6 +322,10 @@ Scenarios every obligation-carrying processor should have (crib from
       assert birth explicitly.
 - [ ] The creator appends births and setup before explicit subscriptions, then
       calls `waitUntilProcessed` through the final creation-batch offset.
+- [ ] The domain object exposes `append(...)` as
+      `ConsumedInput<typeof ProcessorContract>` and validates it with
+      `ProcessorContract.parseConsumedInput(...)`; no one-event wrapper methods
+      without additional domain semantics.
 - [ ] Every `runInBackground` answers "what recovers the outcome?"
 - [ ] Obligations: requested/started/completed events; fold carries what an
       attempt needs; terminal events delete the entry.

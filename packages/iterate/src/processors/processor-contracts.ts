@@ -41,7 +41,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // event type string), the events it `consumes` and `emits`, and optional
 // `processorDeps` — other contracts whose events it may consume/emit without
 // owning them. `defineProcessorContract(...)` validates the declaration and
-// attaches typed `buildEvent` / `parseEvent` / `parseEventInput` helpers.
+// attaches typed `buildEvent` / `parseEvent` / `parseEventInput` /
+// `parseConsumedInput` helpers.
 //
 // The type-level machinery below exists for one purpose: resolving an event
 // type STRING to the payload schema that owns it (local `events` first, then
@@ -140,8 +141,17 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
   "payload" | "type"
 > & {
   type: Type;
-  payload?: Payload;
+  payload: Payload;
 };
+
+/**
+ * A durable processor input. Wake processors never receive ephemeral rows, so
+ * a domain object's processor-typed append door must not claim that they do.
+ */
+type TypedConsumedEventInput<
+  Type extends string = string,
+  Payload = Record<string, unknown>,
+> = Omit<TypedStreamEventInput<Type, Payload>, "ephemeral"> & { ephemeral?: never };
 
 /** `StreamEvent` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEvent<Type extends string = string, Payload = Record<string, unknown>> = Omit<
@@ -182,12 +192,35 @@ type InputFromType<
   Type extends string,
 > = Type extends unknown
   ? EventDefinitionForType<Events, ProcessorDeps, Type> extends EventDefinition<
-      infer PayloadOutput,
+      unknown,
       infer PayloadInput
     >
-    ? TypedStreamEventInput<Type, PayloadOutput | PayloadInput>
+    ? TypedStreamEventInput<Type, PayloadInput>
     : never
   : never;
+
+/** Durable append input for one event delivered to a wake processor. */
+type ConsumedInputFromType<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Type extends string,
+> = Type extends unknown
+  ? EventDefinitionForType<Events, ProcessorDeps, Type> extends EventDefinition<
+      unknown,
+      infer PayloadInput
+    >
+    ? TypedConsumedEventInput<Type, PayloadInput>
+    : never
+  : never;
+
+/** Durable append-input shapes for a processor's `consumes` tuple. */
+type ConsumedInputFromTypes<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Types extends readonly string[],
+> = "*" extends Types[number]
+  ? Omit<StreamEventInput, "ephemeral"> & { ephemeral?: never }
+  : ConsumedInputFromType<Events, ProcessorDeps, Types[number]>;
 
 /** Parsed append input for one resolved type (payload validated, so required). */
 type ParsedInputFromType<
@@ -203,12 +236,42 @@ type ParsedInputFromType<
     : never
   : never;
 
+/** Parsed durable inputs for a processor's `consumes` tuple. */
+type ParsedConsumedInputFromTypes<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Types extends readonly string[],
+> = "*" extends Types[number]
+  ? Omit<StreamEventInput, "ephemeral"> & { ephemeral?: never }
+  : Types[number] extends infer Type extends string
+    ? EventDefinitionForType<Events, ProcessorDeps, Type> extends EventDefinition<
+        infer PayloadOutput,
+        unknown
+      >
+      ? TypedConsumedEventInput<Type, PayloadOutput>
+      : never
+    : never;
+
 /** Union of committed-event shapes a contract's `consumes` list can deliver to `reduce`. */
 export type ConsumedEvent<Contract> = Contract extends {
   events: EventCatalog;
   consumes: infer Consumes extends readonly string[];
 }
   ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
+  : never;
+
+/**
+ * Union of durable append-input shapes accepted by a contract's `consumes`
+ * list. Ephemeral rows are excluded because wake processors cannot consume
+ * them; append those intentionally through the raw Stream door. This is a
+ * schema/vocabulary union, not proof that an event is valid in the processor's
+ * current state or came from a particular provenance.
+ */
+export type ConsumedInput<Contract> = Contract extends {
+  events: EventCatalog;
+  consumes: infer Consumes extends readonly string[];
+}
+  ? ConsumedInputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
 /** Union of append-input shapes a contract's `emits` list allows a processor to append. */
@@ -313,6 +376,18 @@ type ProcessorContractParseEventInput<
     event: StreamEventInput,
   ): ParsedInputFromType<Events, ProcessorDeps, ResolvedEventType<Events, ProcessorDeps>>;
 };
+
+/**
+ * `contract.parseConsumedInput(...)`: validate one domain-object append
+ * against the exact event vocabulary delivered to the processor.
+ */
+type ProcessorContractParseConsumedInput<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Consumes extends readonly string[],
+> = (
+  event: ConsumedInputFromTypes<Events, ProcessorDeps, Consumes>,
+) => ParsedConsumedInputFromTypes<Events, ProcessorDeps, Consumes>;
 
 // =============================================================================
 // Runtime event parsers (bound to this app's event schemas).
@@ -457,7 +532,8 @@ type ResolvedEventInput<Contract> = Contract extends {
 
 /**
  * Typed identity for processor contracts: validation plus the pre-bound
- * `buildEvent` / `parseEvent` / `parseEventInput` helpers.
+ * `buildEvent` / `parseEvent` / `parseEventInput` / `parseConsumedInput`
+ * helpers.
  *
  * The signature enforces the important invariants at authoring time:
  *
@@ -496,6 +572,7 @@ export function defineProcessorContract<
   buildEvent: ProcessorContractBuildEvent<Events, ProcessorDeps>;
   parseEvent: ProcessorContractParseEvent<Events, ProcessorDeps>;
   parseEventInput: ProcessorContractParseEventInput<Events, ProcessorDeps>;
+  parseConsumedInput: ProcessorContractParseConsumedInput<Events, ProcessorDeps, Consumes>;
 };
 // The implementation is intentionally untyped (`any` return): the single typed
 // overload above carries the whole contract type; TS cannot relate the
@@ -506,7 +583,12 @@ export function defineProcessorContract(contract: unknown): any {
   if (typeof contract !== "object" || contract === null) {
     throw new Error("Processor contract must be an object.");
   }
-  for (const method of ["buildEvent", "parseEvent", "parseEventInput"] as const) {
+  for (const method of [
+    "buildEvent",
+    "parseEvent",
+    "parseEventInput",
+    "parseConsumedInput",
+  ] as const) {
     if (method in contract) {
       throw new Error(`Processor "${getProcessorSlug(contract)}" must not define ${method}.`);
     }
@@ -514,6 +596,7 @@ export function defineProcessorContract(contract: unknown): any {
   const typedContract = contract as {
     events: EventCatalog;
     processorDeps?: readonly unknown[];
+    consumes: readonly string[];
   };
   return Object.assign(typedContract, {
     buildEvent(event: { type: string }) {
@@ -524,7 +607,48 @@ export function defineProcessorContract(contract: unknown): any {
     },
     parseEvent: makeContractEventParser(typedContract, "parseEvent", getEventSchema),
     parseEventInput: makeContractEventParser(typedContract, "parseEventInput", getEventInputSchema),
+    parseConsumedInput: makeContractConsumedInputParser(typedContract),
   });
+}
+
+/**
+ * Runtime twin of {@link ConsumedInput}. Unlike `parseEventInput`, this parser
+ * rejects a resolved event that the processor does not actually consume. A
+ * domain object's typed `append` door uses both so its remote runtime boundary
+ * cannot drift from the processor contract after TypeScript has been erased.
+ */
+function makeContractConsumedInputParser(contract: {
+  events: EventCatalog;
+  processorDeps?: readonly unknown[];
+  consumes: readonly string[];
+}) {
+  const parserCache = new Map<string, { parse(value: unknown): unknown }>();
+  return (event: { type: string }) => {
+    if ((event as StreamEventInput).ephemeral === true) {
+      throw new Error(
+        `Processor "${getProcessorSlug(contract)}" cannot consume ephemeral event "${event.type}".`,
+      );
+    }
+    const eventDefinition = getConsumedEventDefinition({
+      contract,
+      eventType: event.type,
+    });
+    if (eventDefinition === undefined) {
+      throw new Error(
+        `Processor "${getProcessorSlug(contract)}" does not consume event "${event.type}".`,
+      );
+    }
+
+    let schema = parserCache.get(event.type);
+    if (schema === undefined) {
+      schema = getEventInputSchema({
+        type: event.type,
+        payloadSchema: eventDefinition.payloadSchema,
+      });
+      parserCache.set(event.type, schema);
+    }
+    return schema.parse(event);
+  };
 }
 
 /**

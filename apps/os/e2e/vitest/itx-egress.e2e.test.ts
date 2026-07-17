@@ -337,7 +337,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     const agentPath = `/agents/list-proof/${crypto.randomUUID()}`;
     const repoPath = `/repos/list-proof/${crypto.randomUUID()}`;
     await Promise.all([
-      project.agents.get(agentPath).create({}),
+      project.agents.get(agentPath).create(),
       project.repos.get(repoPath).create(),
     ]);
     await waitForCondition(

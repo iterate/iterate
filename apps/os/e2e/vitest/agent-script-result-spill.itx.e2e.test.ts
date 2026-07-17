@@ -21,7 +21,7 @@ test(
     await using handle = await createTestProject({ slugPrefix: "script-spill" });
     using agent = handle.agent(AGENT_PATH);
     using itx = handle.itx();
-    await agent.create({});
+    await agent.create();
 
     // The spill writes into the agent's workspace, whose first use clones the
     // project repo — and the repo seeds asynchronously after project creation.
@@ -44,7 +44,7 @@ test(
     // part the pre-spill behavior threw away.
     const marker = crypto.randomUUID();
     const result = { blob: "x".repeat(10_000_000), marker };
-    await agent.stream.append({
+    await agent.append({
       type: "events.iterate.com/capability-host/script-run-settled",
       payload: {
         executionId: "agent-output:1",
