@@ -370,8 +370,8 @@ export class RepoDurableObject extends DurableObject<Env> {
   // forward) push would clobber the first commit — while both callers got a
   // success result. All writes funnel through this one DO by design, which
   // makes a local chain a sufficient lock. Artifacts clones can still lag a
-  // completed push, so mutateArtifactRepo also verifies that its clone can
-  // reach the last pushed commit before it changes anything.
+  // completed push, so mutateArtifactRepo also verifies that its branch HEAD
+  // is the last pushed commit before it changes anything.
   #writeChain: Promise<unknown> = Promise.resolve();
   // Secondary repos have no root-workspace cache. Their HEAD reads otherwise
   // clone the complete Artifact once per call; a task board opening 42 files
@@ -1572,11 +1572,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   for (let attempt = 0; ; attempt += 1) {
     try {
       cloned = await clone();
-      if (
-        input.expectedCommitOid === undefined ||
-        cloned.head.oid === input.expectedCommitOid ||
-        (await gitCloneContainsCommit(cloned.git, input.expectedCommitOid))
-      ) {
+      if (input.expectedCommitOid === undefined || cloned.head.oid === input.expectedCommitOid) {
         break;
       }
       if (attempt >= ARTIFACT_HEAD_VISIBILITY_RETRIES) {
@@ -1643,18 +1639,6 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     noChanges: false,
     ...extra,
   };
-}
-
-async function gitCloneContainsCommit(
-  git: ReturnType<typeof createGit>,
-  commitOid: string,
-): Promise<boolean> {
-  try {
-    const [commit] = await git.log({ ref: commitOid, depth: 1 });
-    return commit?.oid === commitOid;
-  } catch {
-    return false;
-  }
 }
 
 function repoHeadStorageKey(branch: string) {

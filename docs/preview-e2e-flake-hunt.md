@@ -435,9 +435,11 @@ from overlapping, but it does not make the Artifacts clone endpoint strongly
 consistent. A second serialized write can clone a replica that still advertises
 the pre-first-write head and then lose the server's ref compare-and-swap with
 `stale ref`. Mutations now record the seed and every successful push, and wait
-boundedly until their clone can reach that last pushed commit before changing
-anything. A later rejection therefore really does identify an out-of-band
-writer that moved the ref after the checked clone.
+boundedly until their clone's branch HEAD equals that last pushed commit before
+changing anything. Merely finding the commit object in the clone is not enough:
+Artifacts can supply the object while its advertised ref still lags. A later
+rejection therefore really does identify an out-of-band writer that moved the
+ref after the checked clone.
 
 ### 16. Marathon methodology: an incremental deploy splits the fleet head
 
