@@ -26,7 +26,7 @@ import {
 } from "../itx/itx-react.ts";
 import {
   ONBOARDING_AGENT_PATH,
-  onboardingAgentCreateInput,
+  onboardingAgentStartupEvents,
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
 import { resolveItxAuth } from "./itx-auth.ts";
@@ -64,7 +64,7 @@ function publishFeed() {
  * then subscribe from the feed model's resume cursor. The onboarding agent is
  * deliberately NOT born at project bootstrap (a birth costs a real LLM turn) —
  * opening its chat births it, in the web dashboard and here alike, with the
- * same explicit birth batch. useItxSubscription re-runs this on every
+ * same explicit startup events. useItxSubscription re-runs this on every
  * recovery, so the cursor read is per-(re)subscribe and replay overlap is
  * folded out by the model's offset dedupe.
  */
@@ -76,9 +76,10 @@ async function subscribeAgentFeed(itx: Itx) {
   try {
     const snapshot = await agent.processor.snapshot();
     if (snapshot.state.birthCertificate === null) {
-      await agent.create(
-        args.agentPath === ONBOARDING_AGENT_PATH ? onboardingAgentCreateInput(args.projectId) : {},
-      );
+      await agent.create();
+    }
+    if (args.agentPath === ONBOARDING_AGENT_PATH) {
+      await agent.stream.append(...onboardingAgentStartupEvents(args.projectId));
     }
     return await agent.stream.subscribe({
       processEventBatch: (batch) => {

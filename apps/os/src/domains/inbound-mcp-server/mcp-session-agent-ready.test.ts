@@ -6,6 +6,7 @@ describe("ensureMcpSessionAgentReady", () => {
   it("explicitly creates the session agent and waits for create to return", async () => {
     const created = Promise.withResolvers<void>();
     const create = vi.fn(() => created.promise);
+    const append = vi.fn().mockResolvedValue([]);
     const snapshot = vi.fn().mockResolvedValue({ state: { birthCertificate: null } });
     let requestedPath: string | undefined;
 
@@ -15,7 +16,7 @@ describe("ensureMcpSessionAgentReady", () => {
         agents: {
           get(path) {
             requestedPath = path;
-            return { create, processor: { snapshot } };
+            return { create, processor: { snapshot }, stream: { append } };
           },
         },
       },
@@ -25,7 +26,8 @@ describe("ensureMcpSessionAgentReady", () => {
 
     expect(requestedPath).toBe("/agents/mcp/session-test");
     expect(snapshot).toHaveBeenCalledOnce();
-    expect(create).toHaveBeenCalledWith({ systemPrompt: MCP_AGENT_SYSTEM_PROMPT });
+    expect(create).toHaveBeenCalledWith();
+    expect(append).not.toHaveBeenCalled();
 
     let returned = false;
     void ready.then(() => {
@@ -38,10 +40,20 @@ describe("ensureMcpSessionAgentReady", () => {
     await ready;
 
     expect(returned).toBe(true);
+    expect(append).toHaveBeenCalledWith({
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: expect.stringMatching(/^agent\/mcp-system-prompt:[0-9a-f]{16}$/),
+      payload: {
+        role: "system",
+        key: "agent/system-prompt",
+        content: MCP_AGENT_SYSTEM_PROMPT,
+      },
+    });
   });
 
   it("does not try to recreate an existing session agent", async () => {
     const create = vi.fn();
+    const append = vi.fn().mockResolvedValue([]);
     const snapshot = vi.fn().mockResolvedValue({
       state: { birthCertificate: { config: { systemPrompt: "original" } } },
     });
@@ -50,12 +62,13 @@ describe("ensureMcpSessionAgentReady", () => {
       agentPath: "/agents/mcp/session-test",
       projectItx: {
         agents: {
-          get: () => ({ create, processor: { snapshot } }),
+          get: () => ({ create, processor: { snapshot }, stream: { append } }),
         },
       },
     });
 
     expect(snapshot).toHaveBeenCalledOnce();
     expect(create).not.toHaveBeenCalled();
+    expect(append).toHaveBeenCalledOnce();
   });
 });

@@ -10,6 +10,7 @@ import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
+  AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
   AgentProcessorContract,
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -168,22 +169,38 @@ export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
 
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the generic platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
-};
+/**
+ * A complete replacement for the agent runtime prompt, represented as the
+ * ordinary keyed system-context update it really is. Platform-owned channel
+ * facets use this after generic creation. Ordinary caller instructions should
+ * use their own context key so they compose with, rather than replace, the
+ * platform execution contract.
+ */
+export function agentSystemPromptContextEvent(input: { content: string; idempotencyKey: string }) {
+  return AgentProcessorContract.buildEvent({
+    type: "events.iterate.com/agents/context-added",
+    // The event identity includes the policy revision while the context key
+    // stays stable. Retries of one revision dedupe; changing platform policy
+    // appends an explicit same-key update instead of conflicting forever with
+    // the old idempotency record.
+    idempotencyKey: `${input.idempotencyKey}:${promptRevision(input.content)}`,
+    payload: {
+      role: "system",
+      key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+      content: input.content,
+    },
+  });
+}
 
-/** Public agent-creation input. Durable, idempotency-keyed startup inputs
- * commit in the same append as the birth certificates and subscriptions,
- * before create waits for the processors to catch up. */
-export type AgentCreateInput = AgentDefaultsOverrides & {
-  initialEvents?: Array<
-    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
-  >;
-};
+/** Deterministic 64-bit FNV-1a revision for synchronous event construction. */
+function promptRevision(content: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < content.length; index++) {
+    hash ^= BigInt(content.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
+}
 
 /**
  * Build the complete creation batch for one agent stream. Every agent has the
@@ -204,17 +221,14 @@ export function agentCreationForPath<
    * have no directory at hand — the id-only line still works.
    */
   project?: { name: string; slug: string; workerUrl?: string };
-  overrides?: AgentDefaultsOverrides;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     processorSlug: string;
   };
 }) {
   const { agentPath, projectId, project } = input;
-  const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
-  // An override replaces the generic prompt wholesale. Child-agent-ness rides
-  // on the sender actor in each context item, not on the addressed path.
-  const systemPrompt = input.overrides?.systemPrompt ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+  const model = DEFAULT_AGENT_MODEL;
+  const systemPrompt = DEFAULT_AGENT_SYSTEM_PROMPT;
 
   const birthCertificate = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/created",
@@ -266,7 +280,7 @@ export function agentCreationForPath<
         // verbatim to users as the repo's full contents.
         '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
         "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
-        "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create({}); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
+        "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
         // Deliberate reinforcement of the prompt's FIND WORKING CODE
         // section — repetition is the one thing small prompts buy back.
         '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. For unfamiliar PROJECT facts or history: await itx.search.query({ q }) — conversations, webhooks, events, files, and the repo are all indexed, and each hit carries a ref back to the exact source. Noisy results? Refine the query (drop filler words, quote exact tokens); do not fall back to paging vendor APIs. await itx.__describe() lists everything at your scope.',

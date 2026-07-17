@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { onboardingAgentCreateInput } from "../../src/lib/onboarding-agent.ts";
+import { onboardingAgentStartupEvents } from "../../src/lib/onboarding-agent.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-completed";
@@ -40,7 +40,8 @@ async function runOnboardingBirthTurn(slug: string): Promise<LlmCompletionEviden
   using project = itx.projects.create({ slug });
   const { projectId } = await project.__describe();
   using agent = project.agents.get("/agents/onboarding");
-  await agent.create(onboardingAgentCreateInput(projectId));
+  await agent.create();
+  await agent.stream.append(...onboardingAgentStartupEvents(projectId));
   const greeting = await agent.stream.waitForEvent({
     eventTypes: [WEB_MESSAGE_SENT_TYPE],
     timeoutMs: 90_000,

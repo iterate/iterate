@@ -92,7 +92,7 @@ test.skipIf(deployedBaseUrl() === null)(
     // Agent and capability-host processors have explicit births. A raw stream
     // append on an unborn path is intentionally inert, so create through the
     // public agent door before exercising the capability host.
-    await agent.create({});
+    await agent.create();
     const sandboxName = `script-timeout-${crypto.randomUUID()}`;
     const { path: sandboxPath } = await itx.sandboxes.create({
       instanceType: "lite",

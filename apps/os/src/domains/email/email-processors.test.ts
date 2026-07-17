@@ -103,10 +103,18 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
     ]);
-    expect(routed[9]!.payload).toEqual(receivedPayload({}));
+    expect(routed[8]).toMatchObject({
+      payload: {
+        content: EMAIL_AGENT_SYSTEM_PROMPT,
+        key: "agent/system-prompt",
+        role: "system",
+      },
+    });
+    expect(routed[10]!.payload).toEqual(receivedPayload({}));
     expect(driver.state.threads).toEqual({ "2": "/agents/email/t2" });
     expect(driver.state.threadByMessageId).toEqual({ "msg-1@mail.example": "2" });
   });
@@ -340,6 +348,7 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
     ]);

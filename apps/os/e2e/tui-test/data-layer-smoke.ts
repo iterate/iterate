@@ -19,7 +19,7 @@ import {
 } from "iterate/client";
 import { createAgentFeedModel } from "../../../../packages/iterate/src/stream-tui/agent-feed-model.ts";
 import { resolveItxAuth } from "../../../../packages/iterate/src/stream-tui/itx-auth.ts";
-import { onboardingAgentCreateInput } from "../../src/lib/onboarding-agent.ts";
+import { onboardingAgentStartupEvents } from "../../src/lib/onboarding-agent.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
@@ -49,8 +49,9 @@ try {
   // (births are deferred to first chat-open; they cost a real LLM turn).
   const processorSnapshot = await agent.processor.snapshot();
   if (processorSnapshot.state.birthCertificate === null) {
-    await agent.create(onboardingAgentCreateInput(project.project.id));
+    await agent.create();
   }
+  await agent.stream.append(...onboardingAgentStartupEvents(project.project.id));
   subscription = await agent.stream.subscribe({
     processEventBatch: (batch) => {
       if (model.applyEvents(batch.events)) notifyChange();

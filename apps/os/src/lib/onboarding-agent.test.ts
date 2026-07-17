@@ -3,7 +3,7 @@ import { ONBOARDING_AGENT_SYSTEM_PROMPT } from "../domains/agents/agent-defaults
 import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
 import {
   isOnboardingActive,
-  onboardingAgentCreateInput,
+  onboardingAgentStartupEvents,
   onboardingStartEvent,
 } from "./onboarding-agent.ts";
 
@@ -42,10 +42,20 @@ describe("onboardingStartEvent", () => {
     });
   });
 
-  test("is part of the single explicit onboarding create input", () => {
-    expect(onboardingAgentCreateInput("prj_test")).toEqual({
-      systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
-      initialEvents: [onboardingStartEvent("prj_test")],
-    });
+  test("is appended with the onboarding prompt after generic creation", () => {
+    expect(onboardingAgentStartupEvents("prj_test")).toEqual([
+      {
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: expect.stringMatching(
+          /^agent\/onboarding-system-prompt:prj_test:[0-9a-f]{16}$/,
+        ),
+        payload: {
+          role: "system",
+          key: "agent/system-prompt",
+          content: ONBOARDING_AGENT_SYSTEM_PROMPT,
+        },
+      },
+      onboardingStartEvent("prj_test"),
+    ]);
   });
 });

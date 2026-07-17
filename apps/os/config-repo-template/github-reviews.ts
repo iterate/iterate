@@ -189,9 +189,7 @@ export async function processGithubReviewEvent(input: {
   const reviewAgent = input.itx.agents.get(reviewAgentPath);
   const reviewAgentSnapshot = await reviewAgent.processor.snapshot();
   await Promise.all([
-    reviewAgentSnapshot.state.birthCertificate === null
-      ? reviewAgent.create({})
-      : Promise.resolve(),
+    reviewAgentSnapshot.state.birthCertificate === null ? reviewAgent.create() : Promise.resolve(),
     setGithubReviewDetailsUrl({
       check,
       detailsUrl,

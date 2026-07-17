@@ -3,6 +3,7 @@
 // driven through the real registry + durableObjectRecovery path.
 
 import { describe, expect, it } from "vitest";
+import { PR_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import {
@@ -162,6 +163,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/github/webhook-received",
     ]);
     expect(routed[2]!.payload).toEqual({
@@ -184,7 +186,14 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         }),
       ]),
     );
-    expect(routed[8]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
+    expect(routed[8]).toMatchObject({
+      payload: {
+        content: PR_AGENT_SYSTEM_PROMPT,
+        key: "agent/system-prompt",
+        role: "system",
+      },
+    });
+    expect(routed[9]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
   });
 
   it("routes each PR to its own stream and dedupes the route fact per PR", async () => {
@@ -218,6 +227,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/github/webhook-received",
       "events.iterate.com/github/webhook-received",
     ]);
@@ -230,6 +240,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/agents/context-added",
       "events.iterate.com/github/webhook-received",
     ]);
   });
@@ -318,6 +329,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/stream/subscription-configured",
+        "events.iterate.com/agents/context-added",
         "events.iterate.com/github/webhook-received",
       ]);
     }

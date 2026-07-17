@@ -18,7 +18,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { connectItx } from "iterate/node";
-import { onboardingAgentCreateInput } from "../../src/lib/onboarding-agent.ts";
+import { onboardingAgentStartupEvents } from "../../src/lib/onboarding-agent.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -41,8 +41,9 @@ async function attemptOnboardingSmoke(): Promise<void> {
 
   using agent = project.agents.get("/agents/onboarding");
   // Match the dashboard's explicit onboarding flow: agent birth is generic,
-  // while this caller supplies the onboarding prompt and startup input.
-  await agent.create(onboardingAgentCreateInput(description.projectId));
+  // then this caller appends the onboarding prompt and startup input.
+  await agent.create();
+  await agent.stream.append(...onboardingAgentStartupEvents(description.projectId));
   const greeting = await agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/agents/web-message-sent"],
     timeoutMs: 90_000,

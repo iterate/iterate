@@ -1,22 +1,18 @@
 import { describe, expect, test } from "vitest";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
-import { agentCreationForPath } from "./agent-defaults.ts";
+import { agentCreationForPath, agentSystemPromptContextEvent } from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
 
-function defaultsFor(
-  agentPath: string,
-  overrides?: Parameters<typeof agentCreationForPath>[0]["overrides"],
-) {
+function defaultsFor(agentPath: string) {
   return agentCreationForPath({
     agentPath,
     projectId: PROJECT_ID,
-    ...(overrides === undefined ? {} : { overrides }),
   });
 }
 
-function createdEvent(agentPath: string, overrides?: Parameters<typeof defaultsFor>[1]) {
-  return defaultsFor(agentPath, overrides).events.find(
+function createdEvent(agentPath: string) {
+  return defaultsFor(agentPath).events.find(
     (event) => event.type === "events.iterate.com/agent/created",
   );
 }
@@ -83,21 +79,15 @@ describe("agentCreationForPath", () => {
     }
   });
 
-  test("puts caller overrides directly in the immutable birth certificate", () => {
-    const custom = defaultsFor("/agents/demo", {
-      systemPrompt: "Answer in one short sentence.",
-      model: "openai/gpt-5.5",
-    });
-    expect(custom.systemPrompt).toBe("Answer in one short sentence.");
+  test("always puts the platform prompt and model in the generic birth", () => {
+    const defaults = defaultsFor("/agents/demo");
+    expect(defaults.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
     expect(
-      createdEvent("/agents/demo", {
-        systemPrompt: "Answer in one short sentence.",
-        model: "openai/gpt-5.5",
-      })?.payload,
+      defaults.events.find((event) => event.type === "events.iterate.com/agent/created")?.payload,
     ).toEqual({
       config: {
-        llm: { model: "openai/gpt-5.5" },
-        systemPrompt: "Answer in one short sentence.",
+        llm: { model: "openai/gpt-5.6-sol" },
+        systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
       },
     });
   });
@@ -125,5 +115,26 @@ describe("agentCreationForPath", () => {
       expect(String(event.idempotencyKey)).toContain(PROJECT_ID);
       expect(String(event.idempotencyKey)).toContain("/agents/demo");
     }
+  });
+});
+
+describe("agentSystemPromptContextEvent", () => {
+  test("dedupes one prompt revision and versions changed policy under the same context key", () => {
+    const first = agentSystemPromptContextEvent({
+      content: "first policy",
+      idempotencyKey: "agent/test-system-prompt",
+    });
+    const retry = agentSystemPromptContextEvent({
+      content: "first policy",
+      idempotencyKey: "agent/test-system-prompt",
+    });
+    const changed = agentSystemPromptContextEvent({
+      content: "changed policy",
+      idempotencyKey: "agent/test-system-prompt",
+    });
+
+    expect(retry).toEqual(first);
+    expect(changed.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(changed.payload).toMatchObject({ key: "agent/system-prompt", role: "system" });
   });
 });

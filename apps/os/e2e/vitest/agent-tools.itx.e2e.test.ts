@@ -20,7 +20,7 @@ test(
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-tools" });
     using agent = handle.agent("/agents/e2e-tools");
-    await agent.create({});
+    await agent.create();
 
     const marker = crypto.randomUUID().slice(0, 8);
     // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
@@ -73,7 +73,7 @@ test(
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-model" });
     using agent = handle.agent("/agents/e2e-model");
-    await agent.create({});
+    await agent.create();
     const state = (await agent.processor.snapshot()).state;
     expect(state.birthCertificate?.config.llm.model).toBeTruthy();
 

@@ -4,7 +4,11 @@
 
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { EmittedInput } from "../streams/processor-contracts.ts";
-import { agentCreationForPath, telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import {
+  agentCreationForPath,
+  agentSystemPromptContextEvent,
+  telegramAgentSystemPrompt,
+} from "../agents/agent-defaults.ts";
 import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { readRecord, telegramChatStreamPath } from "./utils.ts";
 import {
@@ -168,16 +172,9 @@ function telegramAgentCreationEvents(input: {
   path: string;
   projectId: string;
 }): EmittedInput<TelegramProcessorContract>[] {
-  return agentCreationForPath({
+  const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
-    overrides: {
-      systemPrompt: telegramAgentSystemPrompt({
-        agentPath: input.path,
-        chatId: input.chatId,
-        connection: input.connection,
-      }),
-    },
     sibling: {
       birthCertificate: TelegramAgentProcessorContract.buildEvent({
         type: "events.iterate.com/telegram-agent/created",
@@ -194,7 +191,18 @@ function telegramAgentCreationEvents(input: {
       }),
       processorSlug: TelegramAgentProcessorContract.slug,
     },
-  }).events satisfies EmittedInput<TelegramProcessorContract>[];
+  });
+  return [
+    ...creation.events,
+    agentSystemPromptContextEvent({
+      content: telegramAgentSystemPrompt({
+        agentPath: input.path,
+        chatId: input.chatId,
+        connection: input.connection,
+      }),
+      idempotencyKey: `agent/telegram-system-prompt:${input.projectId}:${input.path}`,
+    }),
+  ] satisfies EmittedInput<TelegramProcessorContract>[];
 }
 
 /** The chat-scoped part of a routed stream path (`chat-{id}` or

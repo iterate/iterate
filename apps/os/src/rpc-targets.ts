@@ -349,7 +349,7 @@ import {
   EmailProcessorContract,
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
-import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
+import { agentCreationForPath } from "./domains/agents/agent-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -4218,27 +4218,23 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Create the agent on this stream. The birth certificate contains only the
-   * processor-owned config; this method also creates the universally paired
-   * capability host, installs both subscriptions, appends any durable
-   * `initialEvents` in the same batch, and returns only after both processors
-   * have durably processed the complete batch.
+   * Create the generic agent machinery on this stream and wait until both
+   * processors have consumed the birth batch. Configuration, context, and
+   * tasks are separate events: append them through `agent.stream` or use a
+   * typed helper such as `message()` after creation.
    */
-  async create(input: AgentCreateInput = {}): Promise<void> {
-    const initialEvents: StreamEventInput[] = input.initialEvents ?? [];
-    if (initialEvents.some((event) => event.idempotencyKey === undefined)) {
-      throw new Error("agent create initialEvents must have idempotency keys");
-    }
-    if (initialEvents.some((event) => event.ephemeral === true)) {
-      throw new Error("agent create initialEvents must be durable");
+  async create(...unexpected: []): Promise<void> {
+    if (unexpected.length > 0) {
+      throw new Error(
+        "agent.create() takes no arguments; append configuration and context through agent.stream after creation",
+      );
     }
     const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
       ...(await agentBootProjectFacts(this.#props.projectId)),
-      overrides: { model: input.model, systemPrompt: input.systemPrompt },
     });
-    const committed = await this.stream.append(...creation.events, ...initialEvents);
+    const committed = await this.stream.append(...creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum

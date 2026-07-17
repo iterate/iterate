@@ -1,10 +1,5 @@
 import { expect, test } from "vitest";
-import type {
-  Agent,
-  AgentChat,
-  AgentCreateInput,
-  CapabilityHost,
-} from "../../src/itx-api.generated.ts";
+import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
 import { agentCreationForPath } from "../../src/domains/agents/agent-defaults.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -18,7 +13,7 @@ import {
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // These are hand written tests - they MUST pass
-test("agent create folds startup events and is idempotent only for the same birth", async () => {
+test("agent create installs only generic machinery; later events configure it", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
@@ -28,46 +23,34 @@ test("agent create folds startup events and is idempotent only for the same birt
   using project = itx.projects.create({ slug: `agent-create-${crypto.randomUUID()}` });
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
   await expect(
-    agent.create({
-      initialEvents: [{ type: "test/unkeyed-startup", payload: {} }],
-    } as unknown as AgentCreateInput),
-  ).rejects.toThrow("agent create initialEvents must have idempotency keys");
-  await expect(
-    agent.create({
-      initialEvents: [
-        {
-          type: "test/ephemeral-startup",
-          idempotencyKey: "test/ephemeral-startup",
-          ephemeral: true,
-          payload: {},
-        },
-      ],
-    } as unknown as AgentCreateInput),
-  ).rejects.toThrow("agent create initialEvents must be durable");
-  const createInput = {
-    systemPrompt: "original prompt",
-    initialEvents: [
-      {
-        type: AGENT_CONTEXT_ADDED_TYPE,
-        idempotencyKey: `agent-create-startup-${crypto.randomUUID()}`,
-        payload: {
-          role: "system",
-          key: "test/create-startup",
-          content: "startup event was folded before create returned",
-        },
-      },
-    ],
-  };
-  await agent.create(createInput);
+    (
+      agent as unknown as {
+        create(input: { systemPrompt: string }): Promise<void>;
+      }
+    ).create({ systemPrompt: "caller must not replace the platform prompt" }),
+  ).rejects.toThrow(
+    "agent.create() takes no arguments; append configuration and context through agent.stream after creation",
+  );
+  expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
+
+  await agent.create();
+  await expect(agent.create()).resolves.toBeUndefined();
+
+  const [configured] = await agent.stream.append({
+    type: AGENT_CONTEXT_ADDED_TYPE,
+    idempotencyKey: `agent-config-after-create-${crypto.randomUUID()}`,
+    payload: {
+      role: "system",
+      key: "test/config-after-create",
+      content: "configuration is an ordinary event after generic creation",
+    },
+  });
+  await agent.processor.waitUntilProcessed({ offset: configured.offset, timeoutMs: 30_000 });
   expect((await agent.processor.snapshot()).state.context.system).toContainEqual(
     expect.objectContaining({
-      key: "test/create-startup",
-      content: "startup event was folded before create returned",
+      key: "test/config-after-create",
+      content: "configuration is an ordinary event after generic creation",
     }),
-  );
-  await expect(agent.create(createInput)).resolves.toBeUndefined();
-  await expect(agent.create({ systemPrompt: "different prompt" })).rejects.toThrow(
-    /idempotency key .* already names a different event/,
   );
 });
 
@@ -81,7 +64,7 @@ test("Agent scripts update their own status record via itx.agent.setStatus", asy
   using project = itx.projects.create({ slug: "agent-set-status" });
   const agentPath = `/agents/set-status-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
-  await agent.create({});
+  await agent.create();
 
   const statusPatch = agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/agent/status-changed"],
@@ -135,7 +118,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   using project = itx.projects.create({ slug: "agent-project-tool" });
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
-  await agent.create({});
+  await agent.create();
 
   using _projectToolProvision = await project.provideCapability({
     path: ["projectTool"],
@@ -263,7 +246,7 @@ test("Late agent subscriptions replay history after an earlier birth certificate
     predicate: (event) => event.payload?.message === marker,
     timeoutMs: 30_000,
   });
-  await agent.create({});
+  await agent.create();
 
   expect(await replayedReply).toMatchObject({
     type: AGENT_WEB_MESSAGE_SENT_TYPE,
@@ -325,7 +308,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
-  await agent.create({});
+  await agent.create();
   const durableWorkerKey = `agent-counter-${crypto.randomUUID()}`;
 
   using _agentProbeProvision = await agent.provideCapability({
@@ -464,7 +447,7 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
-  await agent.create({});
+  await agent.create();
   const scopeProbeWorkerRef = (path: string) => ({
     entrypoint: "ScopeProbeEntrypoint",
     path,
@@ -523,7 +506,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
-  await agent.create({});
+  await agent.create();
 
   // The provide runs INSIDE the agent scope: the script's `itx` fronts the
   // agent's own capability host and mounts on the project root by addressing
@@ -585,7 +568,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     eventTypes: ["events.iterate.com/capability-host/capability-provided"],
     timeoutMs: 60_000,
   });
-  await project.agents.get(agentPath).create({});
+  await project.agents.get(agentPath).create();
 
   expect(await project.agents.list()).toEqual(
     expect.arrayContaining([expect.objectContaining({ path: agentPath })]),

@@ -147,6 +147,13 @@ describe("SlackProcessor (webhook router)", () => {
     expect(
       routed.filter((event) => event.type === "events.iterate.com/stream/subscription-configured"),
     ).toHaveLength(3);
+    expect(routed.at(-3)).toMatchObject({
+      payload: {
+        content: slackAgentSystemPrompt(CONNECTION),
+        key: "agent/system-prompt",
+        role: "system",
+      },
+    });
     expect(routed.slice(-2).map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
       "events.iterate.com/slack/webhook-received",

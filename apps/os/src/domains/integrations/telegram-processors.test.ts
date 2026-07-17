@@ -79,6 +79,17 @@ describe("TelegramProcessor (webhook router)", () => {
         (event) => event.type === "events.iterate.com/stream/subscription-configured",
       ),
     ).toHaveLength(3);
+    expect(allRouted.at(-2)).toMatchObject({
+      payload: {
+        content: telegramAgentSystemPrompt({
+          agentPath: path,
+          chatId: String(CHAT_ID),
+          connection: CONNECTION,
+        }),
+        key: "agent/system-prompt",
+        role: "system",
+      },
+    });
     const routed = telegramWebhooksAt(network, path);
     expect(routed).toHaveLength(1);
     expect(routed[0]!.payload).toEqual(humanMessageWebhookPayload({}));

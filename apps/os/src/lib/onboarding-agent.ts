@@ -1,6 +1,6 @@
 import {
+  agentSystemPromptContextEvent,
   ONBOARDING_AGENT_SYSTEM_PROMPT,
-  type AgentCreateInput,
 } from "../domains/agents/agent-defaults.ts";
 import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
 
@@ -20,12 +20,15 @@ export function onboardingStartEvent(projectId: string) {
   };
 }
 
-/** The explicit, atomic birth batch used by every onboarding entry point. */
-export function onboardingAgentCreateInput(projectId: string): AgentCreateInput {
-  return {
-    systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
-    initialEvents: [onboardingStartEvent(projectId)],
-  };
+/** Idempotent onboarding policy + kickoff, appended after generic creation. */
+export function onboardingAgentStartupEvents(projectId: string) {
+  return [
+    agentSystemPromptContextEvent({
+      content: ONBOARDING_AGENT_SYSTEM_PROMPT,
+      idempotencyKey: `agent/onboarding-system-prompt:${projectId}`,
+    }),
+    onboardingStartEvent(projectId),
+  ];
 }
 
 export function isOnboardingActive(

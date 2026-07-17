@@ -188,7 +188,7 @@ describe("config-repo GitHub reviews", () => {
     expect(h.getAgent).toHaveBeenCalledWith(
       "/agents/repos/route/pull-requests/7/iterate-reviews/100",
     );
-    expect(h.createAgent).toHaveBeenCalledWith({});
+    expect(h.createAgent).toHaveBeenCalledWith();
     expect(h.snapshotAgent).toHaveBeenCalledOnce();
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({

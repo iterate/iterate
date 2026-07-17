@@ -350,13 +350,12 @@ export interface Agent {
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
-   * Create the agent on this stream. The birth certificate contains only the
-   * processor-owned config; this method also creates the universally paired
-   * capability host, installs both subscriptions, appends any durable
-   * `initialEvents` in the same batch, and returns only after both processors
-   * have durably processed the complete batch.
+   * Create the generic agent machinery on this stream and wait until both
+   * processors have consumed the birth batch. Configuration, context, and
+   * tasks are separate events: append them through `agent.stream` or use a
+   * typed helper such as `message()` after creation.
    */
-  create(input: AgentCreateInput): Promise<void>;
+  create(...unexpected: []): Promise<void>;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
@@ -2425,15 +2424,6 @@ export type AgentProcessorState = {
   };
 };
 
-/** Public agent-creation input. Durable, idempotency-keyed startup inputs
- * commit in the same append as the birth certificates and subscriptions,
- * before create waits for the processors to catch up. */
-export type AgentCreateInput = AgentDefaultsOverrides & {
-  initialEvents?: Array<
-    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
-  >;
-};
-
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
  * base64 (optionally a full `data:` URL) — that is what Workers AI image
@@ -3311,14 +3301,6 @@ export type AgentStatusRecord = {
   note?: string | undefined;
   shortStatus?: string | undefined;
   icon?: string | undefined;
-};
-
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the generic platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */

@@ -30,11 +30,20 @@ anything. Mutation hangs off that handle:
 
 ```ts
 const agent = itx.agents.get("/agents/researcher");
-await agent.create({ systemPrompt: "..." });
+await agent.create();
+await agent.stream.append({
+  type: "events.iterate.com/agents/context-added",
+  idempotencyKey: "researcher-role:v1",
+  payload: {
+    role: "system",
+    key: "agent/researcher-role",
+    content: "You are the project's research specialist.",
+  },
+});
 await agent.message("Start the research");
 ```
 
-This is why the API is `agents.get(path).create(...)`, rather than
+This is why the API is `agents.get(path).create()`, rather than
 `agents.create(...)`: addressing and existence remain separate, and every
 subsequent operation uses the same path-bound handle.
 
@@ -142,12 +151,20 @@ An agent creation batch is the reference shape:
 4. explicit Agent and Capability Host subscriptions;
 5. `waitUntilProcessed({ offset: finalBatchOffset })` on both processors.
 
-`agent.create({ initialEvents })` may add durable, idempotency-keyed startup
-facts to that same atomic append. The final wait includes them. Onboarding uses
-this to commit its kickoff context with the births and subscriptions instead
-of racing a second append. Unkeyed inputs are not retry-safe, and ephemeral
-events are not valid startup facts because durable processors cannot wait
-through them.
+Agent `create()` deliberately takes no arguments. It establishes only the
+platform invariants above; caller-selected context, model configuration, and
+tasks are ordinary events appended afterwards through `agent.stream`. This
+keeps an agent's birth independent of the caller that happened to win the
+creation race and prevents one creation call from replacing platform context.
+
+Post-creation events own their own retry contract. Give durable startup facts
+an idempotency key, and retry the append independently if a process fails
+between `create()` and `append()`. Onboarding follows this pattern: it ensures
+the generic agent exists and then always appends the same idempotency-keyed
+prompt and kickoff facts, so a partial attempt heals on retry. A keyed context
+item composes with other context; it supersedes only the item with the same
+key. The reserved `agent/system-prompt` key is platform-owned because replacing
+it replaces the execution protocol.
 
 Transport routers use the same batch shape when they create routed agents,
 with one additional facet birth and subscription. Their source webhook is
@@ -163,7 +180,19 @@ for readiness when their caller needs a usable provisioned result.
 The birth certificate holds the complete initial config. Later configuration
 is an ordinary domain event, not another birth and not a universal framework
 method. Today Agent owns `agent/configured`; callers can append that event
-directly.
+directly to change model policy:
+
+```ts
+await agent.stream.append({
+  type: "events.iterate.com/agent/configured",
+  idempotencyKey: "researcher-model:v1",
+  payload: { config: { llm: { model: "openai/gpt-5.6-sol" } } },
+});
+```
+
+Additional instructions are keyed `agents/context-added` events, as in the
+earlier example. Use a distinct key to compose; reusing a key explicitly
+supersedes only that context item.
 
 Config patches use `mergeProcessorConfig` with these exact rules:
 
@@ -204,7 +233,7 @@ event; it does not mean the destination path implicitly selects a processor.
 | ------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Project                   | `project/created`         | `session.projects.create(...)`                                                                        | Subscribes Project; Project's birth reaction creates the root Capability Host, primary Scheduler, config Repo, and Email router. `project/ready` follows config-repo and worker readiness.                                               |
 | Repo                      | `repo/created`            | `project.repos.create(...)`, global repo creation, or Project bootstrap for `/repos/config`           | Subscribes Repo, cross-posts its birth to `/`, provisions the artifact, then emits `repo/ready`.                                                                                                                                         |
-| Agent                     | `agent/created`           | `project.agents.get(path).create(...)` or a Slack/Telegram/Email/GitHub router                        | Creates the paired Capability Host, setup events, and subscriptions; cross-posts its birth to `/`.                                                                                                                                       |
+| Agent                     | `agent/created`           | `project.agents.get(path).create()` or a Slack/Telegram/Email/GitHub router                           | Creates the paired Capability Host, setup events, and subscriptions; cross-posts its birth to `/`. Caller-selected context/configuration is appended afterwards.                                                                         |
 | Capability Host           | `capability-host/created` | Agent creation, Project bootstrap for `/`, or `capabilityHosts.get(path).create()`                    | Subscription is explicit; standalone create waits through its batch.                                                                                                                                                                     |
 | Scheduler                 | `scheduler/created`       | Project bootstrap or `schedulers.get(path).create()`                                                  | Subscription is explicit; create waits through its batch.                                                                                                                                                                                |
 | Secret                    | `secret/created`          | `secrets.get(path).create(...)`; integration connection setup uses that same Secret DO API            | Encrypts material before append, subscribes Secret, waits for processing, and cross-posts the birth to `/` without plaintext material.                                                                                                   |
