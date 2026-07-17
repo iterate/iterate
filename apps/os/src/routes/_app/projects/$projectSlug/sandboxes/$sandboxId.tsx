@@ -70,19 +70,28 @@ function ProjectSandboxDetailContent() {
     [sandboxPath],
   );
 
-  const panel =
-    sandboxState.value === undefined ? (
-      <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+  // ProjectStreamView opens the addressed stream. Wait until the catalogue-
+  // guarded live-state lookup proves this sandbox exists so a typed typo can
+  // never materialize a phantom /sandboxes/<name> stream.
+  if (sandboxState.value === undefined) {
+    return (
+      <div
+        className="rounded-lg border p-4 text-sm text-muted-foreground"
+        data-spinner={sandboxState.error === undefined ? "true" : undefined}
+      >
         {sandboxState.error ?? "Loading sandbox…"}
       </div>
-    ) : (
-      <SandboxDetailPanel
-        projectId={project.id}
-        routeConfig={routeConfig}
-        sandboxPath={sandboxPath}
-        state={sandboxState.value}
-      />
     );
+  }
+
+  const panel = (
+    <SandboxDetailPanel
+      projectId={project.id}
+      routeConfig={routeConfig}
+      sandboxPath={sandboxPath}
+      state={sandboxState.value}
+    />
+  );
 
   return (
     <ProjectStreamView
