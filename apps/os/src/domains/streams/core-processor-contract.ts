@@ -179,6 +179,8 @@ const SubscriptionConfiguredPayload = z
     deliver: DeliverPolicy.optional(),
     /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
     onPoison: OnPoisonPolicy.optional(),
+    /** Include ephemeral rows in push/webhook delivery. Absent = durable rows only. */
+    includeEphemeral: z.boolean().optional(),
     /**
      * Receiver-owned configuration, passed through VERBATIM on every delivery
      * (the frame carries the configured event). The platform never interprets
@@ -194,7 +196,7 @@ const SubscriptionConfiguredPayload = z
     // subscriber owns its checkpoint) would commit config that silently does
     // nothing.
     if (payload.delivery.mode !== "wake") return;
-    for (const field of ["deliver", "onPoison"] as const) {
+    for (const field of ["deliver", "onPoison", "includeEphemeral"] as const) {
       if (payload[field] !== undefined) {
         ctx.addIssue({
           code: "custom",

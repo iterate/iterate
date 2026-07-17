@@ -826,11 +826,12 @@ export class StreamSubscribers {
               : this.#selectorFor(subscriptionKey, entry.latestConfiguredEvent.offset, config);
           const selectedEventTypes =
             config.delivery.mode === "push" ? this.#sharedPushEventTypes : undefined;
+          const durableOnly = config.includeEphemeral !== true;
           const read = this.#deliveryFrameReader.read({
             afterOffset: row.ackedOffset,
             limit,
             throughOffset: frameThroughOffset,
-            durableOnly: true,
+            durableOnly,
             includeEventByteLengths: selector !== undefined && !selector.matchesAll,
             byteLimit:
               config.delivery.mode === "push"
@@ -838,23 +839,23 @@ export class StreamSubscribers {
                 : DELIVERY_BATCH_BYTE_LIMIT,
             selectedEventTypes,
           });
-          let durable = read.events;
+          let visible = read.events;
           let lastOffset = read.lastOffset;
           if (lastOffset === undefined) return; // caught up
           let scannedEventCount = read.scannedEventCount;
-          let durableByteLength = read.byteLength;
+          let visibleByteLength = read.byteLength;
 
-          // Ephemeral events never reach durable receivers — platform law,
-          // enforced as the same skip-not-defer shape selectors use: the raw
-          // read advances the cursor over their offsets, delivery drops them.
-          let matched = durable;
+          // Push/webhook delivery skips ephemeral rows unless the ordinary
+          // subscription explicitly opts in. The raw cursor still advances
+          // over hidden offsets, just as it does for selector misses.
+          let matched = visible;
           let matchedByteLength: number | undefined;
           const conditionErrors: StreamEventInput[] = [];
           if (selector !== undefined) {
             const selected = this.#applySelector(
               subscriptionKey,
               selector,
-              durable,
+              visible,
               read.eventByteLengths,
               read.projection,
               read.durableOnly,
@@ -881,7 +882,7 @@ export class StreamSubscribers {
                 afterOffset: lastOffset,
                 limit: limit - scannedEventCount,
                 throughOffset: frameThroughOffset,
-                durableOnly: true,
+                durableOnly,
                 includeEventByteLengths: true,
                 byteLimit: PUSH_DELIVERY_BATCH_BYTE_LIMIT,
                 selectedEventTypes,
@@ -903,11 +904,11 @@ export class StreamSubscribers {
               ) {
                 break;
               }
-              durable = durable.concat(nextRead.events);
+              visible = visible.concat(nextRead.events);
               matched = matched.concat(selected.matched);
               matchedByteLength += nextMatchedByteLength;
               scannedEventCount += nextRead.scannedEventCount;
-              durableByteLength += nextRead.byteLength;
+              visibleByteLength += nextRead.byteLength;
               lastOffset = nextLastOffset;
               conditionErrors.push(...selected.conditionErrors);
               if (
@@ -968,8 +969,8 @@ export class StreamSubscribers {
           }
 
           const deliveredBytes =
-            matched.length === durable.length
-              ? durableByteLength
+            matched.length === visible.length
+              ? visibleByteLength
               : (matchedByteLength ?? missingFilteredByteLength());
           // Dispatch-time accounting: retries re-send real bytes, so failed
           // attempts count too (the wire carried them either way).

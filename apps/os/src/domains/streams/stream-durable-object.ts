@@ -3,6 +3,7 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
+import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import {
   ACKNOWLEDGED_IDEMPOTENCY_OFFSET_CAPACITY,
   AcknowledgedCrossPostDeliveryCache,
@@ -112,8 +113,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
-          // ephemeral lane delivers them; the durable lanes filter them from
-          // DELIVERY in stream-subscribers.ts.
+          // ephemeral lane delivers them; durable lanes filter them from
+          // DELIVERY unless their ordinary subscription explicitly opts in.
           includeEphemeral: true,
         }),
       scanPushEventTypesFrame: (args) => this.#log.scanPushEventTypesFrame(args),
@@ -157,13 +158,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
-    // For project-scoped streams the birth certificate includes the worker
-    // feed: a `subscription-configured` push subscription to the project
-    // worker's `processEventBatch`, appended by the stream TO ITSELF in the
-    // same synchronous turn as `created`. Born-configured means zero wiring
-    // window — the feed is armed before the first user event can land (a
-    // voice stream streams from birth) — while remaining ordinary config:
-    // one registry, one spine, overridable by re-appending the same key.
+    // Project streams are born with their ordinary platform feeds. Declaring
+    // them in the same birth commit leaves no asynchronous wiring window before
+    // the first user event, while keeping every feed removable or replaceable
+    // through the ordinary subscription-event lifecycle.
     const wakeInputs: StreamEventInput[] = [];
     if (this.#coreProcessorState.eventCount === 0) {
       wakeInputs.push({
@@ -184,6 +182,10 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "skip",
           } satisfies SubscriptionConfiguredPayload,
         });
+        // The standalone streams playground reuses this DO without OS's
+        // PostHog credential or receiver. Deployed OS environments require
+        // the credential, so its presence is the deployment boundary.
+        if ("APP_CONFIG_POSTHOG" in this.env) wakeInputs.push(posthogSubscriptionEvent());
       }
     }
     wakeInputs.push({
