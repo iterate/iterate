@@ -1,26 +1,9 @@
-import { QueryClient } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import { DefaultNotFoundComponent } from "@iterate-com/ui/components/route-defaults";
+import { createIterateQueryClient } from "iterate/react";
 import { RoutePending } from "./components/route-pending.tsx";
 import { routeTree } from "./routeTree.gen.ts";
-
-const makeQueryClient = () =>
-  new QueryClient({
-    defaultOptions: {
-      queries: {
-        staleTime: 60 * 1000,
-        gcTime: 5 * 60 * 1000,
-        retry: 1,
-        refetchOnWindowFocus: false,
-        refetchOnMount: true,
-        refetchOnReconnect: true,
-      },
-      mutations: {
-        retry: 0,
-      },
-    },
-  });
 
 // routeTree.gen.ts registers `router: ReturnType<typeof getRouter>` on Start's
 // Register interface, so this function's inferred return type IS the app's
@@ -30,7 +13,7 @@ const makeQueryClient = () =>
 // - components passed as options are wrapped in lambdas, so checking them
 //   doesn't traverse the registered router types.
 export function getRouter() {
-  const queryClient = makeQueryClient();
+  const queryClient = createIterateQueryClient();
 
   const router = createRouter({
     routeTree,

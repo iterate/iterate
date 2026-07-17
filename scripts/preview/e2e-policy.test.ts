@@ -8,10 +8,12 @@ import {
   E2E_TEST_TIMEOUT_MS,
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
+  OS_TUI_LANE_TIMEOUT_SECS,
   PREVIEW_RUN_WATCHDOG_SECS,
   SPEC_ACTION_TIMEOUT_MS,
   SPEC_EXPECT_TIMEOUT_MS,
   SPEC_TEST_TIMEOUT_MS,
+  TUI_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
 import { cloudflarePreviewApps, previewInternals } from "./preview.ts";
 
@@ -22,12 +24,14 @@ import { cloudflarePreviewApps, previewInternals } from "./preview.ts";
 const repoRoot = resolve(import.meta.dirname, "../..");
 
 describe("budget ladder", () => {
-  it("stays strictly ordered: action < expect < spec < e2e test < heavy test < lane < run", () => {
+  it("stays strictly ordered from one assertion through the whole preview run", () => {
     const ladder = [
       SPEC_ACTION_TIMEOUT_MS,
       SPEC_EXPECT_TIMEOUT_MS,
+      TUI_TEST_TIMEOUT_MS,
       SPEC_TEST_TIMEOUT_MS,
       E2E_TEST_TIMEOUT_MS,
+      OS_TUI_LANE_TIMEOUT_SECS * 1000,
       E2E_HEAVY_TEST_TIMEOUT_MS,
       OS_PREVIEW_LANE_TIMEOUT_SECS * 1000,
       PREVIEW_RUN_WATCHDOG_SECS * 1000,
@@ -71,6 +75,7 @@ describe("retries live in exactly one layer", () => {
     expect(E2E_CI_RETRIES).toBe(1);
     const configs = [
       "playwright.config.ts",
+      "apps/os/e2e/tui-test/tui-test.config.ts",
       "apps/os/e2e/vitest.config.ts",
       "apps/semaphore/e2e/vitest.config.ts",
       "apps/streams-example-app/vitest.config.ts",
@@ -85,11 +90,15 @@ describe("retries live in exactly one layer", () => {
     }
   });
 
-  it("the os preview lane wraps both sub-lanes in plain watchdogs — no lane-level retry", () => {
+  it("the os preview lane wraps all three sub-lanes in plain watchdogs — no lane retry", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
+    expect(script).toContain(
+      `timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts`,
+    );
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e`);
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec`);
     // Exactly one invocation each: a second occurrence means a retry wrapper came back.
+    expect(script.split("pnpm exec tsx e2e/tui-test/run.ts")).toHaveLength(2);
     expect(script.split("pnpm e2e --project node")).toHaveLength(2);
     expect(script.split("pnpm --dir ../.. spec")).toHaveLength(2);
   });

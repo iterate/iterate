@@ -17,7 +17,7 @@
     "@iterate-com/ui": "workspace:*",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
-    "@tanstack/react-query": "^5.90.0",
+    "@tanstack/react-query": "^5.101.2",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "expo": "~54.0.36",
     "expo-auth-session": "~7.0.11",

@@ -1,9 +1,10 @@
 # Stream TUI
 
 This folder contains the modules behind the published `iterate chat` OpenTUI
-agent chat CLI. The TUI is a thin terminal client on the shared itx client
-stack: it holds one `Agent` capability from `connectItx`
-(the shared `iterate/client` session keeper), folds the agent stream with the SAME shared
+agent chat CLI. The TUI is a thin terminal client on the shared itx + TanStack
+Query stack: `useItxQuery` pages durable history, `useItxSubscription` follows
+the live tail from that cursor, and `useMutation` sends through an `Agent`
+capability on the shared `iterate/client` session keeper. It folds the agent stream with the SAME shared
 reducer the web feed uses (`planAgentUiOps` from
 `@iterate-com/ui/components/events/agent-ui-reducer`), and sends user messages
 through `agent.message`.
@@ -28,6 +29,14 @@ the deployment with credentials from the Itx Auth Module, and
 reconnect, watchdog, and re-subscribe-with-replay. Replay overlap is safe
 because the Agent Feed Model dedupes by offset.
 _Avoid_: hand-rolled reconnect/backoff loops — the keeper owns recovery
+
+**Agent Feed History Query**:
+`readAgentFeedHistory` pages the immutable durable log behind `useItxQuery`.
+The ordered, replay-capable subscription is the only live feed writer; mutation
+responses deliberately do not jump its cursor. The browser and terminal mount
+`createIterateQueryClient`, so cache lifetime, refetch, and mutation-retry policy
+cannot drift by renderer.
+_Avoid_: effect-owned fetch state, a renderer-specific QueryClient policy
 
 **Itx Auth Module**:
 `itx-auth.ts` — resolves TUI credentials in priority order (env admin secret,
@@ -61,8 +70,10 @@ _Avoid_: tmux pane, shell session
   plus the `useItxSubscription` status; it never interprets raw events itself.
 - The Agent Feed Subscription hands every delivered batch to the Agent Feed
   Model and reads its `lastOffset` as the resume cursor on each (re)subscribe.
-- Terminal Behavior Specs launch the real `iterate chat` command through a PTY
-  against a disposable project (see apps/os/e2e/tui-test/run.ts).
+- Terminal Behavior Specs build the package and launch its dist-backed real
+  `iterate chat` command through a PTY against a disposable project. The stable
+  workflow spec is a required OS preview-CI sub-lane; colour snapshots remain
+  manual (see apps/os/e2e/tui-test/run.ts).
 
 ## Rules
 
