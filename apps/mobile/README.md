@@ -68,6 +68,19 @@ verifies, just without Secure Enclave hardware isolation. See
 `tasks/mobile-approver-upgrades.md` for the gap and what closing it needs
 (all three items require leaving Expo Go for a dev build).
 
+## Running examples
+
+The Examples screen (per project, from the chat list's header) lists every
+catalogue example that's runnable against a project itx — the same
+catalogue that powers the web REPL's Examples panel
+(`apps/os/src/itx/examples.ts`), filtered to `context: "project"` entries
+whose `runtimes` includes `"run-script"`. Tap Run and it executes via
+`capabilityHost.runScript` — no local JS eval on the phone, the same
+server-side script isolate agents use — and shows the JSON result inline.
+Exists so testing a platform feature never needs a laptop CLI step first:
+every mobile feature here is built by agents, so it needs to be fully
+testable from the phone alone. See `tasks/mobile-examples-runner.md`.
+
 ## Verification
 
 | Lane                                                          | What it proves                                                                                                                                                                                                                  |
@@ -88,6 +101,7 @@ verifies, just without Secure Enclave hardware isolation. See
 | `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
 | `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
 | `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
-| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals                |
+| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                      |
+| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals → examples     |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.
