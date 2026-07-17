@@ -161,8 +161,9 @@ export async function cancelLocationReminder(
   const identity = await getLocationReminderIdentity(baseUrl);
   const itx = await getItxSession(baseUrl);
   const project = await itx.projects.get(projectId);
+  const operationId = new Date().toISOString();
   await project.streams.get(LOCATION_REMINDER_STREAM_PATH).append({
-    idempotencyKey: `location-reminder-cancelled:${reminderId}`,
+    idempotencyKey: `location-reminder-cancelled:${reminderId}:${operationId}`,
     payload: { ...identity, id: reminderId },
     type: LOCATION_REMINDER_EVENT.cancelled,
   });

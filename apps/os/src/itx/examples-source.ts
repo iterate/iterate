@@ -150,27 +150,65 @@ return await itx.projects.get(pid).__describe();
   projectExample({
     id: "mobile-location-reminder",
     e2eProven: false,
-    title: "Create or cancel a mobile location reminder",
+    title: "List, create, edit, or cancel a mobile location reminder",
     description:
-      "Location reminders are durable events consumed by the Iterate iOS development build. Use them for requests such as ‘remind me to buy milk near a supermarket’; the time scheduler cannot trigger on a place. A requested event saves the intent, but the phone has not armed it yet: tell the user to open Reminders in the mobile app and grant Always location access. Use the same id in a cancelled event to disable it.",
+      "Location reminders are durable events consumed by the Iterate iOS development build. Use them for requests such as ‘remind me to buy milk near a supermarket’; the time scheduler cannot trigger on a place. List before changing existing reminders. Request creates a reminder, or edits it when you keep the id and use a new operationId; reuse that operationId only when retrying the same write. The phone claims and arms new requests after the user enables them in Reminders and grants Always location access. Cancel with the same id.",
     runtimes: ["browser", "node", "cli", "project-worker"],
     fn: async (
       itx,
       vars: {
-        action?: "request" | "cancel";
+        action?: "list" | "request" | "cancel";
         id?: string;
         message?: string;
         placeQuery?: string;
         radiusMeters?: number;
         sourceAgentPath?: string;
+        operationId?: string;
       },
     ) => {
       const stream = itx.streams.get("/mobile/location-reminders");
+      if (vars.action === "list") {
+        const events = await stream.getEvents({
+          eventTypes: [
+            "events.iterate.com/location-reminder/requested",
+            "events.iterate.com/location-reminder/cancelled",
+            "events.iterate.com/location-reminder/delivered",
+            "events.iterate.com/location-reminder/armed",
+            "events.iterate.com/location-reminder/arming-failed",
+          ],
+        });
+        const active = new Map();
+        for (const event of events) {
+          const id = typeof event.payload.id === "string" ? event.payload.id : "";
+          if (!id) continue;
+          if (event.type === "events.iterate.com/location-reminder/requested") {
+            active.set(id, { ...event.payload, status: "requested" });
+          }
+          if (
+            event.type === "events.iterate.com/location-reminder/cancelled" ||
+            event.type === "events.iterate.com/location-reminder/delivered"
+          ) {
+            active.delete(id);
+          }
+          if (event.type === "events.iterate.com/location-reminder/armed" && active.has(id)) {
+            active.set(id, { ...active.get(id), ...event.payload, status: "armed" });
+          }
+          if (
+            event.type === "events.iterate.com/location-reminder/arming-failed" &&
+            active.has(id)
+          ) {
+            active.set(id, { ...active.get(id), ...event.payload, status: "failed" });
+          }
+        }
+        return { reminders: [...active.values()] };
+      }
+
       const id = vars.id || crypto.randomUUID();
+      const operationId = vars.operationId || crypto.randomUUID();
       if (vars.action === "cancel") {
         const [cancelled] = await stream.append({
           type: "events.iterate.com/location-reminder/cancelled",
-          idempotencyKey: `location-reminder-cancelled:${id}`,
+          idempotencyKey: `location-reminder-cancelled:${id}:${operationId}`,
           payload: { id },
         });
         return { id, offset: cancelled.offset, status: "cancelled" };
@@ -178,7 +216,7 @@ return await itx.projects.get(pid).__describe();
 
       const [requested] = await stream.append({
         type: "events.iterate.com/location-reminder/requested",
-        idempotencyKey: `location-reminder-requested:${id}`,
+        idempotencyKey: `location-reminder-requested:${id}:${operationId}`,
         payload: {
           id,
           message: vars.message || "Buy milk",
