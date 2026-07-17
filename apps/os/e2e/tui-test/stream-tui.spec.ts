@@ -4,6 +4,9 @@ import { SPEC_EXPECT_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-pol
 // TUI Test 0.0.4 does not load the config-level expect timeout in its worker,
 // so cold-start assertions need the shared budget at each async matcher.
 const visible = { timeout: SPEC_EXPECT_TIMEOUT_MS };
+// Mounting includes the provider's bounded 25s connect-and-provide operation,
+// so this proof needs a separate budget above an ordinary TUI cold start.
+const computerMountVisible = { timeout: 30_000 };
 
 // A fresh agent path per run: the project processor configures the agent
 // subscription on first append, so any /agents/* path is chattable.
@@ -70,7 +73,9 @@ testWithProject(
 
     terminal.submit("/use-my-computer");
 
-    await expect(terminal.getByText("shared itx.", { strict: false })).toBeVisible(visible);
+    await expect(terminal.getByText("shared itx.", { strict: false })).toBeVisible(
+      computerMountVisible,
+    );
     const view = terminal.serialize().view;
     expect(view).not.toContain("you › /use-my-computer");
   },

@@ -32,3 +32,4 @@ This adds no new callable machine primitive: the mounted capability remains the 
 - 2026-07-17: Review follow-up generation-guards stdout/stderr after teardown and distinguishes explained provider exits from recoverable call/diagnostic errors, with regression tests for both cases.
 - 2026-07-17: Review follow-up waits for provider stdout to drain before classifying exits, tolerates blank NDJSON lines, and makes the production PTY proof wait for the mounted-state notice with the shared cold-start timeout.
 - 2026-07-17: Preview proved the original mounted-state suffix was clipped in a 100-column terminal, so the notice is state-first (`shared itx.<name>`) and the PTY assertion targets that visible success marker.
+- 2026-07-17: Final review prioritizes actionable notices before event metadata in narrow headers and gives the mount proof 30 seconds to cover the provider's bounded 25-second connect-and-provide operation.
