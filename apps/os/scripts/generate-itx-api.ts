@@ -43,6 +43,7 @@ import {
   isInterfaceDeclaration,
   isLiteralTypeNode,
   isMethodDeclaration,
+  isModuleDeclaration,
   isPrivateIdentifier,
   isPropertyDeclaration,
   isStringLiteral,
@@ -54,6 +55,7 @@ import type {
   ClassDeclaration,
   ExpressionWithTypeArguments,
   InterfaceDeclaration,
+  ModuleDeclaration,
   Node,
   ParameterDeclaration,
   SourceFile,
@@ -74,6 +76,130 @@ const graphOutPath = path.join(projectDir, "src/itx-api-graph.generated.ts");
 /** The opt-in roots in rpc-targets.ts (see their docstrings there). */
 const ITERATE_ROOT = "IterateRpcTarget";
 const RELAY_ROOT = "IterateRpcRelay";
+
+const TYPED_STREAM_EVENT_INPUT = "TypedStreamEventInput<";
+
+type EventPayloadOccurrence = {
+  eventType: string;
+  payloadEnd: number;
+  payloadStart: number;
+};
+
+function eventPayloadName(eventType: string): string {
+  const words = eventType
+    .replace(/^events\.iterate\.com\//, "")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+  if (words.length === 0) throw new Error(`cannot name payload for event type "${eventType}"`);
+  return `${words.map((word) => word[0]!.toUpperCase() + word.slice(1)).join("")}Payload`;
+}
+
+function eventPayloadOccurrences(source: string): EventPayloadOccurrence[] {
+  const occurrences: EventPayloadOccurrence[] = [];
+  let searchFrom = 0;
+  while (true) {
+    const referenceStart = source.indexOf(TYPED_STREAM_EVENT_INPUT, searchFrom);
+    if (referenceStart === -1) return occurrences;
+    let cursor = referenceStart + TYPED_STREAM_EVENT_INPUT.length;
+    while (/\s/.test(source[cursor] || "")) cursor += 1;
+    if (source[cursor] !== '"') {
+      searchFrom = cursor;
+      continue;
+    }
+    const literalStart = cursor;
+    cursor += 1;
+    while (cursor < source.length) {
+      if (source[cursor] === "\\") cursor += 2;
+      else if (source[cursor] === '"') break;
+      else cursor += 1;
+    }
+    if (source[cursor] !== '"') throw new Error("unterminated event type in generated input");
+    const eventType = JSON.parse(source.slice(literalStart, cursor + 1)) as string;
+    cursor += 1;
+    while (/\s/.test(source[cursor] || "")) cursor += 1;
+    if (source[cursor] !== ",") {
+      searchFrom = cursor;
+      continue;
+    }
+    const payloadStart = cursor + 1;
+    let angleDepth = 1;
+    let quote: '"' | "'" | "`" | undefined;
+    cursor = payloadStart;
+    for (; cursor < source.length; cursor += 1) {
+      const character = source[cursor]!;
+      if (quote !== undefined) {
+        if (character === "\\") cursor += 1;
+        else if (character === quote) quote = undefined;
+        continue;
+      }
+      if (character === '"' || character === "'" || character === "`") {
+        quote = character;
+      } else if (character === "<") {
+        angleDepth += 1;
+      } else if (character === ">" && source[cursor - 1] !== "=") {
+        angleDepth -= 1;
+        if (angleDepth === 0) break;
+      }
+    }
+    if (angleDepth !== 0) throw new Error(`unterminated generated input for "${eventType}"`);
+    occurrences.push({ eventType, payloadEnd: cursor, payloadStart });
+    searchFrom = cursor + 1;
+  }
+}
+
+/**
+ * Hoist payloads out of contract-derived event unions. The durable event type
+ * is their identity: every generated union references one stable name, and a
+ * second domain consuming the same event adds a reference rather than another
+ * structural copy. Multiple distinct views of one payload are retained as a
+ * union so the generator never silently chooses between incompatible shapes.
+ */
+export function internEventPayloadTypes(chunks: string[]): {
+  chunks: string[];
+  namespaceSource: string;
+} {
+  const payloadsByEventType = new Map<string, Set<string>>();
+  const eventTypeByPayloadName = new Map<string, string>();
+  const transformed = chunks.map((source) => {
+    const occurrences = eventPayloadOccurrences(source);
+    for (const occurrence of occurrences) {
+      const payload = source.slice(occurrence.payloadStart, occurrence.payloadEnd).trim();
+      const payloads = payloadsByEventType.get(occurrence.eventType) || new Set<string>();
+      payloads.add(payload);
+      payloadsByEventType.set(occurrence.eventType, payloads);
+      const name = eventPayloadName(occurrence.eventType);
+      const existingType = eventTypeByPayloadName.get(name);
+      if (existingType !== undefined && existingType !== occurrence.eventType) {
+        throw new Error(
+          `event payload name collision: "${existingType}" and "${occurrence.eventType}" both become events.${name}`,
+        );
+      }
+      eventTypeByPayloadName.set(name, occurrence.eventType);
+    }
+    let output = source;
+    for (const occurrence of occurrences.toReversed()) {
+      output =
+        output.slice(0, occurrence.payloadStart) +
+        ` events.${eventPayloadName(occurrence.eventType)}` +
+        output.slice(occurrence.payloadEnd);
+    }
+    return output;
+  });
+  if (payloadsByEventType.size === 0) return { chunks: transformed, namespaceSource: "" };
+  const declarations = [...payloadsByEventType].map(([eventType, payloads]) => {
+    const union = [...payloads].join(" | ");
+    return [
+      `/** Payload accepted by \`${eventType}\`. */`,
+      "export namespace events {",
+      `  export type ${eventPayloadName(eventType)} = ${union};`,
+      "}",
+    ].join("\n");
+  });
+  return {
+    chunks: transformed,
+    namespaceSource: declarations.join("\n\n"),
+  };
+}
 
 /** The native API's typeToString flags (numeric TypeFormatFlags, same values as tsc). */
 const NO_TRUNCATION = 1;
@@ -565,6 +691,7 @@ export function generateItxApi(): string {
     const trivia = fullText.slice(0, firstStatementStart);
     return trivia.match(/\/\*\*[\s\S]*?\*\//)?.[0] ?? "";
   })();
+  const internedEvents = internEventPayloadTypes(aliasChunks);
 
   const raw = [
     "// GENERATED by scripts/generate-itx-api.ts — do not edit.",
@@ -580,7 +707,9 @@ export function generateItxApi(): string {
     "",
     "// ─── Data shapes ─────────────────────────────────────────────────────────────",
     "",
-    aliasChunks.join("\n\n"),
+    internedEvents.namespaceSource,
+    "",
+    internedEvents.chunks.join("\n\n"),
     "",
   ].join("\n");
 
@@ -633,11 +762,32 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
   };
 
   const declarations: Array<{
-    statement: InterfaceDeclaration | TypeAliasDeclaration;
+    statement: InterfaceDeclaration | ModuleDeclaration | TypeAliasDeclaration;
     record: ItxApiDeclaration;
   }> = [];
+  const declarationName = (
+    statement: InterfaceDeclaration | ModuleDeclaration | TypeAliasDeclaration,
+  ): string => {
+    const name = statement.name.getText().replaceAll(/^['"]|['"]$/g, "");
+    if (!isModuleDeclaration(statement)) return name;
+    const exportedTypes = [
+      ...statement.getText().matchAll(/\bexport\s+type\s+([A-Za-z_$][\w$]*)/g),
+    ];
+    if (exportedTypes.length !== 1) {
+      throw new Error(
+        `generated namespace ${name} must contain exactly one exported type, found ${exportedTypes.length}`,
+      );
+    }
+    return `${name}.${exportedTypes[0]![1]}`;
+  };
   for (const statement of sourceFile.statements) {
-    if (!isInterfaceDeclaration(statement) && !isTypeAliasDeclaration(statement)) continue;
+    if (
+      !isInterfaceDeclaration(statement) &&
+      !isModuleDeclaration(statement) &&
+      !isTypeAliasDeclaration(statement)
+    ) {
+      continue;
+    }
     const jsDoc = ownJsDoc(statement);
     const memberSummaries: Record<string, string> = {};
     if (isInterfaceDeclaration(statement)) {
@@ -651,8 +801,12 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
     declarations.push({
       statement,
       record: {
-        name: statement.name.text,
-        kind: isInterfaceDeclaration(statement) ? "interface" : "typeAlias",
+        name: declarationName(statement),
+        kind: isInterfaceDeclaration(statement)
+          ? "interface"
+          : isModuleDeclaration(statement)
+            ? "namespace"
+            : "typeAlias",
         sourceText: [jsDoc, statement.getText()].filter(Boolean).join("\n"),
         summary: summaryOf(jsDoc),
         memberSummaries,
@@ -667,7 +821,10 @@ export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
   for (const { statement, record } of declarations) {
     const codeOnly = stripComments(statement.getText());
     const referenced = new Set<string>();
-    for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
+    for (const match of codeOnly.matchAll(/\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b/g)) {
+      if (match[0] !== record.name && allNames.has(match[0])) referenced.add(match[0]);
+    }
+    for (const match of codeOnly.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g)) {
       if (match[0] !== record.name && allNames.has(match[0])) referenced.add(match[0]);
     }
     record.referencedTypeNames = [...referenced];

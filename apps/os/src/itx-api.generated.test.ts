@@ -19,6 +19,7 @@ import { API } from "@typescript/native-preview/unstable/sync";
 import {
   generateItxApi,
   generateItxApiGraphSource,
+  internEventPayloadTypes,
   verifyRpcTargetsSatisfyContract,
 } from "../scripts/generate-itx-api.ts";
 
@@ -44,6 +45,38 @@ test("the packages/iterate copy (published as iterate/sdk) is fresh (pnpm genera
     new URL("../../../packages/iterate/src/itx-api.generated.ts", import.meta.url),
   );
   expect(readFileSync(packageCopyPath, "utf8")).toBe(readFileSync(generatedPath, "utf8"));
+});
+
+test("contract-derived event unions share named payload declarations", () => {
+  const generated = readFileSync(generatedPath, "utf8");
+  const agentAppendInput = generated.match(
+    /export type AgentAppendInput =[\s\S]*?(?=\n\/\*\* One committed event)/,
+  )?.[0];
+
+  expect(agentAppendInput).toContain(
+    'TypedStreamEventInput<"events.iterate.com/agent/configured", events.AgentConfiguredPayload>',
+  );
+  expect(agentAppendInput).not.toContain("systemPrompt");
+  expect(generated.match(/export type AgentConfiguredPayload\b/g)).toHaveLength(1);
+  expect(generated).toContain("export namespace events {");
+  const configuredPayload = generated.match(
+    /export type AgentConfiguredPayload =[\s\S]*?;(?=\n})/,
+  )?.[0];
+  expect(configuredPayload?.match(/config:/g)).toHaveLength(1);
+});
+
+test("event payload interning reuses durable event identity across domain aliases", () => {
+  const event = 'TypedStreamEventInput<"events.iterate.com/demo/ping", { value: string }>';
+  const interned = internEventPayloadTypes([
+    `export type FirstInput = ${event};`,
+    `export type SecondInput = ${event};`,
+  ]);
+
+  expect(interned.namespaceSource.match(/export type DemoPingPayload\b/g)).toHaveLength(1);
+  expect(interned.chunks).toEqual([
+    'export type FirstInput = TypedStreamEventInput<"events.iterate.com/demo/ping", events.DemoPingPayload>;',
+    'export type SecondInput = TypedStreamEventInput<"events.iterate.com/demo/ping", events.DemoPingPayload>;',
+  ]);
 });
 
 test("itx-api.generated.ts resolves its exact vendor types from iterate's dependencies", () => {

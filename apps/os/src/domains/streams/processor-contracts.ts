@@ -189,6 +189,20 @@ type InputFromType<
     : never
   : never;
 
+/** Public append input for one consumed type, before its payload schema parses. */
+type ConsumedInputFromType<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Type extends string,
+> = Type extends unknown
+  ? EventDefinitionForType<Events, ProcessorDeps, Type> extends EventDefinition<
+      unknown,
+      infer PayloadInput
+    >
+    ? TypedStreamEventInput<Type, PayloadInput>
+    : never
+  : never;
+
 /** Union of append-input shapes for a `consumes` tuple; `"*"` means any input. */
 type InputFromTypes<
   Events extends EventCatalog,
@@ -196,7 +210,7 @@ type InputFromTypes<
   Types extends readonly string[],
 > = "*" extends Types[number]
   ? StreamEventInput
-  : InputFromType<Events, ProcessorDeps, Types[number]>;
+  : ConsumedInputFromType<Events, ProcessorDeps, Types[number]>;
 
 /** Parsed append input for one resolved type (payload validated, so required). */
 type ParsedInputFromType<

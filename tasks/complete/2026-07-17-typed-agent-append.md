@@ -7,7 +7,7 @@ size: small
 
 ## Status
 
-Complete. Agent handles now expose a contract-derived typed `append`, the shared event-input envelope is emitted once, and the generated app/package contracts reject unknown event types and invalid payloads. Full OS typecheck and unit tests pass.
+Complete. Agent handles expose contract-derived typed `append`; generated payloads are interned once by durable event type under mergeable `events.*Payload` declarations; and the type graph keeps each payload individually addressable so docs closures do not pull an eventual global namespace wholesale. Full OS typecheck and unit tests pass.
 
 ## Goal
 
@@ -29,6 +29,11 @@ Expose `itx.agents.get(path).append(...)` as the direct event-oriented alternati
 - [x] Prove valid consumed events compile and invalid event types/payloads fail through the generated public API. *The standalone published-contract test covers a valid status patch plus two `@ts-expect-error` cases.*
 - [x] Regenerate the flat itx API, type graph, and published `iterate/sdk` copy. *All three generated artifacts were refreshed with `pnpm --dir apps/os generate:itx-api`.*
 - [x] Run focused tests, typecheck, lint, and formatting checks. *OS typecheck, 1,825 unit tests, focused lint, formatting, and generated freshness all pass.*
+- [x] Collect generated payload types by durable event type and emit each payload once. *`internEventPayloadTypes` uses `Map<string, Set<string>>`; its regression test proves two domain aliases reuse one declaration.*
+- [x] Put generated payload declarations in an `events` namespace with stable names such as `events.AgentConfiguredPayload`. *Each event gets one mergeable namespace declaration named from its durable event path.*
+- [x] Keep `AgentAppendInput` compact by referencing namespaced payload declarations instead of inline structures. *The union now consists only of `TypedStreamEventInput<type, events.*Payload>` references.*
+- [x] Preserve the namespace and its reference edges in the Itx Type Graph and virtual type environment. *Payload graph nodes use dotted identities such as `events.AgentConfiguredPayload`, so a payload slice excludes its namespace siblings.*
+- [x] Re-run generated-contract, graph, typecheck, lint, formatting, and unit-test verification. *Generated tests (including standalone package compilation), graph tests, OS typecheck, focused lint/format, and 1,808 unit tests pass.*
 
 ## Implementation log
 
@@ -36,3 +41,7 @@ Expose `itx.agents.get(path).append(...)` as the direct event-oriented alternati
 - 2026-07-17: Added the red published-contract test. It failed because `Agent` had no `append`, proving the public path under test.
 - 2026-07-17: Added `ConsumedInput`, `AgentAppendInput`, and the forwarding RPC method. Initial generation exposed shared private `TypedStreamEventInput` and Zod JSON aliases; the generator now emits the envelope once and maps those aliases to `JsonValue`.
 - 2026-07-17: Regenerated all contract artifacts. `pnpm --dir apps/os typecheck`, focused oxlint/oxfmt, and the full OS unit suite (1,825 passed, 1 skipped) are green.
+- 2026-07-17: Follow-up review found the generated `AgentAppendInput` adds roughly 500 lines because payload input/output structures are expanded inline. Reopened the task to intern them before this pattern spreads to other domain objects.
+- 2026-07-17: Interned payloads by durable event type and emitted mergeable namespace declarations. Split namespace members into dotted graph nodes so future domains share types without making every docs closure load every event payload.
+- 2026-07-17: Narrowed public consumed append payloads to the Zod input type rather than `output | input`, removing identical structural branches while leaving processor `EmittedInput` semantics unchanged.
+- 2026-07-17: Final generated SDK is about 5 KB smaller than the first inline typed-append version. OS typecheck, focused lint/format, generated/graph tests, standalone SDK compilation, and the full unit suite are green.

@@ -27,7 +27,7 @@ export interface ItxApiDeclaration {
    * the key for docs lookups and docs-site deep links. */
   name: string;
   /** Which TypeScript declaration form this is. */
-  kind: "interface" | "typeAlias";
+  kind: "interface" | "namespace" | "typeAlias";
   /** Verbatim TypeScript source including the leading JSDoc comment — the
    * exact text that appears in itx-api.generated.ts. */
   sourceText: string;

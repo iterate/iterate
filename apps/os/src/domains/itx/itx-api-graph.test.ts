@@ -36,6 +36,24 @@ describe("the generated graph", () => {
       expect(byName.has(name), `missing declaration "${name}"`).toBe(true);
     }
   });
+
+  test("namespaced event payloads stay individually addressable", () => {
+    expect(byName.get("AgentAppendInput")?.referencedTypeNames).toContain(
+      "events.AgentConfiguredPayload",
+    );
+    expect(byName.get("AgentAppendInput")?.referencedTypeNames).not.toContain("events");
+    expect(byName.get("events.AgentConfiguredPayload")).toMatchObject({
+      kind: "namespace",
+      summary: "Payload accepted by `events.iterate.com/agent/configured`.",
+    });
+    const payloadSlice = typeSlice({
+      declarations: byName,
+      rootName: "events.AgentConfiguredPayload",
+      maxTokens: 1_000,
+    });
+    expect(payloadSlice.includedNames).toContain("events.AgentConfiguredPayload");
+    expect(payloadSlice.includedNames).not.toContain("events.AgentCreatedPayload");
+  });
 });
 
 describe("typeSlice", () => {
