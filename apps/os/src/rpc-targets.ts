@@ -157,6 +157,7 @@ import {
   retryStreamUnavailable,
   rethrowStreamUnavailable,
 } from "./domains/streams/stream-unavailable.ts";
+import { appendIdempotentBirthBatch } from "./domains/streams/idempotent-birth.ts";
 import { waitForStreamEvent } from "./domains/streams/wait-for-event.ts";
 import {
   connectStreamIdempotencyWaitSocket,
@@ -875,19 +876,23 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
       path: this.props.path,
       projectId: this.props.projectId,
     });
-    const committed = await this.#stream.append(
-      {
-        type: "events.iterate.com/scheduler/created",
-        idempotencyKey: `scheduler-created:${this.props.projectId}:${this.props.path}`,
-        payload: { config: {} },
-      },
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName,
-        idempotencyKey: `scheduler-subscription:${this.props.projectId}:${this.props.path}`,
-        processor: ["schedulers", ["get", this.props.path], "processor"],
-        processorSlug: SchedulerProcessorContract.slug,
-      }),
-    );
+    const committed = await appendIdempotentBirthBatch({
+      events: [
+        {
+          type: "events.iterate.com/scheduler/created",
+          idempotencyKey: `scheduler-created:${this.props.projectId}:${this.props.path}`,
+          payload: { config: {} },
+        },
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName,
+          idempotencyKey: `scheduler-subscription:${this.props.projectId}:${this.props.path}`,
+          processor: ["schedulers", ["get", this.props.path], "processor"],
+          processorSlug: SchedulerProcessorContract.slug,
+        }),
+      ],
+      operation: `scheduler ${this.props.path} create`,
+      stream: this.#stream,
+    });
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("scheduler create committed no events");
     await this.processor.waitUntilProcessed({
@@ -976,19 +981,25 @@ async function requestRepoCreate(input: {
     projectId: input.projectId,
   });
   const timing = { projectId: input.projectId, path };
+  const durableObjectName = streamDurableObjectName({ projectId: input.projectId, path });
   const committed = await timedStep("create-timing", timing, "repo-append", () =>
-    stream.append(
-      {
-        type: "events.iterate.com/repo/created",
-        idempotencyKey: `repo-created:${input.projectId}:${path}`,
-        payload: { config: {} },
-      },
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-        processor: ["repos", ["get", path], "processor"],
-        processorSlug: RepoProcessorContract.slug,
-      }),
-    ),
+    appendIdempotentBirthBatch({
+      events: [
+        {
+          type: "events.iterate.com/repo/created",
+          idempotencyKey: `repo-created:${input.projectId}:${path}`,
+          payload: { config: {} },
+        },
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName,
+          idempotencyKey: `stream/subscription-configured:${durableObjectName}#${RepoProcessorContract.slug}`,
+          processor: ["repos", ["get", path], "processor"],
+          processorSlug: RepoProcessorContract.slug,
+        }),
+      ],
+      operation: `repo ${path} create`,
+      stream,
+    }),
   );
   const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
   if (createOffset === 0) throw new Error("repo create committed no events");
@@ -4160,7 +4171,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       ...(await agentBootProjectFacts(this.#props.projectId)),
       overrides: { model: input.model, systemPrompt: input.systemPrompt },
     });
-    const committed = await this.stream.append(...creation.events, ...initialEvents);
+    const committed = await appendIdempotentBirthBatch({
+      events: [...creation.events, ...initialEvents],
+      operation: `agent ${this.#path} create`,
+      stream: this.stream,
+    });
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum
@@ -4680,28 +4695,34 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     });
 
     const creatorEmail = userPrincipalOf(this.props.auth)?.email;
+    const durableObjectName = streamDurableObjectName({
+      projectId: registered.projectId,
+      path: "/",
+    });
     const appendRootEvents = () =>
-      stream.append(
-        {
-          type: "events.iterate.com/project/created",
-          idempotencyKey: `project-created:${registered.projectId}`,
-          payload: {
-            config: {
-              onboardingActive: true,
-              slug: registered.slug,
-              ...(creatorEmail === undefined ? {} : { creatorEmail }),
+      appendIdempotentBirthBatch({
+        events: [
+          {
+            type: "events.iterate.com/project/created",
+            idempotencyKey: `project-created:${registered.projectId}`,
+            payload: {
+              config: {
+                onboardingActive: true,
+                slug: registered.slug,
+                ...(creatorEmail === undefined ? {} : { creatorEmail }),
+              },
             },
           },
-        },
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName,
+            idempotencyKey: `stream/subscription-configured:${durableObjectName}#${ProjectProcessorContract.slug}`,
+            processor: ["processor"],
+            processorSlug: ProjectProcessorContract.slug,
           }),
-          processor: ["processor"],
-          processorSlug: ProjectProcessorContract.slug,
-        }),
-      );
+        ],
+        operation: `project ${registered.projectId} create`,
+        stream,
+      });
     const [created, subscription] = await timedStep(
       "create-timing",
       timing,
@@ -4983,13 +5004,15 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   /** Create this capability host with one explicit ancestor and wait for its birth batch. */
   async create(input: { ancestorPath: string | null }): Promise<void> {
     const ancestorPath = input.ancestorPath === null ? null : normalizePath(input.ancestorPath);
-    const [birth, ...rest] = await this.#stream.append(
-      ...capabilityHostBirthEvents({
+    const [birth, ...rest] = await appendIdempotentBirthBatch({
+      events: capabilityHostBirthEvents({
         ancestorPath,
         path: this.#props.path,
         projectId: this.#props.projectId,
       }),
-    );
+      operation: `capability host ${this.#props.path} create`,
+      stream: this.#stream,
+    });
     const committedAncestor = CapabilityHostProcessorContract.events[
       "events.iterate.com/capability-host/created"
     ].payloadSchema.parse(birth.payload).config.ancestorPath;

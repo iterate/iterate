@@ -84,6 +84,8 @@ import {
 } from "./subscriber-math.ts";
 import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 
+const LIFECYCLE_RECONCILE_RETRY_MS = 2_000;
+
 /** Serializable debug view of one live connection, for `runtimeState()`. */
 export type ConnectionRuntimeState = {
   subscriptionType: StreamSubscriptionType;
@@ -362,7 +364,7 @@ export class StreamSubscribers {
   }
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
-  onAlarm(): void {
+  onAlarm(): boolean {
     for (const connection of this.#connections.values()) connection.wake();
     if (!this.#tearingDown) {
       try {
@@ -374,15 +376,44 @@ export class StreamSubscribers {
         }
         this.#reconcileDurable(due);
       } catch (error) {
+        if (isDurableObjectLifecycleError(error)) {
+          // A code deploy/reset is already replacing this incarnation. Do not
+          // turn that expected transition into an application error by
+          // aborting it again. Schedule a fresh alarm before returning; the
+          // keyed cursor and folded config let the replacement reconstruct
+          // the owed drain without any in-memory state.
+          console.warn(
+            "stream durable alarm reconciliation interrupted by lifecycle; rearming for replacement incarnation",
+            { error },
+          );
+          this.#hooks.armAlarm(this.#hooks.now() + LIFECYCLE_RECONCILE_RETRY_MS);
+          return false;
+        }
         // Keep every due schedule intact until reconciliation either proves
         // it is obsolete or launches its drain. A synchronous machinery
         // failure therefore remains an owed alarm across the fresh
         // incarnation instead of silently stranding a quiet projection.
         console.error("stream durable alarm reconciliation failed; restarting incarnation", error);
         this.#hooks.abortIncarnation("stream durable alarm reconciliation failed");
+        return false;
       }
     }
-    this.#armAlarmFromStore();
+    try {
+      this.#armAlarmFromStore();
+      return true;
+    } catch (error) {
+      if (isDurableObjectLifecycleError(error)) {
+        console.warn(
+          "stream durable alarm rearm interrupted by lifecycle; rearming for replacement incarnation",
+          { error },
+        );
+        this.#hooks.armAlarm(this.#hooks.now() + LIFECYCLE_RECONCILE_RETRY_MS);
+        return false;
+      }
+      console.error("stream durable alarm rearm failed; restarting incarnation", error);
+      this.#hooks.abortIncarnation("stream durable alarm rearm failed");
+      return false;
+    }
   }
 
   // ===========================================================================
@@ -514,6 +545,16 @@ export class StreamSubscribers {
       try {
         this.#reconcileDurable(new Set([subscriptionKey]));
       } catch (error) {
+        if (isDurableObjectLifecycleError(error)) {
+          // The crash-safe DO alarm is still armed for this deadline. Let the
+          // replacement incarnation consume the same durable cursor instead
+          // of emitting a second, artificial abort error from stale code.
+          console.warn(
+            "stream durable timer reconciliation interrupted by lifecycle; durable alarm will recover",
+            { error, subscriptionKey },
+          );
+          return;
+        }
         console.error("stream durable timer reconciliation failed; restarting incarnation", error);
         this.#hooks.abortIncarnation("stream durable timer reconciliation failed");
       }

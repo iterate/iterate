@@ -24,6 +24,7 @@ import {
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import type { StreamEventWaitLeaseInput, StreamEventWaitLeaseResult } from "./wait-for-event.ts";
@@ -166,7 +167,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#runInBackground(() => this.#armAlarmNoLaterThan(atMs)),
       defer: (work, delayMs) => void setTimeout(work, delayMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
       abortIncarnation: (reason) => this.ctx.abort(reason),
@@ -327,8 +328,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
-    this.#flushCoreProcessorState();
+    if (this.#subscribers.onAlarm()) this.#flushCoreProcessorState();
   }
 
   /**
@@ -347,7 +347,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       const current = await this.ctx.storage.getAlarm();
       if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
     } catch (error) {
-      console.error("stream alarm arming failed", error);
+      if (isDurableObjectLifecycleError(error)) {
+        // The constructor's woken fact reconstructs pending rows and batching
+        // deadlines in the replacement incarnation. Keep an expected deploy
+        // reset out of the application error signal.
+        console.warn("stream alarm arming interrupted by lifecycle", { atMs, error });
+      } else {
+        console.error("stream alarm arming failed", { atMs, error });
+      }
     }
   }
 

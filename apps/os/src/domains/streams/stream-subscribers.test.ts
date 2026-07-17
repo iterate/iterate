@@ -1492,6 +1492,99 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(1);
   });
 
+  it("v5. a timer lifecycle reset yields to the durable alarm without an artificial error", async () => {
+    const h = makeHarness({ manuallyRunDeferred: true });
+    h.configure(
+      pushPayload({
+        delivery: {
+          mode: "push",
+          expression: ["worker", "processEventBatch"],
+          batchWindowMs: 250,
+        },
+      }),
+      0,
+    );
+    h.append(evt(1, "a"));
+    h.subscribers.wake();
+
+    const lifecycleError = new Error("sql read failed", {
+      cause: Object.assign(new Error("Durable Object reset because its code was updated"), {
+        durableObjectReset: true,
+      }),
+    });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      h.advanceTo(250);
+      h.failNextCoreState(lifecycleError);
+      h.runDeferred();
+
+      expect(h.abortedIncarnations).toEqual([]);
+      expect(h.pushes).toEqual([]);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "stream durable timer reconciliation interrupted by lifecycle; durable alarm will recover",
+        { error: lifecycleError, subscriptionKey: "k" },
+      );
+      expect(consoleError).not.toHaveBeenCalled();
+
+      expect(h.subscribers.onAlarm()).toBe(true);
+      await h.settle();
+      expect(h.pushes).toHaveLength(1);
+      expect(h.row("k")?.ackedOffset).toBe(1);
+    } finally {
+      consoleWarn.mockRestore();
+      consoleError.mockRestore();
+    }
+  });
+
+  it("v6. an alarm lifecycle reset rearms recovery without aborting the stale incarnation", async () => {
+    const h = makeHarness({ manuallyRunDeferred: true });
+    h.configure(
+      pushPayload({
+        delivery: {
+          mode: "push",
+          expression: ["worker", "processEventBatch"],
+          batchWindowMs: 250,
+        },
+      }),
+      0,
+    );
+    h.append(evt(1, "a"));
+    h.subscribers.wake();
+
+    const lifecycleError = Object.assign(
+      new Error("Durable Object reset because its code was updated"),
+      { durableObjectReset: true },
+    );
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      h.advanceTo(250);
+      h.failNextCoreState(lifecycleError);
+      expect(h.subscribers.onAlarm()).toBe(false);
+
+      expect(h.abortedIncarnations).toEqual([]);
+      expect(h.pushes).toEqual([]);
+      expect(h.armedAlarms).toContain(2_250);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "stream durable alarm reconciliation interrupted by lifecycle; rearming for replacement incarnation",
+        { error: lifecycleError },
+      );
+      expect(consoleError).not.toHaveBeenCalled();
+
+      h.advanceTo(2_250);
+      expect(h.subscribers.onAlarm()).toBe(true);
+      await h.settle();
+      expect(h.pushes).toHaveLength(1);
+      expect(h.row("k")?.ackedOffset).toBe(1);
+    } finally {
+      consoleWarn.mockRestore();
+      consoleError.mockRestore();
+    }
+  });
+
   it("w. live-tail fast path: a caught-up drain consumes the handed-over tail without a storage read", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
