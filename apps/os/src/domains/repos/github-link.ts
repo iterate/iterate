@@ -65,7 +65,7 @@ function githubCrossPostSubscriptionEvent(input: {
       description: `Copies GitHub webhooks for ${input.owner}/${input.repo} onto this repo's stream so default-branch pushes can be imported.`,
       selector: {
         eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-        condition: `payload.delivery.name = "push" and payload.associations.repository.id = ${input.repositoryId}`,
+        condition: `payload.delivery.name = "push" and payload.body.repository.id = ${input.repositoryId}`,
       },
       delivery: {
         mode: "push",

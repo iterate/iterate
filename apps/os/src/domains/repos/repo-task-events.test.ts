@@ -58,8 +58,7 @@ describe("repo task change projection", () => {
   it("recognizes GitHub branch pushes without projecting commit facts", () => {
     expect(
       repoGithubPushFromWebhookPayload({
-        associations: { repository: { id: 101 } },
-        body: { ref: "refs/heads/main", after: "abc123" },
+        body: { ref: "refs/heads/main", after: "abc123", repository: { id: 101 } },
         delivery: { id: "delivery-1", name: "push" },
         installationId: "789",
       }),
@@ -71,16 +70,18 @@ describe("repo task change projection", () => {
     });
     expect(
       repoGithubPushFromWebhookPayload({
-        associations: { repository: { id: 101 } },
-        body: { ref: "refs/heads/main", after: "abc123" },
+        body: { ref: "refs/heads/main", after: "abc123", repository: { id: 101 } },
         delivery: { id: "delivery-1", name: "pull_request" },
         installationId: "789",
       }),
     ).toBeNull();
     expect(
       repoGithubPushFromWebhookPayload({
-        associations: { repository: { id: 101 } },
-        body: { ref: "refs/heads/main", after: "0".repeat(40) },
+        body: {
+          ref: "refs/heads/main",
+          after: "0".repeat(40),
+          repository: { id: 101 },
+        },
         delivery: { id: "delivery-1", name: "push" },
         installationId: "789",
       }),

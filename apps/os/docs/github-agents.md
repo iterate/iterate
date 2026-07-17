@@ -1,29 +1,27 @@
 # Userspace GitHub pull-request agents
 
-GitHub pull-request agents are project-worker policy, not a platform
-processor. The platform verifies and journals GitHub webhooks, stores a linked
-repository fact, and exposes authenticated Octokit. The project's `worker.ts`
-decides whether a webhook creates or wakes an agent and what that agent should
-do.
+Pull-request agents are project policy. The platform verifies and records
+GitHub webhooks, stores a linked-repository fact, and exposes authenticated
+Octokit. The project's `worker.ts` decides whether a webhook creates or wakes
+an agent and what the agent should do.
 
 ```text
 GitHub App webhook
-  -> /integrations/github/<connection>       one verified, original fact
-       |-> /repos/config                     default-branch push copy only
-       `-> project worker processEvent
-            -> /agents/repos/config/pr/<n>   userspace PR history + agent loop
+  -> /integrations/github/<connection>       verified original fact
+       |-> /repos/config                     default-branch pushes only
+       `-> worker.ts processEvent
+            -> /agents/repos/config/pr/<n>   PR history and agent loop
 ```
 
-There is no pull-request Durable Object, stream processor, path convention, or
-review policy in the GitHub integration. The existing agent stream is the one
-durable journal and execution loop for a pull request.
+There is no pull-request processor or pull-request Durable Object. The agent
+stream is the durable journal and execution loop for its pull request.
 
-## The connection-stream fact
+## The webhook fact
 
-A signed, parseable delivery with both GitHub delivery headers and a claimed
-installation is appended exactly once to `/integrations/github/<connection>`.
-Its idempotency key is the GitHub delivery ID. The complete decoded JSON body
-is preserved alongside a small normalized envelope:
+A signed delivery for a claimed installation is appended to
+`/integrations/github/<connection>`. Its idempotency key is derived from
+GitHub's delivery ID. The complete decoded body is preserved, with only the
+small associations userspace needs for routing:
 
 ```ts
 {
@@ -31,88 +29,62 @@ is preserved alongside a small normalized envelope:
   payload: {
     appSlug: "iterate",
     installationId: "789",
-    delivery: {
-      id: "github-delivery-id",
-      name: "issue_comment",
-      action: "created",
-    },
+    delivery: { id: "delivery-id", name: "issue_comment" },
     associations: {
-      repository: { id: 123456, nodeId: "R_...", fullName: "acme/widgets" },
-      pullRequests: [
-        { repositoryId: 123456, number: 42, basis: "subject" },
-      ],
-      actor: { id: 7, login: "octocat", type: "User" },
-      contentAuthor: {
-        id: 7,
-        login: "octocat",
-        type: "User",
-        authorAssociation: "MEMBER",
-      },
+      repository: { id: 123456, owner: "acme", repo: "widgets" },
+      pullRequest: { number: 42 },
+      author: { association: "MEMBER", login: "octocat", type: "User" },
       mentionedUsers: ["iterate"],
-      problems: [],
     },
-    body: { /* the complete GitHub webhook payload */ },
+    body: { /* complete GitHub webhook payload */ },
   },
 }
 ```
 
-Associations are routing hints from a small runtime-checked parser. Octokit's
-pinned generated webhook-name union compile-checks the recognized event names, but no
-external payload is trusted as a TypeScript value. Subject events use their
-pull request or pull-request-shaped issue; check events use GitHub's native
-`pull_requests` array. Missing identities become `problems` entries instead of
-guesses. `actor` is the webhook sender and `contentAuthor` is the author of the
-comment or review; they are deliberately separate.
+The extractor uses Octokit's generated `EmitterWebhookEvent` payload types.
+After signature verification and an exact event-name switch, it makes the one
+unavoidable cast from parsed JSON to Octokit's discriminated event union. It
+recognizes direct pull-request subjects only: pull requests, PR issue
+comments, reviews, review comments, and review-thread events. Checks and
+workflow runs are not fanned out in this proof of concept.
 
 GitHub's numeric repository ID is stable across App installations. The
-connection and installation identify the credential and source stream;
-repository ID identifies the repository; owner/name are mutable Octokit
-coordinates. Once the ID matches the configured link, userspace takes current
-owner/name coordinates from the signed webhook association, so a rename does
-not fork agent identity or keep review calls on stale display coordinates.
+connection and installation select the credential and source stream; the ID
+selects the repository. Once that ID matches the configured link, current
+owner/name coordinates come from the signed webhook, so repository renames do
+not change agent identity.
 
-## Repo links and push import
+## Repo import is separate
 
-Linking `/repos/config` records:
+Linking `/repos/config` records the connection, installation, numeric
+repository ID, and current owner/name. It installs one cross-post filtered to
+`push` deliveries whose raw `body.repository.id` matches the link. The repo
+processor additionally verifies the provenance, connection, installation,
+repository ID, and default branch before importing the push.
 
-```ts
-{
-  connection: "install-789",
-  installationId: "789",
-  owner: "acme",
-  repo: "widgets",
-  repositoryId: 123456,
-}
-```
-
-The link installs one generic connection-stream cross-post, filtered to
-`push` deliveries for that repository ID. The repo processor accepts the copy
-only when its provenance, subscription key, connection, installation,
-repository ID, and default branch all agree with the current link. This lane
-exists only for repo import. Pull-request routing consumes the original
-connection event, never the repo copy.
-
-Relinking removes the old subscription and installs the new one. A failed
-same-connection relink restores the previous subscription before returning
-the failure, so the existing import lane is not silently lost.
+That cross-post exists only for default-branch import. Pull-request userspace
+consumes the original connection event and rejects every cross-posted copy.
 
 ## The userspace router
 
 The seeded [`worker.ts`](../config-repo-template/worker.ts) contains the whole
-proof of concept. Its event hook performs a cheap PR-association check before
-acquiring itx, then delegates to one directly unit-tested handler:
+proof of concept:
 
 ```ts
 protected override async processEvent(event: StreamEvent): Promise<void> {
   switch (event.type) {
     case "events.iterate.com/github/webhook-received": {
-      if (!hasPullRequestAssociations(event)) break;
-      const itx = await this.env.ITX.get();
-      try {
-        await handleGithubPullRequestWebhook(itx, event);
-      } finally {
-        itx[Symbol.dispose]?.();
+      const associations = event.payload?.associations;
+      if (
+        event.source?.crossPostedFrom !== undefined ||
+        typeof associations !== "object" ||
+        associations === null ||
+        !("pullRequest" in associations)
+      ) {
+        break;
       }
+      using itx = await this.env.ITX.get();
+      await handleGithubPullRequestWebhook(itx, event);
       break;
     }
     default:
@@ -121,37 +93,30 @@ protected override async processEvent(event: StreamEvent): Promise<void> {
 }
 ```
 
-The handler reads the current link for the configured internal repo and
-accepts only an original event whose path, installation ID, and associated
-repository ID exactly match that link. The project controls agent identity by
-mirroring its own repo path:
+The handler reads the current link and accepts the event only when its stream
+path, installation, and stable repository ID all match. Agent identity mirrors
+the project-controlled repo path:
 
-```ts
-// /repos/config + PR 42
-"/agents/repos/config/pr/42";
-
-// /repos/team/service + PR 42
-"/agents/repos/team/service/pr/42";
+```text
+/repos/config       -> /agents/repos/config/pr/42
+/repos/team/service -> /agents/repos/team/service/pr/42
 ```
 
-Only native `pull_request:opened` may create the agent. A draft opening creates
-its durable history without requesting a review. Later deliveries reuse an
-existing agent and cannot create one accidentally. Creation atomically adds:
+Only `pull_request:opened` calls the idempotent `agent.create`. Later events
+require the canonical agent birth event, so they cannot create an agent by
+accident. A valid delivery appends three kinds of facts to the PR stream:
 
-- `github-pr/association`, pinning repo path, repository ID, and PR number;
-- userspace-owned title/icon status (`PR #42`, GitHub icon); and
-- the structural-review system prompt.
+- a stable title/icon status;
+- the complete webhook with explicit cross-post provenance; and
+- when appropriate, one developer task that wakes or interrupts the agent.
 
-Every routed delivery rechecks the stored association. A collision or relink
-appends `github/pull-request-routing-rejected` to the source stream instead of
-mixing histories. A valid delivery is copied to the PR stream with explicit
-cross-post provenance; it remains inert history until the worker also appends
-a developer task.
+The path itself is the association. There is no second association record,
+route plan, rejection protocol, or state reducer.
 
 ## Structural reviews
 
-Rules are ordinary typed policy in `worker.ts`. Record keys are the stable
-identities used by suppressions, comments, idempotency, and future analytics:
+Rules are ordinary typed policy in `worker.ts`. Record keys are stable rule
+IDs used in suppressions, comments, idempotency, and future analytics:
 
 ```ts
 const githubPullRequests = {
@@ -167,84 +132,50 @@ const githubPullRequests = {
 };
 ```
 
-An open, non-draft `opened`, `ready_for_review`, or `synchronize` delivery
-adds one review task keyed `github/review-task`. A new immutable head uses the
-same key with `interrupt-current-request`, so the newest head supersedes an
-unfinished older review. Its idempotency identity includes connection,
-installation, repository ID, owner/name, policy version, head SHA, and the
-source stream path/offset. The source occurrence suffix lets a later delivery
-legitimately reconsider the same head while making redelivery of one event
-idempotent.
+An open, non-draft `opened`, `ready_for_review`, or `synchronize` delivery adds
+a review task with `interrupt-current-request`. The task tells the existing
+agent loop to inspect the immutable head, complete changed-file inputs, prior
+reviews and native thread resolution, apply matching rules and suppressions,
+then either remain silent or publish one consolidated `COMMENT` review.
 
-The task requires the agent to:
-
-- recheck live PR state and immutable head before publishing;
-- paginate all changed files, fetch GitHub's reviewable diff, and fail visibly
-  if every applicable added line cannot be covered;
-- paginate reviews, inline comments, replies, and GraphQL review-thread
-  resolution state;
-- read applicable files from the PR head repository at that exact SHA, never
-  from the default branch;
-- apply only matching rule globs and honor source suppressions;
-- publish exactly one consolidated `COMMENT` review with changed-line inline
-  findings, or remain silent when clean; and
-- perform no file, commit, branch, label, assignee, merge, settings, or project
-  configuration mutations.
-
-Suppressions are intentionally simple:
+Suppressions are source comments:
 
 ```ts
 // iterate-lint-disable typescript/explain-type-cast -- generated SDK boundary
 // iterate-lint-disable-next-line typescript/explain-type-cast -- checked above
 ```
 
-The consolidated review contains a marker accepted only on a review authored
-by the authenticated App bot:
+The task idempotency key is semantic: repository ID, policy version, and head
+SHA. Repeated webhooks for the same policy/head cannot restart a clean review.
+A different head or an explicit policy-version bump can. A hidden marker on
+reviews provides a second publication guard if an already-running task is
+retried:
 
 ```html
 <!-- iterate-ai-lint:<repository-id>:policy:<version>:head:<sha> -->
 ```
 
-That marker prevents duplicate non-clean publication for the same policy/head.
-The persistent stream supplies prior tasks and outcomes; paginated GitHub
-reviews, comments, native thread-resolution state, and trusted human
-dispositions supply the external history.
-The prompt keeps a resolved finding resolved unless relevant code changes.
-Clean completion is deliberately not recorded in this spike, so another
-qualifying delivery can reassess a clean head.
+The prompt also treats resolved threads and trusted human dispositions as
+durable evidence unless the relevant code changes. Together these rules stop
+the nondeterministic reviewer oscillating on an unchanged head.
 
 ## Mentions
 
-For an `@<app-slug>` comment/review mention, the normalized sender and content
-author must be the same non-bot GitHub user, the mentioned login must match the
-App that received this delivery, and the payload association must be `OWNER`,
-`MEMBER`, or `COLLABORATOR`. The task then independently calls
-`repos.checkCollaborator` through the pinned connection before following the
-referenced request. GitHub content remains hostile data until that check.
+A newly created PR comment, submitted review, or created review comment can
+wake the agent when it mentions the receiving App slug and GitHub identifies
+its non-bot author as an owner, member, or collaborator. The task then calls
+`repos.checkCollaborator` through the configured Octokit connection before
+following the referenced request. GitHub text remains untrusted input.
 
-The spike requires a fresh explicit App mention for each follow-up; it does not
-yet fold an entire GitHub thread into a durable addressed-to-agent state
-machine.
+## Proof-of-concept limits
 
-## Rollout and current limits
+- PRs opened before the worker observed `opened` are not backfilled.
+- Globs, suppressions, and findings are enforced by the agent contract, not a
+  deterministic validation engine.
+- Reviews are advisory `COMMENT` reviews; there is no Check Run, commit status,
+  blocking policy, PostHog feed, rule fan-out, or typed timeout yet.
+- A repository linked to multiple Iterate projects can be reviewed once by
+  each project/App.
 
-This is an intentionally breaking replacement for the removed platform
-`github-agent` processor. It carries no historical compatibility path. Do not
-deploy it over projects that still contain that processor's subscriptions or
-old repo links without `repositoryId`; use the planned project/production
-recreation, reseed the current config worker, and relink GitHub first. The
-production smoke must verify the connection event associations and userspace
-agent path after recreation.
-
-The proof of concept also deliberately leaves these for later:
-
-- no backfill for PRs opened before the userspace worker observed `opened`;
-- prompt-mediated globs, suppressions, and finding validation;
-- advisory `COMMENT` reviews only, with no Check Run or commit status;
-- no typed finish/timeout fact, rule fan-out, PostHog telemetry, or blocking
-  policy;
-- no terminal event for a silent clean review. The GitHub marker deduplicates
-  non-clean publication only; a typed finish capability is the likely next
-  step if the experiment succeeds; and
-- a repository intentionally linked into multiple Iterate projects can be
-  reviewed once by each project/App.
+This is a breaking replacement for the removed platform GitHub-agent
+processor. There is no historical compatibility path.

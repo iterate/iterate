@@ -40,7 +40,7 @@ test("github pushes about a linked repository cross-post onto the repo stream", 
       subscriptionKey: `github-repo:${repoPath}`,
       selector: {
         eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-        condition: 'payload.delivery.name = "push" and payload.associations.repository.id = 101',
+        condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
       },
       delivery: {
         mode: "push",

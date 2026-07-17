@@ -222,7 +222,7 @@ describe("linkRepoToGithub", () => {
       description:
         "Copies GitHub webhooks for acme/widgets onto this repo's stream so default-branch pushes can be imported.",
       selector: {
-        condition: 'payload.delivery.name = "push" and payload.associations.repository.id = 101',
+        condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
         eventTypes: ["events.iterate.com/github/webhook-received"],
       },
       delivery: {
@@ -397,7 +397,7 @@ describe("linkRepoToGithub", () => {
     expect(lastSubscriptionFact?.payload).toMatchObject({
       subscriptionKey: "github-repo:/repos/project",
       selector: {
-        condition: 'payload.delivery.name = "push" and payload.associations.repository.id = 101',
+        condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
       },
     });
   });
@@ -425,7 +425,7 @@ describe("linkRepoToGithub", () => {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         selector: {
-          condition: 'payload.delivery.name = "push" and payload.associations.repository.id = 101',
+          condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
         },
       },
     });

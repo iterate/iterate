@@ -34,16 +34,11 @@ const RepoBirthCertificate = z.strictObject({ config: z.strictObject({}) });
 
 const GithubWebhookReceivedPayload = z
   .object({
-    associations: z
+    body: z
       .object({
-        repository: z
-          .object({
-            id: z.number().int().positive(),
-          })
-          .loose(),
+        repository: z.object({ id: z.number().int().positive() }).loose(),
       })
       .loose(),
-    body: z.object({}).loose(),
     delivery: z.object({
       id: z.string().trim().min(1),
       name: z.string().trim().min(1),
@@ -430,7 +425,6 @@ export const RepoProcessorContract = defineProcessorContract({
           description:
             "A push delivery (trimmed): GitHub's webhook body under `body`, plus the delivery headers and the routing installation id.",
           payload: {
-            associations: { repository: { id: 123456789 } },
             body: {
               ref: "refs/heads/main",
               before: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
@@ -442,7 +436,7 @@ export const RepoProcessorContract = defineProcessorContract({
                   author: { name: "Jane Doe", email: "jane@acme-inc.com" },
                 },
               ],
-              repository: { full_name: "acme-inc/acme-config" },
+              repository: { full_name: "acme-inc/acme-config", id: 123456789 },
               sender: { login: "jane-doe" },
               installation: { id: 87654321 },
             },

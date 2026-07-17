@@ -10,7 +10,7 @@
 import { computeHmacHex, timingSafeStringEqual } from "../secrets/utils.ts";
 import { routeIntegrationWebhook } from "./integration-streams.ts";
 import { githubWebhookAssociations } from "./github-webhook-associations.ts";
-import { GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE, parseJsonRecord, readString } from "./utils.ts";
+import { GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE, parseJsonRecord } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
 const WEBHOOK_PATH = "/api/integrations/github/webhook";
@@ -50,7 +50,6 @@ export async function fetchGithubWebhook(input: {
   const installationId = githubWebhookExternalId(payload);
   if (!installationId) return Response.json({ ignored: "no-installation", ok: true });
 
-  const action = readString(payload.action);
   const result = await routeIntegrationWebhook({
     event: {
       idempotencyKey: `github-webhook:${delivery}`,
@@ -58,10 +57,9 @@ export async function fetchGithubWebhook(input: {
         ...(input.config.integrations.github?.appSlug === undefined
           ? {}
           : { appSlug: input.config.integrations.github.appSlug }),
-        associations: githubWebhookAssociations({ name: eventName, payload }),
+        associations: githubWebhookAssociations({ id: delivery, name: eventName, payload }),
         body: payload,
         delivery: {
-          ...(action === undefined ? {} : { action }),
           id: delivery,
           name: eventName,
         },

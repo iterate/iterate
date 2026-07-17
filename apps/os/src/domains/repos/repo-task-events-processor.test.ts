@@ -74,8 +74,12 @@ function githubPush(input?: {
   return {
     type: "events.iterate.com/github/webhook-received" as const,
     payload: {
-      associations: { repository: { id: input?.repositoryId ?? 101 } },
-      body: { ref: "refs/heads/main", before: "before123", after: "after456" },
+      body: {
+        ref: "refs/heads/main",
+        before: "before123",
+        after: "after456",
+        repository: { id: input?.repositoryId ?? 101 },
+      },
       delivery: { id: "delivery-1", name: "push" },
       installationId: input?.installationId ?? "789",
     },

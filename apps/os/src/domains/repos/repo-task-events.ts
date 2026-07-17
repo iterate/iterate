@@ -47,8 +47,14 @@ export function repoGithubPushFromWebhookPayload(payload: unknown): {
   const delivery = record(captured?.delivery);
   if (delivery?.name !== "push") return null;
   const installationId = string(captured?.installationId);
-  const repositoryId = positiveInteger(record(record(captured?.associations)?.repository)?.id);
   const body = record(captured?.body);
+  const candidateRepositoryId = record(body?.repository)?.id;
+  const repositoryId =
+    typeof candidateRepositoryId === "number" &&
+    Number.isSafeInteger(candidateRepositoryId) &&
+    candidateRepositoryId > 0
+      ? candidateRepositoryId
+      : null;
   const ref = string(body?.ref);
   const afterCommitOid = string(body?.after);
   if (
@@ -97,8 +103,4 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function string(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
-}
-
-function positiveInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }

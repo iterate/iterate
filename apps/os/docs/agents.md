@@ -114,7 +114,7 @@ protocol. Each projected item then has a compact header followed by its
 content:
 
 ```text
-@81 key="github/review-task" updates=@17 actor=github refs=["/integrations/github/install-789@240"]
+@81 key="github/review-task" updates=@17 refs=["/integrations/github/install-789@240"]
 Review pull request #123 at its immutable head. Read the referenced event for the full payload.
 ```
 

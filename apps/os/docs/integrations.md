@@ -219,8 +219,9 @@ GitHub connects as a **GitHub App installation** (deep-link to
 - **Inbound App webhooks** land on the door, verify `x-hub-signature-256`
   with plain WebCrypto, and route on `installation_id`. Each delivery is
   appended once to `/integrations/github/<connection>` with its complete
-  decoded JSON payload plus small, runtime-checked associations: stable repository ID,
-  pull-request numbers, webhook actor, content author, and mentioned users.
+  decoded JSON payload plus small associations typed from Octokit's generated
+  payloads: stable repository coordinates, an optional subject pull request,
+  its content author, and mentioned users.
   The integration does not create agents or decide what a webhook means to a
   project.
 - **`gh` in sandboxes** works automatically, with no byte handoff: ALL
