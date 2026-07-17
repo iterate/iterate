@@ -52,6 +52,9 @@ export const SPEC_ACTION_TIMEOUT_MS = 750;
 /** Playwright `expect` polling budget — one UI assertion, not a whole flow. */
 export const SPEC_EXPECT_TIMEOUT_MS = 15_000;
 
+/** Microsoft TUI Test per-spec budget for one real-PTY product flow. */
+export const TUI_TEST_TIMEOUT_MS = 45_000;
+
 /** Playwright per-spec budget: a full product flow against a deployed slot. */
 export const SPEC_TEST_TIMEOUT_MS = 90_000;
 
@@ -78,6 +81,13 @@ export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
 export const OS_ONBOARDING_SMOKE_TIMEOUT_SECS = 240;
 
 /**
+ * Watchdog on the built Iterate CLI's PTY lane. One 45s spec plus its single
+ * CI retry, package build, and disposable-project setup fits comfortably;
+ * expiry is a visible lane failure and is never retried here.
+ */
+export const OS_TUI_LANE_TIMEOUT_SECS = 180;
+
+/**
  * Watchdog on each preview sub-lane (`timeout N pnpm e2e` and
  * `timeout N pnpm spec` in scripts/preview/preview.ts). Kills, never
  * retries: a lane that blows this is wedged, not slow — before the specs
@@ -88,8 +98,8 @@ export const OS_ONBOARDING_SMOKE_TIMEOUT_SECS = 240;
  * processor spaces LLM retries 10/20/40s apart, so an agent test whose first
  * attempt eats a Workers-AI rate-limit blip legitimately takes ~190s before
  * its re-roll passes (observed on the slack-agent e2e). A 360s ceiling
- * killed an all-green lane bloated by exactly that. Both sub-lanes run
- * concurrently. The onboarding smoke above is separately bounded so a
+ * killed an all-green lane bloated by exactly that. The Vitest, Playwright,
+ * and separately bounded TUI sub-lanes run concurrently. The onboarding smoke above is bounded so a
  * pre-suite RPC wedge cannot consume the preview job's 10-minute ceiling.
  */
 export const OS_PREVIEW_LANE_TIMEOUT_SECS = 480;
