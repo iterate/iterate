@@ -1,12 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import { serialize } from "capnweb";
-import {
-  buildAgentForest,
-  flattenVisibleAgentRows,
-  pinnedAgentShortcuts,
-  sidebarStructuralRoots,
-} from "./agent-tree.ts";
+import { buildAgentForest, flattenVisibleAgentRows, pinnedAgentShortcuts } from "./agent-tree.ts";
 import {
   AGENT_ACTIVITY_MAX_LENGTH,
   AGENT_BINDING_CONNECTION_MAX_LENGTH,
@@ -45,7 +40,9 @@ describe("agent forest", () => {
     expect(root?.children.map((node) => node.agent.path)).toEqual([
       "/agents/research/farms/pricing",
     ]);
-    expect(root?.children[0]?.children[0]?.parentPath).toBe("/agents/research/farms/pricing");
+    expect(root?.children[0]?.children[0]?.agent.path).toBe(
+      "/agents/research/farms/pricing/retail",
+    );
   });
 
   test("aggregates descendant runtime, waits, counts, and latest work", () => {
@@ -81,36 +78,18 @@ describe("agent forest", () => {
     expect(pinnedAgentShortcuts(forest).map((node) => node.agent.path)).toEqual([child.path]);
   });
 
-  test("caps sidebar structural roots after excluding pinned root shortcuts", () => {
-    const records = Object.fromEntries([
-      ...Array.from({ length: 3 }, (_, index) => {
-        const path = `/agents/pinned-${index}`;
-        return [path, agent(path, { metadata: { pinned: true } })] as const;
-      }),
-      ...Array.from({ length: 10 }, (_, index) => {
-        const path = `/agents/unpinned-${index}`;
-        return [path, agent(path)] as const;
-      }),
-    ]);
-    const forest = buildAgentForest(records);
-    const result = sidebarStructuralRoots(forest, 8);
-
-    expect(result.roots).toHaveLength(8);
-    expect(result.roots.every((node) => !node.agent.metadata.pinned)).toBe(true);
-    expect(result.hiddenRootCount).toBe(2);
-  });
-
   test("search retains ancestors and reveals matching descendants", () => {
     const records = {
       "/agents/root": agent("/agents/root", { metadata: { pinned: false, title: "Parent" } }),
       "/agents/root/child": agent("/agents/root/child", {
         metadata: { pinned: false, activity: "Researching cows near Bath" },
       }),
+      "/agents/other": agent("/agents/other", { metadata: { pinned: false, title: "Other" } }),
     };
     const rows = flattenVisibleAgentRows(buildAgentForest(records), new Set(), "cows");
 
-    expect(rows.map((row) => [row.node.agent.path, row.matching])).toEqual([
-      ["/agents/root", false],
+    expect(rows.map((row) => [row.node.agent.path, row.expanded])).toEqual([
+      ["/agents/root", true],
       ["/agents/root/child", true],
     ]);
   });

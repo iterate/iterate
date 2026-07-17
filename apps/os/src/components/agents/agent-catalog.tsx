@@ -8,9 +8,11 @@ import { Input } from "@iterate-com/ui/components/input";
 import { AgentListRow } from "./agent.tsx";
 import { buildAgentForest, flattenVisibleAgentRows } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
+import { toggledSet } from "~/lib/tree-rows.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const CLOCK_TICK_MS = 15_000;
+const NO_AGENTS: Record<string, AgentRecord> = {};
 
 export function AgentCatalog({
   agents,
@@ -18,9 +20,10 @@ export function AgentCatalog({
   onTogglePinned,
   projectSlug,
 }: {
-  agents: Record<string, AgentRecord>;
+  /** Undefined for the one round trip before live state arrives. */
+  agents: Record<string, AgentRecord> | undefined;
   onOpen: (path: string) => void;
-  onTogglePinned: (agent: AgentRecord) => void | Promise<void>;
+  onTogglePinned: (agent: AgentRecord) => void | Promise<unknown>;
   projectSlug: string;
 }) {
   const [query, setQuery] = useState("");
@@ -28,12 +31,12 @@ export function AgentCatalog({
   const searching = query.trim() !== "";
   const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const forest = useMemo(() => buildAgentForest(agents), [agents]);
+  const forest = useMemo(() => buildAgentForest(agents ?? NO_AGENTS), [agents]);
   const rows = useMemo(
     () => flattenVisibleAgentRows(forest, expandedPaths, query),
     [expandedPaths, forest, query],
   );
-  const agentCount = Object.keys(agents).length;
+  const agentCount = Object.keys(agents ?? NO_AGENTS).length;
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -42,12 +45,7 @@ export function AgentCatalog({
   });
 
   const toggleExpanded = useCallback((path: string) => {
-    setExpandedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
+    setExpandedPaths((current) => toggledSet(current, path));
   }, []);
 
   return (
@@ -67,11 +65,13 @@ export function AgentCatalog({
               aria-label="Search agents"
             />
           </div>
-          <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:block">
-            {searching
-              ? `${rows.length} ${rows.length === 1 ? "match" : "matches"}`
-              : `${agentCount} ${agentCount === 1 ? "agent" : "agents"}`}
-          </span>
+          {agents === undefined ? null : (
+            <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:block">
+              {searching
+                ? `${rows.length} ${rows.length === 1 ? "match" : "matches"}`
+                : `${agentCount} ${agentCount === 1 ? "agent" : "agents"}`}
+            </span>
+          )}
           <Button
             nativeButton={false}
             size="sm"
@@ -86,14 +86,12 @@ export function AgentCatalog({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 sm:px-6">
         <div className="mx-auto w-full max-w-3xl py-2">
-          {rows.length === 0 ? (
+          {agents === undefined ? null : rows.length === 0 ? (
             <Empty className="my-4 min-h-52 rounded-lg border">
               <EmptyHeader>
-                <EmptyTitle>
-                  {Object.keys(agents).length === 0 ? "No agents yet" : "No matches"}
-                </EmptyTitle>
+                <EmptyTitle>{agentCount === 0 ? "No agents yet" : "No matches"}</EmptyTitle>
                 <EmptyDescription>
-                  {Object.keys(agents).length === 0
+                  {agentCount === 0
                     ? "Create an agent to start a durable conversation."
                     : "Try a title, activity, path, or integration name."}
                 </EmptyDescription>
@@ -105,7 +103,6 @@ export function AgentCatalog({
                 const row = rows[virtualRow.index];
                 if (row === undefined) return null;
                 const node = row.node;
-                const expanded = searching || expandedPaths.has(node.agent.path);
                 return (
                   <li
                     key={node.agent.path}
@@ -120,7 +117,7 @@ export function AgentCatalog({
                     <AgentListRow
                       node={node}
                       nowMs={nowMs}
-                      expanded={expanded}
+                      expanded={row.expanded}
                       onOpen={() => onOpen(node.agent.path)}
                       onTogglePinned={() => onTogglePinned(node.agent)}
                       onToggleChildren={

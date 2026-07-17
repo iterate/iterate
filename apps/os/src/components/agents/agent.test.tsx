@@ -53,10 +53,10 @@ describe("Agent presentation family", () => {
     expect(markup).toContain("Waiting for model");
     expect(markup).not.toContain("<button");
     expect(markup).not.toContain("<a");
-    expect(agentCommandAccessibleLabel(node, false)).toContain(
+    expect(agentCommandAccessibleLabel(node, false, true)).toContain(
       "Child agents collapsed; press Right Arrow to expand.",
     );
-    expect(agentCommandAccessibleLabel(node, false)).toContain("Shift+P to unpin");
+    expect(agentCommandAccessibleLabel(node, false, true)).toContain("Shift+P to unpin");
   });
 
   test("the sidebar row is a one-line shortcut: title only, no metadata spill", () => {

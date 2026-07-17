@@ -27,7 +27,7 @@ export function AgentSidebarRow({
 }: {
   node: AgentTreeNode;
   onOpen: () => void;
-  onTogglePinned: () => void | Promise<void>;
+  onTogglePinned: () => void | Promise<unknown>;
 }) {
   const agent = node.agent;
   const displayState = agentNodeDisplayState(node);
@@ -80,7 +80,7 @@ export function AgentListRow({
   nowMs: number;
   expanded: boolean;
   onOpen: () => void;
-  onTogglePinned: () => void | Promise<void>;
+  onTogglePinned: () => void | Promise<unknown>;
   onToggleChildren?: () => void;
 }) {
   const agent = node.agent;
@@ -98,6 +98,8 @@ export function AgentListRow({
     >
       <span className="flex w-4 shrink-0 justify-end pt-0.5">
         {expandable ? (
+          // z-10 lifts the chevron above the title's stretched-link overlay;
+          // without it the whole row would navigate instead of toggling.
           <Button
             type="button"
             variant="ghost"
@@ -177,7 +179,7 @@ export function AgentDetailCard({
 }: {
   agent: AgentRecord;
   nowMs: number;
-  onTogglePinned: () => void | Promise<void>;
+  onTogglePinned: () => void | Promise<unknown>;
   onRename?: (title: string) => boolean | Promise<boolean>;
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
@@ -349,12 +351,9 @@ export function AgentCommandPresentation({
             />
           </span>
         ) : null}
-        <span
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            state.dot,
-            hasChildren && !shortcut && "-ml-1 ring-2 ring-background",
-          )}
+        <StateDot
+          state={state}
+          className={cn(hasChildren && !shortcut && "-ml-1 ring-2 ring-background")}
         />
       </span>
       <span className="min-w-0 flex-1">
@@ -419,7 +418,7 @@ function PinButton({
   className,
 }: {
   pinned: boolean;
-  onToggle: () => void | Promise<void>;
+  onToggle: () => void | Promise<unknown>;
   size?: "icon-xs" | "icon-sm";
   className?: string;
 }) {

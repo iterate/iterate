@@ -1,5 +1,11 @@
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 import { StreamPath } from "~/lib/stream-links.ts";
+import {
+  closestAncestorByPath,
+  flattenTreeRows,
+  toggledSet,
+  type TreeRow,
+} from "~/lib/tree-rows.ts";
 
 export type PaletteTab = "agents" | "tree" | "recent";
 
@@ -78,21 +84,14 @@ type PaletteStreamTreeNode = {
 export function buildStreamForest(
   streams: Record<string, StreamIndexRow>,
 ): PaletteStreamTreeNode[] {
-  const nodes = new Map(
-    Object.values(streams).map((row) => [
-      row.path,
-      { row, children: [] } satisfies PaletteStreamTreeNode,
-    ]),
+  const nodes = new Map<string, PaletteStreamTreeNode>(
+    Object.values(streams).map((row) => [row.path, { row, children: [] }]),
   );
   const roots: PaletteStreamTreeNode[] = [];
   for (const node of nodes.values()) {
-    let boundary = node.row.path.lastIndexOf("/");
-    let parent: PaletteStreamTreeNode | undefined;
-    while (boundary > 0 && parent === undefined) {
-      parent = nodes.get(node.row.path.slice(0, boundary));
-      boundary = node.row.path.lastIndexOf("/", boundary - 1);
-    }
-    if (parent === undefined && node.row.path !== "/") parent = nodes.get("/");
+    const parent =
+      closestAncestorByPath(node.row.path, nodes) ??
+      (node.row.path === "/" ? undefined : nodes.get("/"));
     if (parent === undefined) roots.push(node);
     else parent.children.push(node);
   }
@@ -104,39 +103,19 @@ export function buildStreamForest(
   return roots;
 }
 
+const STREAM_TREE_SHAPE = {
+  children: (node: PaletteStreamTreeNode) => node.children,
+  key: (node: PaletteStreamTreeNode) => node.row.path,
+  matches: (node: PaletteStreamTreeNode, query: string) =>
+    node.row.path.toLowerCase().includes(query),
+};
+
 export function flattenStreamRows(
   forest: readonly PaletteStreamTreeNode[],
   expandedPaths: ReadonlySet<string>,
   query: string,
-): Array<{ node: PaletteStreamTreeNode; depth: number }> {
-  const normalizedQuery = query.trim().toLowerCase();
-  const rows: Array<{ node: PaletteStreamTreeNode; depth: number }> = [];
-  const append = (node: PaletteStreamTreeNode, depth: number): boolean => {
-    const matching =
-      normalizedQuery === "" || node.row.path.toLowerCase().includes(normalizedQuery);
-    const childRows: Array<{ node: PaletteStreamTreeNode; depth: number }> = [];
-    const previousLength = rows.length;
-    for (const child of node.children) {
-      const beforeChild = rows.length;
-      const childMatches = append(child, depth + 1);
-      if (childMatches) childRows.push(...rows.splice(beforeChild));
-    }
-    const subtreeMatches = matching || childRows.length > 0;
-    rows.length = previousLength;
-    if (!subtreeMatches) return false;
-    rows.push({ node, depth });
-    if (normalizedQuery !== "" || expandedPaths.has(node.row.path)) rows.push(...childRows);
-    return true;
-  };
-  for (const root of forest) append(root, 0);
-  return rows;
-}
-
-function toggled(current: ReadonlySet<string>, path: string): ReadonlySet<string> {
-  const next = new Set(current);
-  if (next.has(path)) next.delete(path);
-  else next.add(path);
-  return next;
+): TreeRow<PaletteStreamTreeNode>[] {
+  return flattenTreeRows(forest, STREAM_TREE_SHAPE, expandedPaths, query);
 }
 
 type PaletteDialogState = {
@@ -190,12 +169,12 @@ export function reducePaletteDialogState(
     case "agent_toggled":
       return {
         ...state,
-        expandedAgentPaths: toggled(state.expandedAgentPaths, action.path),
+        expandedAgentPaths: toggledSet(state.expandedAgentPaths, action.path),
       };
     case "stream_toggled":
       return {
         ...state,
-        expandedStreamPaths: toggled(state.expandedStreamPaths, action.path),
+        expandedStreamPaths: toggledSet(state.expandedStreamPaths, action.path),
       };
   }
 }

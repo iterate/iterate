@@ -6,10 +6,9 @@ import {
   SidebarGroupLabel,
   SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "iterate/react";
 import { AgentSidebarRow } from "./agent.tsx";
-import { buildAgentForest, pinnedAgentShortcuts, sidebarStructuralRoots } from "./agent-tree.ts";
+import { patchAgentMetadata } from "./agent-metadata.ts";
+import { buildAgentForest, pinnedAgentShortcuts } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
@@ -33,19 +32,13 @@ export function SidebarAgents({
   const navigate = useNavigate();
   const forest = useMemo(() => buildAgentForest(agents), [agents]);
   const rows = useMemo(() => {
+    // Pinned shortcuts first, then the top unpinned roots. Pinned agents
+    // beyond PINNED_LIMIT drop out of the sidebar entirely (their roots are
+    // filtered too); "All agents" keeps the full catalog one click away.
     const pinned = pinnedAgentShortcuts(forest).slice(0, PINNED_LIMIT);
-    const { roots } = sidebarStructuralRoots(forest, ROOT_LIMIT);
+    const roots = forest.filter((node) => !node.agent.metadata.pinned).slice(0, ROOT_LIMIT);
     return [...pinned, ...roots];
   }, [forest]);
-
-  async function togglePinned(agent: AgentRecord): Promise<void> {
-    try {
-      const itx = await connectItx(projectId);
-      await itx.agents.get(agent.path).setMetadata({ pinned: !agent.metadata.pinned });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update pin.");
-    }
-  }
 
   if (rows.length === 0) return null;
   return (
@@ -59,7 +52,11 @@ export function SidebarAgents({
               key={node.agent.path}
               node={node}
               onOpen={() => void navigate(linkOptionsForStreamPath(projectSlug, node.agent.path))}
-              onTogglePinned={() => togglePinned(node.agent)}
+              onTogglePinned={() =>
+                patchAgentMetadata(projectId, node.agent.path, {
+                  pinned: !node.agent.metadata.pinned,
+                })
+              }
             />
           ))}
           <Link

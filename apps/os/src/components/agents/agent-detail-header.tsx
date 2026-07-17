@@ -2,9 +2,8 @@ import { useId, useMemo, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "iterate/react";
 import { AgentDetailCard, AgentListRow } from "./agent.tsx";
+import { patchAgentMetadata } from "./agent-metadata.ts";
 import {
   buildAgentForest,
   flattenVisibleAgentRows,
@@ -13,6 +12,7 @@ import {
 } from "./agent-tree.ts";
 import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { toggledSet } from "~/lib/tree-rows.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const CLOCK_TICK_MS = 15_000;
@@ -46,35 +46,6 @@ export function AgentDetailHeader({
   const selfActive = deriveAgentDisplayState(node.agent.runtime) !== "idle";
   const activeDescendants = Math.max(0, node.aggregateActiveCount - (selfActive ? 1 : 0));
 
-  async function updateMetadata(patch: { title?: string; pinned?: boolean }): Promise<boolean> {
-    try {
-      const itx = await connectItx(projectId);
-      await itx.agents.get(path).setMetadata(patch);
-      return true;
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update agent.");
-      return false;
-    }
-  }
-
-  async function togglePinned(agent: AgentRecord): Promise<void> {
-    try {
-      const itx = await connectItx(projectId);
-      await itx.agents.get(agent.path).setMetadata({ pinned: !agent.metadata.pinned });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update pin.");
-    }
-  }
-
-  function toggleExpanded(childPath: string) {
-    setExpandedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(childPath)) next.delete(childPath);
-      else next.add(childPath);
-      return next;
-    });
-  }
-
   return (
     <section className="shrink-0 border-b px-4 py-3 sm:px-6" aria-label="Agent details">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-2">
@@ -82,9 +53,9 @@ export function AgentDetailHeader({
           agent={node.agent}
           nowMs={nowMs}
           onTogglePinned={async () => {
-            await updateMetadata({ pinned: !node.agent.metadata.pinned });
+            await patchAgentMetadata(projectId, path, { pinned: !node.agent.metadata.pinned });
           }}
-          onRename={(title) => updateMetadata({ title })}
+          onRename={(title) => patchAgentMetadata(projectId, path, { title })}
         />
         {descendantCount > 0 ? (
           <div className="flex flex-col gap-1" aria-label="Child agents">
@@ -121,8 +92,14 @@ export function AgentDetailHeader({
                         onOpen={() =>
                           void navigate(linkOptionsForStreamPath(projectSlug, child.agent.path))
                         }
-                        onTogglePinned={() => togglePinned(child.agent)}
-                        onToggleChildren={() => toggleExpanded(child.agent.path)}
+                        onTogglePinned={() =>
+                          patchAgentMetadata(projectId, child.agent.path, {
+                            pinned: !child.agent.metadata.pinned,
+                          })
+                        }
+                        onToggleChildren={() =>
+                          setExpandedPaths((current) => toggledSet(current, child.agent.path))
+                        }
                       />
                     </div>
                   ))}

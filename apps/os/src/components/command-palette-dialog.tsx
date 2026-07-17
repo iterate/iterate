@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useReducer,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { useEffect, useMemo, useReducer, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Bot, ChevronRight, Clock3, GitBranch, Plus } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -18,9 +12,8 @@ import {
   CommandShortcut,
 } from "@iterate-com/ui/components/command";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
-import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { connectItx, useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/react";
 import {
   agentCommandValue,
   buildStreamForest,
@@ -41,6 +34,8 @@ import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathAncestors } from "~/lib/stream-links.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
+import { patchAgentMetadata } from "~/components/agents/agent-metadata.ts";
 import {
   buildAgentForest,
   flattenVisibleAgentRows,
@@ -79,8 +74,8 @@ export function CommandPaletteDialog({
     initialPaletteDialogState,
   );
   const { tab, query, selectedValue, expandedAgentPaths, expandedStreamPaths } = palette;
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const enabled = open && liveIndex;
+  const nowMs = useTickingNowMs(CLOCK_TICK_MS, open);
   const streamsState = useLiveState(
     (itx) => itx.liveState,
     (state) => state.streamsIndex,
@@ -104,9 +99,6 @@ export function CommandPaletteDialog({
       tab: defaultPaletteTab(currentPath, liveIndex),
       expandedStreamPaths: new Set(["/", ...streamPathAncestors(currentPath)]),
     });
-    setNowMs(Date.now());
-    const interval = setInterval(() => setNowMs(Date.now()), CLOCK_TICK_MS);
-    return () => clearInterval(interval);
   }, [currentPath, liveIndex, open]);
 
   function openStream(path: string) {
@@ -115,12 +107,7 @@ export function CommandPaletteDialog({
   }
 
   async function togglePinned(agent: AgentRecord): Promise<void> {
-    try {
-      const itx = await connectItx(scope);
-      await itx.agents.get(agent.path).setMetadata({ pinned: !agent.metadata.pinned });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update pin.");
-    }
+    await patchAgentMetadata(scope, agent.path, { pinned: !agent.metadata.pinned });
   }
 
   if (!liveIndex) {
@@ -152,8 +139,12 @@ export function CommandPaletteDialog({
     );
   }
 
+  // A live-state value is undefined for exactly one round trip after opening;
+  // render that window as loading, not as an empty project.
   const streams = streamsState.value ?? {};
   const agents = agentsState.value ?? {};
+  const streamsLoading = streamsState.value === undefined;
+  const agentsLoading = agentsState.value === undefined;
   const normalizedCreatePath = normalizeDestination(query);
 
   function handleCommandKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -236,6 +227,7 @@ export function CommandPaletteDialog({
               <AgentResults
                 agents={agents}
                 expandedPaths={expandedAgentPaths}
+                loading={agentsLoading}
                 nowMs={nowMs}
                 query={query}
                 onOpen={openStream}
@@ -246,6 +238,7 @@ export function CommandPaletteDialog({
               <StreamTreeResults
                 currentPath={currentPath}
                 expandedPaths={expandedStreamPaths}
+                loading={streamsLoading}
                 query={query}
                 streams={streams}
                 onOpen={openStream}
@@ -253,6 +246,7 @@ export function CommandPaletteDialog({
               />
             ) : (
               <RecentStreamResults
+                loading={streamsLoading}
                 nowMs={nowMs}
                 query={query}
                 streams={streams}
@@ -282,6 +276,7 @@ export function CommandPaletteDialog({
 function AgentResults({
   agents,
   expandedPaths,
+  loading,
   nowMs,
   query,
   onOpen,
@@ -290,6 +285,7 @@ function AgentResults({
 }: {
   agents: Record<string, AgentRecord>;
   expandedPaths: ReadonlySet<string>;
+  loading: boolean;
   nowMs: number;
   query: string;
   onOpen: (path: string) => void;
@@ -309,7 +305,11 @@ function AgentResults({
   if (visiblePinned.length === 0 && visibleRows.length === 0) {
     return (
       <CommandEmpty>
-        {Object.keys(agents).length === 0 ? "No agents yet." : "No matching agents."}
+        {loading
+          ? "Loading agents…"
+          : Object.keys(agents).length === 0
+            ? "No agents yet."
+            : "No matching agents."}
       </CommandEmpty>
     );
   }
@@ -332,12 +332,12 @@ function AgentResults({
       ) : null}
       {visibleRows.length > 0 ? (
         <CommandGroup heading={query.trim() === "" ? "Active, waiting, and recent" : "Matches"}>
-          {visibleRows.map(({ node, depth }) => (
+          {visibleRows.map(({ node, depth, expanded }) => (
             <AgentCommandItem
               key={node.agent.path}
               node={node}
               depth={depth}
-              expanded={query.trim() !== "" || expandedPaths.has(node.agent.path)}
+              expanded={expanded}
               nowMs={nowMs}
               onOpen={onOpen}
               onToggleExpanded={onToggleExpanded}
@@ -400,6 +400,7 @@ function AgentCommandItem({
 function StreamTreeResults({
   currentPath,
   expandedPaths,
+  loading,
   query,
   streams,
   onOpen,
@@ -407,6 +408,7 @@ function StreamTreeResults({
 }: {
   currentPath: string;
   expandedPaths: ReadonlySet<string>;
+  loading: boolean;
   query: string;
   streams: Record<string, StreamIndexRow>;
   onOpen: (path: string) => void;
@@ -417,11 +419,12 @@ function StreamTreeResults({
     () => flattenStreamRows(forest, expandedPaths, query).slice(0, MAX_STREAM_TREE_RESULTS),
     [expandedPaths, forest, query],
   );
-  if (rows.length === 0) return <CommandEmpty>No matching streams.</CommandEmpty>;
+  if (rows.length === 0) {
+    return <CommandEmpty>{loading ? "Loading streams…" : "No matching streams."}</CommandEmpty>;
+  }
   return (
     <CommandGroup heading="Stream tree">
-      {rows.map(({ node, depth }) => {
-        const expanded = query.trim() !== "" || expandedPaths.has(node.row.path);
+      {rows.map(({ node, depth, expanded }) => {
         const hasChildren = node.children.length > 0;
         return (
           <CommandItem
@@ -464,11 +467,13 @@ function StreamTreeResults({
 }
 
 function RecentStreamResults({
+  loading,
   nowMs,
   query,
   streams,
   onOpen,
 }: {
+  loading: boolean;
   nowMs: number;
   query: string;
   streams: Record<string, StreamIndexRow>;
@@ -487,7 +492,9 @@ function RecentStreamResults({
         .slice(0, MAX_RECENT_RESULTS),
     [normalizedQuery, streams],
   );
-  if (rows.length === 0) return <CommandEmpty>No recent streams.</CommandEmpty>;
+  if (rows.length === 0) {
+    return <CommandEmpty>{loading ? "Loading streams…" : "No recent streams."}</CommandEmpty>;
+  }
   return (
     <CommandGroup heading="Most recently active">
       {rows.map((row) => (

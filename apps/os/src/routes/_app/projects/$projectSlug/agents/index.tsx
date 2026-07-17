@@ -1,9 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { useItx, useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/react";
 import { AgentCatalog } from "~/components/agents/agent-catalog.tsx";
+import { patchAgentMetadata } from "~/components/agents/agent-metadata.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,
@@ -30,21 +29,11 @@ function ProjectAgentsIndexContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
-  const itx = useItx();
-  const agents =
-    useLiveState(
-      (projectItx) => projectItx.liveState,
-      (state) => state.agents,
-      [],
-    ).value ?? {};
-
-  async function togglePinned(agent: AgentRecord): Promise<void> {
-    try {
-      await itx.agents.get(agent.path).setMetadata({ pinned: !agent.metadata.pinned });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update pin.");
-    }
-  }
+  const agents = useLiveState(
+    (projectItx) => projectItx.liveState,
+    (state) => state.agents,
+    [],
+  ).value;
 
   return (
     <ProjectStreamView
@@ -54,7 +43,9 @@ function ProjectAgentsIndexContent() {
           agents={agents}
           projectSlug={params.projectSlug}
           onOpen={(path) => void navigate(linkOptionsForStreamPath(params.projectSlug, path))}
-          onTogglePinned={togglePinned}
+          onTogglePinned={(agent) =>
+            patchAgentMetadata(project.id, agent.path, { pinned: !agent.metadata.pinned })
+          }
         />
       }
       projectId={project.id}

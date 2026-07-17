@@ -16,6 +16,9 @@ const reactEnvironment = globalThis as typeof globalThis & {
 };
 
 let observedTargets: WeakSet<Element>;
+const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+const originalResizeObserver = globalThis.ResizeObserver;
 
 function rect(height: number, top = 0): DOMRect {
   return {
@@ -78,6 +81,11 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
+  if (originalOffsetHeight !== undefined) {
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", originalOffsetHeight);
+  }
+  HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+  globalThis.ResizeObserver = originalResizeObserver;
 });
 
 function record(index: number): AgentRecord {

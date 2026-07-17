@@ -26,7 +26,7 @@ export const AGENT_DISPLAY_STATE_PRESENTATION: Record<
 export function agentCommandAccessibleLabel(
   node: AgentTreeNode,
   expanded: boolean,
-  expandable = true,
+  expandable: boolean,
 ): string {
   const state = AGENT_DISPLAY_STATE_PRESENTATION[agentNodeDisplayState(node)];
   const childInstruction =

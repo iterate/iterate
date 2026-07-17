@@ -767,10 +767,13 @@ function ProjectStreamNavItem({
       </SidebarMenuButton>
       {badge > 0 ? (
         <>
-          <SidebarMenuBadge>{badge > 99 ? "99+" : badge}</SidebarMenuBadge>
+          <SidebarMenuBadge aria-label={`${badge} agents active or waiting`} role="status">
+            {badge > 99 ? "99+" : badge}
+          </SidebarMenuBadge>
           <span
             className="absolute right-0.5 top-0.5 hidden size-3 items-center justify-center rounded-full bg-primary text-[8px] font-semibold leading-none text-primary-foreground tabular-nums group-data-[collapsible=icon]:flex"
             aria-label={`${badge} agents active or waiting`}
+            role="status"
           >
             {badge > 9 ? "9+" : badge}
           </span>
