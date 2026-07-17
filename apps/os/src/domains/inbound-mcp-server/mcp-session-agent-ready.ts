@@ -1,10 +1,10 @@
+import type { StreamEvent } from "iterate/processors";
 import {
   agentSystemPromptContextEvent,
   MCP_AGENT_SYSTEM_PROMPT,
   MCP_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
 import type { AgentEventInput } from "../agents/agent-processor-contract.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 
 /** Explicitly birth the session agent before ask() starts its reply timeout. */
 export async function ensureMcpSessionAgentReady(input: {

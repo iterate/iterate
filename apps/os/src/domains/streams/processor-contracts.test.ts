@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { describe, expect, expectTypeOf, test } from "vitest";
-import type { StreamEventInput } from "./schemas.ts";
 import {
   defineProcessorContract,
   mergeProcessorConfig,
   type ConsumedInput,
-} from "./processor-contracts.ts";
+  type StreamEventInput,
+} from "iterate/processors";
 
 describe("mergeProcessorConfig", () => {
   test("recurses through plain objects and retains omitted keys", () => {

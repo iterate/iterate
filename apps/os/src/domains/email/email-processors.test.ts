@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEventInput } from "../streams/schemas.ts";
+import type { StreamEventInput } from "iterate/processors";
+import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
 import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";

@@ -6,9 +6,10 @@
 // cell, crash-as-eviction) live inline in the suites that need them
 // (stream-processor-registry.test.ts, the per-domain *-recovery tests).
 
-import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEventReadInput } from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
+import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamProcessor, StreamProcessorContract } from "./stream-processor.ts";
 import { StreamProcessorRunner } from "./stream-processor-runner.ts";
 
@@ -38,7 +39,11 @@ function emptyStreamRuntimeState() {
   };
 }
 
-export class MemoryStream implements Stream {
+// Deliberately typed against the narrow ProcessorStream handle (what the
+// machinery depends on), not the full generated `Stream` — the extra methods
+// below (getEvent/getEvents/waitForEvent, runtime-state stubs) exist for test
+// assertions and for suites that treat the double as a fuller stream.
+export class MemoryStream implements ProcessorStream {
   events: StreamEvent[] = [];
   /** Injectable clock for createdAt stamps; harnesses point it at virtual time. */
   now: () => number = Date.now;
@@ -47,7 +52,11 @@ export class MemoryStream implements Stream {
   /** Set by MemoryStreamNetwork.get(); a detached stream answers `at()` with itself. */
   network: MemoryStreamNetwork | undefined;
 
-  constructor(readonly path = "/agents/test") {}
+  readonly path: string;
+
+  constructor(path = "/agents/test") {
+    this.path = path;
+  }
 
   async __describe() {
     return { instructions: "in-memory test stream", types: "", children: {} };
@@ -83,7 +92,7 @@ export class MemoryStream implements Stream {
     return appended;
   }
 
-  at(path?: string): Stream {
+  at(path?: string): MemoryStream {
     return path === undefined || this.network === undefined ? this : this.network.get(path);
   }
 
@@ -94,7 +103,7 @@ export class MemoryStream implements Stream {
     return this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
   }
 
-  async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
+  async getEvents(input: StreamEventReadInput = {}): Promise<StreamEvent[]> {
     const { afterOffset = 0, limit = 500 } = input;
     const beforeOffset = input.beforeOffset ?? Number.MAX_SAFE_INTEGER;
     return this.events
@@ -109,7 +118,7 @@ export class MemoryStream implements Stream {
       .slice(0, limit);
   }
 
-  readEvents(input: Parameters<Stream["readEvents"]>[0] = {}) {
+  readEvents(input: StreamEventReadInput = {}) {
     let afterOffset = input.afterOffset ?? 0;
     return {
       next: async () => {
@@ -175,8 +184,11 @@ export class MemoryStream implements Stream {
  */
 export class MemoryStreamNetwork {
   readonly streams = new Map<string, MemoryStream>();
+  readonly now: () => number;
 
-  constructor(readonly now: () => number = Date.now) {}
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
 
   get(path: string): MemoryStream {
     let stream = this.streams.get(path);

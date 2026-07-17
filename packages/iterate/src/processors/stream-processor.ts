@@ -1,6 +1,6 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
-import type { Stream } from "../../itx-api.generated.ts";
+import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
 // Type-only by necessity, not just hygiene: the runner imports this module's
@@ -54,7 +54,7 @@ export type StreamProcessorContract = {
  * outside.
  */
 export type StreamProcessorBaseDeps = {
-  stream: Stream;
+  stream: ProcessorStream;
   /** Path of the stream this processor runs on (the stream `stream` points at). */
   path: string;
   /** Owning project, or null on a global (deployment-root) stream. */
@@ -294,7 +294,7 @@ export abstract class StreamProcessor<
   Deps extends object = object,
 > extends RpcTarget {
   abstract readonly contract: Contract;
-  protected readonly stream: Stream;
+  protected readonly stream: ProcessorStream;
   /** Path of the home stream — the one `this.stream` points at. */
   protected readonly path: string;
   /** Owning project, or null on a global (deployment-root) stream. */
@@ -549,7 +549,7 @@ export abstract class StreamProcessor<
   }
 
   #appendStamped(
-    args: { target: Stream; whileProcessing?: Pick<StreamEvent, "offset" | "type"> },
+    args: { target: ProcessorStream; whileProcessing?: Pick<StreamEvent, "offset" | "type"> },
     input: EmittedInput<Contract>[],
   ): Promise<StreamEvent[]> {
     const processor = this.#processorStamp(args.whileProcessing);

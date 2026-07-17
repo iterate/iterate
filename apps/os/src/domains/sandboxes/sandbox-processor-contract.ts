@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "iterate/processors";
 import { SandboxInstanceType } from "./instance-types.ts";
 
 const SandboxBirthCertificate = z.object({

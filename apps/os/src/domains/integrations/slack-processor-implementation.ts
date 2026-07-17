@@ -4,8 +4,7 @@
 // Emitted event types, payloads, and idempotency keys are stable wire formats.
 
 import { z } from "zod";
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { EmittedInput } from "../streams/processor-contracts.ts";
+import { StreamProcessor, type EmittedInput } from "iterate/processors";
 import {
   agentCreationForPath,
   slackAgentSystemPrompt,

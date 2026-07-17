@@ -1,3 +1,4 @@
+import type { StreamEvent } from "iterate/processors";
 import {
   agentSystemPromptContextEvent,
   ONBOARDING_AGENT_SYSTEM_PROMPT,
@@ -5,7 +6,6 @@ import {
 } from "../domains/agents/agent-defaults.ts";
 import type { AgentEventInput } from "../domains/agents/agent-processor-contract.ts";
 import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
-import type { StreamEvent } from "../domains/streams/schemas.ts";
 
 export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 const ONBOARDING_START_REVISION = "1";

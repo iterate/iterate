@@ -5,7 +5,7 @@ import type {
   StreamPingInput,
   StreamSubscriberPing,
 } from "./rpc-types.ts";
-import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
+import type { ProcessorContractAnnouncement } from "./processor-contracts.ts";
 import type { SubscriberMetrics } from "./subscriber-metrics.ts";
 import type { ProcessorRuntimeContribution } from "./stream-processor.ts";
 

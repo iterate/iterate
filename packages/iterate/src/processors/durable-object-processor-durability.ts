@@ -13,8 +13,8 @@
 // vitest over an in-memory `storage.kv` fake
 // (durable-object-processor-durability.test.ts).
 
-import type { Stream } from "../../itx-api.generated.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
+import type { ProcessorStream } from "./stream-handle.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./processor-contracts.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import type {
   ProcessorProgress,
@@ -117,7 +117,7 @@ export function durableObjectRecovery(args: {
   /** The processor's contract slug — keys the per-runner keepalive record. */
   slug: string;
   /** The processor's home stream: revived facts and crash-loop evidence land here. */
-  stream: Stream;
+  stream: ProcessorStream;
   /** Worker deploy version; a change resets the keepalive's crash-loop budget
    * (the antidote deploy). Pass `workerVersion(env)`. REQUIRED for the same
    * reason the host requires it: a silent default could never take the

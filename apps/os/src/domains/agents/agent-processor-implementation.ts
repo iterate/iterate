@@ -16,13 +16,13 @@
 // =============================================================================
 
 import { z } from "zod";
-import type { StreamEvent } from "../streams/schemas.ts";
-import { StreamProcessor, type ProcessorReads } from "../streams/stream-processor.ts";
+import type { StreamEvent } from "iterate/processors";
+import { StreamProcessor, type ProcessorReads } from "iterate/processors";
 import {
   cachedEventSchema,
   getConsumedEventDefinition,
   mergeProcessorConfig,
-} from "../streams/processor-contracts.ts";
+} from "iterate/processors";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AGENT_COMPACTION_TRIGGER_FRACTION,

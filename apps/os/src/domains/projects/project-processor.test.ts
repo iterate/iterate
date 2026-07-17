@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
-import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 

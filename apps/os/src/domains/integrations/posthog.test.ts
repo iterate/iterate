@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StreamPushEventBatch } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
-import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import {
   capturePosthogStreamEventBatch,
   POSTHOG_STREAM_EVENT_MAX_JSON_BYTES,
