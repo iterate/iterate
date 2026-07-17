@@ -61,13 +61,13 @@ processor (same architectural bar as project create), with:
 
 ## Current map (do not invent a second path)
 
-| Piece | Location |
-| ----- | -------- |
-| UI add/refresh/remove | `apps/os/src/components/project-custom-domains-settings.tsx` |
-| Events + `ProjectCustomDomain` state | `apps/os/src/domains/projects/project-processor-contract.ts` |
-| Reduce + `blockProcessorWhile` ensure | `apps/os/src/domains/projects/custom-domain-processor.ts` |
-| CF client + KV prime-on-active | `apps/os/src/domains/projects/custom-domains.ts` |
-| Ingress exact + `<app>.<custom>` | `apps/os/src/ingress.ts`, project hostname directory |
+| Piece                                 | Location                                                     |
+| ------------------------------------- | ------------------------------------------------------------ |
+| UI add/refresh/remove                 | `apps/os/src/components/project-custom-domains-settings.tsx` |
+| Events + `ProjectCustomDomain` state  | `apps/os/src/domains/projects/project-processor-contract.ts` |
+| Reduce + `blockProcessorWhile` ensure | `apps/os/src/domains/projects/custom-domain-processor.ts`    |
+| CF client + KV prime-on-active        | `apps/os/src/domains/projects/custom-domains.ts`             |
+| Ingress exact + `<app>.<custom>`      | `apps/os/src/ingress.ts`, project hostname directory         |
 
 Preserve: single project processor ownership, CF as certificate/hostname
 authority, KV hostname directory as routing source of truth when active,
@@ -103,8 +103,8 @@ Names are suggestive; implementer may refine contracts but must keep
   - apex points at SaaS fallback (`cname.<base>` or documented target)
   - `*.hostname` points at same when wildcard cert is requested
   - ownership / ACME TXT present when CF still requires them  
-  Does **not** replace CF as authority for TLS; it explains *why* CF is stuck
-  and why app subdomains 404 DNS.
+    Does **not** replace CF as authority for TLS; it explains _why_ CF is stuck
+    and why app subdomains 404 DNS.
 
 - `…/custom-domain-refresh-requested` (existing)  
   Force re-observation; also emitted by scheduler/alarm while not terminal.
@@ -146,15 +146,15 @@ Names are suggestive; implementer may refine contracts but must keep
 
 ## Tests
 
-1. **Unit / processor harness** (primary):  
-   - add-requested → requested state, ensure called once  
-   - observed pending → pending_validation, no KV prime  
-   - observed active → active + KV prime  
-   - dns-observed missing wildcard → UI-facing state still explains gap  
-   - remove → CF delete + KV clear  
+1. **Unit / processor harness** (primary):
+   - add-requested → requested state, ensure called once
+   - observed pending → pending_validation, no KV prime
+   - observed active → active + KV prime
+   - dns-observed missing wildcard → UI-facing state still explains gap
+   - remove → CF delete + KV clear
    - refresh while pending re-runs observation  
-   Follow `docs/writing-stream-processors.md` and existing
-   `custom-domain` / project-processor tests.
+     Follow `docs/writing-stream-processors.md` and existing
+     `custom-domain` / project-processor tests.
 
 2. **Contract examples** updated for any new events.
 
