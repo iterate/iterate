@@ -404,11 +404,10 @@ describe("triggering", () => {
     const call = vi.mocked(invokeCapability).mock.calls[0]![0];
     expect(call.path).toEqual(["run"]);
     expect(call.traceRole).toBe("scheduler_action");
-    expect(
-      (call.ref as { source: { files: { files: Record<string, string> } } }).source.files.files[
-        "main.js"
-      ],
-    ).toContain("async (itx, schedule, trigger) => 42");
+    const source = (call.ref as { source: { files: { files: Record<string, string> } } }).source
+      .files.files["main.js"];
+    expect(source).toContain("async (itx, schedule, trigger) => 42");
+    expect(source).toContain("using itx = await this.env.ITX.get();");
     const [scheduleArg, triggerArg] = call.args as [
       Record<string, unknown>,
       Record<string, unknown>,
@@ -434,6 +433,44 @@ describe("triggering", () => {
     });
     expect(completed.idempotencyKey).toBe(`scheduler/trigger-completed:${triggerArg.executionId}`);
     expect(state().pendingTriggers).toEqual({});
+  });
+
+  it("detaches and disposes an RPC action result after recording its JSON value", async () => {
+    const dispose = vi.fn();
+    const result = Object.assign({ made: "cat-image" }, { [Symbol.dispose]: dispose });
+    const harness = makeHarness({ invokeCapability: async () => result });
+    const { clock, deliver, processor, stream } = harness;
+    await stream.append(setEvent("report"));
+    await deliver();
+    clock.now = T0 + 61_000;
+    await processor.triggerDue();
+    await deliver();
+    await waitForCompletion(harness);
+
+    expect(stream.events.find((event) => event.type === COMPLETED_TYPE)!.payload).toMatchObject({
+      outcome: "succeeded",
+      result: { made: "cat-image" },
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes an RPC action result even when JSON detachment fails", async () => {
+    const dispose = vi.fn();
+    const result: Record<string | symbol, unknown> = { [Symbol.dispose]: dispose };
+    result.self = result;
+    const harness = makeHarness({ invokeCapability: async () => result });
+    const { clock, deliver, processor, stream } = harness;
+    await stream.append(setEvent("report"));
+    await deliver();
+    clock.now = T0 + 61_000;
+    await processor.triggerDue();
+    await deliver();
+    await waitForCompletion(harness);
+
+    expect(stream.events.find((event) => event.type === COMPLETED_TYPE)!.payload).toMatchObject({
+      outcome: "failed",
+    });
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("records a throwing script as outcome=failed and keeps the recurrence alive", async () => {

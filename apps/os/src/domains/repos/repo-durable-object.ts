@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
+import { disposeIgnoredRpcResult } from "iterate/live-state";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
@@ -1383,7 +1384,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       // reported a misleading NOT_FOUND).
       if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
       const existing = await this.requireArtifacts().get(name);
-      return { created: false, lastPushAt: existing.lastPushAt };
+      try {
+        return { created: false, lastPushAt: existing.lastPushAt };
+      } finally {
+        disposeIgnoredRpcResult(existing);
+      }
     }
   }
 
@@ -1405,8 +1410,12 @@ export class RepoDurableObject extends DurableObject<Env> {
 
 async function artifactToken(artifacts: Artifacts, name: string) {
   const repo = await artifacts.get(name);
-  const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return plaintext.split("?expires=")[0] ?? plaintext;
+  try {
+    const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
+    return plaintext.split("?expires=")[0] ?? plaintext;
+  } finally {
+    disposeIgnoredRpcResult(repo);
+  }
 }
 
 async function seedArtifactRepo(input: {

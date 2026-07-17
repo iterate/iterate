@@ -1,4 +1,5 @@
 import { tracing } from "cloudflare:workers";
+import { disposeIgnoredRpcResult } from "iterate/live-state";
 import { StreamProcessor, type ProcessorReads } from "iterate/processors";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
@@ -376,8 +377,9 @@ export class SchedulerProcessor extends StreamProcessor<
       try {
         const result = await tracing.enterSpan("scheduler action invocation", async (span) => {
           span.setAttribute("iterate.scheduler.execution_id", executionId);
+          let rpcResult: unknown;
           try {
-            const result = await this.deps.dynamicWorkers.invokeCapability({
+            rpcResult = await this.deps.dynamicWorkers.invokeCapability({
               args: [
                 {
                   key: pending.key,
@@ -397,17 +399,32 @@ export class SchedulerProcessor extends StreamProcessor<
               ref: scheduleActionWorkerRef(entry.action.script),
               traceRole: "scheduler_action",
             });
+            // Detach while the RPC result is alive. Completion events must own
+            // plain JSON, never a session-pinning Workers RPC proxy.
+            const detached = rpcResult === undefined ? undefined : json(rpcResult);
             span.setAttribute("iterate.scheduler.action_outcome", "succeeded");
-            return result;
+            return detached;
           } catch (error) {
             span.setAttribute("iterate.scheduler.action_outcome", "failed");
             throw error;
+          } finally {
+            try {
+              disposeIgnoredRpcResult(rpcResult);
+            } catch (error) {
+              // The action already ran; turning cleanup failure into a script
+              // failure would invite an unsafe retry. Keep the outcome and
+              // surface the ownership defect independently.
+              console.error("scheduler action RPC result disposal failed", {
+                executionId,
+                error,
+              });
+            }
           }
         });
         outcome = {
           definedAtOffset: entry.definedAtOffset,
           outcome: "succeeded",
-          ...(result === undefined ? {} : { result: json(result) }),
+          ...(result === undefined ? {} : { result }),
         };
       } catch (error) {
         outcome = {
@@ -467,7 +484,7 @@ function scheduleActionWorkerRef(script: string): StatelessDynamicWorkerRef {
     const fn = ${script};
     export class ScheduleActionEntrypoint extends WorkerEntrypoint {
       async run(schedule, trigger) {
-        const itx = await this.env.ITX.get();
+        using itx = await this.env.ITX.get();
         return await fn(itx, schedule, trigger);
       }
     }

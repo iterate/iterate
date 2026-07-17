@@ -161,6 +161,8 @@ type Connection = {
   readonly settleLatency: LatencyRing;
   /** Mutual-ping RTT samples for this connection. */
   readonly pingRtt: LatencyRing;
+  /** Durable config/cursor incarnation that owns this wake connection. */
+  readonly ownership?: DrainAttempt;
   /** Retained ping capability; absent for subscribers that supplied none. */
   ping?: RetainedSubscriberPing;
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
@@ -194,6 +196,8 @@ type OpenConnectionArgs = {
   getRuntimeState?: GetProcessorRuntimeState;
   /** Subscriber's ping capability, retained for the connection lifetime. */
   ping?: StreamSubscriberPing;
+  /** Durable ownership fence; absent for ephemeral subscriptions. */
+  ownership?: DrainAttempt;
 };
 
 /**
@@ -242,6 +246,12 @@ type StreamSubscribersHooks = {
    */
   appendFact(event: StreamEventInput): void;
   /**
+   * Append a control fact whose commit changes delivery ownership. Unlike an
+   * observational fact, failure must propagate so its cursor obligation is
+   * retained and retried.
+   */
+  appendRequiredFact(event: StreamEventInput): void;
+  /**
    * Delivery-throughput accounting: called once per dispatched delivery with
    * the event count and serialized payload bytes it carried (all lanes).
    */
@@ -250,10 +260,21 @@ type StreamSubscribersHooks = {
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
   random(): number;
-  /** Arm the Durable Object alarm for the earliest pending retry. */
-  armAlarm(atMs: number): void;
+  /** Durably move the Durable Object alarm no later than this deadline. */
+  armAlarm(atMs: number): Promise<void>;
+  /** Repoint the shared alarm to the exact deadline derived from all cursor rows. */
+  repointAlarm(atMs: number | null): Promise<void>;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
+  /** Tear down a stale Durable Object incarnation after a lifecycle reset. */
+  abortIncarnation(reason: string): void;
+};
+
+/** Ownership fence captured before one push/webhook delivery yields. */
+type DrainAttempt = {
+  subscriptionKey: string;
+  configOffset: number;
+  epoch: number;
 };
 
 export class StreamSubscribers {
@@ -343,10 +364,10 @@ export class StreamSubscribers {
     }
   }
 
-  /** The DO alarm handler body: retry whatever is due, then re-arm. */
-  onAlarm(): void {
+  /** The DO alarm handler body: retry whatever is due, then exactly re-arm. */
+  async onAlarm(): Promise<void> {
     this.wake();
-    this.#armAlarmFromStore();
+    await this.#repointAlarmFromStore();
   }
 
   // ===========================================================================
@@ -454,9 +475,18 @@ export class StreamSubscribers {
       ...(delivery.processorSlug === undefined ? {} : { processorSlug: delivery.processorSlug }),
     };
 
+    const row = this.#hooks.store.get(subscriptionKey);
+    if (row === undefined) return;
+    const attempt = { subscriptionKey, configOffset, epoch: row.epoch } satisfies DrainAttempt;
+
     this.#pokesInFlight.add(subscriptionKey);
     const work = (async () => {
       try {
+        await this.#armAttemptWatchdog(attempt);
+        if (!this.#isCurrentAttempt(attempt)) {
+          queueMicrotask(() => this.wake());
+          return;
+        }
         // A poke that outlives its timeout still eventually settles with a
         // RETAINED sink; dropping that undisposed would leak a session-pinning
         // stub on exactly the wedged-subscriber occasions the timeout exists
@@ -507,6 +537,7 @@ export class StreamSubscribers {
           presence,
           getRuntimeState: response.getRuntimeState,
           ping: response.ping,
+          ownership: attempt,
         });
         // Observational watermark: the subscriber confirmed this checkpoint.
         // While the connection streams, the watermark deliberately goes stale;
@@ -518,15 +549,38 @@ export class StreamSubscribers {
         // it: a checkpoint past the last watermark means deliveries have been
         // digested since the failure.
         const watermarkRow = this.#hooks.store.get(subscriptionKey);
-        if (watermarkRow === undefined || response.checkpointOffset > watermarkRow.ackedOffset) {
-          this.#hooks.store.ack(subscriptionKey, response.checkpointOffset);
+        if (
+          watermarkRow === undefined ||
+          watermarkRow.epoch !== attempt.epoch ||
+          !this.#isCurrentAttempt(attempt)
+        ) {
+          this.#connections.get(subscriptionKey)?.close("replaced");
+          queueMicrotask(() => this.wake());
+          return;
+        }
+        if (response.checkpointOffset > watermarkRow.ackedOffset) {
+          this.#hooks.store.ack(subscriptionKey, response.checkpointOffset, attempt.epoch);
         } else {
-          this.#hooks.store.advanceWatermark(subscriptionKey, response.checkpointOffset);
+          this.#hooks.store.advanceWatermark(
+            subscriptionKey,
+            response.checkpointOffset,
+            attempt.epoch,
+          );
         }
       } catch (error) {
-        this.#onDeliveryFailure(subscriptionKey, error);
+        try {
+          await this.#onDeliveryFailure(attempt, error);
+        } catch (recoveryError) {
+          console.error("stream wake poke recovery failed; restarting incarnation", {
+            subscriptionKey,
+            error: recoveryError,
+            pokeError: error,
+          });
+          this.#hooks.abortIncarnation("stream wake poke recovery failed");
+        }
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
+        await this.#repointAlarmAfterDelivery();
       }
     })();
     this.#hooks.keepAlive(work);
@@ -542,6 +596,7 @@ export class StreamSubscribers {
    */
   #drainPush(subscriptionKey: string): void {
     this.#pushDrains.add(subscriptionKey);
+    let activeAttempt: DrainAttempt | undefined;
     const work = (async () => {
       try {
         for (;;) {
@@ -553,6 +608,12 @@ export class StreamSubscribers {
           const row = this.#hooks.store.get(subscriptionKey);
           if (row === undefined) return;
           if (row.nextAttemptAt !== null && row.nextAttemptAt > this.#hooks.now()) return;
+          const attempt = {
+            subscriptionKey,
+            configOffset: entry.latestConfiguredEvent.offset,
+            epoch: row.epoch,
+          } satisfies DrainAttempt;
+          activeAttempt = attempt;
 
           // Webhook mode IS the push drain pinned to batch size 1: external
           // receivers get single-event POSTs, each ack covers exactly one
@@ -579,6 +640,7 @@ export class StreamSubscribers {
             if (row.ackedOffset < state.maxOffset) {
               this.#hooks.store.ack(subscriptionKey, state.maxOffset, row.epoch);
             }
+            activeAttempt = undefined;
             return;
           }
           const byteLengthByOffset = new Map(
@@ -602,6 +664,7 @@ export class StreamSubscribers {
             // Skip-not-defer: nothing here for this subscriber, but the cursor
             // must advance or the subscription re-reads these events forever.
             this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+            activeAttempt = undefined;
             continue;
           }
 
@@ -623,6 +686,12 @@ export class StreamSubscribers {
           const dispatchAtMs = this.#hooks.now();
           this.#hooks.recordEgress(matched.length, deliveredBytes);
           try {
+            await this.#armAttemptWatchdog(attempt);
+            if (!this.#isCurrentAttempt(attempt)) {
+              activeAttempt = undefined;
+              queueMicrotask(() => this.wake());
+              continue;
+            }
             if (config.delivery.mode === "webhook") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
               await withDeliveryTimeout(
@@ -659,10 +728,22 @@ export class StreamSubscribers {
             // (halved the bisect window or stepped over confirmed poison) and
             // the loop should try again NOW; anything else backs off or parks
             // and the alarm/resume owns the future.
-            if (this.#onPushFailure({ subscriptionKey, config, matched, error }) === "continue") {
+            const disposition = await this.#onPushFailure({
+              attempt,
+              config,
+              matched,
+              error,
+            });
+            activeAttempt = undefined;
+            if (disposition === "continue") {
               continue;
             }
             return;
+          }
+          if (!this.#isCurrentAttempt(attempt)) {
+            activeAttempt = undefined;
+            queueMicrotask(() => this.wake());
+            continue;
           }
           // The awaited resolve above IS this lane's consumption ack — record
           // both the call duration (transport+receiver latency) and the
@@ -684,14 +765,46 @@ export class StreamSubscribers {
           this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
+          activeAttempt = undefined;
         }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
+        await this.#repointAlarmAfterDelivery();
       }
     })();
     this.#hooks.keepAlive(
-      work.catch((error: unknown) => {
-        console.error("stream push drain failed", { subscriptionKey, error });
+      work.catch(async (error: unknown) => {
+        const attempt = activeAttempt;
+        if (isDurableObjectLifecycleError(error)) {
+          // A deploy/reset can let the receiver resolve, then reject the local
+          // cursor ack. Restarting replays the still-unacked batch instead of
+          // leaving a quiet stream with no future wake source.
+          console.warn("stream push drain interrupted by lifecycle; restarting incarnation", {
+            subscriptionKey,
+            error,
+          });
+        } else {
+          console.error("stream push drain failed; backing off before retry", {
+            subscriptionKey,
+            error,
+          });
+        }
+        try {
+          if (attempt !== undefined) await this.#onDeliveryFailure(attempt, error);
+        } catch (recoveryError) {
+          // If the recovery write cannot reach storage, this incarnation
+          // cannot make a durable promise about a later retry.
+          console.error("stream push drain recovery failed; restarting incarnation", {
+            subscriptionKey,
+            error: recoveryError,
+            drainError: error,
+          });
+          this.#hooks.abortIncarnation("stream push drain recovery failed");
+          return;
+        }
+        if (isDurableObjectLifecycleError(error)) {
+          this.#hooks.abortIncarnation("stream push drain interrupted by Durable Object lifecycle");
+        }
       }),
     );
   }
@@ -766,12 +879,17 @@ export class StreamSubscribers {
    * poisoned — mass-skipping its backlog would be silent data loss).
    */
   #onPushFailure(args: {
-    subscriptionKey: string;
+    attempt: DrainAttempt;
     config: SubscriptionConfiguredPayload;
     matched: StreamEvent[];
     error: unknown;
-  }): "continue" | "stop" {
-    const { subscriptionKey, config, matched, error } = args;
+  }): Promise<"continue" | "stop"> {
+    const { attempt, config, matched, error } = args;
+    const { subscriptionKey } = attempt;
+    if (!this.#isCurrentAttempt(attempt)) {
+      queueMicrotask(() => this.wake());
+      return Promise.resolve("continue");
+    }
     // A receiver that DECLARED itself unavailable (see
     // StreamReceiverUnavailableError) is down, not poisoned: no bisecting, no
     // skip confirmation — the same batch backs off and redelivers whole, and
@@ -782,8 +900,7 @@ export class StreamSubscribers {
     // tries — a mis-skip needs a poison event racing the recovery boundary,
     // versus today's guaranteed skip of healthy events during the outage.
     if (isStreamReceiverUnavailableError(error)) {
-      this.#onDeliveryFailure(subscriptionKey, error);
-      return "stop";
+      return this.#onDeliveryFailure(attempt, error).then(() => "stop");
     }
     if (config.onPoison === "skip") {
       if (matched.length > 1) {
@@ -792,21 +909,23 @@ export class StreamSubscribers {
         // just proved it is alive enough to reject.
         const current = this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT;
         this.#batchLimits.set(subscriptionKey, halveBatchLimit(current));
-        return "continue";
+        return Promise.resolve("continue");
       }
       const row = this.#hooks.store.get(subscriptionKey);
-      const attempt = (row?.attempt ?? 0) + 1;
-      if (attempt < SKIP_CONFIRM_ATTEMPTS) {
-        this.#backoff(subscriptionKey, attempt, error);
-        return "stop";
+      if (row === undefined || row.epoch !== attempt.epoch) {
+        queueMicrotask(() => this.wake());
+        return Promise.resolve("continue");
+      }
+      const attemptCount = Math.min(row.attempt + 1, MAX_DELIVERY_ATTEMPTS);
+      if (attemptCount < SKIP_CONFIRM_ATTEMPTS) {
+        return this.#backoff(attempt, attemptCount, error).then(() => "stop");
       }
       // Confirmed poison — unless skips are running consecutive, in which
       // case the receiver is down (everything fails, nothing is "the" poison
       // event) and mass-skipping its backlog would be silent data loss: park.
       const skips = (this.#consecutiveSkips.get(subscriptionKey) ?? 0) + 1;
       if (skips >= MAX_CONSECUTIVE_SKIPS) {
-        this.#park(subscriptionKey, attempt, error);
-        return "stop";
+        return this.#park(attempt, attemptCount, error).then(() => "stop");
       }
       const poison = matched[0]!;
       this.#consecutiveSkips.set(subscriptionKey, skips);
@@ -814,40 +933,79 @@ export class StreamSubscribers {
         type: "events.iterate.com/stream/error-occurred",
         idempotencyKey: `push-poison-skipped:${subscriptionKey}:${poison.offset}`,
         payload: {
-          message: `subscription "${subscriptionKey}" skipped poison event at offset ${poison.offset} after ${attempt} attempts: ${errorMessage(error)}`,
+          message: `subscription "${subscriptionKey}" skipped poison event at offset ${poison.offset} after ${attemptCount} attempts: ${errorMessage(error)}`,
         },
       });
       // Step over the confirmed poison event and reset the bisect window +
       // failure streak: the receiver is alive, it just cannot digest that one.
-      this.#hooks.store.ack(subscriptionKey, poison.offset);
+      this.#hooks.store.ack(subscriptionKey, poison.offset, attempt.epoch);
       this.#batchLimits.delete(subscriptionKey);
-      return "continue";
+      return Promise.resolve("continue");
     }
 
-    const row = this.#hooks.store.get(subscriptionKey);
-    this.#onDeliveryFailure(subscriptionKey, error, row?.attempt ?? 0);
-    return "stop";
+    return this.#onDeliveryFailure(attempt, error).then(() => "stop");
   }
 
   /** Shared failure path for pokes and park-mode pushes: back off, then park. */
-  #onDeliveryFailure(subscriptionKey: string, error: unknown, previousAttempts?: number): void {
-    const attempts = previousAttempts ?? this.#hooks.store.get(subscriptionKey)?.attempt ?? 0;
-    const attempt = attempts + 1;
-    if (attempt >= MAX_DELIVERY_ATTEMPTS) {
-      this.#park(subscriptionKey, attempt, error);
+  async #onDeliveryFailure(attempt: DrainAttempt, error: unknown): Promise<void> {
+    if (!this.#isCurrentAttempt(attempt)) {
+      queueMicrotask(() => this.wake());
       return;
     }
-    this.#backoff(subscriptionKey, attempt, error);
+    const row = this.#hooks.store.get(attempt.subscriptionKey);
+    if (row === undefined || row.epoch !== attempt.epoch) {
+      queueMicrotask(() => this.wake());
+      return;
+    }
+    const attemptCount = Math.min(row.attempt + 1, MAX_DELIVERY_ATTEMPTS);
+    if (attemptCount >= MAX_DELIVERY_ATTEMPTS) {
+      try {
+        await this.#park(attempt, attemptCount, error);
+      } catch (parkError) {
+        // Parking changes delivery ownership, so its fact is required. If the
+        // append fails, keep the cursor obligation live and retry the park on
+        // the next failed delivery instead of silently clearing the alarm.
+        console.error("stream subscription park fact failed; retaining retry obligation", {
+          subscriptionKey: attempt.subscriptionKey,
+          error: parkError,
+          deliveryError: error,
+        });
+        await this.#backoff(attempt, attemptCount, parkError);
+      }
+      return;
+    }
+    await this.#backoff(attempt, attemptCount, error);
   }
 
-  #backoff(subscriptionKey: string, attempt: number, error: unknown): void {
-    const nextAttemptAt = this.#hooks.now() + computeBackoffMs(attempt, this.#hooks.random());
-    this.#hooks.store.nack(subscriptionKey, {
-      attempt,
-      nextAttemptAt,
-      error: errorMessage(error),
-    });
-    this.#hooks.armAlarm(nextAttemptAt);
+  async #backoff(attempt: DrainAttempt, attemptCount: number, error: unknown): Promise<void> {
+    if (!this.#isCurrentAttempt(attempt)) {
+      queueMicrotask(() => this.wake());
+      return;
+    }
+    const nextAttemptAt = this.#hooks.now() + computeBackoffMs(attemptCount, this.#hooks.random());
+    this.#hooks.store.nack(
+      attempt.subscriptionKey,
+      {
+        attempt: attemptCount,
+        nextAttemptAt,
+        error: errorMessage(error),
+      },
+      attempt.epoch,
+    );
+    if (!this.#isCurrentAttempt(attempt)) {
+      queueMicrotask(() => this.wake());
+      return;
+    }
+    await this.#hooks.armAlarm(nextAttemptAt);
+  }
+
+  /** Persist and arm the successor wake before yielding to a remote attempt. */
+  async #armAttemptWatchdog(attempt: DrainAttempt): Promise<void> {
+    if (!this.#isCurrentAttempt(attempt)) return;
+    const nextAttemptAt = this.#hooks.now() + DELIVERY_WATCHDOG_MS;
+    this.#hooks.store.armWatchdog(attempt.subscriptionKey, nextAttemptAt, attempt.epoch);
+    if (!this.#isCurrentAttempt(attempt)) return;
+    await this.#hooks.armAlarm(nextAttemptAt);
   }
 
   /**
@@ -856,7 +1014,8 @@ export class StreamSubscribers {
    * failure cannot spam the log. `subscription-resumed` (or a fresh
    * `subscription-configured`) is the way back.
    */
-  #park(subscriptionKey: string, attempts: number, error: unknown): void {
+  async #park(attempt: DrainAttempt, attempts: number, error: unknown): Promise<void> {
+    const { subscriptionKey } = attempt;
     // State-guarded, not idempotency-keyed: a park after resume at an unmoved
     // cursor is a NEW transition and must land as a new fact (an idempotency
     // key derived from the cursor would swallow it and the subscription would
@@ -869,11 +1028,15 @@ export class StreamSubscribers {
       return;
     }
     const row = this.#hooks.store.get(subscriptionKey);
-    this.#hooks.appendFact({
+    if (row === undefined || row.epoch !== attempt.epoch || !this.#isCurrentAttempt(attempt)) {
+      queueMicrotask(() => this.wake());
+      return;
+    }
+    this.#hooks.appendRequiredFact({
       type: "events.iterate.com/stream/subscription-parked",
       payload: {
         subscriptionKey,
-        atOffset: row?.ackedOffset ?? 0,
+        atOffset: row.ackedOffset,
         attempts,
         error: errorMessage(error),
       },
@@ -883,26 +1046,52 @@ export class StreamSubscribers {
     // every onAlarm forever — a permanent alarm hot loop per parked
     // subscription. Clear the backoff, keep the cursor (the park fact carries
     // the attempts + error for the audit trail).
-    if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
+    this.#hooks.store.ack(subscriptionKey, row.ackedOffset, attempt.epoch);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
   }
 
-  #armAlarmFromStore(): void {
+  async #repointAlarmFromStore(): Promise<void> {
     // Not a bare MIN over the rows: parked rows keep their cursor but must
     // not drive the alarm, and a row whose retry is IN FLIGHT this very turn
     // still carries its (past) due time until the attempt settles — re-arming
     // from either spins the alarm at zero delay.
     const state = this.#hooks.coreState();
+    const now = this.#hooks.now();
     let next: number | null = null;
     for (const row of this.#hooks.store.list()) {
       if (row.nextAttemptAt === null) continue;
       const key = row.subscriptionKey;
-      if (state.configuredSubscribersByKey[key]?.parkedAtOffset !== undefined) continue;
-      if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
-      if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
+      const configured = state.configuredSubscribersByKey[key];
+      if (configured === undefined || configured.parkedAtOffset !== undefined) continue;
+      const inFlight = this.#pushDrains.has(key) || this.#pokesInFlight.has(key);
+      const candidate =
+        inFlight && row.nextAttemptAt <= now
+          ? now + DELIVERY_WATCHDOG_RECHECK_MS
+          : row.nextAttemptAt;
+      if (next === null || candidate < next) next = candidate;
     }
-    if (next !== null) this.#hooks.armAlarm(next);
+    await this.#hooks.repointAlarm(next);
+  }
+
+  async #repointAlarmAfterDelivery(): Promise<void> {
+    try {
+      await this.#repointAlarmFromStore();
+    } catch (error) {
+      console.error("stream alarm repoint after delivery failed", error);
+    }
+  }
+
+  #isCurrentAttempt(attempt: DrainAttempt): boolean {
+    const configured = this.#hooks.coreState().configuredSubscribersByKey[attempt.subscriptionKey];
+    if (
+      configured === undefined ||
+      configured.parkedAtOffset !== undefined ||
+      configured.latestConfiguredEvent.offset !== attempt.configOffset
+    ) {
+      return false;
+    }
+    return this.#hooks.store.get(attempt.subscriptionKey)?.epoch === attempt.epoch;
   }
 
   // ===========================================================================
@@ -1151,6 +1340,7 @@ export class StreamSubscribers {
       bytesSent: 0,
       settleLatency: new LatencyRing(),
       pingRtt: new LatencyRing(),
+      ...(args.ownership === undefined ? {} : { ownership: args.ownership }),
       wake: () => void pump(),
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
@@ -1205,7 +1395,8 @@ export class StreamSubscribers {
    */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
     const connection = this.#connections.get(subscriptionKey);
-    if (connection === undefined) return;
+    const attempt = connection?.ownership;
+    if (connection === undefined || attempt === undefined) return;
     const details = { subscriptionKey, error };
     if (isDurableObjectLifecycleError(error)) {
       // A killed, evicted, deployed, or overloaded subscriber is a modelled
@@ -1216,8 +1407,23 @@ export class StreamSubscribers {
     } else {
       console.error("stream durable sink delivery failed; backing off before re-poke", details);
     }
-    this.#onDeliveryFailure(subscriptionKey, error);
+    // #onDeliveryFailure reaches its durable nack/park write before its first
+    // await. Preserve that ordering: close() wakes reconcile, which must see
+    // the retry obligation already in place.
+    const recovery = this.#onDeliveryFailure(attempt, error);
     connection.close("delivery-failed");
+    this.#hooks.keepAlive(
+      recovery
+        .catch((recoveryError) => {
+          console.error("stream durable sink recovery failed; restarting incarnation", {
+            subscriptionKey,
+            error: recoveryError,
+            deliveryError: error,
+          });
+          this.#hooks.abortIncarnation("stream durable sink recovery failed");
+        })
+        .finally(() => this.#repointAlarmAfterDelivery()),
+    );
   }
 
   // ===========================================================================
@@ -1412,6 +1618,14 @@ export class StreamSubscribers {
  * retry hits the warm cache (the same shape #1761's build budget had).
  */
 const DELIVERY_TIMEOUT_MS = 60_000;
+/**
+ * Durable successor wake for an in-flight delivery. It intentionally trails
+ * the local timeout: the normal timeout path records its real backoff first;
+ * the watchdog only takes over when the incarnation disappears mid-await.
+ */
+const DELIVERY_WATCHDOG_MS = DELIVERY_TIMEOUT_MS + 5_000;
+/** Keep a consumed watchdog alive while its original attempt is still settling. */
+const DELIVERY_WATCHDOG_RECHECK_MS = 5_000;
 
 /**
  * Minimum interval between mutual-ping rounds. Sampling is observer-driven

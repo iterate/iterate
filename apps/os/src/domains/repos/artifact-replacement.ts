@@ -1,3 +1,5 @@
+import { disposeIgnoredRpcResult } from "iterate/live-state";
+
 const DELETE_POLL_INTERVAL_MS = 500;
 const DELETE_POLL_ATTEMPTS = 60;
 
@@ -31,7 +33,8 @@ export async function replaceArtifactWithEmptyRepo(
 
     for (let attempt = 0; attempt < pollAttempts; attempt++) {
       try {
-        await artifacts.get(name);
+        const repo = await artifacts.get(name);
+        disposeIgnoredRpcResult(repo);
       } catch (error) {
         if ((error as { code?: unknown })?.code !== "NOT_FOUND") throw error;
         deletionApplied = true;

@@ -285,11 +285,18 @@ export type SubscriptionCursorStore = {
    * that deliveries succeed, and resetting the counter here is what let a
    * deterministically failing subscriber spin forever without ever parking.
    */
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void;
+  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
+  /**
+   * Before yielding to a remote push, persist its crash watchdog without
+   * changing the failure count/error. Fenced to the row epoch captured by the
+   * delivery so a seek or same-key recreation wins.
+   */
+  armWatchdog(subscriptionKey: string, nextAttemptAt: number, epoch: number): void;
   /** Failed delivery: record the consecutive attempt count and when to retry. */
   nack(
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
+    epoch?: number,
   ): void;
   /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
   setCursor(subscriptionKey: string, ackedOffset: number): void;
@@ -412,6 +419,30 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null, updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
+      advanceWatermarkFenced: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          ackedOffset: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      armWatchdog: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          nextAttemptAt: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set next_attempt_at = :nextAttemptAt, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
       nack: sql.run<{
         parameters: {
           subscriptionKey: string;
@@ -424,6 +455,20 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         update subscriptions
         set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
         where subscription_key = :subscriptionKey
+      `,
+      nackFenced: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          attempt: number;
+          nextAttemptAt: number;
+          error: string;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       setCursor: sql.run<{
         parameters: {
@@ -498,10 +543,17 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     }
   }
 
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
-    this.#db.advanceWatermark({
+  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
+    const params = { subscriptionKey, ackedOffset, updatedAt: new Date().toISOString() };
+    if (epoch === undefined) this.#db.advanceWatermark(params);
+    else this.#db.advanceWatermarkFenced({ ...params, epoch });
+  }
+
+  armWatchdog(subscriptionKey: string, nextAttemptAt: number, epoch: number): void {
+    this.#db.armWatchdog({
       subscriptionKey,
-      ackedOffset,
+      nextAttemptAt,
+      epoch,
       updatedAt: new Date().toISOString(),
     });
   }
@@ -509,15 +561,18 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   nack(
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
+    epoch?: number,
   ): void {
-    this.#db.nack({
+    const params = {
       subscriptionKey,
       attempt: args.attempt,
       nextAttemptAt: args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
       error: args.error.slice(0, 2_000),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    if (epoch === undefined) this.#db.nack(params);
+    else this.#db.nackFenced({ ...params, epoch });
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {

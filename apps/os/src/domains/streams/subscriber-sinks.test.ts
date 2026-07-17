@@ -224,4 +224,38 @@ describe("wake-handshake RPC ownership", () => {
     ).toThrow("checkpointOffset");
     expect(disposeResult).toHaveBeenCalledOnce();
   });
+
+  test("ignores a late delivery rejection after that exact sink was replaced", async () => {
+    let rejectDelivery!: (error: Error) => void;
+    const delivery = new Promise<void>((_resolve, reject) => {
+      rejectDelivery = reject;
+    });
+    const sink = remoteCallback<Parameters<ProcessEventBatch>[0], Promise<void>>(() => delivery);
+    const onDeliveryError = vi.fn();
+    const retained = retainWakeHandshakeResponse({
+      onDeliveryError,
+      value: {
+        checkpointOffset: 0,
+        sink: sink.raw as ProcessEventBatch,
+        [Symbol.dispose]: vi.fn(),
+      },
+    });
+
+    retained.sink({
+      events: [],
+      path: "/",
+      projectId: "prj_test",
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 0,
+      state: {},
+      streamMaxOffset: 0,
+    });
+    retained.sink[Symbol.dispose]();
+    rejectDelivery(new Error("old delivery failed late"));
+    await Promise.allSettled([delivery]);
+    await Promise.resolve();
+
+    expect(sink.duplicateDispose).toHaveBeenCalledOnce();
+    expect(onDeliveryError).not.toHaveBeenCalled();
+  });
 });

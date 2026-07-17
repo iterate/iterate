@@ -8,6 +8,9 @@ function artifactsError(code: string): Error & { code: string } {
 describe("replaceArtifactWithEmptyRepo", () => {
   it("waits for the acknowledged deletion to become visible before recreating the name", async () => {
     const calls: string[] = [];
+    const disposeRepo = vi.fn(() => {
+      calls.push("dispose:get:present");
+    });
     const artifacts = {
       create: vi.fn(async () => {
         calls.push("create");
@@ -21,7 +24,7 @@ describe("replaceArtifactWithEmptyRepo", () => {
         .fn<Artifacts["get"]>()
         .mockImplementationOnce(async () => {
           calls.push("get:present");
-          return {} as ArtifactsRepo;
+          return { [Symbol.dispose]: disposeRepo } as unknown as ArtifactsRepo;
         })
         .mockImplementationOnce(async () => {
           calls.push("get:missing");
@@ -37,7 +40,15 @@ describe("replaceArtifactWithEmptyRepo", () => {
       sleep: async () => {},
     });
 
-    expect(calls).toEqual(["invalidate", "delete", "get:present", "get:missing", "create"]);
+    expect(calls).toEqual([
+      "invalidate",
+      "delete",
+      "get:present",
+      "dispose:get:present",
+      "get:missing",
+      "create",
+    ]);
+    expect(disposeRepo).toHaveBeenCalledOnce();
     expect(artifacts.create).toHaveBeenCalledWith("repo", { setDefaultBranch: "main" });
   });
 

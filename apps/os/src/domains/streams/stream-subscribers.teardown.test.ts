@@ -57,15 +57,19 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.nextAttemptAt = null;
       row.lastError = null;
     },
-    advanceWatermark: (k, acked) => {
+    advanceWatermark: (k, acked, epoch) => {
       const row = rows.get(k);
-      if (!row) return;
+      if (!row || (epoch !== undefined && row.epoch !== epoch)) return;
       row.ackedOffset = Math.max(row.ackedOffset, acked);
       row.nextAttemptAt = null;
     },
-    nack: (k, args) => {
+    armWatchdog: (k, nextAttemptAt, epoch) => {
       const row = rows.get(k);
-      if (!row) return;
+      if (row !== undefined && row.epoch === epoch) row.nextAttemptAt = nextAttemptAt;
+    },
+    nack: (k, args, epoch) => {
+      const row = rows.get(k);
+      if (!row || (epoch !== undefined && row.epoch !== epoch)) return;
       Object.assign(row, {
         attempt: args.attempt,
         nextAttemptAt: args.nextAttemptAt,
@@ -145,11 +149,14 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         webhook: async () => undefined,
       },
       appendFact: append,
+      appendRequiredFact: append,
       recordEgress: () => undefined,
       now: () => Date.now(),
       random: () => 0.5,
-      armAlarm: () => undefined,
+      armAlarm: async () => undefined,
+      repointAlarm: async () => undefined,
       keepAlive: (promise) => void kept.push(promise),
+      abortIncarnation: () => undefined,
     },
   });
 

@@ -21,6 +21,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { compileEventSelector } from "./event-selector.ts";
+import { StreamAlarm } from "./stream-alarm.ts";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
@@ -110,6 +111,11 @@ export class StreamDurableObject extends DurableObject<Env> {
    * the freshly folded config — see #readCoreProcessorState.
    */
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
+  /** Serialized owner of the platform alarm shared by every durable cursor row. */
+  readonly #alarm = new StreamAlarm({
+    storage: this.ctx.storage,
+    keepAlive: (promise) => this.ctx.waitUntil(promise),
+  });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
   readonly #subscribers = new StreamSubscribers({
@@ -139,8 +145,8 @@ export class StreamDurableObject extends DurableObject<Env> {
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
       appendFact: (event) => {
-        // Facts the delivery machinery produces (presence, parked, poison
-        // records) are observations; appending one must never mask the
+        // Observational facts the delivery machinery produces (presence,
+        // poison records) must never mask the
         // delivery-path operation that produced it, so failures log.
         try {
           this.append(event);
@@ -148,11 +154,19 @@ export class StreamDurableObject extends DurableObject<Env> {
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
+      // A parked fact transfers delivery ownership from the cursor spine to
+      // explicit operator resume. Its append is therefore part of the state
+      // transition, not best-effort evidence.
+      appendRequiredFact: (event) => {
+        this.append(event);
+      },
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#alarm.armNoLaterThan(atMs),
+      repointAlarm: (atMs) => this.#alarm.repoint(atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
+      abortIncarnation: (reason) => this.ctx.abort(reason),
     },
   });
   #coreProcessorState: CoreProcessorState;
@@ -215,33 +229,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
-  alarm(): void {
-    this.#alarmArmedForMs = null;
+  async alarm(): Promise<void> {
+    await this.#alarm.fired();
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
+    await this.#subscribers.onAlarm();
     this.#flushCoreProcessorState();
-  }
-
-  /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
-   */
-  #alarmArmedForMs: number | null = null;
-
-  /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
-    }
   }
 
   // ===========================================================================

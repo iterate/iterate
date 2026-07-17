@@ -19,6 +19,11 @@ describe("isDurableObjectLifecycleError", () => {
     ["durableObjectReset flag", withFlag("durableObjectReset"), true],
     ["retryable flag", withFlag("retryable"), true],
     ["overloaded flag", withFlag("overloaded"), true],
+    [
+      "lifecycle flag on a wrapped cause",
+      new Error("storage operation failed", { cause: withFlag("durableObjectReset") }),
+      true,
+    ],
     ["flag present but not literally true", withFlag("retryable", "yes"), false],
     ["plain Error (app-level throw from the DO)", new Error("kill requested"), false],
     ["string rejection", "kill requested", false],
@@ -26,6 +31,14 @@ describe("isDurableObjectLifecycleError", () => {
     ["undefined", undefined, false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isDurableObjectLifecycleError(error)).toBe(expected);
+  });
+
+  it("terminates safely when an error cause chain is cyclic", () => {
+    const first = new Error("first") as Error & { cause?: unknown };
+    const second = new Error("second", { cause: first });
+    first.cause = second;
+
+    expect(isDurableObjectLifecycleError(first)).toBe(false);
   });
 });
 

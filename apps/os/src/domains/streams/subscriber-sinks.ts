@@ -102,6 +102,7 @@ export function retainProcessEventBatch(
   const retained = retainCallback<Parameters<ProcessEventBatch>[0]>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;
   let pendingDeliveries = 0;
+  let disposed = false;
   const callback: RetainedProcessEventBatch = Object.assign(
     (batch: Parameters<ProcessEventBatch>[0], opts?: DeliveryOptions) => {
       let result: unknown;
@@ -109,7 +110,7 @@ export function retainProcessEventBatch(
         result = retained(batch);
       } catch (error) {
         // A disposed/broken stub can throw synchronously at call time.
-        onDeliveryError?.(error);
+        if (!disposed) onDeliveryError?.(error);
         opts?.onSettled?.("error");
         return;
       }
@@ -124,7 +125,10 @@ export function retainProcessEventBatch(
           .then(
             () => opts?.onSettled?.("ok"),
             (error: unknown) => {
-              onDeliveryError(error);
+              // Replacement/removal disposes this exact sink. A result that
+              // rejects afterwards belongs to the old connection and must not
+              // nack or close a newer same-key connection.
+              if (!disposed) onDeliveryError(error);
               opts?.onSettled?.("error");
             },
           )
@@ -143,6 +147,8 @@ export function retainProcessEventBatch(
     {
       pendingDeliveries: () => pendingDeliveries,
       [Symbol.dispose]() {
+        if (disposed) return;
+        disposed = true;
         try {
           retained[Symbol.dispose]();
         } finally {

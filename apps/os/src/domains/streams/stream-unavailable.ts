@@ -39,13 +39,29 @@ export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
  * and overload/network families carry `overloaded`/`retryable`.
  */
 export function isDurableObjectLifecycleError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const flags = error as {
-    durableObjectReset?: unknown;
-    retryable?: unknown;
-    overloaded?: unknown;
-  };
-  return flags.durableObjectReset === true || flags.retryable === true || flags.overloaded === true;
+  const seen = new Set<object>();
+  let current = error;
+  // Storage and RPC clients may preserve the workerd rejection as `cause`
+  // while adding operation context. Bound and cycle-check that standard chain.
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== "object" || current === null || seen.has(current)) return false;
+    seen.add(current);
+    const flags = current as {
+      cause?: unknown;
+      durableObjectReset?: unknown;
+      retryable?: unknown;
+      overloaded?: unknown;
+    };
+    if (
+      flags.durableObjectReset === true ||
+      flags.retryable === true ||
+      flags.overloaded === true
+    ) {
+      return true;
+    }
+    current = flags.cause;
+  }
+  return false;
 }
 
 /**

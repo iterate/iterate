@@ -424,4 +424,19 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(row.lastError).toBe("ingest failing");
     expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
   });
+
+  it("fences watchdog, nack, and wake watermark writes against a replaced row", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const oldEpoch = store.get("k")!.epoch;
+    store.delete("k");
+    store.ensure("k", 0);
+    const replacement = store.get("k")!;
+
+    store.armWatchdog("k", 100, oldEpoch);
+    store.nack("k", { attempt: 7, nextAttemptAt: 200, error: "old failure" }, oldEpoch);
+    store.advanceWatermark("k", 99, oldEpoch);
+
+    expect(store.get("k")).toEqual(replacement);
+  });
 });

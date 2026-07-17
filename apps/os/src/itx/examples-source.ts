@@ -1479,7 +1479,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/webhooks/github/${urlToken}" && req.method === "POST") {
-      const project = await this.env.ITX.get();
+      using project = await this.env.ITX.get();
       await project.streams.get("${journalPath}").append({
         type: "events.iterate.com/github/webhook-received",
         idempotencyKey: "github:" + (req.headers.get("x-github-delivery") ?? crypto.randomUUID()),

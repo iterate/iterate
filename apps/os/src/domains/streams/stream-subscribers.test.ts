@@ -88,19 +88,26 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.lastError = null;
   }
 
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
+  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
     const row = this.rows.get(subscriptionKey);
-    if (row === undefined) return;
+    if (row === undefined || (epoch !== undefined && row.epoch !== epoch)) return;
     row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
     row.nextAttemptAt = null;
+  }
+
+  armWatchdog(subscriptionKey: string, nextAttemptAt: number, epoch: number): void {
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined || row.epoch !== epoch) return;
+    row.nextAttemptAt = nextAttemptAt;
   }
 
   nack(
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
+    epoch?: number,
   ): void {
     const row = this.rows.get(subscriptionKey);
-    if (row === undefined) return;
+    if (row === undefined || (epoch !== undefined && row.epoch !== epoch)) return;
     row.attempt = args.attempt;
     row.nextAttemptAt = args.nextAttemptAt;
     row.lastError = args.error.slice(0, 2_000);
@@ -153,6 +160,10 @@ function makeHarness() {
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
   const armedAlarms: number[] = [];
+  const repointedAlarms: (number | null)[] = [];
+  let platformAlarmAtMs: number | null = null;
+  let requiredFactFailure: Error | undefined;
+  const abortedIncarnations: string[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
@@ -200,43 +211,58 @@ function makeHarness() {
   };
 
   let storageReads = 0;
-  const subscribers = new StreamSubscribers({
-    idleTeardownMs: 60_000,
-    hooks: {
-      readEvents: ({ afterOffset, limit }) => {
-        storageReads += 1;
-        return log
-          .filter((event) => event.offset > afterOffset)
-          .slice(0, limit)
-          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
-      },
-      coreState: (): CoreProcessorState =>
-        CoreProcessorContract.stateSchema.parse({
-          projectId: "p1",
-          path: "/t",
-          createdAt: streamCreatedAt,
-          maxOffset: assignedMaxOffset,
-          configuredSubscribersByKey: configured,
-        }),
-      store,
-      dial,
-      appendFact: (event) => {
-        facts.push(event);
-        // Mimic the core reducer: a parked fact folds into desired state, and
-        // the spine reads parked-ness from coreState().
-        if (event.type === PARKED) {
-          const payload = event.payload as { subscriptionKey: string; atOffset: number };
-          const entry = configured[payload.subscriptionKey];
-          if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
-        }
-      },
-      recordEgress: (count, bytes) => egress.push({ count, bytes }),
-      now: () => now,
-      random: () => 0.5,
-      armAlarm: (atMs) => armedAlarms.push(atMs),
-      keepAlive: (promise) => kept.push(promise),
+  const applyFact = (event: StreamEventInput) => {
+    facts.push(event);
+    // Mimic the core reducer: a parked fact folds into desired state, and
+    // the spine reads parked-ness from coreState().
+    if (event.type === PARKED) {
+      const payload = event.payload as { subscriptionKey: string; atOffset: number };
+      const entry = configured[payload.subscriptionKey];
+      if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
+    }
+  };
+  const hooks: ConstructorParameters<typeof StreamSubscribers>[0]["hooks"] = {
+    readEvents: ({ afterOffset, limit }) => {
+      storageReads += 1;
+      return log
+        .filter((event) => event.offset > afterOffset)
+        .slice(0, limit)
+        .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
     },
-  });
+    coreState: (): CoreProcessorState =>
+      CoreProcessorContract.stateSchema.parse({
+        projectId: "p1",
+        path: "/t",
+        createdAt: streamCreatedAt,
+        maxOffset: assignedMaxOffset,
+        configuredSubscribersByKey: configured,
+      }),
+    store,
+    dial,
+    appendFact: applyFact,
+    appendRequiredFact: (event: StreamEventInput) => {
+      if (requiredFactFailure !== undefined) throw requiredFactFailure;
+      applyFact(event);
+    },
+    recordEgress: (count, bytes) => egress.push({ count, bytes }),
+    now: () => now,
+    random: () => 0.5,
+    armAlarm: async (atMs: number) => {
+      armedAlarms.push(atMs);
+      if (platformAlarmAtMs === null || atMs < platformAlarmAtMs) platformAlarmAtMs = atMs;
+    },
+    repointAlarm: async (atMs: number | null) => {
+      repointedAlarms.push(atMs);
+      platformAlarmAtMs = atMs;
+    },
+    keepAlive: (promise) => kept.push(promise),
+    abortIncarnation: (reason) => abortedIncarnations.push(reason),
+  };
+  let subscribers: StreamSubscribers;
+  const restart = () => {
+    subscribers = new StreamSubscribers({ idleTeardownMs: 60_000, hooks });
+  };
+  restart();
 
   /** Await every kept promise (and any it spawned), then flush microtask chains. */
   const settle = async () => {
@@ -249,10 +275,16 @@ function makeHarness() {
   };
 
   return {
-    subscribers,
+    get subscribers() {
+      return subscribers;
+    },
+    restart,
     store,
     facts,
     armedAlarms,
+    repointedAlarms,
+    platformAlarm: () => platformAlarmAtMs,
+    abortedIncarnations,
     egress,
     pokes,
     pushes,
@@ -280,6 +312,9 @@ function makeHarness() {
     setIncarnation: (createdAt: string | undefined) => {
       streamCreatedAt = createdAt;
     },
+    failRequiredFactsWith: (error: Error | undefined) => {
+      requiredFactFailure = error;
+    },
     configure: (payload: SubscriptionConfiguredPayload, offset = 0) => {
       configured[payload.subscriptionKey] = {
         latestConfiguredEvent: {
@@ -303,7 +338,7 @@ async function driveUntilParked(h: ReturnType<typeof makeHarness>, parks = 1): P
     const next = h.store.minNextAttemptAt();
     if (next === null) throw new Error("no pending retry while driving toward park");
     h.advanceTo(Math.max(h.now(), next) + 1);
-    h.subscribers.onAlarm();
+    await h.subscribers.onAlarm();
     await h.settle();
   }
   if (h.factsOfType(PARKED).length < parks) throw new Error("subscription never parked");
@@ -391,6 +426,104 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(5);
   });
 
+  it("a2. a lifecycle reset during the cursor ack aborts the stale incarnation", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const ack = h.store.ack.bind(h.store);
+    let resetPending = true;
+    h.store.ack = (...args) => {
+      if (resetPending) {
+        resetPending = false;
+        throw new Error("cursor ack failed", {
+          cause: Object.assign(new Error("Durable Object reset because its code was updated"), {
+            durableObjectReset: true,
+            retryable: true,
+          }),
+        });
+      }
+      ack(...args);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(0);
+    expect(h.abortedIncarnations).toEqual([
+      "stream push drain interrupted by Durable Object lifecycle",
+    ]);
+
+    // The persisted watchdog is the replacement incarnation's successor wake:
+    // no append or manual wake is needed on this otherwise quiet stream.
+    const watchdogAt = h.row("k")!.nextAttemptAt!;
+    expect(h.platformAlarm()).toBe(watchdogAt);
+    h.restart();
+    h.advanceTo(watchdogAt + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pushes).toHaveLength(2);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+  });
+
+  it("a3. an internal drain failure enters bounded backoff instead of stranding the cursor", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const ack = h.store.ack.bind(h.store);
+    let failurePending = true;
+    h.store.ack = (...args) => {
+      if (failurePending) {
+        failurePending = false;
+        throw new Error("sqlite write failed");
+      }
+      ack(...args);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    const failed = h.row("k");
+    expect(failed).toMatchObject({ ackedOffset: 0, attempt: 1, lastError: "sqlite write failed" });
+    expect(failed?.nextAttemptAt).not.toBeNull();
+    expect(h.armedAlarms).toContain(failed!.nextAttemptAt!);
+    expect(h.abortedIncarnations).toHaveLength(0);
+
+    h.advanceTo(failed!.nextAttemptAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pushes).toHaveLength(2);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
+  });
+
+  it("a4. a failed recovery write aborts the incarnation instead of losing the retry", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const get = h.store.get.bind(h.store);
+    let recoveryPending = false;
+    h.store.ack = () => {
+      recoveryPending = true;
+      throw new Error("cursor ack failed");
+    };
+    h.store.get = (subscriptionKey) => {
+      if (recoveryPending) throw new Error("cursor recovery read failed");
+      return get(subscriptionKey);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    recoveryPending = false;
+    expect(h.row("k")?.ackedOffset).toBe(0);
+    expect(h.armedAlarms).toContain(h.row("k")!.nextAttemptAt);
+    expect(h.platformAlarm()).toBe(h.row("k")!.nextAttemptAt);
+    expect(h.abortedIncarnations).toEqual(["stream push drain recovery failed"]);
+  });
+
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ selector: { eventTypes: ["a"] } }), 0);
@@ -445,7 +578,7 @@ describe("StreamSubscribers", () => {
     expect(h.pushes).toHaveLength(1);
 
     h.advanceTo(firstRetryAt + 1);
-    h.subscribers.onAlarm();
+    await h.subscribers.onAlarm();
     await h.settle();
 
     expect(h.pushes).toHaveLength(2);
@@ -457,7 +590,7 @@ describe("StreamSubscribers", () => {
     expect(secondRetryAt).toBeLessThanOrEqual(h.now() + computeBackoffMs(2, 1));
 
     h.advanceTo(secondRetryAt + 1);
-    h.subscribers.onAlarm();
+    await h.subscribers.onAlarm();
     await h.settle();
 
     expect(h.pushes).toHaveLength(3);
@@ -506,6 +639,45 @@ describe("StreamSubscribers", () => {
     h.subscribers.onResumed("k");
     await driveUntilParked(h, 2);
     expect(h.factsOfType(PARKED)).toHaveLength(2);
+    expect(h.configured["k"].parkedAtOffset).toBe(0);
+  });
+
+  it("d2. a failed required park fact keeps the retry obligation until parking commits", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.push = async () => {
+      throw new Error("still down");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    while (h.row("k")!.attempt < MAX_DELIVERY_ATTEMPTS - 1) {
+      h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+      await h.subscribers.onAlarm();
+      await h.settle();
+    }
+
+    h.failRequiredFactsWith(new Error("park append failed"));
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: MAX_DELIVERY_ATTEMPTS,
+      lastError: "park append failed",
+    });
+    expect(h.row("k")!.nextAttemptAt).not.toBeNull();
+    expect(h.platformAlarm()).toBe(h.row("k")!.nextAttemptAt);
+
+    h.failRequiredFactsWith(undefined);
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.factsOfType(PARKED)).toHaveLength(1);
     expect(h.configured["k"].parkedAtOffset).toBe(0);
   });
 
@@ -576,7 +748,7 @@ describe("StreamSubscribers", () => {
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
       h.advanceTo(Math.max(h.now(), next) + 1);
-      h.subscribers.onAlarm();
+      await h.subscribers.onAlarm();
       await h.settle();
     }
 
@@ -744,7 +916,7 @@ describe("StreamSubscribers", () => {
       });
 
     for (let i = 0; i < 5; i += 1) h.subscribers.wake();
-    expect(h.pokes).toHaveLength(1);
+    await vi.waitFor(() => expect(h.pokes).toHaveLength(1));
 
     resolvePoke({ checkpointOffset: 2, sink });
     await h.settle();
@@ -982,7 +1154,7 @@ describe("StreamSubscribers", () => {
     // Receiver recovers; the alarm redrive resumes at EXACTLY the failed event.
     failOffset = null;
     h.advanceTo(h.store.minNextAttemptAt()! + 1);
-    h.subscribers.onAlarm();
+    await h.subscribers.onAlarm();
     await h.settle();
 
     expect(h.webhooks.map((call) => call.delivery.event.offset)).toEqual([1, 2, 2, 3]);
@@ -1005,7 +1177,7 @@ describe("StreamSubscribers", () => {
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
       h.advanceTo(next + 1);
-      h.subscribers.onAlarm();
+      await h.subscribers.onAlarm();
       await h.settle();
     }
 
@@ -1040,7 +1212,7 @@ describe("StreamSubscribers", () => {
     // past-timestamp alarm hot loop per parked subscription.
     const armsBefore = h.armedAlarms.length;
     for (let round = 0; round < 5; round += 1) {
-      h.subscribers.onAlarm();
+      await h.subscribers.onAlarm();
       await h.settle();
     }
     expect(h.armedAlarms.length).toBe(armsBefore);
@@ -1071,7 +1243,7 @@ describe("StreamSubscribers", () => {
     // Alarm-driven retry: the poke succeeds (host reachable, checkpoint
     // unchanged) but the streak SURVIVES the handshake.
     h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
-    h.subscribers.onAlarm();
+    await h.subscribers.onAlarm();
     await h.settle();
     expect(h.pokes).toHaveLength(2);
     expect(h.row("k")?.attempt).toBe(1); // preserved, not reset by the poke
@@ -1083,7 +1255,7 @@ describe("StreamSubscribers", () => {
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
       h.advanceTo(next + 1);
-      h.subscribers.onAlarm();
+      await h.subscribers.onAlarm();
       await h.settle();
     }
     expect(h.factsOfType(PARKED)).toHaveLength(1);
@@ -1189,6 +1361,38 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(3);
   });
 
+  it("u2. an old delivery rejection cannot back off or park a same-key recreation", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    for (let n = 1; n <= 3; n += 1) h.append(evt(n, "a"));
+
+    let rejectOldDelivery: ((error: Error) => void) | undefined;
+    h.dialImpl.push = () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectOldDelivery = reject;
+      });
+    h.subscribers.wake();
+    await vi.waitFor(() => expect(h.pushes).toHaveLength(1));
+
+    delete h.configured["k"];
+    h.subscribers.onSubscriptionRemoved("k");
+    h.configure(pushPayload(), 4);
+    h.subscribers.onSubscriptionConfigured(pushPayload(), 4);
+    h.dialImpl.push = async () => {};
+    rejectOldDelivery!(new Error("old receiver failed late"));
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[1]!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 3,
+      attempt: 0,
+      lastError: null,
+      nextAttemptAt: null,
+    });
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+  });
+
   it("v. selector-condition failures on error facts never append more error facts", async () => {
     const h = makeHarness();
     h.configure(
@@ -1287,7 +1491,7 @@ describe("StreamSubscribers", () => {
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
       h.advanceTo(Math.max(h.now(), next) + 1);
-      h.subscribers.onAlarm();
+      await h.subscribers.onAlarm();
       await h.settle();
     }
     expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
@@ -1301,7 +1505,7 @@ describe("StreamSubscribers", () => {
     const next = h.store.minNextAttemptAt();
     expect(next).not.toBeNull();
     h.advanceTo(Math.max(h.now(), next!) + 1);
-    h.subscribers.onAlarm();
+    await h.subscribers.onAlarm();
     await h.settle();
     expect(h.pushes.at(-1)!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
     expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
