@@ -372,6 +372,15 @@ export const resolveChatProject = async (input: {
 }) => {
   const configured = input.explicitProject || input.configuredDefaultProject;
 
+  // A canonical project id needs no catalogue lookup: the project-scoped itx
+  // connection performs the real access check. Besides duplicating that check,
+  // projects.list() probes every visible project's deployment state; an admin
+  // environment with many disposable projects can therefore spend tens of
+  // seconds enumerating unrelated Durable Objects before chat even paints.
+  // Slugs and implicit selection still need the catalogue below, including its
+  // auth-known/missing-project bootstrap path.
+  if (configured?.startsWith("prj_")) return configured;
+
   return await withAuthenticatedOsSession({
     auth: input.auth,
     baseUrl: input.baseUrl,
@@ -396,7 +405,6 @@ export const resolveChatProject = async (input: {
           (candidate) => candidate.id === configured || candidate.slug === configured,
         );
         if (!project) {
-          if (configured.startsWith("prj_")) return configured;
           throw new Error(
             `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
           );
