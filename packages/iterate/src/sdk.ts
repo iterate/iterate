@@ -200,7 +200,9 @@ async function withProject<T>(env: IterateEnv, fn: (project: Project) => Promise
 function overlay<T extends object>(target: T, overrides: Record<PropertyKey, unknown>): T {
   return new Proxy(target, {
     get(object, prop) {
-      if (prop in overrides) return overrides[prop];
+      // Own keys only: `in` would match Object.prototype inherits
+      // (toString, …) and shadow the host object's.
+      if (Object.hasOwn(overrides, prop)) return overrides[prop];
       const value = Reflect.get(object, prop, object);
       return typeof value === "function" ? value.bind(object) : value;
     },
