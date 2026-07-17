@@ -2,7 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import { agentCommandAccessibleLabel } from "./agent-presentation.ts";
-import { Agent, AgentCommandPresentation } from "./agent.tsx";
+import {
+  AgentCommandPresentation,
+  AgentDetailCard,
+  AgentListRow,
+  AgentSidebarRow,
+} from "./agent.tsx";
 import { buildAgentForest } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 
@@ -54,46 +59,34 @@ describe("Agent presentation family", () => {
     expect(agentCommandAccessibleLabel(node, false)).toContain("Shift+P to unpin");
   });
 
-  test("detail renders the complete path and every available exact timestamp", () => {
-    const agent = record("/agents/a/long/and-readable/path", {
+  test("the sidebar row is a one-line shortcut: title only, no metadata spill", () => {
+    const agent = record("/agents/inbox", {
       metadata: {
-        pinned: false,
-        activity: "A complete current-condition sentence that may wrap across several lines.",
-        summary:
-          "A full two-sentence summary belongs in the roomy detail header. It must remain readable even when the viewport makes it wrap beyond two visual lines.",
-      },
-      timestamps: {
-        createdAt: CREATED_AT,
-        lastWorkAt: "2026-07-17T10:01:00.000Z",
-        metadataUpdatedAt: "2026-07-17T10:02:00.000Z",
-        activityUpdatedAt: "2026-07-17T10:03:00.000Z",
-        runtimeUpdatedAt: "2026-07-17T10:04:00.000Z",
+        pinned: true,
+        title: "Customer inbox",
+        activity: "Triaging customer mail",
+        summary: "A long summary that must never render in the sidebar.",
       },
     });
+    const [node] = buildAgentForest({ [agent.path]: agent });
+    if (node === undefined) throw new Error("missing test node");
+
     const markup = renderToStaticMarkup(
-      <Agent
-        agent={agent}
-        variant="detail"
-        nowMs={Date.parse(CREATED_AT)}
-        actions={{ onTogglePinned: () => undefined }}
-      />,
+      <AgentSidebarRow node={node} onOpen={() => undefined} onTogglePinned={() => undefined} />,
     );
 
-    expect(markup).toContain(agent.path);
-    expect(markup).toContain("Created");
-    expect(markup).toContain("Last work");
-    expect(markup).toContain("Metadata updated");
-    expect(markup).toContain("Activity updated");
-    expect(markup).toContain("Runtime updated");
-    expect(markup).toContain("2026-07-17T10:04:00.000Z");
-    expect(markup.match(/line-clamp-none/g)).toHaveLength(2);
+    expect(markup).toContain("Customer inbox");
+    expect(markup).toContain('data-agent-variant="sidebar"');
+    expect(markup).not.toContain("Triaging customer mail");
+    expect(markup).not.toContain("never render in the sidebar");
+    expect(markup).not.toContain("<time");
   });
 
-  test("detail keeps the selected agent's state separate from active descendants", () => {
-    const parent = record("/agents/parent", {
-      metadata: { pinned: false, activity: "Waiting for the child", waitingFor: "user_input" },
+  test("a collapsed catalog row aggregates its subtree into the dot and a subagent count", () => {
+    const parent = record("/agents/release", {
+      metadata: { pinned: false, title: "Release readiness", activity: "Waiting for approval" },
     });
-    const child = record("/agents/parent/child", {
+    const child = record("/agents/release/child", {
       runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
       timestamps: {
         createdAt: CREATED_AT,
@@ -105,24 +98,64 @@ describe("Agent presentation family", () => {
     if (node === undefined) throw new Error("missing test node");
 
     const markup = renderToStaticMarkup(
-      <Agent
-        agent={parent}
-        variant="detail"
+      <AgentListRow
+        node={node}
         nowMs={Date.parse(CREATED_AT)}
-        tree={{ ...node, expanded: true }}
-        actions={{ onTogglePinned: () => undefined }}
+        expanded={false}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        onToggleChildren={() => undefined}
       />,
     );
 
-    expect(markup).toContain("Waiting for user input");
-    expect(markup).toContain("1 waiting for user");
-    expect(markup).toContain("1 active below");
-    expect(markup).toContain("1 child agent");
-    expect(markup).not.toContain("Running code");
+    expect(markup).toContain('data-agent-state="running_code"');
+    expect(markup).toContain("Running code");
+    expect(markup).toContain("1 subagent");
+    expect(markup).toContain("Waiting for approval");
+    expect(markup).toContain('aria-label="Expand child agents"');
+    // The catalog row stays terse: no runtime-count chips, no path text.
     expect(markup).not.toContain("1 script");
+    expect(markup).not.toContain(">/agents/release<");
   });
 
-  test("large variants expose unready triggers as a neutral diagnostic", () => {
+  test("detail renders the complete path, self state, and every available exact timestamp", () => {
+    const agent = record("/agents/a/long/and-readable/path", {
+      metadata: {
+        pinned: false,
+        activity: "A complete current-condition sentence that may wrap across several lines.",
+        summary:
+          "A full two-sentence summary belongs in the roomy detail header. It must remain readable even when the viewport makes it wrap beyond two visual lines.",
+        waitingFor: "user_input",
+      },
+      timestamps: {
+        createdAt: CREATED_AT,
+        lastWorkAt: "2026-07-17T10:01:00.000Z",
+        metadataUpdatedAt: "2026-07-17T10:02:00.000Z",
+        activityUpdatedAt: "2026-07-17T10:03:00.000Z",
+        runtimeUpdatedAt: "2026-07-17T10:04:00.000Z",
+      },
+    });
+    const markup = renderToStaticMarkup(
+      <AgentDetailCard
+        agent={agent}
+        nowMs={Date.parse(CREATED_AT)}
+        onTogglePinned={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain(agent.path);
+    expect(markup).toContain("Needs input");
+    expect(markup).toContain("current-condition sentence");
+    expect(markup).toContain("two-sentence summary");
+    expect(markup).toContain("Created");
+    expect(markup).toContain("Last work");
+    expect(markup).toContain("Metadata updated");
+    expect(markup).toContain("Activity updated");
+    expect(markup).toContain("Runtime updated");
+    expect(markup).toContain("2026-07-17T10:04:00.000Z");
+  });
+
+  test("detail exposes unready triggers as a neutral diagnostic without inventing a queue", () => {
     const agent = record("/agents/unready", {
       runtime: {
         ...ZERO_AGENT_RUNTIME,
@@ -131,11 +164,10 @@ describe("Agent presentation family", () => {
     });
 
     const markup = renderToStaticMarkup(
-      <Agent
+      <AgentDetailCard
         agent={agent}
-        variant="detail"
         nowMs={Date.parse(CREATED_AT)}
-        actions={{ onTogglePinned: () => undefined }}
+        onTogglePinned={() => undefined}
       />,
     );
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   SidebarGroup,
@@ -8,22 +8,19 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItx } from "iterate/react";
-import { Agent } from "./agent.tsx";
-import {
-  buildAgentForest,
-  flattenVisibleAgentRows,
-  pinnedAgentShortcuts,
-  sidebarStructuralRoots,
-} from "./agent-tree.ts";
+import { AgentSidebarRow } from "./agent.tsx";
+import { buildAgentForest, pinnedAgentShortcuts, sidebarStructuralRoots } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
-const CLOCK_TICK_MS = 15_000;
 const PINNED_LIMIT = 5;
 const ROOT_LIMIT = 8;
-const VISIBLE_ROW_LIMIT = 40;
 
+/**
+ * The sidebar is navigation, not a dashboard: a short list of one-line
+ * shortcuts (pinned first, then the busiest roots) and a link to the full
+ * catalog. Trees, counts, and timestamps live on the agents page.
+ */
 export function SidebarAgents({
   agents,
   projectId,
@@ -33,33 +30,13 @@ export function SidebarAgents({
   projectId: string;
   projectSlug: string;
 }) {
-  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const navigate = useNavigate();
-  const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   const forest = useMemo(() => buildAgentForest(agents), [agents]);
-  const pinned = useMemo(() => pinnedAgentShortcuts(forest), [forest]);
-  const { roots, hiddenRootCount } = useMemo(
-    () => sidebarStructuralRoots(forest, ROOT_LIMIT),
-    [forest],
-  );
-  const allVisibleRows = useMemo(
-    () => flattenVisibleAgentRows(roots, expandedPaths),
-    [expandedPaths, roots],
-  );
-  const visibleRows = allVisibleRows.slice(0, VISIBLE_ROW_LIMIT);
-
-  const toggleExpanded = useCallback((path: string) => {
-    setExpandedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }, []);
-
-  function openAgent(path: string) {
-    void navigate(linkOptionsForStreamPath(projectSlug, path));
-  }
+  const rows = useMemo(() => {
+    const pinned = pinnedAgentShortcuts(forest).slice(0, PINNED_LIMIT);
+    const { roots } = sidebarStructuralRoots(forest, ROOT_LIMIT);
+    return [...pinned, ...roots];
+  }, [forest]);
 
   async function togglePinned(agent: AgentRecord): Promise<void> {
     try {
@@ -70,82 +47,28 @@ export function SidebarAgents({
     }
   }
 
-  if (forest.length === 0) return null;
-  const hiddenPinned = Math.max(0, pinned.length - PINNED_LIMIT);
-  const hiddenExpandedRows = Math.max(0, allVisibleRows.length - visibleRows.length);
-
+  if (rows.length === 0) return null;
   return (
     <>
       <SidebarSeparator className="group-data-[collapsible=icon]:hidden" />
-      {pinned.length > 0 ? (
-        <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-          <SidebarGroupLabel>Pinned agents</SidebarGroupLabel>
-          <SidebarGroupContent className="space-y-0.5">
-            {pinned.slice(0, PINNED_LIMIT).map((node) => (
-              <Agent
-                key={`pinned:${node.agent.path}`}
-                agent={node.agent}
-                variant="sidebar"
-                nowMs={nowMs}
-                shortcut
-                tree={{ ...node, expanded: false }}
-                actions={{
-                  onOpen: () => openAgent(node.agent.path),
-                  onTogglePinned: () => togglePinned(node.agent),
-                }}
-              />
-            ))}
-            {hiddenPinned > 0 ? (
-              <Link
-                to="/projects/$projectSlug/agents"
-                params={{ projectSlug }}
-                search={{}}
-                className="block px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                +{hiddenPinned} pinned
-              </Link>
-            ) : null}
-          </SidebarGroupContent>
-        </SidebarGroup>
-      ) : null}
       <SidebarGroup className="group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel>Agents</SidebarGroupLabel>
-        <SidebarGroupContent className="space-y-0.5">
-          {visibleRows.map(({ node, depth }) => {
-            const expanded = expandedPaths.has(node.agent.path);
-            return (
-              <div key={node.agent.path} style={{ paddingLeft: `${Math.min(depth, 3) * 10}px` }}>
-                <Agent
-                  agent={node.agent}
-                  variant="sidebar"
-                  nowMs={nowMs}
-                  tree={{ ...node, expanded }}
-                  actions={{
-                    onOpen: () => openAgent(node.agent.path),
-                    onTogglePinned: () => togglePinned(node.agent),
-                    onToggleChildren: () => toggleExpanded(node.agent.path),
-                  }}
-                />
-              </div>
-            );
-          })}
-          {hiddenExpandedRows > 0 ? (
-            <Link
-              to="/projects/$projectSlug/agents"
-              params={{ projectSlug }}
-              search={{}}
-              className="block px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              +{hiddenExpandedRows} expanded agents
-            </Link>
-          ) : null}
+        <SidebarGroupContent className="flex flex-col">
+          {rows.map((node) => (
+            <AgentSidebarRow
+              key={node.agent.path}
+              node={node}
+              onOpen={() => void navigate(linkOptionsForStreamPath(projectSlug, node.agent.path))}
+              onTogglePinned={() => togglePinned(node.agent)}
+            />
+          ))}
           <Link
             to="/projects/$projectSlug/agents"
             params={{ projectSlug }}
             search={{}}
-            className="block px-2 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+            className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
           >
-            Show all agents{hiddenRootCount > 0 ? ` · ${hiddenRootCount} more` : ""}
+            All agents
           </Link>
         </SidebarGroupContent>
       </SidebarGroup>

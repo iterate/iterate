@@ -1,28 +1,7 @@
-import { useCallback, useState, type FormEvent } from "react";
-import {
-  Bot,
-  ChevronRight,
-  Copy,
-  Github,
-  Mail,
-  Pencil,
-  Send,
-  Slack,
-  Star,
-  type LucideIcon,
-} from "lucide-react";
-import { Badge } from "@iterate-com/ui/components/badge";
+import { useCallback, useState, type FormEvent, type MouseEvent } from "react";
+import { ChevronRight, Copy, Pencil, Star } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemFooter,
-  ItemMedia,
-  ItemTitle,
-} from "@iterate-com/ui/components/item";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -31,74 +10,188 @@ import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-t
 import {
   deriveAgentDisplayState,
   type AgentBinding,
+  type AgentDisplayState,
   type AgentRecord,
 } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 
-type AgentProps = {
-  agent: AgentRecord;
-  variant: "detail" | "catalog" | "sidebar";
-  nowMs: number;
-  tree?: Pick<
-    AgentTreeNode,
-    | "depth"
-    | "children"
-    | "aggregateRuntime"
-    | "aggregateWaiting"
-    | "aggregateLastWorkAt"
-    | "aggregateAgentCount"
-    | "aggregateActiveCount"
-  > & { expanded: boolean };
-  actions: {
-    onOpen?: () => void;
-    onTogglePinned: () => void | Promise<void>;
-    onRename?: (title: string) => boolean | Promise<boolean>;
-    onToggleChildren?: () => void;
-  };
-  shortcut?: boolean;
-};
+/**
+ * One-line sidebar shortcut: dot, title, and a hover-revealed pin toggle.
+ * Everything else (state text, activity, counts) lives in the catalog and
+ * detail surfaces.
+ */
+export function AgentSidebarRow({
+  node,
+  onOpen,
+  onTogglePinned,
+}: {
+  node: AgentTreeNode;
+  onOpen: () => void;
+  onTogglePinned: () => void | Promise<void>;
+}) {
+  const agent = node.agent;
+  const displayState = agentNodeDisplayState(node);
+  const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
+  return (
+    <div
+      className="group/agent relative"
+      data-agent-path={agent.path}
+      data-agent-state={displayState}
+      data-agent-variant="sidebar"
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        title={agent.path}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+      >
+        <StateDot state={state} className="size-1.5" />
+        <span className="min-w-0 flex-1 truncate">{agentTitle(agent)}</span>
+        {agent.metadata.pinned ? (
+          <Star
+            className="size-3 shrink-0 fill-amber-400 text-amber-500 group-hover/agent:opacity-0"
+            aria-hidden
+          />
+        ) : null}
+      </button>
+      <PinButton
+        pinned={agent.metadata.pinned}
+        onToggle={onTogglePinned}
+        className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 focus-visible:opacity-100 group-hover/agent:opacity-100"
+      />
+    </div>
+  );
+}
 
-export function Agent({ agent, variant, nowMs, tree, actions, shortcut = false }: AgentProps) {
+/**
+ * Flat catalog list row: title and recency on the first line, state and
+ * current activity on the second. The dot aggregates the whole collapsed
+ * subtree; the chevron gutter is the only tree chrome.
+ */
+export function AgentListRow({
+  node,
+  nowMs,
+  expanded,
+  onOpen,
+  onTogglePinned,
+  onToggleChildren,
+}: {
+  node: AgentTreeNode;
+  nowMs: number;
+  expanded: boolean;
+  onOpen: () => void;
+  onTogglePinned: () => void | Promise<void>;
+  onToggleChildren?: () => void;
+}) {
+  const agent = node.agent;
+  const displayState = agentNodeDisplayState(node);
+  const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
+  const description = agent.metadata.activity ?? agent.metadata.summary;
+  const descendantCount = node.aggregateAgentCount - 1;
+  const expandable = node.children.length > 0 && onToggleChildren !== undefined;
+  return (
+    <div
+      className="group/agent relative flex items-start gap-2 border-b py-2.5 pr-2 hover:bg-accent/40"
+      data-agent-path={agent.path}
+      data-agent-state={displayState}
+      data-agent-variant="catalog"
+    >
+      <span className="flex w-4 shrink-0 justify-end pt-0.5">
+        {expandable ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="relative z-10 size-4 text-muted-foreground"
+            aria-label={expanded ? "Collapse child agents" : "Expand child agents"}
+            aria-expanded={expanded}
+            onClick={onToggleChildren}
+          >
+            <ChevronRight
+              className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+            />
+          </Button>
+        ) : null}
+      </span>
+      <StateDot state={state} className="mt-1.5" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          {/* Stretched link: the title's ::after covers the row, so the whole
+              row opens the agent while staying a single keyboard target. */}
+          <button
+            type="button"
+            onClick={onOpen}
+            title={agent.path}
+            className="min-w-0 truncate text-left text-sm font-medium after:absolute after:inset-0 hover:underline"
+          >
+            {agentTitle(agent)}
+          </button>
+          {agent.metadata.pinned ? (
+            <Star
+              className="size-3 shrink-0 self-center fill-amber-400 text-amber-500 group-hover/agent:opacity-0"
+              aria-hidden
+            />
+          ) : null}
+          <time
+            dateTime={node.aggregateLastWorkAt}
+            title={node.aggregateLastWorkAt}
+            className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground group-hover/agent:opacity-0"
+          >
+            {formatTimeAgo(node.aggregateLastWorkAt, nowMs)}
+          </time>
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="shrink-0">{state.label}</span>
+          {descendantCount > 0 ? (
+            <span className="shrink-0">
+              · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          {description === undefined ? null : (
+            <span className="min-w-0 truncate">· {description}</span>
+          )}
+          <BindingLink
+            binding={agent.binding}
+            className="relative z-10 ml-auto max-w-48 shrink-0"
+          />
+        </div>
+      </div>
+      <PinButton
+        pinned={agent.metadata.pinned}
+        onToggle={onTogglePinned}
+        className="absolute right-1 top-1.5 opacity-0 focus-visible:opacity-100 group-hover/agent:opacity-100"
+      />
+    </div>
+  );
+}
+
+/**
+ * The detail header is the one roomy surface: full activity and summary,
+ * runtime counts, the durable path, and exact timestamps — all as quiet text.
+ */
+export function AgentDetailCard({
+  agent,
+  nowMs,
+  onTogglePinned,
+  onRename,
+}: {
+  agent: AgentRecord;
+  nowMs: number;
+  onTogglePinned: () => void | Promise<void>;
+  onRename?: (title: string) => boolean | Promise<boolean>;
+}) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(() => agentTitle(agent));
-  const [updatingPin, setUpdatingPin] = useState(false);
-  const detail = variant === "detail";
-  const catalog = variant === "catalog";
-  const sidebar = variant === "sidebar";
-  const selfState = deriveAgentDisplayState(agent.runtime, agent.metadata.waitingFor);
-  const selfRuntimeActive = deriveAgentDisplayState(agent.runtime) !== "idle";
-  // A collapsed catalog/sidebar root represents its whole subtree. The
-  // detail header represents the selected agent itself; descendants have
-  // their own explicit summary immediately below it.
-  const aggregateTree = detail ? undefined : tree;
-  const displayState =
-    aggregateTree === undefined ? selfState : agentNodeDisplayState(aggregateTree);
+  const displayState = deriveAgentDisplayState(agent.runtime, agent.metadata.waitingFor);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const StateIcon = state.icon;
-  const BindingIcon = bindingIcon(agent.binding);
-  const lastWorkAt = aggregateTree?.aggregateLastWorkAt ?? agent.timestamps.lastWorkAt;
-  const descendantCount = Math.max(0, (tree?.aggregateAgentCount ?? 1) - 1);
-  const activeDescendants = Math.max(
-    0,
-    (tree?.aggregateActiveCount ?? (selfRuntimeActive ? 1 : 0)) - (selfRuntimeActive ? 1 : 0),
-  );
+  const counts = runtimeCountSummaries(agent);
   const focusTitleInput = useCallback((node: HTMLInputElement | null) => node?.focus(), []);
 
   async function submitTitle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const title = draftTitle.trim();
-    if (title === "" || actions.onRename === undefined) return;
-    if (await actions.onRename(title)) setEditingTitle(false);
-  }
-
-  async function togglePinned() {
-    if (updatingPin) return;
-    setUpdatingPin(true);
-    try {
-      await actions.onTogglePinned();
-    } finally {
-      setUpdatingPin(false);
-    }
+    if (title === "" || onRename === undefined) return;
+    if (await onRename(title)) setEditingTitle(false);
   }
 
   async function copyPath() {
@@ -112,208 +205,114 @@ export function Agent({ agent, variant, nowMs, tree, actions, shortcut = false }
   }
 
   return (
-    <Item
-      variant={detail || catalog ? "outline" : "default"}
-      size={sidebar ? "xs" : detail ? "default" : "sm"}
-      className={cn(
-        "relative min-w-0 overflow-hidden",
-        detail && "items-start p-4 sm:p-5",
-        catalog && "bg-card/60",
-        sidebar && "rounded-md border-0 px-1.5 hover:bg-sidebar-accent",
-      )}
+    <div
+      className="flex min-w-0 flex-col gap-2"
       data-agent-path={agent.path}
       data-agent-state={displayState}
-      data-agent-variant={variant}
+      data-agent-variant="detail"
     >
-      <span
-        className={cn(
-          "absolute inset-y-0 left-0 w-1",
-          state.rail,
-          state.active && "motion-safe:animate-pulse",
-        )}
-        aria-hidden
-      />
-      {tree !== undefined &&
-      tree.children.length > 0 &&
-      !shortcut &&
-      actions.onToggleChildren !== undefined ? (
-        <ItemMedia className={cn(sidebar ? "ml-0" : "ml-1")}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={tree.expanded ? "Collapse child agents" : "Expand child agents"}
-            aria-expanded={tree.expanded}
-            onClick={(event) => {
-              event.stopPropagation();
-              actions.onToggleChildren?.();
-            }}
-          >
-            <ChevronRight className={cn("transition-transform", tree.expanded && "rotate-90")} />
-          </Button>
-        </ItemMedia>
-      ) : (
-        <ItemMedia variant="icon" className={sidebar ? "ml-1" : "ml-2"}>
-          {BindingIcon === Bot ? (
-            <Bot className="text-muted-foreground" aria-hidden />
-          ) : (
-            <BindingIcon className="text-muted-foreground" aria-hidden />
-          )}
-        </ItemMedia>
-      )}
-
-      <ItemContent className="min-w-0">
-        {editingTitle && detail ? (
-          <form onSubmit={(event) => void submitTitle(event)} className="flex max-w-xl gap-2">
-            <Input
-              ref={focusTitleInput}
-              value={draftTitle}
-              onChange={(event) => setDraftTitle(event.target.value)}
-              aria-label="Agent title"
-            />
-            <Button type="submit" size="sm">
-              Save
-            </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setEditingTitle(false)}>
-              Cancel
-            </Button>
-          </form>
-        ) : (
-          <ItemTitle className={cn("max-w-full", detail && "text-lg")}>
-            {actions.onOpen === undefined ? (
-              <span className="min-w-0 truncate" title={agent.path}>
-                {agentTitle(agent)}
-              </span>
-            ) : (
-              <button
+      <div className="flex items-start gap-2.5">
+        <StateDot state={state} className="mt-2.5" />
+        <div className="min-w-0 flex-1">
+          {editingTitle ? (
+            <form onSubmit={(event) => void submitTitle(event)} className="flex max-w-xl gap-2">
+              <Input
+                ref={focusTitleInput}
+                value={draftTitle}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                aria-label="Agent title"
+              />
+              <Button type="submit" size="sm">
+                Save
+              </Button>
+              <Button
                 type="button"
-                className="min-w-0 truncate text-left hover:underline"
-                onClick={actions.onOpen}
-                title={agent.path}
+                size="sm"
+                variant="ghost"
+                onClick={() => setEditingTitle(false)}
               >
-                {agentTitle(agent)}
-              </button>
-            )}
-            {shortcut ? (
-              <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                Pinned
-              </Badge>
-            ) : null}
-          </ItemTitle>
-        )}
-
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1 font-medium text-foreground/80">
-            <StateIcon className={cn("size-3", state.active && "motion-safe:animate-pulse")} />
-            {state.label}
-          </span>
-          {agent.binding === undefined ? null : <BindingBadge binding={agent.binding} />}
-          {activeDescendants > 0 ? <span>{activeDescendants} active below</span> : null}
-          {descendantCount > 0 ? (
-            <span>
-              {descendantCount} child agent{descendantCount === 1 ? "" : "s"}
-            </span>
-          ) : null}
-          <time dateTime={lastWorkAt} title={lastWorkAt} className="tabular-nums">
-            {formatTimeAgo(lastWorkAt, nowMs)}
-          </time>
+                Cancel
+              </Button>
+            </form>
+          ) : (
+            <h2
+              className="min-w-0 truncate text-lg font-semibold tracking-tight"
+              title={agent.path}
+            >
+              {agentTitle(agent)}
+            </h2>
+          )}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+            <span>{state.label}</span>
+            <BindingLink binding={agent.binding} className="max-w-64" />
+            <time
+              dateTime={agent.timestamps.lastWorkAt}
+              title={agent.timestamps.lastWorkAt}
+              className="tabular-nums"
+            >
+              {formatTimeAgo(agent.timestamps.lastWorkAt, nowMs)}
+            </time>
+            {counts.map((count) => (
+              <span key={count}>{count}</span>
+            ))}
+          </div>
         </div>
-
-        {agent.metadata.activity === undefined ? null : (
-          <ItemDescription
-            className={cn(sidebar && "line-clamp-1 text-[11px]", detail && "line-clamp-none")}
-          >
-            {agent.metadata.activity}
-          </ItemDescription>
-        )}
-        {sidebar || agent.metadata.summary === undefined ? null : (
-          <ItemDescription className={cn(detail ? "max-w-3xl line-clamp-none" : "line-clamp-2")}>
-            {agent.metadata.summary}
-          </ItemDescription>
-        )}
-        {sidebar ? null : <RuntimeCounts agent={agent} tree={aggregateTree} />}
-      </ItemContent>
-
-      <ItemActions className="ml-auto self-start">
-        {detail && actions.onRename !== undefined && !editingTitle ? (
+        <div className="flex shrink-0 items-center gap-1">
+          {onRename !== undefined && !editingTitle ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Rename agent"
+                    onClick={() => {
+                      setDraftTitle(agentTitle(agent));
+                      setEditingTitle(true);
+                    }}
+                  />
+                }
+              >
+                <Pencil />
+              </TooltipTrigger>
+              <TooltipContent>Rename agent</TooltipContent>
+            </Tooltip>
+          ) : null}
+          <PinButton pinned={agent.metadata.pinned} onToggle={onTogglePinned} size="icon-sm" />
+        </div>
+      </div>
+      {agent.metadata.activity === undefined ? null : (
+        <p className="max-w-3xl text-sm">{agent.metadata.activity}</p>
+      )}
+      {agent.metadata.summary === undefined ? null : (
+        <p className="max-w-3xl text-sm text-muted-foreground">{agent.metadata.summary}</p>
+      )}
+      <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-1">
+          <code className="min-w-0 truncate font-mono text-[11px]" title={agent.path}>
+            {agent.path}
+          </code>
           <Tooltip>
             <TooltipTrigger
               render={
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
-                  aria-label="Rename agent"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setDraftTitle(agentTitle(agent));
-                    setEditingTitle(true);
-                  }}
+                  size="icon-xs"
+                  aria-label="Copy agent path"
+                  onClick={() => void copyPath()}
                 />
               }
             >
-              <Pencil />
+              <Copy />
             </TooltipTrigger>
-            <TooltipContent>Rename agent</TooltipContent>
+            <TooltipContent>Copy agent path</TooltipContent>
           </Tooltip>
-        ) : null}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size={sidebar ? "icon-xs" : "icon-sm"}
-                aria-label={agent.metadata.pinned ? "Unpin agent" : "Pin agent"}
-                aria-pressed={agent.metadata.pinned}
-                disabled={updatingPin}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void togglePinned();
-                }}
-              />
-            }
-          >
-            <Star className={cn(agent.metadata.pinned && "fill-amber-400 text-amber-500")} />
-          </TooltipTrigger>
-          <TooltipContent>{agent.metadata.pinned ? "Unpin agent" : "Pin agent"}</TooltipContent>
-        </Tooltip>
-      </ItemActions>
-
-      {detail || catalog ? (
-        <ItemFooter
-          className={cn(
-            "min-w-0 border-t pt-2 text-xs text-muted-foreground",
-            detail && "w-full flex-col items-stretch gap-3",
-          )}
-        >
-          <div className="flex min-w-0 items-start gap-2">
-            {detail ? (
-              <code className="min-w-0 flex-1 whitespace-normal break-all rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">
-                {agent.path}
-              </code>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <code className="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]" />
-                  }
-                >
-                  {agent.path}
-                </TooltipTrigger>
-                <TooltipContent>{agent.path}</TooltipContent>
-              </Tooltip>
-            )}
-            {detail ? (
-              <Button type="button" size="xs" variant="ghost" onClick={() => void copyPath()}>
-                <Copy /> Copy path
-              </Button>
-            ) : null}
-          </div>
-          {detail ? <DetailTimestamps timestamps={agent.timestamps} nowMs={nowMs} /> : null}
-        </ItemFooter>
-      ) : null}
-    </Item>
+        </div>
+        <DetailTimestamps timestamps={agent.timestamps} nowMs={nowMs} />
+      </div>
+    </div>
   );
 }
 
@@ -353,7 +352,7 @@ export function AgentCommandPresentation({
         <span
           className={cn(
             "size-2 shrink-0 rounded-full",
-            state.rail,
+            state.dot,
             hasChildren && !shortcut && "-ml-1 ring-2 ring-background",
           )}
         />
@@ -368,7 +367,7 @@ export function AgentCommandPresentation({
             {activity ?? node.agent.path}
           </span>
           {node.agent.binding === undefined ? null : (
-            <BindingBadge binding={node.agent.binding} interactive={false} />
+            <span className="max-w-48 shrink-0 truncate">{bindingLabel(node.agent.binding)}</span>
           )}
         </span>
       </span>
@@ -393,6 +392,71 @@ export function AgentCommandPresentation({
   );
 }
 
+function StateDot({
+  state,
+  className,
+}: {
+  state: (typeof AGENT_DISPLAY_STATE_PRESENTATION)[AgentDisplayState];
+  className?: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "size-2 shrink-0 rounded-full",
+        state.dot,
+        state.active && "motion-safe:animate-pulse",
+        className,
+      )}
+      aria-hidden
+    />
+  );
+}
+
+function PinButton({
+  pinned,
+  onToggle,
+  size = "icon-xs",
+  className,
+}: {
+  pinned: boolean;
+  onToggle: () => void | Promise<void>;
+  size?: "icon-xs" | "icon-sm";
+  className?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  async function toggle(event: MouseEvent) {
+    event.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onToggle();
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size={size}
+            className={cn("bg-background/80", className)}
+            aria-label={pinned ? "Unpin agent" : "Pin agent"}
+            aria-pressed={pinned}
+            disabled={busy}
+            onClick={(event) => void toggle(event)}
+          />
+        }
+      >
+        <Star className={cn(pinned && "fill-amber-400 text-amber-500")} />
+      </TooltipTrigger>
+      <TooltipContent>{pinned ? "Unpin agent" : "Pin agent"}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function DetailTimestamps({
   timestamps,
   nowMs,
@@ -408,11 +472,11 @@ function DetailTimestamps({
     ["Runtime updated", timestamps.runtimeUpdatedAt],
   ].filter((entry): entry is [string, string] => entry[1] !== undefined);
   return (
-    <dl className="grid min-w-0 grid-cols-2 gap-x-5 gap-y-1 lg:grid-cols-3">
+    <dl className="flex flex-wrap gap-x-4 gap-y-1">
       {entries.map(([label, value]) => (
-        <div key={label} className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-wide">{label}</dt>
-          <dd className="min-w-0 text-[11px] tabular-nums text-foreground/70">
+        <div key={label} className="flex items-baseline gap-1.5">
+          <dt>{label}</dt>
+          <dd className="tabular-nums text-foreground/70">
             <time dateTime={value} title={value} aria-label={`${label}: ${value}`}>
               {formatTimeAgo(value, nowMs)}
             </time>
@@ -423,76 +487,46 @@ function DetailTimestamps({
   );
 }
 
-function RuntimeCounts({ agent, tree }: { agent: AgentRecord; tree: AgentProps["tree"] }) {
-  const runtime = tree?.aggregateRuntime ?? agent.runtime;
+/** Self-only in-flight work, phrased as short "count noun" fragments. */
+function runtimeCountSummaries(agent: AgentRecord): string[] {
+  const runtime = agent.runtime;
   const unreadyTriggers = Math.max(0, runtime.triggers.pending - runtime.triggers.runnable);
-  const waiting = tree?.aggregateWaiting ?? {
-    userInput: agent.metadata.waitingFor === "user_input" ? 1 : 0,
-    externalEvent: agent.metadata.waitingFor === "external_event" ? 1 : 0,
-    timer: agent.metadata.waitingFor === "timer" ? 1 : 0,
-  };
-  const counts = [
-    runtime.runningScripts > 0
-      ? `${runtime.runningScripts} script${runtime.runningScripts === 1 ? "" : "s"}`
-      : null,
-    runtime.llmRequests.started + runtime.llmRequests.requested > 0
-      ? `${runtime.llmRequests.started + runtime.llmRequests.requested} model request${runtime.llmRequests.started + runtime.llmRequests.requested === 1 ? "" : "s"}`
-      : null,
-    runtime.llmRequests.scheduled + runtime.triggers.runnable > 0
-      ? `${runtime.llmRequests.scheduled + runtime.triggers.runnable} queued`
-      : null,
-    unreadyTriggers > 0
-      ? `${unreadyTriggers} pending trigger${unreadyTriggers === 1 ? "" : "s"}`
-      : null,
-    waiting !== undefined && waiting.userInput > 0 ? `${waiting.userInput} waiting for user` : null,
-    waiting !== undefined && waiting.externalEvent > 0
-      ? `${waiting.externalEvent} waiting externally`
-      : null,
-    waiting !== undefined && waiting.timer > 0 ? `${waiting.timer} waiting for timer` : null,
+  const modelRequests = runtime.llmRequests.started + runtime.llmRequests.requested;
+  const queued = runtime.llmRequests.scheduled + runtime.triggers.runnable;
+  return [
+    runtime.runningScripts > 0 ? pluralCount(runtime.runningScripts, "script") : null,
+    modelRequests > 0 ? pluralCount(modelRequests, "model request") : null,
+    queued > 0 ? `${queued} queued` : null,
+    unreadyTriggers > 0 ? pluralCount(unreadyTriggers, "pending trigger") : null,
   ].filter((value): value is string => value !== null);
-  if (counts.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-1 pt-0.5">
-      {counts.map((count) => (
-        <Badge key={count} variant="secondary" className="h-4 px-1.5 text-[10px] font-normal">
-          {count}
-        </Badge>
-      ))}
-    </div>
-  );
 }
 
-function BindingBadge({
+function pluralCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function BindingLink({
   binding,
-  interactive = true,
+  className,
 }: {
-  binding: AgentBinding;
-  interactive?: boolean;
+  binding: AgentBinding | undefined;
+  className?: string;
 }) {
-  const Icon = bindingIcon(binding);
+  if (binding === undefined) return null;
   const label = bindingLabel(binding);
   const url = bindingUrl(binding);
-  const content = (
-    <Badge variant="outline" className="h-4 max-w-52 gap-1 px-1.5 text-[10px] font-normal">
-      <Icon />
-      <span className="truncate">{label}</span>
-    </Badge>
-  );
-  if (!interactive || url === undefined) return content;
+  if (url === undefined) return <span className={cn("truncate", className)}>{label}</span>;
   return (
-    <a href={url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-      {content}
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      className={cn("truncate hover:text-foreground hover:underline", className)}
+    >
+      {label}
     </a>
   );
-}
-
-function bindingIcon(binding: AgentBinding | undefined): LucideIcon {
-  if (binding?.type === "slack_thread") return Slack;
-  if (binding?.type === "telegram_thread") return Send;
-  if (binding?.type === "email_thread") return Mail;
-  if (binding?.type === "github_pull_request" || binding?.type === "github_check_run")
-    return Github;
-  return Bot;
 }
 
 function bindingLabel(binding: AgentBinding): string {

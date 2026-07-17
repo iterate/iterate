@@ -42,7 +42,6 @@ beforeEach(() => {
   });
   HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
     if (this.matches("li[data-index]")) return rect(142);
-    if (this.getAttribute("aria-labelledby") === "all-agents-heading") return rect(1_000, 200);
     return rect(800);
   };
   globalThis.ResizeObserver = class ResizeObserver {

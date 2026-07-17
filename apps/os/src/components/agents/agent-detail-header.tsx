@@ -2,10 +2,9 @@ import { useId, useMemo, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { Badge } from "@iterate-com/ui/components/badge";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItx } from "iterate/react";
-import { Agent } from "./agent.tsx";
+import { AgentDetailCard, AgentListRow } from "./agent.tsx";
 import {
   buildAgentForest,
   flattenVisibleAgentRows,
@@ -58,6 +57,15 @@ export function AgentDetailHeader({
     }
   }
 
+  async function togglePinned(agent: AgentRecord): Promise<void> {
+    try {
+      const itx = await connectItx(projectId);
+      await itx.agents.get(agent.path).setMetadata({ pinned: !agent.metadata.pinned });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update pin.");
+    }
+  }
+
   function toggleExpanded(childPath: string) {
     setExpandedPaths((current) => {
       const next = new Set(current);
@@ -68,27 +76,23 @@ export function AgentDetailHeader({
   }
 
   return (
-    <section className="shrink-0 border-b bg-muted/20 px-4 py-3 sm:px-6" aria-label="Agent details">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3">
-        <Agent
+    <section className="shrink-0 border-b px-4 py-3 sm:px-6" aria-label="Agent details">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2">
+        <AgentDetailCard
           agent={node.agent}
-          variant="detail"
           nowMs={nowMs}
-          tree={{ ...node, expanded: true }}
-          actions={{
-            onTogglePinned: async () => {
-              await updateMetadata({ pinned: !node.agent.metadata.pinned });
-            },
-            onRename: (title) => updateMetadata({ title }),
+          onTogglePinned={async () => {
+            await updateMetadata({ pinned: !node.agent.metadata.pinned });
           }}
+          onRename={(title) => updateMetadata({ title })}
         />
         {descendantCount > 0 ? (
-          <div className="space-y-2" aria-label="Child agents">
+          <div className="flex flex-col gap-1" aria-label="Child agents">
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              className="h-8 justify-start px-1.5"
+              className="h-7 justify-start px-1 text-xs text-muted-foreground"
               aria-controls={childrenRegionId}
               aria-expanded={childrenOpen}
               onClick={() => setChildrenOpen((open) => !open)}
@@ -96,63 +100,41 @@ export function AgentDetailHeader({
               <ChevronRight
                 className={childrenOpen ? "rotate-90 transition-transform" : "transition-transform"}
               />
-              {descendantCount} child agent{descendantCount === 1 ? "" : "s"}
-              {activeDescendants > 0 ? (
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">
-                  {activeDescendants} active
-                </Badge>
-              ) : null}
+              {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
+              {activeDescendants > 0 ? ` · ${activeDescendants} active` : ""}
             </Button>
             {childrenOpen ? (
               <div
                 id={childrenRegionId}
                 className="max-h-40 overflow-y-auto overscroll-contain pr-1 sm:max-h-56"
               >
-                <div className="grid gap-2 lg:grid-cols-2">
-                  {visibleChildRows.map(({ node: child, depth }) => {
-                    const expanded = expandedPaths.has(child.agent.path);
-                    return (
-                      <div
-                        key={child.agent.path}
-                        style={{ marginLeft: `${Math.min(depth, 3) * 14}px` }}
-                      >
-                        <Agent
-                          agent={child.agent}
-                          variant="catalog"
-                          nowMs={nowMs}
-                          tree={{ ...child, expanded }}
-                          actions={{
-                            onOpen: () =>
-                              void navigate(
-                                linkOptionsForStreamPath(projectSlug, child.agent.path),
-                              ),
-                            onTogglePinned: async () => {
-                              try {
-                                const itx = await connectItx(projectId);
-                                await itx.agents
-                                  .get(child.agent.path)
-                                  .setMetadata({ pinned: !child.agent.metadata.pinned });
-                              } catch (error) {
-                                toast.error(
-                                  error instanceof Error ? error.message : "Could not update pin.",
-                                );
-                              }
-                            },
-                            onToggleChildren: () => toggleExpanded(child.agent.path),
-                          }}
-                        />
-                      </div>
-                    );
-                  })}
+                <div className="flex flex-col">
+                  {visibleChildRows.map(({ node: child, depth }) => (
+                    <div
+                      key={child.agent.path}
+                      style={{ paddingLeft: `${Math.min(depth, 3) * 16}px` }}
+                    >
+                      <AgentListRow
+                        node={child}
+                        nowMs={nowMs}
+                        expanded={expandedPaths.has(child.agent.path)}
+                        onOpen={() =>
+                          void navigate(linkOptionsForStreamPath(projectSlug, child.agent.path))
+                        }
+                        onTogglePinned={() => togglePinned(child.agent)}
+                        onToggleChildren={() => toggleExpanded(child.agent.path)}
+                      />
+                    </div>
+                  ))}
                 </div>
                 {descendantCount > visibleChildRows.length ? (
                   <Link
                     to="/projects/$projectSlug/agents"
                     params={{ projectSlug }}
                     search={{}}
-                    className="inline-flex text-xs font-medium text-muted-foreground hover:text-foreground"
+                    className="inline-flex pt-1 text-xs font-medium text-muted-foreground hover:text-foreground"
                   >
-                    View all {descendantCount} child agents in the catalog
+                    View all {descendantCount} subagents in the catalog
                   </Link>
                 ) : null}
               </div>

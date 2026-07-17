@@ -1,44 +1,26 @@
-import { Braces, CirclePause, Clock3, Sparkles, Terminal, UserRound } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-tree.ts";
 import type { AgentDisplayState } from "~/domains/agents/agent-presence.ts";
 
+/**
+ * The dot encodes attention priority, not the full state taxonomy: green =
+ * the agent is working, amber = it needs a human, gray = parked or idle.
+ * The label text carries the precise state.
+ */
 export const AGENT_DISPLAY_STATE_PRESENTATION: Record<
   AgentDisplayState,
-  { label: string; icon: LucideIcon; active: boolean; rail: string }
+  { label: string; active: boolean; dot: string }
 > = {
-  running_code: {
-    label: "Running code",
-    icon: Terminal,
-    active: true,
-    rail: "bg-emerald-500",
-  },
-  waiting_for_model: {
-    label: "Waiting for model",
-    icon: Sparkles,
-    active: true,
-    rail: "bg-sky-500",
-  },
-  queued: { label: "Queued", icon: Braces, active: true, rail: "bg-violet-500" },
-  waiting_for_user_input: {
-    label: "Waiting for user input",
-    icon: UserRound,
-    active: false,
-    rail: "bg-amber-500",
-  },
+  running_code: { label: "Running code", active: true, dot: "bg-emerald-500" },
+  waiting_for_model: { label: "Waiting for model", active: true, dot: "bg-emerald-500" },
+  queued: { label: "Queued", active: true, dot: "bg-emerald-500" },
+  waiting_for_user_input: { label: "Needs input", active: false, dot: "bg-amber-500" },
   waiting_for_external_event: {
-    label: "Waiting for external event",
-    icon: CirclePause,
+    label: "Waiting externally",
     active: false,
-    rail: "bg-orange-400",
+    dot: "bg-muted-foreground/40",
   },
-  waiting_for_timer: {
-    label: "Waiting for timer",
-    icon: Clock3,
-    active: false,
-    rail: "bg-fuchsia-400",
-  },
-  idle: { label: "Idle", icon: CirclePause, active: false, rail: "bg-muted-foreground/25" },
+  waiting_for_timer: { label: "Waiting for timer", active: false, dot: "bg-muted-foreground/40" },
+  idle: { label: "Idle", active: false, dot: "bg-muted-foreground/25" },
 };
 
 export function agentCommandAccessibleLabel(
