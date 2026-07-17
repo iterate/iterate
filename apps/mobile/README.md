@@ -91,8 +91,8 @@ the private half in the Keychain behind Face ID (`expo-secure-store`'s
 `packages/iterate/src/approval-keys.ts` already uses for CI/non-Mac
 machines, not a fake — every grant is a real signature the platform
 verifies, just without Secure Enclave hardware isolation. See
-`tasks/mobile-approver-upgrades.md` for the gap and what closing it needs
-(all three items require leaving Expo Go for a dev build).
+`tasks/mobile-native-capabilities.md` for the gap and what closing it needs
+(these capabilities require leaving Expo Go for a dev build).
 
 ## Running examples
 

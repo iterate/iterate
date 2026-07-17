@@ -4,7 +4,7 @@
 // keeps the private half in the Keychain behind Face ID / Touch ID), then
 // grant or reject held requests as they arrive live. See
 // apps/mobile/src/lib/approvals.ts for the protocol and
-// tasks/mobile-approver-upgrades.md for what a real dev build would add
+// tasks/mobile-native-capabilities.md for what a real dev build would add
 // (hardware-isolated signing, push notifications).
 
 import { useMutation, useQuery } from "@tanstack/react-query";

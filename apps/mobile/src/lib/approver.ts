@@ -9,7 +9,7 @@
 // check, the same "the human read this and approved it" guarantee the
 // Secure Enclave path gives, just without hardware key isolation (the key
 // exists in JS memory for the moment of signing). See
-// tasks/mobile-approver-upgrades.md for closing that gap with a real dev
+// tasks/mobile-native-capabilities.md for closing that gap with a real dev
 // build.
 
 import * as Crypto from "expo-crypto";
