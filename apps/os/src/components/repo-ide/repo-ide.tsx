@@ -26,6 +26,7 @@ import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { CommitDiffPane } from "./commit-diff-pane.tsx";
 import { CommitHistoryPanel } from "./commit-history-panel.tsx";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
+import { discardRepoFile } from "./repo-file-discard.ts";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
@@ -110,6 +111,17 @@ export function RepoIde({
     store.setStaged(path, undefined);
   };
 
+  const discardPath = (path: string) =>
+    discardRepoFile({
+      path,
+      headHasPath: headPathSet.has(path),
+      selected: selectedPath === path,
+      confirmDiscard: (message) => window.confirm(message),
+      discardWorking: (trackedPath) => store.discardWorking(trackedPath),
+      removeWorkingFile: dropChange,
+      closeSelectedFile: () => selectFile(undefined),
+    });
+
   const removePath = (path: string) => {
     // Deleting a not-yet-committed file just drops its change; deleting a
     // HEAD file stages the deletion in the working slot.
@@ -135,7 +147,7 @@ export function RepoIde({
       store.setWorking(path, { type: "write", content: "" });
       selectFile(path);
     },
-    discard: (path) => store.discardWorking(path),
+    discard: discardPath,
     remove: (path, isFolder) => {
       for (const affected of isFolder ? pathsUnder(path) : [path]) removePath(affected);
     },
@@ -585,7 +597,7 @@ export function RepoIde({
                 onCommit={(message, reset) => commit.mutate(message, { onSuccess: reset })}
                 onStage={(path) => store.stage(path)}
                 onUnstage={(path) => store.unstage(path)}
-                onDiscard={(path) => store.discardWorking(path)}
+                onDiscard={discardPath}
                 onDiscardAll={() => store.discardAll()}
                 onOpen={(path, status) =>
                   patchSearch({
@@ -656,6 +668,7 @@ export function RepoIde({
                     }
                     onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
                     onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
+                    onDiscardFile={() => discardPath(selectedPath)}
                     onStageFile={() => store.stage(selectedPath)}
                     onUnstageFile={() => {
                       store.unstage(selectedPath);
