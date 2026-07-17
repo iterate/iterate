@@ -46,11 +46,12 @@ test("a new user can create a project through the UI form", async ({ page }) => 
     await page.goto("/new-project");
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
-    // Create resolves as soon as the project identity exists
-    // (`waitUntilReady: false`), then lands on the project home checklist so
-    // the bootstrap saga is visible. Once `state.ready` flips, the home page
-    // hands off to the onboarding agent. The composer is that destination's
-    // structural chrome; 60s covers birth + saga + handoff.
+    // Create resolves as soon as identity is registered and birth events are
+    // appended (`waitUntilReady: false` — no birth/ready wait), then lands on
+    // the project home checklist so the bootstrap saga is visible. Once
+    // `state.ready` flips, the home page hands off to the onboarding agent.
+    // The composer is that destination's structural chrome; 60s covers saga +
+    // handoff.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
     // Checklist is the early-land destination (project home while bootstrap
     // runs). Locator wait only — no expect() under this outer await (lint).

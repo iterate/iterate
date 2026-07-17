@@ -51,28 +51,20 @@ export function CreateProjectForm({
   const [navigatingAway, setNavigatingAway] = useState(false);
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
-      // Straight through the itx session: create registers the project with
-      // the auth worker (org grant -> claims) and starts the engine bootstrap
-      // saga, then widens THIS socket's access to the new project.
       const session = await connectIterateSession();
-      // Fast path: resolve as soon as the project EXISTS — the bootstrap saga
-      // keeps running behind the handle, and the project home page plays its
-      // progress live from processor pushes until `state.ready` flips.
-      const project = session.projects.create({
+      // Fast path: waitUntilReady: false returns once identity is registered,
+      // the directory is primed, and birth events are appended — not after
+      // processor birth or project/ready. Navigate on that; the project home
+      // plays the checklist from live pushes.
+      await session.projects.create({
         slug: input.slug,
         waitUntilReady: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
-      // ONE pipelined round trip, then navigate: __describe() rides the create
-      // pipeline, so the only wait is create itself (auth registration +
-      // birth). Deliberately NOT awaited here: projects.list() — it probes
-      // engine existence for every project the caller owns, which costs whole
-      // seconds and is exactly the "weird delay" this path had.
-      const description = await project.__describe();
-      // The form validates strict kebab-case, so the auth worker's slug
-      // normalization is an identity for UI creates; the background task
-      // below still reconciles against the canonical record.
-      return { id: description.projectId, slug: input.slug };
+      // Form slug is strict kebab-case; auth normalization is identity for UI
+      // creates. Skip __describe() — it added a needless round trip before
+      // navigation.
+      return { slug: input.slug };
     },
     onSuccess: (project) => {
       setNavigatingAway(true);
@@ -96,21 +88,6 @@ export function CreateProjectForm({
         reconnectIterateSession();
         await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
         await router.invalidate();
-        // Belt and braces: if the auth worker normalized the slug after all,
-        // hop to the canonical URL (the checklist state is server-side, so
-        // nothing is lost).
-        const session = await connectIterateSession();
-        const entry = (await session.projects.list()).find(
-          (candidate) => candidate.id === project.id,
-        );
-        if (entry != null && entry.slug !== project.slug) {
-          void router.navigate({
-            to: "/projects/$projectSlug",
-            params: { projectSlug: entry.slug },
-            search: { welcome: true },
-            replace: true,
-          });
-        }
       })().catch(() => {
         // Claims catch up on the next token refresh regardless; the directory
         // fallback keeps the project usable in the meantime.

@@ -215,13 +215,11 @@ export interface ProjectCollection {
    * Register and bootstrap a project. By default this resolves once the
    * bootstrap saga has committed `project/ready` — convenient for scripts
    * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve once the `project/created` birth
-   * certificate has been processed
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
-   * lands). The dashboard uses the fast path to redirect into the project
-   * instantly and play creation progress from pushes.
+   * `waitUntilReady: false` to resolve once identity is registered, the
+   * directory is primed, and birth events are appended (does not wait for
+   * processor birth or ready): the saga runs behind the returned handle, and
+   * progress is ordinary live state. The dashboard uses this to redirect
+   * into the project home checklist immediately.
    */
   create(args: {
     organizationSlug?: string;

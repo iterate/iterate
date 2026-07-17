@@ -4854,13 +4854,13 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * Register and bootstrap a project. By default this resolves once the
    * bootstrap saga has committed `project/ready` — convenient for scripts
    * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve once the `project/created` birth
-   * certificate has been processed
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
-   * lands). The dashboard uses the fast path to redirect into the project
-   * instantly and play creation progress from pushes.
+   * `waitUntilReady: false` to resolve as soon as the project identity is
+   * registered, the directory is primed, and the bootstrap birth events are
+   * **appended** (not yet waited through processor birth / ready): the saga
+   * runs behind the returned handle, and its progress is ordinary live state
+   * (`itx.liveState` — `state.reduced.ready` flips when bootstrap lands).
+   * The dashboard uses this fast path to redirect into the project home
+   * checklist immediately and play creation progress from pushes.
    */
   async create(args: {
     organizationSlug?: string;
@@ -4931,6 +4931,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       path: "/",
       projectId: args.projectId,
     });
+    // Fast path for the dashboard: identity + directory + birth events are
+    // enough to navigate into the project home and watch the saga via live
+    // state. Waiting for processor birth here is what made Create spin for
+    // many seconds while the user saw nothing of the checklist.
+    if (args.waitUntilReady === false) {
+      return project;
+    }
+
     await timedStep("create-timing", timing, "wait-project-birth", () =>
       project.processor.waitUntilProcessed({
         offset: Math.max(created.offset, subscription.offset),
@@ -4941,20 +4949,16 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     );
-    // The project now EXISTS and its birth has been processed. Whether to
-    // also wait for bootstrap readiness is the caller's choice.
-    if (args.waitUntilReady !== false) {
-      await timedStep("create-timing", timing, "wait-project-ready", () =>
-        stream.waitForEvent({
-          afterOffset: created.offset,
-          eventTypes: ["events.iterate.com/project/ready"],
-          // Tight on purpose: the saga should complete in seconds (see
-          // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-          // be fixed, not waited out). Preview CI warms slots before the suites.
-          timeoutMs: 60_000,
-        }),
-      );
-    }
+    await timedStep("create-timing", timing, "wait-project-ready", () =>
+      stream.waitForEvent({
+        afterOffset: created.offset,
+        eventTypes: ["events.iterate.com/project/ready"],
+        // Tight on purpose: the saga should complete in seconds (see
+        // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+        // be fixed, not waited out). Preview CI warms slots before the suites.
+        timeoutMs: 60_000,
+      }),
+    );
 
     return project;
   }
