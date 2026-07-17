@@ -78,7 +78,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   // message, same as the dashboard's new-chat page and the app's own send
   // mutation (chat.tsx).
   const agent = project.agents.get(agentPath) as RpcStub<Agent>;
-  await agent.create({});
+  await agent.create();
   const sent = await agent.message(
     "Reply with a short greeting. Do not run any code or take any other action.",
   );

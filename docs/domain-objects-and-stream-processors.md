@@ -30,29 +30,39 @@ anything. Mutation hangs off that handle:
 
 ```ts
 const agent = itx.agents.get("/agents/researcher");
-await agent.create({ systemPrompt: "..." });
+await agent.create();
+await agent.append({
+  type: "events.iterate.com/agents/context-added",
+  idempotencyKey: "researcher-role:v1",
+  payload: {
+    role: "system",
+    key: "agent/researcher-role",
+    content: "You are the project's research specialist.",
+  },
+});
 await agent.message("Start the research");
 ```
 
-This is why the API is `agents.get(path).create(...)`, rather than
+This is why the API is `agents.get(path).create()`, rather than
 `agents.create(...)`: addressing and existence remain separate, and every
 subsequent operation uses the same path-bound handle.
 
 ## Creation is an explicit birth certificate
 
 Every hosted domain processor owns a distinct past-tense `*/created` event.
-Its payload has one convention and no generic identity fields:
+Its payload contains only immutable facts required for that domain object to
+exist, and no generic identity fields. Many processors use a `{ config }`
+shape; an existence-only birth can be empty:
 
 ```ts
 {
-  config: {
-    // facts this processor needs in order to exist
-  },
+  // domain-owned immutable birth facts, if any
 }
 ```
 
 Path, parent path, and "kind" do not belong in this generic shape. Paths come
-from event/source coordinates; domain-specific facts belong under `config`.
+from event/source coordinates. The Agent birth is deliberately `{}`: model
+configuration and prompt context are mutable stream events, not birth facts.
 The reducer stores the exact payload in `state.birthCertificate`.
 
 The birth must be the first event in that processor's domain history. A
@@ -118,13 +128,12 @@ still sees exactly one birth. Reusing a key for a different type, payload,
 metadata, or durability is rejected rather than silently returning the first
 event. Reducer leniency must never hide two actual `*/created` records.
 
-`create` is not an “ensure” operation for a long-lived object: defaults and
-caller-supplied birth config may change between deployments while the existing
-birth remains immutable. Reconnects, webhook retries, recurring jobs, and UI
-remounts first inspect `processor.snapshot().state.birthCertificate`; they call
-`create` only when it is `null`. Concurrent first creators may both observe
-`null`; their identical idempotency-keyed batches safely converge, while
-different births fail loudly.
+`create` ensures existence; it does not reconcile later configuration or
+context. Once a birth exists, a repeated call waits through the already
+observed creation boundary and returns without rebuilding mutable setup.
+Concurrent first creators may both observe `null`; their identical,
+idempotency-keyed batches safely converge, while different batches fail
+loudly. Policy changes after birth are new domain events.
 
 ### Creation commands own the whole birth batch
 
@@ -136,18 +145,32 @@ from `create` therefore means later command calls observe the birth and setup.
 
 An agent creation batch is the reference shape:
 
-1. `agent/created` with the agent config;
+1. existence-only `agent/created` with payload `{}`;
 2. `capability-host/created` for the same stream;
-3. the ordinary workspace capability and boot-input setup events;
-4. explicit Agent and Capability Host subscriptions;
-5. `waitUntilProcessed({ offset: finalBatchOffset })` on both processors.
+3. ordinary `agent/configured` model policy and keyed system-context events;
+4. the workspace capability and boot-context setup events;
+5. explicit Agent and Capability Host subscriptions;
+6. `waitUntilProcessed({ offset: finalBatchOffset })` on both processors.
 
-`agent.create({ initialEvents })` may add durable, idempotency-keyed startup
-facts to that same atomic append. The final wait includes them. Onboarding uses
-this to commit its kickoff context with the births and subscriptions instead
-of racing a second append. Unkeyed inputs are not retry-safe, and ephemeral
-events are not valid startup facts because durable processors cannot wait
-through them.
+Agent `create()` deliberately takes no arguments. It establishes only the
+platform-authored defaults and machinery above; caller-selected context, model
+configuration, and tasks are ordinary events appended afterwards through
+`agent.append(...)` or a higher-level helper. This keeps an agent's birth independent of
+the caller that happened to win the creation race. The default model and base
+prompt are still visible as events rather than hidden properties of birth.
+
+Post-creation events own their own retry contract. Give durable startup facts
+an explicit revisioned idempotency key, and retry the append independently if
+a process fails between `create()` and `append()`. One idempotency key names
+one exact event payload forever; when shipped policy content changes, bump its
+revision and append the new occurrence. Onboarding follows this pattern: it
+ensures the generic agent exists and then always appends the same revisioned
+prompt and kickoff facts, so retries and concurrent callers converge. A keyed
+context item composes with every differently keyed item; it supersedes only
+the prior item with the same key. `agent/system-prompt` is the well-known
+readiness and execution-policy slot, not a separate authorization mechanism:
+any actor with authority to append to that stream can intentionally update it.
+Additional instructions should normally use their own key so they compose.
 
 Transport routers use the same batch shape when they create routed agents,
 with one additional facet birth and subscription. Their source webhook is
@@ -158,12 +181,79 @@ Some objects have asynchronous provisioning after birth. They use a separate
 Repo are the current examples. Their public create APIs may additionally wait
 for readiness when their caller needs a usable provisioned result.
 
+## Prefer a typed append door to one-event wrapper methods
+
+Every durable domain object should normally expose `append(...)` as its direct
+event-writing API. Derive its input from the processor contract rather than
+hand-copying a union:
+
+```ts
+type WidgetEventInput = ConsumedInput<WidgetProcessorContract>;
+
+async append(...events: WidgetEventInput[]): Promise<StreamEvent[]> {
+  await this.assertCreated();
+  return this.stream.append(
+    ...events.map((event) => WidgetProcessorContract.parseConsumedInput(event)),
+  );
+}
+```
+
+`ConsumedInput<Contract>` resolves every payload from the event catalog and
+the exact `consumes` tuple. `parseConsumedInput` is its runtime twin, so an RPC
+caller cannot send a merely resolvable but unconsumed event after TypeScript is
+erased. The resulting input requires each contract payload and excludes
+`ephemeral: true`, because a durable wake processor cannot receive ephemeral
+rows. Call the raw stream door for events outside that processor's vocabulary
+or for intentionally ephemeral events.
+
+This derived union proves durable shape and processor vocabulary, not that an
+event is a valid next state transition or has particular provenance. Possession
+of the domain handle is the append authority in this trust model. `create()`
+remains the normal birth path, and higher-level methods remain responsible for
+coordinated lifecycle invariants; a trusted low-level caller can still append a
+second birth or an unmatched completion and make the reducer reject the
+journal. Do not misdescribe `ConsumedInput` as a command-state validator.
+
+Do not add `configure()`, `rename()`, `setFoo()`, or one method per event when
+the implementation would only wrap `stream.append({ type, payload })`. Those
+methods duplicate the event schema, hide the journal model, and drift when the
+contract changes. A higher-level method earns its place when it adds real
+domain semantics—encryption, external I/O, attachment storage, provenance,
+multi-stream coordination, birth/readiness waits, or another invariant that
+cannot be expressed by validating and appending the event itself. Convenience
+helpers may build on `append`; they are not a substitute for the typed door.
+
+This is an API-shape rule, not merely an implementation preference. Do not
+expose a domain object that has only `setName`, `addContext`, and similar
+event-shaped commands while hiding its journal vocabulary. The mechanically
+derived typed `append` is the primary mutation contract; named methods are
+reserved for operations that actually coordinate more than validation plus
+one append.
+
 ## Configuration after birth
 
-The birth certificate holds the complete initial config. Later configuration
-is an ordinary domain event, not another birth and not a universal framework
-method. Today Agent owns `agent/configured`; callers can append that event
-directly.
+A birth certificate holds only the immutable facts required for existence.
+Configuration that may change is an ordinary domain event, not another birth
+and not a universal framework method. Agent's birth is empty; its creation
+batch establishes the default model with `agent/configured`, and callers can
+append the same event type later to change model policy:
+
+```ts
+await agent.append({
+  type: "events.iterate.com/agent/configured",
+  idempotencyKey: "researcher-model:v1",
+  payload: { config: { llm: { model: "openai/gpt-5.6-sol" } } },
+});
+```
+
+Additional instructions are keyed `agents/context-added` events, as in the
+earlier example. Use a distinct key to compose; reusing a key explicitly
+supersedes only that context item.
+
+`agent.append(...)` follows the general pattern above: its `AgentEventInput`
+is `ConsumedInput<AgentProcessorContract>`. Use the lower-level
+`agent.stream.append(...)` only when intentionally writing an event outside
+the Agent processor's vocabulary or an ephemeral event to the shared stream.
 
 Config patches use `mergeProcessorConfig` with these exact rules:
 
@@ -177,6 +267,17 @@ Facet processors whose config is immutable simply keep it in their birth
 certificate. A processor may define its own later config events when the
 domain needs them; for example, Sandbox has `sandbox/configured`. We do not
 invent a generic `configure()` RPC merely to wrap ordinary appends.
+
+## Empty-state contract cutovers stay empty-state
+
+When a contract change is paired with deleting and recreating production data,
+do not add migration readers, compatibility reducers, fallback parsers, heal
+paths, or tests for the discarded contract. Those mechanisms create a second
+behavioral mode that the rollout explicitly does not need. Treat the data reset
+and recreation as part of the change's acceptance proof, then test only the
+new contract against the new state. Agent v2 follows this rule; its production
+procedure is documented in
+[Agents: Production Reset](../apps/os/docs/agents.md#production-reset).
 
 ## Catalogs list domain births, not path prefixes
 
@@ -204,7 +305,7 @@ event; it does not mean the destination path implicitly selects a processor.
 | ------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Project                   | `project/created`         | `session.projects.create(...)`                                                                        | Subscribes Project; Project's birth reaction creates the root Capability Host, primary Scheduler, config Repo, and Email router. `project/ready` follows config-repo and worker readiness.                           |
 | Repo                      | `repo/created`            | `project.repos.create(...)`, global repo creation, or Project bootstrap for `/repos/config`           | Subscribes Repo, cross-posts its birth to `/`, provisions the artifact, then emits `repo/ready`.                                                                                                                     |
-| Agent                     | `agent/created`           | `project.agents.get(path).create(...)` or a Slack/Telegram/Email router                               | Creates the paired Capability Host, setup events, and subscriptions; cross-posts its birth to `/`.                                                                                                                   |
+| Agent                     | `agent/created`           | `project.agents.get(path).create()` or a Slack/Telegram/Email router                                  | Creates the paired Capability Host, setup events, and subscriptions; cross-posts its birth to `/`. Caller-selected context/configuration is appended afterwards.                                                     |
 | Capability Host           | `capability-host/created` | Agent creation, Project bootstrap for `/`, or `capabilityHosts.get(path).create()`                    | Subscription is explicit; standalone create waits through its batch.                                                                                                                                                 |
 | Scheduler                 | `scheduler/created`       | Project bootstrap or `schedulers.get(path).create()`                                                  | Subscription is explicit; create waits through its batch.                                                                                                                                                            |
 | Secret                    | `secret/created`          | `secrets.get(path).create(...)`; integration connection setup uses that same Secret DO API            | Encrypts material before append, subscribes Secret, waits for processing, and cross-posts the birth to `/` without plaintext material.                                                                               |

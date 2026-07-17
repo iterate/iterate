@@ -240,12 +240,7 @@ describe("ProjectProcessor catalogs", () => {
       },
       {
         type: "events.iterate.com/agent/created",
-        payload: {
-          config: {
-            llm: { model: "openai/gpt-5.6-sol" },
-            systemPrompt: "Handle this Slack thread.",
-          },
-        },
+        payload: {},
         source: {
           crossPostedFrom: [
             {

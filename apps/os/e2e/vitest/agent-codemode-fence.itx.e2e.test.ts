@@ -21,7 +21,7 @@ test(
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "codemode-fence" });
     using agent = handle.agent("/agents/e2e-codemode-fence");
-    await agent.create({});
+    await agent.create();
 
     // The reply an LLM provider would journal: prose, then one fenced script
     // whose sendMessage argument itself contains a ```text block.
