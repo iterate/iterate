@@ -353,13 +353,19 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     const settle: {
       executionId: string;
       expiresAt: number;
+      reason: "pending-settlement" | "recovery";
       settlement: ScriptExecutionSettlementValue;
     }[] = [];
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
       if (this.#liveExecutions.has(executionId)) continue;
       const pendingSettlement = this.#pendingSettlements.get(executionId);
       if (pendingSettlement !== undefined) {
-        settle.push({ executionId, expiresAt: execution.expiresAt, settlement: pendingSettlement });
+        settle.push({
+          executionId,
+          expiresAt: execution.expiresAt,
+          reason: "pending-settlement",
+          settlement: pendingSettlement,
+        });
         continue;
       }
       if (execution.status === "requested" && now < execution.expiresAt) {
@@ -381,16 +387,21 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       settle.push({
         executionId,
         expiresAt: execution.expiresAt,
+        reason: "recovery",
         settlement: settlementForUndrivenScript(execution.status),
       });
     }
     // Settle inline — this runs inside the head event's outer blocking closure
     // (see processEvent), so awaiting the single atomic append holds the frame.
     if (settle.length === 0) return;
-    for (const { executionId, settlement } of settle) {
-      console.error("[capability-host] settling undriven script execution", {
+    for (const { executionId, reason, settlement } of settle) {
+      if (reason !== "recovery") continue;
+      console.info("[capability-host] recovering undriven script execution", {
+        cancellation: settlement.status === "failed" ? settlement.cancellation : undefined,
         executionId,
-        settlement,
+        failureKind: settlement.status === "failed" ? settlement.failureKind : undefined,
+        phase: settlement.status === "failed" ? settlement.phase : undefined,
+        status: settlement.status,
       });
     }
     // One stream append is both faster and stronger than serial appends: a

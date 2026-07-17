@@ -61,11 +61,15 @@ describe("StreamRpcTarget", () => {
       type: "events.iterate.com/test/ephemeral",
     } satisfies StreamEvent;
     let acquisitions = 0;
+    const remoteTimeouts: number[] = [];
     class TestStreamRpcTarget extends StreamRpcTarget {
       override get durableObjectStub() {
         acquisitions += 1;
         return {
-          waitForEvent: () => (acquisitions === 1 ? firstWait.promise : secondWait.promise),
+          waitForEvent: (input: { timeoutMs: number }) => {
+            remoteTimeouts.push(input.timeoutMs);
+            return acquisitions === 1 ? firstWait.promise : secondWait.promise;
+          },
         } as never;
       }
     }
@@ -83,12 +87,110 @@ describe("StreamRpcTarget", () => {
     try {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(acquisitions).toBe(2);
+      expect(remoteTimeouts).toEqual([20_000, 20_000]);
 
       firstWait.resolve(event);
       await expect(waiting).resolves.toBe(event);
     } finally {
       firstWait.resolve(event);
       secondWait.reject(new Error("late rejection after the ephemeral match"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("pins a cursor-less wait so a durable event in the re-arm gap is replayed", async () => {
+    vi.useFakeTimers();
+    const firstWait = Promise.withResolvers<StreamEvent>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/in-rearm-gap",
+    } satisfies StreamEvent;
+    const waitInputs: { afterOffset?: number; timeoutMs: number }[] = [];
+    let headReads = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return {
+          getMaxOffset: () => {
+            headReads += 1;
+            return 8;
+          },
+          waitForEvent: (input: { afterOffset?: number; timeoutMs: number }) => {
+            waitInputs.push(input);
+            if (waitInputs.length === 1) return firstWait.promise;
+            return input.afterOffset === 8
+              ? Promise.resolve(event)
+              : new Promise<StreamEvent>(() => undefined);
+          },
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({
+      eventTypes: [event.type],
+      timeoutMs: 30_000,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(headReads).toBe(1);
+      expect(waitInputs).toHaveLength(2);
+      expect(waitInputs.map(({ afterOffset }) => afterOffset)).toEqual([8, 8]);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstWait.reject(new Error("late rejection from superseded cursor-less wait"));
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-acquires when the cursor-pinning head read is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstHead = Promise.withResolvers<number>();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/after-orphaned-head-read",
+    } satisfies StreamEvent;
+    let headReads = 0;
+    let waits = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return {
+          getMaxOffset: () => {
+            headReads += 1;
+            return headReads === 1 ? firstHead.promise : 8;
+          },
+          waitForEvent: () => {
+            waits += 1;
+            return Promise.resolve(event);
+          },
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const waiting = stream.waitForEvent({ eventTypes: [event.type], timeoutMs: 30_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(headReads).toBe(2);
+      expect(waits).toBe(1);
+      await expect(waiting).resolves.toBe(event);
+    } finally {
+      firstHead.reject(new Error("late rejection from superseded head read"));
       await waiting.catch(() => undefined);
       vi.useRealTimers();
     }
@@ -109,8 +211,31 @@ describe("StreamRpcTarget", () => {
       projectId: "prj_test",
     });
 
-    await expect(stream.waitForEvent({ predicate: () => true, timeoutMs: 30_000 })).rejects.toBe(
-      predicateError,
+    await expect(
+      stream.waitForEvent({ afterOffset: 0, predicate: () => true, timeoutMs: 30_000 }),
+    ).rejects.toBe(predicateError);
+    expect(acquisitions).toBe(1);
+  });
+
+  it("tags an explicit stream lifecycle rejection without hiding it behind recovery", async () => {
+    const lifecycleError = Object.assign(new Error("kill requested"), {
+      durableObjectReset: true,
+    });
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => Promise.reject(lifecycleError) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.waitForEvent({ afterOffset: 0, timeoutMs: 30_000 })).rejects.toThrow(
+      "stream-unavailable: kill requested",
     );
     expect(acquisitions).toBe(1);
   });
@@ -131,6 +256,7 @@ describe("StreamRpcTarget", () => {
     });
 
     const waiting = stream.waitForEvent({
+      afterOffset: 0,
       eventTypes: ["events.iterate.com/test/absent"],
       timeoutMs: 30_000,
     });

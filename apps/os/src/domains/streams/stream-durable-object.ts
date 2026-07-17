@@ -374,6 +374,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** The committed head used to pin a recoverable public wait's replay cursor. */
+  getMaxOffset(): number {
+    return this.#coreProcessorState.maxOffset;
+  }
+
   // ===========================================================================
   // The core processor.
   //

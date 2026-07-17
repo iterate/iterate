@@ -554,34 +554,65 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     }
 
     const deadline = Date.now() + args.timeoutMs;
+    let replayAfterOffset = args.afterOffset;
+
+    // A cursor-less DO wait is live-from-the-head at which that individual
+    // subscription opens. Re-arming it with no cursor would therefore skip a
+    // durable event committed between subscriptions. Pin one post-call-start
+    // head and replay from it on every incarnation instead. Acquiring that
+    // head is itself sliced under the same public deadline: a silent orphan
+    // cannot wedge recovery before the first wait is even armed.
+    while (replayAfterOffset === undefined && Date.now() < deadline) {
+      const attemptDeadline = Math.min(deadline, Date.now() + STREAM_WAIT_REACQUIRE_MS);
+      let head: Promise<number>;
+      try {
+        head = Promise.resolve(this.durableObjectStub.getMaxOffset());
+      } catch (error) {
+        rethrowStreamUnavailable(error);
+      }
+      const outcome = await settleByDeadline(head, attemptDeadline, Date.now);
+      if (outcome.status === "fulfilled") {
+        replayAfterOffset = outcome.value;
+        break;
+      }
+      if (outcome.status === "rejected") rethrowStreamUnavailable(outcome.error);
+    }
+
     const terminal = Promise.withResolvers<StreamEvent>();
-    let lifecycleRetries = 0;
+    let lastSliceTimeout: unknown;
 
     while (Date.now() < deadline) {
       const attemptDeadline = Math.min(deadline, Date.now() + STREAM_WAIT_REACQUIRE_MS);
-      const sliceTimeoutMs = Math.max(1, attemptDeadline - Date.now());
+      // Keep the preceding healthy subscription alive for one extra slice
+      // while its replacement opens. This bounds normal overlap at two and
+      // avoids introducing an ephemeral-event gap at each recovery boundary;
+      // durable events are additionally protected by replayAfterOffset.
+      const remoteTimeoutMs = Math.max(
+        1,
+        Math.min(deadline - Date.now(), STREAM_WAIT_REACQUIRE_MS * 2),
+      );
       let wait: Promise<StreamEvent>;
       try {
         wait = Promise.resolve(
-          this.durableObjectStub.waitForEvent({ ...args, timeoutMs: sliceTimeoutMs }),
+          this.durableObjectStub.waitForEvent({
+            ...args,
+            afterOffset: replayAfterOffset,
+            timeoutMs: remoteTimeoutMs,
+          }),
         );
       } catch (error) {
-        if (lifecycleRetries === 0 && isDurableObjectLifecycleError(error)) {
-          lifecycleRetries += 1;
-          continue;
-        }
         rethrowStreamUnavailable(error);
       }
 
       // A superseded call can still report an ephemeral match that a fresh
       // subscription cannot replay. Let that success win. Likewise, retain a
-      // late predicate/application failure as the terminal result; only the
-      // explicitly modelled slice timeout and lifecycle-reset outcomes are
-      // safe to replace with a fresh durable replay.
+      // late predicate/application/lifecycle failure as the terminal result;
+      // only the explicitly modelled slice timeout is safe to replace with a
+      // fresh durable replay. In particular, an explicit kill must retain the
+      // public `stream-unavailable` rejection contract rather than being
+      // hidden behind recovery until the caller's deadline.
       void wait.then(terminal.resolve, (error: unknown) => {
-        if (!isStreamWaitTimeoutError(error) && !isDurableObjectLifecycleError(error)) {
-          terminal.reject(error);
-        }
+        if (!isStreamWaitTimeoutError(error)) terminal.reject(error);
       });
 
       const outcome = await settleByDeadline(
@@ -591,9 +622,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       );
       if (outcome.status === "fulfilled") return outcome.value;
       if (outcome.status === "rejected") {
-        if (isStreamWaitTimeoutError(outcome.error)) continue;
-        if (lifecycleRetries === 0 && isDurableObjectLifecycleError(outcome.error)) {
-          lifecycleRetries += 1;
+        if (isStreamWaitTimeoutError(outcome.error)) {
+          lastSliceTimeout = outcome.error;
           continue;
         }
         rethrowStreamUnavailable(outcome.error);
@@ -603,6 +633,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     throw new Error(
       `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event after ${args.timeoutMs}ms ` +
         "(the public deadline expired while recovery re-armed one-shot waits).",
+      lastSliceTimeout === undefined ? undefined : { cause: lastSliceTimeout },
     );
   }
 
