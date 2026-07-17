@@ -373,7 +373,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  IterateDurableObject,\n" +
       "  IterateWorkerEntrypoint,\n" +
       "  itxProjectStream,\n" +
-      "  withStatefulWorkerAlarms,\n" +
       "  type Project,\n" +
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
@@ -901,22 +900,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (this.#host === undefined) {\n" +
       "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
       "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
-      "      // withStatefulWorkerAlarms: this class is hosted as a workerd facet,\n" +
-      "      // and facet storage has no alarms — the wrapper routes the standard\n" +
-      "      // `ctx.storage` alarm API through the platform Durable Object hosting\n" +
-      "      // this worker, whose fire calls `alarm()` below.\n" +
-      "      const registry = createStreamProcessorRegistry(\n" +
-      "        withStatefulWorkerAlarms(this.ctx, this.env, guestbookAppRef),\n" +
-      "        {\n" +
-      "          path: guestbookStreamPath,\n" +
-      "          projectId,\n" +
-      "          stream,\n" +
-      "          // The worker's own build identity: a version change resets a\n" +
-      "          // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
-      "          // worker recovers on its next build (the antidote deploy).\n" +
-      "          version: this.env.ITERATE_WORKER_VERSION,\n" +
-      "        },\n" +
-      "      );\n" +
+      "      // this.ctx carries working durable alarms (IterateDurableObject routes\n" +
+      "      // them through the platform Durable Object hosting this facet), so the\n" +
+      "      // registry's keepalive can arm; its fire calls `alarm()` below.\n" +
+      "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
+      "        path: guestbookStreamPath,\n" +
+      "        projectId,\n" +
+      "        stream,\n" +
+      "        // The worker's own build identity: a version change resets a\n" +
+      "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
+      "        // worker recovers on its next build (the antidote deploy).\n" +
+      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
+      "      });\n" +
       "      const guestbook = registry.register(\n" +
       "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
       "        // Keepalive recovery: if an eviction kills this object while it owes\n" +
@@ -929,9 +924,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return this.#host;\n" +
       "  }\n" +
       "\n" +
-      "  /** The hosting Durable Object's alarm fire, replayed into this class (see\n" +
-      "   * withStatefulWorkerAlarms above). Route it to the registry: each keepalive\n" +
-      "   * self-gates on its own persisted record, so a stale fire is a no-op. */\n" +
+      "  /** The hosting Durable Object's alarm fire, delivered here like a native\n" +
+      "   * one. Route it to the registry: each keepalive self-gates on its own\n" +
+      "   * persisted record, so a stale fire is a no-op. */\n" +
       "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
       "    // A fire can be a cold incarnation's first event, so don't depend on a\n" +
       "    // live loopback dial: any prior contact cached the project id durably\n" +

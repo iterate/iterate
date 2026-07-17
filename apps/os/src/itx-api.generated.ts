@@ -2008,8 +2008,8 @@ export type DynamicWorkerCapability<T extends object = Record<string, unknown>> 
      * method, retried by the platform if it throws. Facets have no native
      * alarms in workerd, so the hosting Durable Object keeps the real one on
      * the worker's behalf. Stateless worker refs reject. Inside the worker,
-     * prefer `withStatefulWorkerAlarms` from `iterate/sdk`, which presents
-     * this as the ordinary `ctx.storage` alarm API.
+     * `IterateDurableObject` presents this as the ordinary `ctx.storage`
+     * alarm API automatically.
      */
     setAlarm(atMs: number | null): Promise<void>;
     /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */
