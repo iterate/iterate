@@ -35,7 +35,7 @@ import {
 import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
 import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItxBrowser, evictItxSocket, evictItxSocketIfCurrent } from "~/itx/itx-react.tsx";
+import { connectItx, connectIterateSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -105,70 +105,68 @@ export function ProjectStreamView({
   streamPath: string;
 }) {
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  // A stream mirror can spend minutes paging tens of thousands of historical
-  // events and owns an aggressive reconnect loop. Keep that work off the
-  // provider socket used by the page's ordinary queries: resetting this keyed
-  // lane must never reject a concurrent Repo.readFile (the production-scale
-  // failure where opening /repos/iterate blanked the whole task board).
-  const streamConnectionAddress = useMemo(
-    () => ({
-      ...(projectId == null ? {} : { projectId }),
-      // One durable mirror lane per project: navigating between streams reuses
-      // it instead of leaking a persistent WebSocket for every path visited.
-      connectionKey: "browser-stream-mirror",
-    }),
-    [projectId],
-  );
-  // Dial itx imperatively (never `useItx()`), and PER CALL: the stream view's
-  // shell — header, tabs, composer, panel — must paint before the socket
-  // connects (a hook read here would suspend the whole view into the nearest
-  // route boundary), and the stream runtimes this source feeds outlive the
-  // render — a captured capnweb stub pins whatever transport it was born on,
-  // so after a suspend/resume killed that socket every reconnect would ride
-  // the corpse and the feed would wedge until a reload (the repro in
-  // specs/stream-resume-after-suspend.spec.ts).
+  // The stream mirror rides the ONE shared session socket — the same connection
+  // the page's ordinary queries use. It can page tens of thousands of historical
+  // events and owns an aggressive reconnect loop, but it NEVER closes the shared
+  // socket itself: on a suspected half-open transport it REPORTS the suspicion to
+  // the socket-owned verifier ({@link reportTransportSuspicion}), the only thing
+  // that may retire the shared socket — and only after two failed probes against
+  // the same generation. That is what lets the mirror share the socket without
+  // re-introducing the failure where resetting the mirror rejected a concurrent
+  // Repo.readFile and blanked the whole task board.
+  //
+  // Resolve the session PER CALL (never `useItx()`): the stream view's shell —
+  // header, tabs, composer, panel — must paint before the socket connects (a
+  // hook read here would suspend the whole view), and the runtimes this source
+  // feeds outlive the render — a captured capnweb stub pins whatever transport
+  // it was born on, so after a suspend/resume killed that socket every reconnect
+  // would ride the corpse and the feed would wedge until a reload (the repro in
+  // specs/stream-resume-after-suspend.spec.ts). `connectIterateSession()` returns the
+  // CURRENT generation each call.
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () =>
       streamSource ??
-      (async (path) => (await connectItxBrowser(streamConnectionAddress)).streams.get(path)),
-    [streamConnectionAddress, streamSource],
+      (async (path) =>
+        projectId == null
+          ? (await connectIterateSession()).streams.get(path)
+          : (await connectItx(projectId)).streams.get(path)),
+    [projectId, streamSource],
   );
   const streamClientFactory = useMemo(() => {
     if (streamSource !== undefined) {
-      // Custom source: we can't see its transport, so no identity-bound
-      // evictor — the runtime falls back to resetStreamSourceTransport.
+      // Custom source: its own transport, so no default suspicion wiring — the
+      // runtime falls back to resetStreamSourceTransport.
       return async (input: { streamPath: string }) => {
         const stub = await streamSource(input.streamPath);
-        // The stub's REAL dispose, so every reconnect releases its stream
-        // export on the (possibly long-lived, healthy) session instead of
-        // stranding one per reconnect in the cap table on both sides.
+        // The stub's REAL dispose, so every reconnect releases its stream export
+        // instead of stranding one per reconnect in the cap table on both sides.
         return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
       };
     }
     return async (input: { streamPath: string }) => {
-      // The connecting promise IS the socket's identity: binding the evictor
-      // to it means a suspicion verdict against THIS connection can only ever
-      // evict THIS socket — never a successor another runtime already dialed.
-      const connection = connectItxBrowser(streamConnectionAddress);
-      const stub = (await connection).streams.get(input.streamPath);
+      const stub =
+        projectId == null
+          ? (await connectIterateSession()).streams.get(input.streamPath)
+          : (await connectItx(projectId)).streams.get(input.streamPath);
       return asBrowserStreamClient(
         stub,
         () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
-        () => evictItxSocketIfCurrent(streamConnectionAddress, connection),
+        // Report suspicion — NEVER close the shared socket directly. The
+        // socket-owned verifier retires it only if it is genuinely half-open.
+        reportTransportSuspicion,
       );
     };
-  }, [streamConnectionAddress, streamSource]);
-  // The half-open lane: a suspended page's socket can die without a close
-  // frame, so the socket map keeps handing out the corpse and per-call dialing
-  // alone can't recover. When the runtimes' probes/dials time out they call
-  // this to evict it; the next dial is fresh. Eviction must target the exact
-  // context the source dials, so a custom streamSource brings its own
-  // resetTransport (or none) and only the default source wires the default.
+  }, [projectId, streamSource]);
+  // Half-open recovery: a suspended page's socket can die without a close frame,
+  // so per-call dialing alone can't recover it. When the runtimes' probes/dials
+  // time out they call this, which reports the suspicion to the shared socket's
+  // verifier rather than evicting anything itself. A custom streamSource brings
+  // its own resetTransport (or none).
   const resetTransport = useMemo(
     () =>
       resetStreamSourceTransport ??
-      (streamSource === undefined ? () => evictItxSocket(streamConnectionAddress) : undefined),
-    [resetStreamSourceTransport, streamConnectionAddress, streamSource],
+      (streamSource === undefined ? reportTransportSuspicion : undefined),
+    [resetStreamSourceTransport, streamSource],
   );
 
   // The stream mirror: one download of this stream into the shared per-path

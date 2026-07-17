@@ -51,16 +51,16 @@ type RosterRow = {
  * STABLE-slice selector per the useLiveState contract — the sort/shape work
  * happens in the downstream useMemo. Recency is the row's own `updatedAt`:
  * every turn flips busy at trigger and settle, so the last status patch IS
- * the agent's last activity. Subscribed through `address` — the sidebar
- * lives in the app shell, outside the project's ItxProvider — so it never
- * suspends and paints when the project socket connects.
+ * the agent's last activity. Named by `slug` — the sidebar lives in the app
+ * shell, outside any <ProjectScope> — and useLiveState resolves the connection
+ * inside its effect, so it never suspends and paints when the session connects.
  */
 function useAgentRoster(projectId: string): RosterRow[] {
   const roster = useLiveState(
     (itx) => itx.liveState,
     (state) => state.agents,
     [projectId],
-    { address: { projectId } },
+    { slug: projectId },
   );
   return useMemo(() => {
     if (roster.value === undefined) return [];
