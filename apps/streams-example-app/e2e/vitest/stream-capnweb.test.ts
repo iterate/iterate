@@ -129,27 +129,21 @@ describe("stream capnweb protocol", () => {
     });
   });
 
-  it.fails(
-    "documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends",
-    // Vitest retries the deliberately failing body before it inverts the
-    // result for `fails`; a retry can never heal this documented limitation.
-    { retry: 0 },
-    async () => {
-      const path = e2eStreamPathLabel("stream-capnweb-inbound-frame-limit");
-      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
-      const event: StreamEventInput = {
-        type: "test.stream.capnweb-inbound-frame-limit",
-        payload: { body: "x".repeat(32 * 1024 * 1024) },
-      };
+  it("documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends", async () => {
+    const path = e2eStreamPathLabel("stream-capnweb-inbound-frame-limit");
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
+    const event: StreamEventInput = {
+      type: "test.stream.capnweb-inbound-frame-limit",
+      payload: { body: "x".repeat(32 * 1024 * 1024) },
+    };
 
-      expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(32 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(32 * 1024 * 1024);
 
-      // This is expected to fail before stream storage sees the event: Cloudflare
-      // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
-      // a single append call into one WebSocket message.
-      await stream.stream.append(event);
-    },
-  );
+    // This is expected to fail before stream storage sees the event: Cloudflare
+    // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
+    // a single append call into one WebSocket message.
+    await expect(stream.stream.append(event)).rejects.toThrow(/connection (lost|failed)/i);
+  });
 
   // Cross-stream appends now go through the public `Stream.at(relativePath)`
   // capability. These prove path resolution lands on the same leading-slash DO
