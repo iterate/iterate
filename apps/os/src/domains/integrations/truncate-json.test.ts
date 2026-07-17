@@ -44,6 +44,21 @@ describe("truncateJsonToBytes", () => {
     expect(value.payload.transcript).toHaveLength(20_000);
   });
 
+  it("accounts for large siblings when assigning a child byte budget", () => {
+    const value = {
+      before: "a".repeat(600),
+      largest: "x".repeat(1_000),
+      after: "b".repeat(500),
+    };
+
+    const result = truncateJsonToBytes(value, 1_400);
+
+    expect(result.bytes).toBe(jsonBytes(result.value));
+    expect(result.bytes).toBeLessThanOrEqual(1_400);
+    expect(result.value).toMatchObject({ before: value.before, after: value.after });
+    expect((result.value as typeof value).largest).toMatch(/\[truncated from \d+ JSON bytes\]$/);
+  });
+
   it("measures encoded JSON bytes and never splits a Unicode code point", () => {
     const value = { payload: `quoted: \\"${"😀".repeat(4_000)}` };
 
