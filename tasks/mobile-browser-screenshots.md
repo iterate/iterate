@@ -1,11 +1,11 @@
 ---
-status: implementation complete, PR evidence pending
+status: implementation and PR evidence complete, review pending
 size: medium
 ---
 
 # Mobile browser screenshots
 
-**Status summary:** about 90% complete. Expo Web, a phone-sized Playwright visual spec, reviewed baselines, accessibility semantics, docs, web export, and local verification are done. Remaining: commit/push, attach both screenshots to PR #2064, and complete its CI/review pass. Authenticated fixture screens and video are scoped follow-ups.
+**Status summary:** about 95% complete. Expo Web, a phone-sized Playwright visual spec, reviewed baselines, accessibility semantics, docs, web export, local verification, and both inline screenshots on PR #2064 are done. Remaining: complete the PR's CI/review pass. Authenticated fixture screens and video are scoped follow-ups.
 
 Make the merged `apps/mobile` app renderable and screenshot-able on an ordinary development machine, without Xcode, an iOS simulator, a native rebuild, or an Apple account. Preserve Expo Go as the on-phone runtime; Expo Web is a second development/test target, not a replacement.
 
@@ -14,7 +14,7 @@ Make the merged `apps/mobile` app renderable and screenshot-able on an ordinary 
 - [x] Add the supported Expo Web dependencies/configuration and a documented command that serves the real Expo Router app in a browser — _`react-dom` + `react-native-web`; `pnpm --dir apps/mobile start:web` serves the real Router entry_
 - [x] Add a Playwright spec that starts the Expo Web server, uses a phone-sized Chromium viewport, exercises a visible interaction, and writes deterministic screenshots — _`apps/mobile/playwright.config.ts` + `e2e/playwright/signed-out.spec.ts`; two 390×844 reviewed baselines_
 - [x] Keep the test on public rendered behavior: no component mocks, private storage seeding, Xcode, simulator, native prebuild, or Expo Go device is required — _the test navigates, locates the rendered buttons/input, switches to preview 3, and pixel-compares screenshots_
-- [ ] Verify the app visually in a browser and attach the resulting screenshots to the pull request — _pending_
+- [x] Verify the app visually in a browser and attach the resulting screenshots to the pull request — _automated snapshot comparison plus an isolated headed-browser pass; both 390×844 states render inline in PR #2064 from commit `409207b37`_
 - [x] Document the relationship between Expo Go, Expo Web screenshot testing, generated artifacts, and the exact local commands — _`apps/mobile/README.md` now distinguishes fast web visual review from native-integration proof_
 - [x] Record video capture as a follow-up if adding it would materially expand this PR — _follow-up: add opt-in Playwright video/PR upload after authenticated visual fixtures exist; still images fully prove this first lane_
 
