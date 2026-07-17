@@ -32,10 +32,10 @@ _Avoid_: hand-rolled reconnect/backoff loops — the keeper owns recovery
 
 **Agent Feed History Query**:
 `readAgentFeedHistory` pages the immutable durable log behind `useItxQuery`.
-Durable live batches and mutation results merge back into that Query cache by
-offset; ephemeral rows remain only in the live model. The browser and terminal
-mount `createIterateQueryClient`, so cache lifetime, refetch, and mutation-retry
-policy cannot drift by renderer.
+The ordered, replay-capable subscription is the only live feed writer; mutation
+responses deliberately do not jump its cursor. The browser and terminal mount
+`createIterateQueryClient`, so cache lifetime, refetch, and mutation-retry policy
+cannot drift by renderer.
 _Avoid_: effect-owned fetch state, a renderer-specific QueryClient policy
 
 **Itx Auth Module**:

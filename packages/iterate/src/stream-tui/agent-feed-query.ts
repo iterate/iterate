@@ -4,28 +4,8 @@ import type { Itx } from "../itx/itx-react.ts";
 const EVENT_PAGE_SIZE = 500;
 
 /**
- * Fold subscription or mutation results into the durable Query cache.
- * Ephemeral rows belong only to the live model; durable offsets are unique,
- * and sorting closes the harmless mutation-return vs subscription race.
- */
-export function mergeAgentFeedHistory(
-  current: StreamEvent[],
-  incoming: readonly StreamEvent[],
-): StreamEvent[] {
-  const knownOffsets = new Set(current.map((event) => event.offset));
-  const added: StreamEvent[] = [];
-  for (const event of incoming) {
-    if (event.ephemeral === true || knownOffsets.has(event.offset)) continue;
-    knownOffsets.add(event.offset);
-    added.push(event);
-  }
-  if (added.length === 0) return current;
-  return [...current, ...added].sort((left, right) => left.offset - right.offset);
-}
-
-/**
  * Read the durable history that seeds the terminal feed's TanStack query.
- * Live and ephemeral events arrive through the subscription opened after this
+ * All live events arrive through the ordered subscription opened after this
  * read; its replay cursor closes the durable race between the two operations.
  */
 export async function readAgentFeedHistory(itx: Itx, agentPath: string): Promise<StreamEvent[]> {

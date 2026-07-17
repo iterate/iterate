@@ -711,6 +711,30 @@ describe("preview deploy selection", () => {
     expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
   });
 
+  test("selects the full fleet for an e2e policy-only change", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["packages/shared/src/test-support/e2e-policy/budgets.ts"],
+      }),
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "semaphore",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
+  });
+
   test("self-heals an erased slot: a parked recorded-green app is redeployed with its dependencies", async () => {
     // Live incident (PR #1793 on preview-7, 2026-07-09): e2e failed with
     // "no such column: epoch", the documented remedy `erase-data` parked the

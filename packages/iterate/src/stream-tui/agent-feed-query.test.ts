@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { StreamEvent } from "../itx-api.generated.ts";
 import type { Itx } from "../itx/itx-react.ts";
-import { mergeAgentFeedHistory, readAgentFeedHistory } from "./agent-feed-query.ts";
+import { readAgentFeedHistory } from "./agent-feed-query.ts";
 
 const event = (offset: number): StreamEvent => ({
   type: "test/event",
@@ -46,19 +46,5 @@ describe("readAgentFeedHistory", () => {
       /did not advance beyond offset 0/,
     );
     expect(dispose).toHaveBeenCalledOnce();
-  });
-});
-
-describe("mergeAgentFeedHistory", () => {
-  test("keeps one ordered durable row per offset across live and mutation races", () => {
-    const current = [event(1), event(4)];
-    const ephemeral = { ...event(3), ephemeral: true as const };
-
-    expect(mergeAgentFeedHistory(current, [event(4), ephemeral, event(2), event(2)])).toEqual([
-      event(1),
-      event(2),
-      event(4),
-    ]);
-    expect(mergeAgentFeedHistory(current, [event(4)])).toBe(current);
   });
 });

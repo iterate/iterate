@@ -18,7 +18,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
 import { Suspense, useCallback, useEffect, useState } from "react";
-import { QueryClientProvider, useMutation, useQueryClient } from "@tanstack/react-query";
+import { QueryClientProvider, QueryErrorResetBoundary, useMutation } from "@tanstack/react-query";
 import {
   configureIterateSession,
   connectItx,
@@ -28,13 +28,13 @@ import {
   useItxSubscription,
   type Itx,
 } from "../itx/itx-react.ts";
-import type { StreamEvent } from "../itx-api.generated.ts";
 import {
   ONBOARDING_AGENT_PATH,
   onboardingAgentCreateInput,
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
+import { sendAgentMessage } from "./agent-message-command.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
-import { mergeAgentFeedHistory, readAgentFeedHistory } from "./agent-feed-query.ts";
+import { readAgentFeedHistory } from "./agent-feed-query.ts";
 import { resolveItxAuth } from "./itx-auth.ts";
 import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
 import { COLORS } from "./chat-colors.ts";
@@ -61,7 +61,6 @@ async function openAgentFeedSubscription(input: {
   itx: Itx;
   model: ReturnType<typeof createAgentFeedModel>;
   publishFeed: () => void;
-  recordDurableEvents: (events: readonly StreamEvent[]) => void;
 }) {
   // One agent path stub per (re)subscribe cycle, released once the returned
   // subscription handle exists. useItxSubscription owns and releases that
@@ -76,7 +75,6 @@ async function openAgentFeedSubscription(input: {
     }
     return await agent.stream.subscribe({
       processEventBatch: (batch) => {
-        input.recordDurableEvents(batch.events);
         if (input.model.applyEvents(batch.events)) input.publishFeed();
       },
       replayAfterOffset: input.model.snapshot().lastOffset,
@@ -105,15 +103,6 @@ function AgentChatApp() {
     if (model.applyEvents(history)) setFeed(model.snapshot());
   }, [history, model]);
   const publishFeed = useCallback(() => setFeed(model.snapshot()), [model]);
-  const queryClient = useQueryClient();
-  const recordDurableEvents = useCallback(
-    (events: readonly StreamEvent[]) => {
-      queryClient.setQueryData<StreamEvent[]>(["itx", ...historyQueryKey], (current = []) =>
-        mergeAgentFeedHistory(current, events),
-      );
-    },
-    [queryClient],
-  );
 
   /**
    * Establish the live agent feed on the shared socket: ensure the agent
@@ -124,35 +113,37 @@ function AgentChatApp() {
    * model folds replay overlap out by offset.
    */
   const subscribeAgentFeed = useCallback(
-    (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed, recordDurableEvents }),
-    [model, publishFeed, recordDurableEvents],
+    (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed }),
+    [model, publishFeed],
   );
   const subscription = useItxSubscription(subscribeAgentFeed, [model], {
     slug: args.projectId,
   });
-  const sendMessage = useMutation({
+  // oxlint-disable react-doctor/query-mutation-missing-invalidation -- History is only the startup seed; the replay-capable subscription is the live authority. Writing or refetching the mutation result here can advance the model past delayed events.
+  const {
+    mutate: sendMessage,
+    isPending: messageIsPending,
+    error: messageError,
+  } = useMutation({
     mutationFn: async (message: string) => {
       const itx = await connectItx(args.projectId);
       const agent = itx.agents.get(args.agentPath);
       try {
-        return await agent.message(message);
+        await sendAgentMessage(agent, message);
       } finally {
         (agent as Partial<Disposable>)[Symbol.dispose]?.();
       }
     },
-    // The mutation response and subscription can race. Fold both through the
-    // same offset-aware cache merge; the live model has the same dedupe rule.
-    onSuccess: (event) => {
-      queryClient.setQueryData<StreamEvent[]>(["itx", ...historyQueryKey], (current = []) =>
-        mergeAgentFeedHistory(current, [event]),
-      );
-    },
   });
-  const notice = sendMessage.isPending
+  // oxlint-enable react-doctor/query-mutation-missing-invalidation
+  const messageNotice = messageIsPending
     ? "sending…"
-    : sendMessage.error != null
-      ? `send failed: ${sendMessage.error instanceof Error ? sendMessage.error.message : String(sendMessage.error)}`
+    : messageError != null
+      ? `send failed: ${messageError instanceof Error ? messageError.message : String(messageError)}`
       : "";
+  const notice = [messageNotice, subscription.status === "error" ? "Ctrl+R to retry" : ""]
+    .filter(Boolean)
+    .join(" · ");
   const [composerValue, setComposerValue] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
 
@@ -163,6 +154,9 @@ function AgentChatApp() {
 
   useKeyboard((key) => {
     if (key.name === "escape") clearComposer();
+    if (key.ctrl && key.name === "r" && subscription.status === "error") {
+      subscription.refresh();
+    }
   });
 
   const submit = useCallback(
@@ -170,7 +164,7 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
       clearComposer();
-      sendMessage.mutate(message);
+      sendMessage(message);
     },
     [clearComposer, sendMessage],
   );
@@ -273,12 +267,16 @@ const renderer = await createCliRenderer({
 const queryClient = createIterateQueryClient();
 createRoot(renderer).render(
   <QueryClientProvider client={queryClient}>
-    <TerminalErrorBoundary>
-      <ProjectScope slug={args.projectId}>
-        <Suspense fallback={<LoadingTerminal />}>
-          <AgentChatApp />
-        </Suspense>
-      </ProjectScope>
-    </TerminalErrorBoundary>
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <TerminalErrorBoundary onReset={reset}>
+          <ProjectScope slug={args.projectId}>
+            <Suspense fallback={<LoadingTerminal />}>
+              <AgentChatApp />
+            </Suspense>
+          </ProjectScope>
+        </TerminalErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
   </QueryClientProvider>,
 );
