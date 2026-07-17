@@ -212,12 +212,11 @@ The fixed subscription key is `iterate-platform-posthog`. It delivers from
 offset zero, includes ephemeral rows, parks rather than poison-skipping, and
 uses the fixed expression
 `["integrations", "posthog", "processEventBatch"]`. The key, idempotency key,
-delivery route, and `includeEphemeral` power are reserved at every append,
-cross-post, and recovery boundary. Only the narrow `stream-delivery` principal
-may append the exact canonical configuration during normal operation; recovery
-may restore that authentic history, and admins may operate its cursor but may
-not redefine it. `itx.integrations.posthog` is an internal first-party receiver;
-it has no per-project credentials or configuration.
+delivery route, and `includeEphemeral` power are reserved at every append and
+cross-post boundary. Only the narrow `stream-delivery` principal may append the
+exact canonical configuration; admins may operate its cursor but may not
+redefine it. `itx.integrations.posthog` is an internal first-party receiver; it
+has no per-project credentials or configuration.
 
 Fresh streams install the subscription when their project-worker feed delivers
 the immutable offset-one `events.iterate.com/stream/created` fact. Redelivery
@@ -230,10 +229,9 @@ birth configuration and cannot be triggered through a lookalike push route.
 There is deliberately no legacy scan, wake-time shim, or
 operator-configurable backfill. Streams created before this invariant exists
 are outside the rollout boundary; every stream created afterwards acquires the
-feed through its ordinary durable birth delivery. A recovery restore must
-preserve the canonical configuration already present in its history. The shared
-streams example app has no project-worker/OS integration root and therefore
-does not acquire this OS-only subscription.
+feed through its ordinary durable birth delivery. There is no recovery import
+or restoration lane. The shared streams example app has no project-worker/OS
+integration root and therefore does not acquire this OS-only subscription.
 
 “All events” means one PostHog occurrence for every committed row still owned
 by the stream, without a type selector, sampling, success/error filter, or
@@ -265,12 +263,12 @@ The group key is the immutable project id, following PostHog's requirement that
 group keys be unique identifiers rather than display names. The authentic root
 `project/created` birth certificate additionally emits one idempotent
 `$groupidentify` occurrence for that same key. Its `$group_set` records the id
-and immutable canonical slug (also as PostHog's conventional `name` display
-property), so operators can find one project group by either identifier. The
-event must be first-hand, durable, unannotated, on `/`, and carry the reserved
-`project-created:<id>` idempotency key; lookalike or cross-posted events cannot
-write group properties. No directory lookup, mutable alias, or per-batch group
-update exists, and creator email or other birth payload fields are never sent.
+and immutable canonical slug, so operators can find one project group by either
+identifier without creating parallel entities. The event must be first-hand,
+durable, unannotated, on `/`, and carry the reserved `project-created:<id>`
+idempotency key; lookalike or cross-posted events cannot write group properties.
+No directory lookup, mutable alias, or per-batch group update exists, and
+creator email or other birth payload fields are never sent.
 
 PostHog only links identified events to groups, so every event uses one stable
 synthetic operational identity per deployment/project. This creates no
