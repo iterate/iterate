@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   isDurableObjectLifecycleError,
+  isStreamWaitTimeoutError,
   isStreamUnavailableError,
   rethrowStreamUnavailable,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
 
 const withFlag = (flag: string, value: unknown = true) =>
@@ -68,5 +70,17 @@ describe("isStreamUnavailableError", () => {
     ["unrelated app error", new Error('no capability "itx.streams.get"'), false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isStreamUnavailableError(error)).toBe(expected);
+  });
+});
+
+describe("isStreamWaitTimeoutError", () => {
+  it("classifies only the explicit stream waiter timeout contract", () => {
+    expect(
+      isStreamWaitTimeoutError(
+        new Error(`${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out waiting for stream event`),
+      ),
+    ).toBe(true);
+    expect(isStreamWaitTimeoutError(new Error("predicate failed"))).toBe(false);
+    expect(isStreamWaitTimeoutError("stream-wait-timeout: string rejection")).toBe(false);
   });
 });
