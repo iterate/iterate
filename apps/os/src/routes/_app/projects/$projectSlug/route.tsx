@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { ProjectScope } from "~/itx/itx-react.tsx";
+import { ProjectScope } from "iterate/react";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 

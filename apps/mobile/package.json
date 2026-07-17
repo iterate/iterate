@@ -5,10 +5,12 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
+    "start:web": "expo start --web",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:screenshots": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
@@ -27,7 +29,7 @@
     "@tanstack/react-query": "^5.90.0",
     "capnweb": "^0.8.0",
     "codemirror": "^6.0.2",
-    "expo": "~54.0.35",
+    "expo": "~54.0.36",
     "expo-auth-session": "~7.0.11",
     "expo-constants": "~18.0.13",
     "expo-crypto": "~15.0.9",
@@ -47,12 +49,13 @@
     "react-native-screens": "4.16.0",
     "react-native-tree-multi-select": "3.0.2",
     "react-native-url-polyfill": "^3.0.0",
-    "react-native-web": "0.21.0",
+    "react-native-web": "^0.21.2",
     "react-native-webview": "13.15.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.60.0",
     "@types/react": "~19.1.17",
-    "@types/react-dom": "19.1.9",
+    "@types/react-dom": "~19.1.11",
     "typescript": "~5.9.3",
     "vitest": "^4.1.7"
   }

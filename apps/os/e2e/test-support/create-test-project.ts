@@ -1,8 +1,8 @@
 import type { RpcStub } from "capnweb";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { connectItx } from "iterate/node";
 import type { Agent, Project as ProjectRpcTarget } from "../../src/itx-api.generated.ts";
 import { createAdminOsItx, requireBaseUrl } from "./os-client.ts";
-import { connectItx } from "~/itx-client.ts";
 
 /**
  * Create a disposable project against the deployment under test via itx (the

@@ -16,8 +16,6 @@
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "rewriteRelativeImportExtensions": true,
-    "declaration": true,
-    "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
     "rootDir": "../..",

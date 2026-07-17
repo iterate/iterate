@@ -61,6 +61,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { z } from "zod";
+import { useItx, useItxQuery, useLiveState } from "iterate/react";
 import type { Project } from "../../../../itx-api.generated.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
@@ -70,7 +71,6 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
 type Connection = Awaited<ReturnType<Project["integrations"]["getConnection"]>>;
 

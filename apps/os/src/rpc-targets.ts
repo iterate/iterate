@@ -28,12 +28,13 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import type { LiveUpdate } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
+  isStreamDeliveryAuth,
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
-  trustedInternalAuthContext,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -105,6 +106,7 @@ import {
 } from "./domains/integrations/github-api.ts";
 import { replayPathCall } from "./itx/path-proxy.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
+import { capturePosthogStreamEventBatch } from "./domains/integrations/posthog.ts";
 import {
   connectionSlackClient,
   normalizeSlackError,
@@ -303,7 +305,6 @@ import type {
 } from "./domains/streams/stream-subscribers.ts";
 import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
 import type { StreamProcessorRegistry } from "./domains/streams/stream-processor-registry.ts";
-import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
@@ -438,12 +439,12 @@ const STREAM_WAIT_REACQUIRE_MS = 10_000;
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT product event: live subscribe() connections see it, while default reads and durable subscribers exclude it unless a push/webhook explicitly opts in; the row may be evicted later, so append durable product truth separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
         crossPostTo:
-          "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
+          "Copy matching events onto another stream (optionally JSONata-transformed). Cross-post subscriptions do not opt into ephemeral rows; a selector matching only ephemeral types delivers nothing.",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
@@ -674,8 +675,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /**
-   * Session-scoped live event delivery (the "ephemeral" subscription lane —
-   * also the only lane that receives `ephemeral: true` events):
+   * Session-scoped live event delivery (the "ephemeral" subscription lane):
    * `processEventBatch` first receives durable history after
    * `replayAfterOffset`, then new commits. Ephemeral events are delivered only
    * when appended after this exact subscription opens and are never replayed.
@@ -3034,6 +3034,32 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
   }
 }
 
+/** Iterate's fixed first-party PostHog stream receiver. */
+class PostHogIntegrationRpcTarget extends RpcTarget {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    if (!isStreamDeliveryAuth(props.auth)) {
+      throw new Error("PostHog ingestion is available only to stream delivery");
+    }
+  }
+
+  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+    if (batch.projectId !== this.props.projectId) {
+      throw new Error("PostHog stream delivery project does not match its itx authority");
+    }
+    const config = parseConfig(env).posthog;
+    if (config === undefined) {
+      throw new StreamReceiverUnavailableError("PostHog is not configured for this deployment");
+    }
+    await capturePosthogStreamEventBatch({
+      apiKey: config.apiKey,
+      batch,
+      projectId: this.props.projectId,
+      workerName: env.WORKER_SELF,
+    });
+  }
+}
+
 /**
  * The `itx.integrations` collection.
  *
@@ -3113,6 +3139,14 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     return parallelOpenApiTarget({
       egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
       parent: "a project itx (itx.integrations.parallel)",
+    });
+  }
+
+  /** @internal Iterate's fixed first-party event feed. */
+  get posthog(): PostHogIntegrationRpcTarget {
+    return new PostHogIntegrationRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
     });
   }
 
@@ -5805,8 +5839,8 @@ export function itxForScope(props: {
  * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
  * walks the same shape a project stream's does.
  */
-export function deploymentItxForTrustedInternal(props: { ctx: CfExecutionContext }) {
-  return new SessionRpcTarget({ auth: trustedInternalAuthContext(), ctx: props.ctx });
+export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
+  return new SessionRpcTarget(props);
 }
 
 async function projectProcessorState(projectId: string) {

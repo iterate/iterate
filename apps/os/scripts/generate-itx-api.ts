@@ -56,6 +56,7 @@ import type {
   InterfaceDeclaration,
   Node,
   ParameterDeclaration,
+  SourceFile,
   TypeAliasDeclaration,
 } from "@typescript/native-preview/unstable/ast";
 import { stripComments } from "../src/domains/itx/itx-api-graph.ts";
@@ -256,13 +257,7 @@ export function generateItxApi(): string {
    * never silently pick the wrong shape.
    */
   const namedDecls = new Map<string, (TypeAliasDeclaration | InterfaceDeclaration)[]>();
-  for (const fileName of project.rootFiles) {
-    if (fileName.endsWith(".d.ts")) continue;
-    const resolved = path.resolve(fileName);
-    if (resolved === rpcTargetsPath || resolved === outPath) continue;
-    if (fileName.includes("node_modules")) continue;
-    const sourceFile = project.program.getSourceFile(fileName);
-    if (!sourceFile) continue;
+  const collectNamedDecls = (sourceFile: SourceFile) => {
     for (const statement of sourceFile.statements) {
       if (
         (isTypeAliasDeclaration(statement) || isInterfaceDeclaration(statement)) &&
@@ -273,6 +268,33 @@ export function generateItxApi(): string {
         namedDecls.set(statement.name.text, list);
       }
     }
+  };
+  for (const fileName of project.rootFiles) {
+    if (fileName.endsWith(".d.ts")) continue;
+    const resolved = path.resolve(fileName);
+    if (resolved === rpcTargetsPath || resolved === outPath) continue;
+    if (fileName.includes("node_modules")) continue;
+    const sourceFile = project.program.getSourceFile(fileName);
+    if (!sourceFile) continue;
+    collectNamedDecls(sourceFile);
+  }
+  // Contract wire types that live in the published package rather than the
+  // apps/os root file set (the live-state protocol moved into `iterate/client`
+  // so the browser store and the server engine share one definition). They are
+  // reached through package imports, which the root-file walk above skips —
+  // chase them explicitly, and fail loudly if the program does not carry them
+  // under their real path (a resolution change would otherwise silently drop
+  // types from the contract).
+  for (const fileName of [
+    path.resolve(projectDir, "../../packages/iterate/src/itx/live-state/protocol.ts"),
+  ]) {
+    const sourceFile = project.program.getSourceFile(fileName);
+    if (!sourceFile) {
+      throw new Error(
+        `itx api generation: expected package contract source in the program: ${fileName}`,
+      );
+    }
+    collectNamedDecls(sourceFile);
   }
 
   // Every relay must forward to a contract that actually exists as a hand-authored

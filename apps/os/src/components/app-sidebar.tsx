@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
-import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
+import { Link, useMatches, useMatchRoute, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
@@ -12,6 +12,7 @@ import {
   ExternalLink,
   GitBranch,
   KeyRound,
+  ListTodo,
   LogOut,
   Plug,
   Plus,
@@ -63,13 +64,13 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
+import { useIterateSessionQuery } from "iterate/react";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { SidebarRecentAgents } from "./agent-roster.tsx";
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";
-import { useIterateSessionQuery } from "~/itx/itx-react.tsx";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 
@@ -513,12 +514,20 @@ function ProjectSidebarGroup({
   appBaseUrl?: string;
 }) {
   const matchRoute = useMatchRoute();
+  const routeSearch = useSearch({ strict: false }) as { tasks?: boolean };
   const isNewChatActive = Boolean(
     matchRoute({
       to: "/projects/$projectSlug/agents/new",
       params: { projectSlug },
       fuzzy: false,
     }),
+  );
+  const isConfigTasksActive = Boolean(
+    matchRoute({
+      to: "/projects/$projectSlug/repos/$",
+      params: { projectSlug, _splat: "config" },
+      fuzzy: false,
+    }) && routeSearch.tasks === true,
   );
   const projectWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
@@ -550,6 +559,18 @@ function ProjectSidebarGroup({
                   fuzzy: false,
                 }),
               )}
+            />
+            <ProjectSidebarMenuItem
+              icon={ListTodo}
+              label="Tasks"
+              render={
+                <Link
+                  to="/projects/$projectSlug/repos/$"
+                  params={{ projectSlug, _splat: "config" }}
+                  search={{ tasks: true }}
+                />
+              }
+              isActive={isConfigTasksActive}
             />
             <ProjectSidebarMenuItem
               icon={SquareTerminal}
