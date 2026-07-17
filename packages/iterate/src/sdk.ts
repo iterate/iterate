@@ -31,9 +31,16 @@ import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated.ts";
 
-/** The one binding the platform supplies to every dynamic worker: `get()`
- * for capability method calls, `fetch()` for HTTP into sibling workers. */
-type IterateEnv = { ITX: ItxBinding };
+/**
+ * What the platform supplies to every dynamic worker: the `ITX` binding
+ * (`get()` for capability method calls, `fetch()` for HTTP into sibling
+ * workers) and `ITERATE_WORKER_VERSION` — the worker's own content-addressed
+ * build identity, changing exactly when its source does. Pass the latter as
+ * the `version` of a hosted processor registry: a version change is what
+ * resets a crash-looping keepalive's backoff budget, so a broken-then-fixed
+ * worker recovers on its next build instead of waiting out the backoff.
+ */
+type IterateEnv = { ITX: ItxBinding; ITERATE_WORKER_VERSION: string };
 
 /**
  * The remote auth target cannot receive an ordinary Request just to inspect

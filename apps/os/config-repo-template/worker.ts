@@ -510,10 +510,10 @@ export class GuestbookApp extends IterateDurableObject {
           path: guestbookStreamPath,
           projectId,
           stream,
-          // The crash-loop budget's deploy-reset lane: a facet has no build
-          // identity to hand here yet, so a broken-then-fixed worker waits
-          // out the keepalive backoff instead of resetting on deploy.
-          version: "0",
+          // The worker's own build identity: a version change resets a
+          // crash-looping keepalive's backoff budget, so a broken-then-fixed
+          // worker recovers on its next build (the antidote deploy).
+          version: this.env.ITERATE_WORKER_VERSION,
         },
       );
       const guestbook = registry.register(
