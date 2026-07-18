@@ -109,7 +109,7 @@ function RootComponent() {
     <AppProviders
       config={config}
       posthog={{
-        appStage: config.cloudflare.workerName,
+        appStage: config?.cloudflare.workerName,
         capturePageviews: false,
         proxyUrl: "/e",
       }}
