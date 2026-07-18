@@ -38,7 +38,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. The composable partner of\n   * `projects.create({ waitUntilReady: false })`.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. For project CONTENT and history, see itx.search. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. The composable partner of\n   * `projects.create({ waitUntilReady: false })`.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. For project CONTENT and history, see itx.search. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
@@ -88,7 +88,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       secrets: "Secret catalog by path.",
       repo: 'The project\'s config repo at /repos/config — shorthand for `repos.get("/repos/config")`.',
       workers: "Dynamic worker refs: get(ref).",
-      workspaces: "Path-addressed durable workspaces (`itx.workspaces.get(path)`).",
+      workspaces:
+        "Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`).",
       processEventBatch:
         "Platform dispatch point: streams deliver committed event batches here for the project worker.",
       worker:
@@ -699,12 +700,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkspaceCollection",
     kind: "interface",
     sourceText:
-      "/**\n * Catalog of durable workspaces within one project.\n *\n * `get(\"/\")` is the project's ROOT workspace: a read-only, always-fresh\n * materialization of the config repo's main branch. Every other workspace is\n * addressed by its FULL path under `/workspaces/` — the same domain-prefix\n * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is\n * the agent path under the prefix (`/workspaces/agents/...`, exposed as\n * `itx.workspace` in that agent's scope), and standalone workspaces live\n * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the\n * root: writes stay local, missing reads fall through to latest main — no\n * clone, usable instantly.\n */\nexport interface WorkspaceCollection {\n  __describe(): Promise<Description>;\n  /** The workspace at a path — \"/\" is the read-only root (latest main); others are private overlays. */\n  get(path: string): Workspace;\n}",
-    summary: "Catalog of durable workspaces within one project.",
+      "/**\n * Catalog of durable workspaces within one project: EVENT-SOURCED,\n * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,\n * always warm). Every workspace is addressed by its FULL path under\n * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and\n * `/repos/...`: an agent's workspace is the agent path under the prefix\n * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's\n * scope), and standalone workspaces live under `/workspaces/<anything>`.\n *\n * A workspace's identity + configuration are stream facts: `create({ path,\n * mounts })` appends the `workspace/created` birth certificate to the\n * workspace's own stream; `workspace/configured` patches the mount table. A\n * workspace touched without an explicit create births itself with the default\n * table (the config repo mounted at \"/\", committable) — so `get(path)` is\n * always usable and behaves like the old single-parent overlay by default.\n */\nexport interface WorkspaceCollection {\n  __describe(): Promise<Description>;\n  /** The workspace at a path (first touch births it with the default mount table). */\n  get(path: string): Workspace;\n  /**\n   * Create a workspace. Runs entirely inside the workspace Durable Object's\n   * serialized authority: birth is ensured (the certificate is ALWAYS the\n   * default table — identical body, so the idempotency key can never hit the\n   * stream's different-body rejection), then a custom `mounts` table\n   * converges via one validated `workspace/configured` patch. Idempotent.\n   */\n  create(input: { mounts?: Record<string, WorkspaceMount>; path: string }): Promise<Workspace>;\n}",
+    summary:
+      "Catalog of durable workspaces within one project: EVENT-SOURCED, MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container, always warm).",
     memberSummaries: {
-      get: 'The workspace at a path — "/" is the read-only root (latest main); others are private overlays.',
+      get: "The workspace at a path (first touch births it with the default mount table).",
+      create: "Create a workspace.",
     },
-    referencedTypeNames: ["Description", "Workspace"],
+    referencedTypeNames: ["Description", "Workspace", "WorkspaceMount"],
   },
   {
     name: "ProjectWorker",
@@ -861,30 +864,37 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Workspace",
     kind: "interface",
     sourceText:
-      "/**\n * One durable workspace: a private virtual filesystem living in a Durable\n * Object (no container, always warm). The root workspace (`\"/\"`) is the\n * read-only, always-fresh materialization of the config repo's main branch.\n * Every other workspace is an OVERLAY over the root: reads see latest main\n * until a local write shadows a path, writes and deletes stay private, and\n * there is no clone — a new workspace is usable instantly. `git.commit`\n * commits the overlay's changes straight to the config repo's MAIN branch\n * (the same lane as `itx.repo.commitFiles`, so the project worker/website\n * redeploys automatically), then the overlay resets to mirror the new main.\n *\n * Constraints: the `.git` name is reserved (platform-managed). Large files\n * are fine (past ~1.5MB they are stored in R2 transparently).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  /** Workspace identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** File contents, or null when the path does not exist. */\n  readFile(path: string): Promise<string | null>;\n  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /**\n   * Wipe the workspace back to pristine: the local layer and every deletion\n   * vanish, leaving a clean view of latest main (on the root, the next read\n   * re-materializes). Uncommitted work is LOST (committed changes live on\n   * main).\n   */\n  reset(): Promise<void>;\n  /**\n   * Un-pin one path: drop the local copy (file or subtree) and any deletion\n   * of it, so the path follows latest main again — the surgical sibling of\n   * reset(). Scoped at-or-below the path; a deleted ancestor directory still\n   * masks it until that ancestor is reverted too.\n   */\n  revert(path: string): Promise<void>;\n  /** Every file path in the merged view (local layer over latest main), sorted. */\n  listAllFiles(): Promise<string[]>;\n  writeFile(path: string, content: string): Promise<void>;\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  appendFile(path: string, content: string): Promise<void>;\n  /** Delete one file. Returns false when the path did not exist. */\n  deleteFile(path: string): Promise<boolean>;\n  /**\n   * Safely replace text in one file (uncommitted — use `git` to publish).\n   * The `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;\n  readDir(dir?: string): Promise<WorkspaceFileInfo[]>;\n  glob(pattern: string): Promise<WorkspaceFileInfo[]>;\n  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void>;\n  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;\n  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;\n  /** File metadata, or null when the path does not exist. */\n  stat(path: string): Promise<WorkspaceFileInfo | null>;\n  exists(path: string): Promise<boolean>;\n  /** Git over this workspace's checkout. */\n  git: WorkspaceGit;\n}",
-    summary:
-      "One durable workspace: a private virtual filesystem living in a Durable Object (no container, always warm).",
+      "/**\n * One durable workspace: an event-sourced, mount-routed private filesystem.\n * Its mount table (getConfig/configure) maps repos into the tree: reads under\n * a mount fall through to that repo's main at HEAD, writes land in a private\n * copy-on-write local layer (large files spill to R2 transparently), and\n * `git.commit({ scope })` turns ONE mount's changes into one commit on that\n * repo's main (honoring the mount's policy). Paths outside every mount are\n * private scratch. The `.git` name is reserved (platform-managed).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The workspace stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;\n  /** The folded configuration (birth certificate + configured patches). */\n  getConfig(): Promise<WorkspaceConfig>;\n  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */\n  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;\n  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */\n  readFile(path: string): Promise<string | null>;\n  /** One file's raw bytes from the merged view; null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /** Whether a path exists in the merged view. */\n  exists(path: string): Promise<boolean>;\n  /** Write one file into the private overlay. */\n  writeFile(path: string, content: string): Promise<void>;\n  /** Write raw bytes to one file in the private overlay. */\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  /** Replace an exact string in one file (copies a mount file up first). */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  /** Delete one file (whiteouts a mount copy; false when it did not exist). */\n  deleteFile(path: string): Promise<boolean>;\n  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */\n  listAllFiles(): Promise<string[]>;\n  /** Merged file paths matching a glob pattern. */\n  glob(pattern: string): Promise<string[]>;\n  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */\n  reset(): Promise<void>;\n  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */\n  revert(path: string): Promise<void>;\n  /** Per-mount git surface. */\n  git: WorkspaceGit;\n}",
+    summary: "One durable workspace: an event-sourced, mount-routed private filesystem.",
     memberSummaries: {
-      whoami: "Workspace identity string (debug).",
       kill: "Restart the workspace's server-side object; the next request boots it fresh.",
-      readFile: "File contents, or null when the path does not exist.",
-      readFileBytes:
-        "Raw file bytes (use for binaries — readFile text-decodes), or null when missing.",
-      reset:
-        "Wipe the workspace back to pristine: the local layer and every deletion vanish, leaving a clean view of latest main (on the root, the next read re-materializes).",
-      revert:
-        "Un-pin one path: drop the local copy (file or subtree) and any deletion of it, so the path follows latest main again — the surgical sibling of reset().",
-      listAllFiles: "Every file path in the merged view (local layer over latest main), sorted.",
-      deleteFile: "Delete one file.",
-      edit: "Safely replace text in one file (uncommitted — use `git` to publish).",
-      stat: "File metadata, or null when the path does not exist.",
-      git: "Git over this workspace's checkout.",
+      processor: "The workspace stream processor (snapshot/state).",
+      getConfig: "The folded configuration (birth certificate + configured patches).",
+      configure:
+        "Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured).",
+      readFile:
+        "One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing.",
+      readFileBytes: "One file's raw bytes from the merged view; null when missing.",
+      exists: "Whether a path exists in the merged view.",
+      writeFile: "Write one file into the private overlay.",
+      writeFileBytes: "Write raw bytes to one file in the private overlay.",
+      edit: "Replace an exact string in one file (copies a mount file up first).",
+      deleteFile: "Delete one file (whiteouts a mount copy; false when it did not exist).",
+      listAllFiles:
+        "Every file path in the merged view (local layer + every mount at HEAD, sorted).",
+      glob: "Merged file paths matching a glob pattern.",
+      reset: "Wipe the local layer and deletions — back to a pristine view of the mounts.",
+      revert: "Un-pin ONE path: drop the local copy/deletion so it follows its mount again.",
+      git: "Per-mount git surface.",
     },
     referencedTypeNames: [
       "Description",
+      "WakeableStreamProcessorRpc",
+      "WorkspaceProcessorState",
+      "WorkspaceConfig",
+      "WorkspaceConfigPatch",
       "EditWorkspaceFileInput",
       "EditWorkspaceFileResult",
-      "WorkspaceFileInfo",
       "WorkspaceGit",
     ],
   },
@@ -927,18 +937,19 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkspaceGit",
     kind: "interface",
     sourceText:
-      "/**\n * The commit surface of an overlay workspace. There is no staging area, no\n * branch, and no separate push: `commit({ message })` turns the workspace's\n * changes (local files minus `.gitignore`d paths, plus deletions) into ONE\n * ordinary commit on the config repo's MAIN branch — the same lane as\n * `itx.repo.commitFiles`, so the project worker/website redeploys\n * automatically. Credentials are internal; no token rides this surface.\n */\nexport interface WorkspaceGit {\n  __describe(): Promise<Description>;\n  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */\n  status(): Promise<WorkspaceChange[]>;\n  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */\n  commit(input: {\n    author?: { email: string; name: string };\n    message: string;\n  }): Promise<WorkspacePublishResult>;\n  /** The config repo's main-branch history, newest first. */\n  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;\n}",
-    summary: "The commit surface of an overlay workspace.",
+      "/**\n * The per-mount git surface of a workspace. `status()` groups the overlay's\n * changes by owning mount (plus the never-committable unmounted scratch);\n * `commit({ message, scope? })` turns ONE mount's changes into one ordinary\n * commit on that repo's main via its own `commitFiles` lane — scope may be\n * omitted when exactly one mount is dirty, and commits never span mounts.\n * Read-only mounts reject commits. No branches, no push: commit = live on\n * that repo's main.\n */\nexport interface WorkspaceGit {\n  __describe(): Promise<Description>;\n  /** Changes grouped by owning mount, plus the unmounted local scratch. */\n  status(): Promise<WorkspaceStatus>;\n  /** Commit one mount's changes to its repo's main branch. */\n  commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult>;\n  /** One mount's repo history, newest first. */\n  log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;\n}",
+    summary: "The per-mount git surface of a workspace.",
     memberSummaries: {
-      status: "Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted.",
-      commit:
-        "Commit the workspace's changes to the config repo's main branch (goes live immediately).",
-      log: "The config repo's main-branch history, newest first.",
+      status: "Changes grouped by owning mount, plus the unmounted local scratch.",
+      commit: "Commit one mount's changes to its repo's main branch.",
+      log: "One mount's repo history, newest first.",
     },
     referencedTypeNames: [
       "Description",
-      "WorkspaceChange",
-      "WorkspacePublishResult",
+      "WorkspaceStatus",
+      "WorkspaceCommitInput",
+      "WorkspaceCommitResult",
+      "WorkspaceGitLogInput",
       "WorkspaceGitLogEntry",
     ],
   },
@@ -1745,6 +1756,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "WorkspaceMount",
+    kind: "typeAlias",
+    sourceText:
+      '/** One repo mount: the repo a workspace subtree reads from and its commit policy. */\nexport type WorkspaceMount = { policy: "commit-to-main" | "read-only"; repoPath: string };',
+    summary: "One repo mount: the repo a workspace subtree reads from and its commit policy.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "SubscriptionKey",
     kind: "typeAlias",
     sourceText:
@@ -2053,6 +2073,33 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["DynamicWorkerRefBase"],
   },
   {
+    name: "WorkspaceProcessorState",
+    kind: "typeAlias",
+    sourceText:
+      '/** The workspace processor\'s reduced state: birth certificate plus folded config. */\nexport type WorkspaceProcessorState = {\n  birthCertificate: {\n    config: {\n      mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;\n    };\n  } | null;\n  config: { mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }> };\n};',
+    summary: "The workspace processor's reduced state: birth certificate plus folded config.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceConfig",
+    kind: "typeAlias",
+    sourceText:
+      '/** A workspace\'s complete configuration: the mount table, keyed by mount path. */\nexport type WorkspaceConfig = {\n  mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;\n};',
+    summary: "A workspace's complete configuration: the mount table, keyed by mount path.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceConfigPatch",
+    kind: "typeAlias",
+    sourceText:
+      '/** A configuration patch: deep-merged per mount point; null unmounts. */\nexport type WorkspaceConfigPatch = {\n  mounts?:\n    | Record<\n        string,\n        {\n          policy?: "commit-to-main" | "read-only" | undefined;\n          repoPath?: string | undefined;\n        } | null\n      >\n    | undefined;\n};',
+    summary: "A configuration patch: deep-merged per mount point; null unmounts.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "EditWorkspaceFileInput",
     kind: "typeAlias",
     sourceText:
@@ -2067,16 +2114,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/** Result of `Workspace.edit`. The change is in the working tree only — not committed. */\nexport type EditWorkspaceFileResult = {\n  occurrenceCount: number;\n  path: string;\n};",
     summary: "Result of `Workspace.edit`.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "WorkspaceFileInfo",
-    kind: "typeAlias",
-    sourceText:
-      '/**\n * Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`\'s\n * `FileInfo`, the shape `readDir`/`glob`/`stat` return.\n */\nexport type WorkspaceFileInfo = {\n  createdAt: number;\n  mimeType: string;\n  name: string;\n  path: string;\n  size: number;\n  /** Symlink target, present only on symlinks. */\n  target?: string;\n  type: "directory" | "file" | "symlink";\n  updatedAt: number;\n};',
-    summary:
-      "Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`'s `FileInfo`, the shape `readDir`/`glob`/`stat` return.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2208,21 +2245,39 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["DynamicWorkerSource"],
   },
   {
-    name: "WorkspaceChange",
+    name: "WorkspaceStatus",
     kind: "typeAlias",
     sourceText:
-      '/**\n * One overlay change returned by `WorkspaceGit.status`: a local file that\n * shadows a parent file ("modified"), one the parent does not have ("added"),\n * or a parent file hidden by a local delete ("deleted"). "modified" means\n * shadowed, not necessarily different — the overlay never diffs content.\n */\nexport type WorkspaceChange = {\n  change: "added" | "deleted" | "modified";\n  path: string;\n};',
+      '/** Per-mount changes plus the unmounted local scratch (never committable). */\nexport type WorkspaceStatus = {\n  mounts: {\n    changes: WorkspaceChange[];\n    path: string;\n    policy: "commit-to-main" | "read-only";\n    repoPath: string;\n  }[];\n  unmounted: WorkspaceChange[];\n};',
+    summary: "Per-mount changes plus the unmounted local scratch (never committable).",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkspaceChange"],
+  },
+  {
+    name: "WorkspaceCommitInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */\nexport type WorkspaceCommitInput = {\n  author?: { email: string; name: string };\n  message: string;\n  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */\n  scope?: string;\n};",
     summary:
-      'One overlay change returned by `WorkspaceGit.status`: a local file that shadows a parent file ("modified"), one the parent does not have ("added"), or a parent file hidden by a local delete ("deleted").',
+      "Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "WorkspacePublishResult",
+    name: "WorkspaceCommitResult",
     kind: "typeAlias",
     sourceText:
-      "/** Result of `WorkspaceGit.commit` — the commit landed on the config repo's main. */\nexport type WorkspacePublishResult = {\n  /** The repo branch the commit landed on — the config repo's default (main). */\n  branch: string;\n  /** Paths committed (after .gitignore filtering) plus deletions applied. */\n  changedPaths: string[];\n  commitOid: string;\n};",
-    summary: "Result of `WorkspaceGit.commit` — the commit landed on the config repo's main.",
+      "/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */\nexport type WorkspaceCommitResult = {\n  branch: string;\n  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */\n  changedPaths: string[];\n  commitOid: string;\n  /** The mount the commit was scoped to (its workspace path). */\n  mount: string;\n  repoPath: string;\n};",
+    summary: "Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkspaceGitLogInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to `WorkspaceGit.log` — one mount's repo history. */\nexport type WorkspaceGitLogInput = {\n  limit?: number;\n  /** The mount to read (its mount path). Optional when the table has exactly one mount. */\n  scope?: string;\n};",
+    summary: "Input to `WorkspaceGit.log` — one mount's repo history.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2230,8 +2285,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkspaceGitLogEntry",
     kind: "typeAlias",
     sourceText:
-      "/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */\nexport type WorkspaceGitLogEntry = {\n  author: { email: string; name: string };\n  message: string;\n  oid: string;\n  /** Epoch milliseconds. */\n  timestamp: number;\n};",
-    summary: "One commit returned by `WorkspaceGit.log` (the config repo's main history).",
+      "/** One commit returned by `WorkspaceGit.log` (a mounted repo's main history). */\nexport type WorkspaceGitLogEntry = {\n  author: { email: string; name: string };\n  message: string;\n  oid: string;\n  /** Epoch milliseconds. */\n  timestamp: number;\n};",
+    summary: "One commit returned by `WorkspaceGit.log` (a mounted repo's main history).",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2321,6 +2376,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "Declarative source for a dynamic worker: an orthogonal file source plus Cloudflare-compatible build options.",
     memberSummaries: {},
     referencedTypeNames: ["WorkerFileSource", "WorkerBuildOptions"],
+  },
+  {
+    name: "WorkspaceChange",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * One overlay change: a local file that shadows a mount file ("modified" —\n * shadowed, not content-diffed), one the mount does not have ("added"), or a\n * mount file hidden by a local delete ("deleted").\n */\nexport type WorkspaceChange = {\n  change: "added" | "deleted" | "modified";\n  path: string;\n};',
+    summary:
+      'One overlay change: a local file that shadows a mount file ("modified" — shadowed, not content-diffed), one the mount does not have ("added"), or a mount file hidden by a local delete ("deleted").',
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "WorkerFileSource",
