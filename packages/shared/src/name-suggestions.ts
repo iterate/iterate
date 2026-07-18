@@ -34,10 +34,7 @@ const GENERIC_EMAIL_DOMAINS = new Set([
  * ("Jonas Templestein" → "Jonas Templestein's Organization"). Fall back to
  * the email-only heuristic when name is missing.
  */
-export function suggestOrganizationName(input: {
-  name?: string | null;
-  email?: string | null;
-}): string {
+export function suggestOrganizationName(input: { name?: string | null; email?: string | null }) {
   const displayName = input.name?.trim();
   if (displayName) {
     return `${displayName}'s Organization`;
