@@ -229,7 +229,7 @@ describe("userspace GitHub pull-request routing", () => {
       },
     });
     expect(test.appendBatches[0]?.events[2]).toMatchObject({
-      idempotencyKey: "github-pr/review:install-789:101:acme/widgets:iterate:1:head-abc",
+      idempotencyKey: "github-pr/review:install-789:101:acme/widgets:iterate:2:head-abc",
       payload: {
         key: "github/review-task",
         llmRequestPolicy: { behaviour: "interrupt-current-request" },
@@ -242,7 +242,10 @@ describe("userspace GitHub pull-request routing", () => {
     expect(task).toContain("exactly one consolidated COMMENT review");
     expect(task).toContain("iterate-lint-disable-next-line");
     expect(task).toContain("structure/no-small-single-use-helper");
-    expect(task).toContain("<!-- iterate-ai-lint:101:policy:1:head:head-abc -->");
+    expect(task).toContain("no `!`-prefixed negative glob");
+    expect(task).toContain("!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}");
+    expect(task).toContain("!**/{__tests__,test,tests,spec,specs}/**");
+    expect(task).toContain("<!-- iterate-ai-lint:101:policy:2:head:head-abc -->");
   });
 
   it("routes each linked GitHub repository through its project-controlled repo path", async () => {
@@ -290,7 +293,7 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.appendBatches[1]?.events.map((item) => item.idempotencyKey)).toEqual([
       "github-pr/binding",
       "github-pr/webhook:/integrations/github/install-789:12",
-      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-abc",
+      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-abc",
     ]);
   });
 
@@ -313,9 +316,9 @@ describe("userspace GitHub pull-request routing", () => {
     expect(test.create).not.toHaveBeenCalled();
     const reviews = test.appendBatches.map((batch) => batch.events[2]);
     expect(reviews.map((review) => review?.idempotencyKey)).toEqual([
-      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-one",
-      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-two",
-      "github-pr/review:install-789:101:acme/widgets:iterate:1:head-two",
+      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-one",
+      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-two",
+      "github-pr/review:install-789:101:acme/widgets:iterate:2:head-two",
     ]);
     expect(reviews[1]).toMatchObject({
       payload: { llmRequestPolicy: { behaviour: "interrupt-current-request" } },
@@ -367,7 +370,7 @@ describe("userspace GitHub pull-request routing", () => {
       "renamed/widgets-next pull request #7",
     );
     expect(test.appendBatches[0]?.events[2]?.idempotencyKey).toBe(
-      "github-pr/review:install-789:101:renamed/widgets-next:iterate:1:head-abc",
+      "github-pr/review:install-789:101:renamed/widgets-next:iterate:2:head-abc",
     );
   });
 

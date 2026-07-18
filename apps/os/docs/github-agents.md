@@ -133,16 +133,24 @@ IDs used in suppressions, comments, idempotency, and future analytics:
 
 ```ts
 const githubPullRequests = {
-  policyVersion: "1",
+  policyVersion: "2",
   rules: {
     "typescript/explain-type-cast": {
-      files: ["**/*.{ts,tsx,mts,cts}"],
+      files: [
+        "**/*.{ts,tsx,mts,cts}",
+        "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
+        "!**/{__tests__,test,tests,spec,specs}/**",
+      ],
       invariant:
         "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
     },
   },
 };
 ```
+
+A rule applies only when a changed path matches at least one positive glob and
+none of its `!`-prefixed negative globs. The seeded policy excludes conventional
+test and spec filenames and directories from every structural rule.
 
 The same project policy applies to every GitHub-linked repo. The router derives
 each agent path from the matched Iterate repo path; GitHub owner/name changes
