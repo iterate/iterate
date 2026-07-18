@@ -12,6 +12,13 @@ import type {
 import type { LiveUpdate } from "./itx/live-state/protocol.ts";
 import type { LiveStateRpc, LiveStateSubscriptionHandle } from "./processors/rpc-types.ts";
 
+type LiveStateSource<State extends object> = Pick<LiveStateEngine<State>, "getState" | "subscribe">;
+
+type RefreshingLiveStateSource<State extends object> = {
+  readonly live: LiveStateSource<State>;
+  loadAndRefreshLive(): void | PromiseLike<void>;
+};
+
 export { createLiveStateStore } from "./itx/live-state/store.ts";
 export { applyPatch, diff } from "./itx/live-state/diff.ts";
 export type { LiveStatePatch, LiveUpdate } from "./itx/live-state/protocol.ts";
@@ -24,25 +31,38 @@ export {
   type RetainedCallback,
 } from "./itx/rpc/retain.ts";
 
-/** Expose mutable server state as a read-only Cap'n Web capability. */
+/**
+ * Expose mutable server state as a read-only Cap'n Web capability.
+ * Pass an in-memory `LiveState`, or a stream-processor registry whose engine
+ * must hydrate before its first snapshot.
+ */
 export class LiveStateRpcTarget<State extends object>
   extends RpcTarget
   implements LiveStateRpc<State>
 {
-  readonly #live: Pick<LiveStateEngine<State>, "getState" | "subscribe">;
+  readonly #live: LiveStateSource<State>;
+  readonly #beforeRead: (() => void | PromiseLike<void>) | undefined;
 
-  constructor(live: Pick<LiveStateEngine<State>, "getState" | "subscribe">) {
+  constructor(source: LiveStateSource<State> | RefreshingLiveStateSource<State>) {
     super();
-    this.#live = live;
+    if ("loadAndRefreshLive" in source) {
+      this.#live = source.live;
+      this.#beforeRead = () => source.loadAndRefreshLive();
+    } else {
+      this.#live = source;
+      this.#beforeRead = undefined;
+    }
   }
 
   async get(): Promise<State> {
+    await this.#beforeRead?.();
     return this.#live.getState();
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
+    await this.#beforeRead?.();
     return new LiveStateSubscriptionRpcTarget(this.#live.subscribe(onUpdate));
   }
 }

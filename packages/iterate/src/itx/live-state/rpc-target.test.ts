@@ -10,9 +10,10 @@ describe("LiveStateRpcTarget", () => {
   it("exposes the server engine as a read-only live capability", async () => {
     vi.useFakeTimers();
     const live = new LiveState({ count: 0 }, { debounceMs: 0 });
+    const beforeRead = vi.fn();
     class AppSession extends RpcTarget {
       get state(): LiveStateRpcTarget<{ count: number }> {
-        return new LiveStateRpcTarget(live);
+        return new LiveStateRpcTarget({ live, loadAndRefreshLive: beforeRead });
       }
 
       increment(): void {
@@ -27,9 +28,12 @@ describe("LiveStateRpcTarget", () => {
       increment(): void;
     }>(channel.port2);
     const store = createLiveStateStore<{ count: number }>();
+
+    await expect(app.state.get()).resolves.toEqual({ count: 0 });
     using subscription = await app.state.subscribe((update) => store.apply(update, vi.fn()));
 
     await vi.waitFor(() => expect(store.getState()).toEqual({ count: 0 }));
+    expect(beforeRead).toHaveBeenCalledTimes(2);
     await app.increment();
     await vi.advanceTimersByTimeAsync(0);
     await vi.waitFor(() => expect(store.getState()).toEqual({ count: 1 }));
@@ -39,5 +43,7 @@ describe("LiveStateRpcTarget", () => {
     // pass-by-value object that could expose LiveState's mutation methods.
     const state: RpcStub<LiveStateRpc<{ count: number }>> = app.state;
     expect(state).toBeDefined();
+
+    await expect(new LiveStateRpcTarget(live).get()).resolves.toEqual({ count: 1 });
   });
 });

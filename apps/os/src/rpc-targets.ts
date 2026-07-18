@@ -52,11 +52,10 @@ import type {
 } from "iterate/processors";
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
-import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
 import {
   disposeIgnoredRpcResult,
   LiveState,
-  LiveStateRpcTarget as SharedLiveStateRpcTarget,
+  LiveStateRpcTarget,
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
@@ -6182,7 +6181,7 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
 // Every OS-owned RpcTarget that defines or relays an itx contract lives in this
 // module. Transport primitives shared with userspace, such as the read-only
 // target from `iterate/live-state`, stay in that package; the local relay below
-// supplies OS-specific registry refresh and generated-contract ownership.
+// only bridges that target across the Durable Object hop.
 // ---------------------------------------------------------------------------
 
 type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
@@ -7013,39 +7012,6 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 }
 
-/**
- * DO-side RpcTarget over a registry's live-state engine — the surface a
- * `.liveState` node exposes: `get()`/`subscribe()` — read-only over the wire
- * (see LiveStateRpc: the DO derives this state from its fold, so writes go
- * through the node's own verbs). `get`/`subscribe` first seed the engine from
- * committed state so the first paint is never stale after a DO restart.
- */
-export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
-  extends IterateRpcRelay<"LiveStateRpc">
-  implements LiveStateRpc<State>
-{
-  readonly #host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">;
-  readonly #target: SharedLiveStateRpcTarget<State>;
-
-  constructor(host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">) {
-    super();
-    this.#host = host;
-    this.#target = new SharedLiveStateRpcTarget(host.live);
-  }
-
-  async get(): Promise<State> {
-    await this.#host.loadAndRefreshLive();
-    return await this.#target.get();
-  }
-
-  async subscribe(
-    onUpdate: (update: LiveUpdate<State>) => unknown,
-  ): Promise<LiveStateSubscriptionHandle> {
-    await this.#host.loadAndRefreshLive();
-    return await this.#target.subscribe(onUpdate);
-  }
-}
-
 /** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
 type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
 
@@ -7106,7 +7072,7 @@ class LiveDemoTickerRpcTarget
       tick: 0,
       startedAt: this.#startedAt,
     });
-    return await new SharedLiveStateRpcTarget({
+    return await new LiveStateRpcTarget({
       getState: () => engine.getState(),
       subscribe: (sink) => {
         const inner = engine.subscribe(sink);
