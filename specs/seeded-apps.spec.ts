@@ -138,12 +138,15 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   // with a Cap'n Web live-state lane. Its own origin has no app cookie yet,
   // so the auth partial gates it exactly like the internal app did — and the
   // same OS session carries the "Continue with Iterate" hop. Same worker.ts
-  // The vite pipeline builds this app's own `npm run build` on first use —
-  // the 120s budget covers that cold build behind the building page.
+  // The auth gate answers BEFORE any build (the root worker gates the host,
+  // then forwards), so the login form is quick — it is the first page load
+  // AFTER auth that triggers the vite lane's cold build (the app's own npm
+  // install + vite build in the builder pool, behind the self-refreshing
+  // building page). The heading wait is the one that must absorb it.
   await page.goto(appUrl("tanstack", slug, baseURL!));
-  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 120_000 });
+  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 60_000 });
   await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
-  await page.getByRole("heading", { name: "TanStack todos" }).waitFor({ timeout: 30_000 });
+  await page.getByRole("heading", { name: "TanStack todos" }).waitFor({ timeout: 300_000 });
 
   // The composer works once the Cap'n Web session authenticates (the
   // "connecting…" status hides), and the add comes back over live state.
