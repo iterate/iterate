@@ -8,9 +8,10 @@ transformation protects existing preview deployments while they update.
 ## Decision
 
 - Keep every non-ephemeral production stream fact in PostHog.
-- Associate every production stream fact with its `project` group and, when the
-  project belongs to one, its `organization` group. Accept identified-event and
-  Group Analytics processing for this feed as an intentional product cost.
+- Associate every production stream fact with its `project` group. Do not read
+  the project directory merely to derive an organization for the machine feed.
+  Accept identified-event and Group Analytics processing for this feed as an
+  intentional product cost.
 - Identify signed-in browser users as people. Use Group Analytics for their UI
   activity and curated product events, with `organization` and `project` as
   the group types, while also registering
@@ -265,12 +266,12 @@ and identity model that PostHog supplies.
 
 The practical split is therefore:
 
-- PostHog for curated product analytics, browser identity, and full
-  organization/project Group Analytics on both browser and durable stream
-  activity.
+- PostHog for curated product analytics, browser identity, organization/project
+  Group Analytics in the browser, and project Group Analytics for durable
+  stream activity.
 - Grouped `stream:append` events while their product value justifies the full
-  base, identified-event, and Group Analytics cost, with ordinary
-  `organization_id` and `project_id` properties retained for HogQL slicing.
+  base, identified-event, and Group Analytics cost, with ordinary `project_id`
+  retained for HogQL slicing.
 - R2/Iceberg as the better future home if exact long-retention raw history is
   required independently of PostHog.
 
@@ -358,7 +359,7 @@ never modified.
 
 1. **Keep full grouped non-ephemeral production coverage.** The current
    post-fix volume is bounded and has already exposed valuable lifecycle and
-   defect evidence. Every row should join its project and organization groups.
+   defect evidence. Every row should join its project group.
 2. **Keep dev/preview stream export off.** Preview E2E data belongs in test logs
    and traces, not paid organization analytics. Ordinary browser analytics can
    remain separated in the existing development/staging projects.
@@ -377,16 +378,18 @@ never modified.
    `created_at` is the PostHog ingestion time that explains the bill.
 6. **Use groups on every production event.** A browser person is the
    authenticated user. A machine-authored stream fact uses one stable synthetic
-   identity per project. Both carry `organization` and `project` group context
-   whenever an organization exists, plus ordinary ID properties for HogQL.
+   identity per project and carries only `project` group context plus ordinary
+   `project_id` for HogQL. Browser events carry both organization and project
+   context where available.
 7. **Classify the production error rows.** Fix the two current
    `runtime.runningScripts` contract violations and track the old rollout/parked
    cases to explicit resolutions. Do not normalize them as expected noise.
 8. **Keep Group Analytics for all production activity.** The product model needs
    organization- and project-level funnels, cohorts, flags, experiments, and
-   breakdowns across browser and durable stream events. Accept its
-   identified-event charge, and track the add-on line item so a future volume
-   increase cannot silently change the economics again.
+   breakdowns in the browser, plus project-level analysis across browser and
+   durable stream events. Accept its identified-event charge, and track the
+   add-on line item so a future volume increase cannot silently change the
+   economics again.
 9. **Treat billing limits as a last-resort circuit breaker.** PostHog limits can
    permanently drop data. Use a warning below the limit, document ownership and
    rollback, and keep production headroom rather than setting the limit at the

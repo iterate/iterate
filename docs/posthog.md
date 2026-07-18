@@ -3,8 +3,8 @@
 OS and Semaphore initialize PostHog through the shared UI package. The
 marketing site has a separate provider. OS also exports its non-ephemeral
 production durable-event feed. OS uses PostHog people plus organization and
-project groups as one shared product-analytics model across browser and stream
-activity.
+project groups as one shared product-analytics model. Browser activity uses
+both group dimensions; machine-authored stream activity uses only project.
 
 ## OS identity and groups
 
@@ -27,13 +27,12 @@ because they are not product organizations.
 
 Machine-authored stream facts do not have a human actor. They use one stable,
 namespaced PostHog distinct ID per deployment/project instead. Every exported
-`stream:append` is linked to its `project` group and, when the project belongs
-to one, its `organization` group. The authentic root project birth emits the
-group records and project metadata. These rows are intentionally identified and
-therefore intentionally incur both identified-event and Group Analytics
-processing. A missing project-directory record rejects the delivery instead of
-silently emitting an event with incomplete group context; the durable stream
-retry/park state preserves that failure for diagnosis.
+`stream:append` is linked only to its `project` group. The authentic root
+project birth emits the project group record and metadata. These rows are
+intentionally identified and therefore intentionally incur both
+identified-event and Group Analytics processing. The exporter does not read the
+project directory or derive an organization for each event; project is the
+complete grouping boundary for the machine feed.
 
 ## Identity Boundary
 
@@ -61,7 +60,7 @@ synthetic projects at CI scale and must acknowledge the durable PostHog
 subscription without sending it to PostHog. Ephemeral events are excluded in
 both the subscription and capture paths. Production events retain the complete
 committed stream fact, bounded by the documented 100 KiB JSON limit, with
-immutable project/organization group keys and ordinary ID properties.
+an immutable project group key and ordinary `project_id` property.
 
 PostHog bills Product Analytics by captured event count. Once Group Analytics
 is enabled, all identified events in the PostHog project are processed by that
@@ -85,4 +84,5 @@ control, cost model, and monitoring recommendations.
    stream row's identity and group mapping, durable payload preservation,
    environment gate, retry identity, and group metadata.
 4. Browse authenticated organization and project routes and confirm page and
-   interaction events resolve to the same groups as `stream:append` events.
+   interaction events resolve to the same project group as `stream:append`
+   events; browser events additionally resolve to their organization group.
