@@ -90,6 +90,30 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // reads via #processorReads) goes through the runner's committed progress.
   readonly #reads = this.#registry.reads(this.#capabilityHostProcessor);
 
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.#warmBoot();
+  }
+
+  /**
+   * Overlap this scope's cold activation with whatever woke the object: warm
+   * the typechecker sidecar's wasm compiler, and pre-read this scope's
+   * capability descriptions — journal catch-up plus the one fallback-host
+   * dial, exactly the data the first script's typecheck gate needs.
+   * DELIBERATELY fire-and-forget: no verb awaits it and a failure only logs.
+   * Consumers re-do this work on demand and merely pay the cold cost warmup
+   * failed to hide; gating verbs on a cached warmup rejection would let one
+   * transient sidecar error brick the whole incarnation.
+   */
+  #warmBoot(): void {
+    this.env.TYPECHECKER.warm().catch((error: unknown) => {
+      console.warn("[capability-host] typechecker warmup failed", { error });
+    });
+    this.#capabilityHostProcessor.describeCapabilities().catch((error: unknown) => {
+      console.warn("[capability-host] capability description warmup failed", { error });
+    });
+  }
+
   /** The processor's runner-backed fold reads — lazy closures because #reads
    * is built from the registered processor above; the explicit return type
    * breaks the field-initializer inference cycle. */

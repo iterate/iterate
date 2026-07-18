@@ -63,9 +63,10 @@ export interface Env {
   /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types
-   * validation and `itx.docs.typecheck`. The only script carrying the
-   * TypeScript compiler (tswasm, ~30MB wasm) — same quarantine story as
-   * BUILDER.
+   * validation and `itx.docs.typecheck`; `warm()` idempotently pre-pays the
+   * isolate's wasm activation (capability hosts fire it at boot). The only
+   * script carrying the TypeScript compiler (tswasm, ~30MB wasm) — same
+   * quarantine story as BUILDER.
    */
   TYPECHECKER: Service<
     import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint

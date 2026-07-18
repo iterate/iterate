@@ -54,6 +54,17 @@ export class TypecheckerEntrypoint extends WorkerEntrypoint {
     return Response.json({ worker: "os-typechecker" }, { status: 404 });
   }
 
+  /**
+   * Idempotently pre-pay this isolate's cold cost: instantiate the shared
+   * wasm compiler and push one trivial no-network file through the same lane
+   * real checks use, crash-reset included. On a warm isolate this is ~free;
+   * on a cold one it absorbs the multi-hundred-ms wasm activation that would
+   * otherwise land inside a user's first script.
+   */
+  async warm(): Promise<void> {
+    await this.check({ files: { "/warmup.ts": "export const warm: number = 1;\n" } });
+  }
+
   async check(input: {
     files: Record<string, string>;
     entrypoint?: string;
