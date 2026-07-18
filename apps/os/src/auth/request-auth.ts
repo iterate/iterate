@@ -164,12 +164,13 @@ async function resolveIterateCredential(input: {
   });
   const authenticationError =
     authentication.credential === "session" ? undefined : authenticationFailure.event;
-  const diagnostics = authenticationError
-    ? {
-        error: "session_verification_failed" as const,
-        sessionVerificationFailure: authenticationError,
-      }
-    : {};
+  const diagnostics: Pick<OsRequestAuthResolution, "error" | "sessionVerificationFailure"> =
+    authenticationError
+      ? {
+          error: "session_verification_failed",
+          sessionVerificationFailure: authenticationError,
+        }
+      : {};
 
   if (authentication.credential === null) {
     return { ...anonymousResolution(authentication.responseHeaders), ...diagnostics };
