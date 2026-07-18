@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS,
   isDurableObjectLifecycleError,
+  isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   isStreamUnavailableError,
   rethrowStreamUnavailable,
@@ -61,6 +62,21 @@ describe("retryIdempotentDurableObjectOperation", () => {
       error: expect.objectContaining({ overloaded: true }),
       maxAttempts: IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS,
     });
+  });
+
+  it("retries a nested Stream lifecycle failure after RPC strips the workerd flags", async () => {
+    const serialized = new Error(
+      `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}Durable Object reset because its code was updated.`,
+    );
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(serialized)
+      .mockResolvedValueOnce("recovered");
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).resolves.toBe("recovered");
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(isDurableObjectLifecycleError(serialized)).toBe(false);
+    expect(isRetryableDurableObjectAvailabilityError(serialized)).toBe(true);
   });
 
   it("never retries an application error", async () => {

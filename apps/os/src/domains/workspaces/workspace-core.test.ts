@@ -58,6 +58,10 @@ function fakeKv() {
  * post-commit fall-through assertions test the real read-your-write shape. */
 function fakeRepo(tree: Record<string, string>) {
   const commits: { changes: unknown[]; message: string }[] = [];
+  const commandReceipts = new Map<
+    string,
+    { input: string; result: Awaited<ReturnType<MountRepoAccess["commitFiles"]>> }
+  >();
   const repo: MountRepoAccess = {
     readFile: async ({ encoding, path }) => {
       const content = tree[path];
@@ -82,6 +86,17 @@ function fakeRepo(tree: Record<string, string>) {
         commitOid: `commit-${commits.length}`,
         noChanges: input.changes.length === 0,
       };
+    },
+    commitFilesCommand: async (command) => {
+      const serialized = JSON.stringify(command.input);
+      const existing = commandReceipts.get(command.operationId);
+      if (existing !== undefined) {
+        if (existing.input !== serialized) throw new Error("fake command input conflict");
+        return existing.result;
+      }
+      const result = await repo.commitFiles(command.input);
+      commandReceipts.set(command.operationId, { input: serialized, result });
+      return result;
     },
     log: async ({ limit }) => ({
       commits: [
@@ -117,6 +132,36 @@ function subject(mounts: Record<string, WorkspaceMount> = MOUNTS) {
     workspace,
   });
   return { config, core, iterate, localFiles: files };
+}
+
+function interruptedCommitSubject() {
+  const config = fakeRepo({ "worker.ts": "export default {}" });
+  const { files, workspace } = fakeLocalLayer();
+  const kv = fakeKv();
+  let interruptCleanup = true;
+  const interruptedWorkspace = {
+    ...workspace,
+    rm: async (path: string, options: { force?: boolean; recursive?: boolean }) => {
+      if (interruptCleanup) {
+        interruptCleanup = false;
+        throw new Error("injected reset before workspace cleanup");
+      }
+      return await workspace.rm(path, options);
+    },
+  } as Workspace;
+  const options = {
+    kv,
+    mounts: async () => ({
+      "/config": { policy: "commit-to-main" as const, repoPath: "/repos/config" },
+    }),
+    repo: () => config.repo,
+  };
+  return {
+    config,
+    files,
+    interrupted: new WorkspaceCore({ ...options, workspace: interruptedWorkspace }),
+    recovered: new WorkspaceCore({ ...options, workspace }),
+  };
 }
 
 describe("mount-routed reads", () => {
@@ -223,6 +268,70 @@ describe("git status, commit, and log", () => {
     await expect(core.readFile("/scratch/notes.txt")).resolves.toBe("survives");
     const statusAfter = await core.gitStatus();
     expect(statusAfter.mounts.find((mount) => mount.path === "/config")?.changes).toEqual([]);
+  });
+
+  test("replays a completed repo mutation and finishes workspace cleanup after a reset", async () => {
+    const { config, files, interrupted, recovered } = interruptedCommitSubject();
+    const command = {
+      input: { message: "update worker" },
+      operationId: "4035f424-72d9-4515-a05b-2fd6d662a021",
+    };
+    await interrupted.writeFile("/config/worker.ts", "changed");
+
+    await expect(interrupted.gitCommitCommand(command)).rejects.toThrow(/injected reset/);
+    expect(config.commits).toHaveLength(1);
+    expect(files.has("/config/worker.ts")).toBe(true);
+
+    await expect(recovered.gitCommitCommand(command)).resolves.toMatchObject({
+      changedPaths: ["/config/worker.ts"],
+      commitOid: "commit-1",
+    });
+    expect(config.commits).toHaveLength(1);
+    expect(files.has("/config/worker.ts")).toBe(false);
+  });
+
+  test("replays a completed workspace result without consuming a later edit", async () => {
+    const { config, core } = subject();
+    const command = {
+      input: { message: "update worker" },
+      operationId: "92df645d-0a83-41e2-a249-11f2927068fc",
+    };
+    await core.writeFile("/config/worker.ts", "changed");
+    const first = await core.gitCommitCommand(command);
+
+    // Simulate a lost edge acknowledgement followed by unrelated later work
+    // before the transport replays the original command.
+    await core.writeFile("/config/worker.ts", "later edit");
+    await expect(core.gitCommitCommand(command)).resolves.toEqual(first);
+    await expect(core.readFile("/config/worker.ts")).resolves.toBe("later edit");
+    expect(config.commits).toHaveLength(1);
+  });
+
+  test("refuses recovery when the workspace changed after the repo commit", async () => {
+    const { config, interrupted, recovered } = interruptedCommitSubject();
+    const command = {
+      input: { message: "update worker" },
+      operationId: "1d205ee9-e117-468b-9d92-5111e357dabc",
+    };
+    await interrupted.writeFile("/config/worker.ts", "changed");
+    await expect(interrupted.gitCommitCommand(command)).rejects.toThrow(/injected reset/);
+
+    await recovered.writeFile("/config/worker.ts", "later edit");
+    await expect(recovered.gitCommitCommand(command)).rejects.toThrow(/recovery conflict/);
+    await expect(recovered.readFile("/config/worker.ts")).resolves.toBe("later edit");
+    expect(config.commits).toHaveLength(1);
+  });
+
+  test("rejects workspace operation-id reuse with different input", async () => {
+    const { config, core } = subject();
+    const operationId = "b222b4c7-c0bf-4780-b08d-811cd9160e10";
+    await core.writeFile("/config/worker.ts", "changed");
+    await core.gitCommitCommand({ input: { message: "first" }, operationId });
+
+    await expect(
+      core.gitCommitCommand({ input: { message: "different" }, operationId }),
+    ).rejects.toThrow(/replayed with different input/);
+    expect(config.commits).toHaveLength(1);
   });
 
   test("commit refuses to span mounts and names the scope choices", async () => {

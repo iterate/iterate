@@ -13,10 +13,7 @@ import type {
   RevokeCapabilityInput,
 } from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import {
-  CapabilityHostProcessorContract,
-  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-} from "./capability-host-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
@@ -35,6 +32,16 @@ import {
 } from "./itx-expression.ts";
 
 export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
+
+/** Internal replay identity minted by the fronting RPC target. The public API
+ * still accepts only source code; carrying this command across a host reset is
+ * what makes a lost acknowledgement safe to retry without running a second
+ * script. */
+export type RunScriptCommand = {
+  code: string;
+  executionId: string;
+  expiresAt: number;
+};
 
 type ScriptExecutionEntrypoint = {
   run(code: string, options: { emittedJs?: string; expiresAt: number }): Promise<unknown>;
@@ -720,11 +727,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
   }
 
-  async runScript(code: string): Promise<RunScriptResult> {
+  async runScript(input: RunScriptCommand): Promise<RunScriptResult> {
     await this.#assertCreated();
-    const executionId = crypto.randomUUID();
+    const { code, executionId, expiresAt } = input;
     const now = this.#now ?? Date.now;
-    const expiresAt = now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
     const completionAbort = new AbortController();
     // Register before the request append so a very fast completion cannot
     // pass the waiter. Observe the rejection immediately: if the request
@@ -740,9 +746,34 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
     try {
+      // The waiter is already registered, so checking the durable settlement
+      // here closes both sides of the replay race: a completion from the first
+      // incarnation is either found by this point read or observed as a future
+      // delivery. This is the committed-result path after the outer RPC lost
+      // its acknowledgement.
+      const existingCompletion = await this.stream.getEvent({
+        idempotencyKey: this.idempotencyKey(`script-run-settled@${executionId}`),
+      });
+      if (existingCompletion !== undefined) {
+        const existingSettlement = settlementFromCompletionEvent(existingCompletion, executionId);
+        if (existingSettlement === undefined) {
+          throw new Error(
+            `Script execution "${executionId}" has a malformed durable settlement event.`,
+          );
+        }
+        completionAbort.abort("durable settlement already exists");
+        void observedCompletion;
+        return scriptRunResult({
+          event: existingCompletion,
+          executionId,
+          settlement: existingSettlement,
+        });
+      }
+
       await this.#awaitJournalAppend(
         this.append({
           type: "events.iterate.com/capability-host/script-run-requested",
+          idempotencyKey: this.idempotencyKey(`script-run-requested@${executionId}`),
           payload: { code, executionId, expiresAt },
         }),
         expiresAt,
@@ -761,12 +792,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       );
     }
     const { event, settlement } = completion.event;
-    if (settlement.status === "failed") throw new Error(settlement.error);
-    return {
-      completedEvent: event,
-      executionId,
-      result: settlement.result ?? null,
-    };
+    return scriptRunResult({ event, executionId, settlement });
   }
 
   async #assertCreated(): Promise<void> {
@@ -1079,6 +1105,19 @@ function settlementFromCompletionEvent(
   }
   const parsed = ScriptExecutionSettlement.safeParse(event.payload.settlement);
   return parsed.success ? parsed.data : undefined;
+}
+
+function scriptRunResult(input: {
+  event: StreamEvent;
+  executionId: string;
+  settlement: ScriptExecutionSettlementValue;
+}): RunScriptResult {
+  if (input.settlement.status === "failed") throw new Error(input.settlement.error);
+  return {
+    completedEvent: input.event,
+    executionId: input.executionId,
+    result: input.settlement.result ?? null,
+  };
 }
 
 function assertExpressionDoesNotReferenceOwnMount(

@@ -58,8 +58,22 @@ test(
       },
     );
 
-    const agentEvents = await agent.stream.getEvents({ limit: 500 });
-    const types = agentEvents.map((event) => event.type.replace("events.iterate.com/", ""));
+    // The script body can append its proof and the model can send its reply
+    // before the capability host's separate durable settlement append lands.
+    // Observe that journal fact instead of sampling once in the small gap.
+    let types: string[] = [];
+    await waitForCondition(
+      async () => {
+        const agentEvents = await agent.stream.getEvents({ limit: 500 });
+        types = agentEvents.map((event) => event.type.replace("events.iterate.com/", ""));
+        return types.includes("capability-host/script-run-settled");
+      },
+      {
+        description: "the agent script's durable settlement event",
+        intervalMs: 250,
+        timeoutMs: 60_000,
+      },
+    );
     expect(types).toContain("capability-host/script-run-requested");
     expect(types).toContain("capability-host/script-run-settled");
     expect(types).toContain("agents/web-message-sent");

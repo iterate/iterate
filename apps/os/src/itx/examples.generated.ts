@@ -132,8 +132,10 @@ return { appended, count: events.length };
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 // Transient signal: live product subscribers see it; product state never will.
-const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
+const path = vars.path ?? "/repl/ephemeral-demo";
+const stream = itx.streams.get(path);
 const [tick] = await stream.append({
+  idempotencyKey: \`ephemeral-demo:tick:\${path}\`,
   type: "events.iterate.repl/progress-ticked",
   ephemeral: true,
   payload: { percent: 50 },
@@ -141,6 +143,7 @@ const [tick] = await stream.append({
 
 // The durable truth is its own ordinary event — THIS is what processors fold.
 const [done] = await stream.append({
+  idempotencyKey: \`ephemeral-demo:done:\${path}\`,
   type: "events.iterate.repl/work-completed",
   payload: { result: "ok" },
 });

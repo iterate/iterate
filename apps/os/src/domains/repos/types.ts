@@ -43,6 +43,16 @@ export type CommitRepoFilesResult = {
   noChanges: boolean;
 };
 
+/**
+ * Internal replay identity for a workspace-driven repo commit. The public
+ * repo capability still accepts {@link CommitRepoFilesInput}; only a trusted
+ * Durable Object caller can mint and replay this command.
+ */
+export type RepoCommitCommand = {
+  input: CommitRepoFilesInput;
+  operationId: string;
+};
+
 /** Command object for a coding-agent-style exact string edit. */
 export type EditRepoFileInput = {
   author?: { email: string; name: string };

@@ -179,7 +179,7 @@ import type {
 } from "./domains/workers/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
-  isDurableObjectLifecycleError,
+  isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
   retryIdempotentDurableObjectOperation,
@@ -279,6 +279,7 @@ import {
 import {
   CapabilityHostProcessorContract,
   capabilityFallbackForScope,
+  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
 } from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
   settleByDeadline,
@@ -349,6 +350,7 @@ import {
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
+  WorkspaceCommitCommand,
   WorkspaceCommitInput,
   WorkspaceCommitResult,
   WorkspaceGitLogEntry,
@@ -604,7 +606,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    const result = await this.#read("getEvent", () =>
+      Promise.resolve(this.durableObjectStub.getEvent(args)),
+    ).catch(rethrowStreamUnavailable);
     if (result === undefined) return undefined;
     return detachPlainRpcResult(result);
   }
@@ -617,7 +621,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    const result = await this.#read("getEvents", () =>
+      Promise.resolve(this.durableObjectStub.getEvents(args)),
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
@@ -740,9 +746,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    const result = await this.durableObjectStub
-      .getProcessorRuntimeState(args)
-      .catch(rethrowStreamUnavailable);
+    const result = await this.#read("getProcessorRuntimeState", () =>
+      Promise.resolve(this.durableObjectStub.getProcessorRuntimeState(args)),
+    ).catch(rethrowStreamUnavailable);
     return result === null ? null : detachPlainRpcResult(result);
   }
 
@@ -767,8 +773,26 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       storageSizeBytes: number;
     };
   }> {
-    const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    const result = await this.#read("runtimeState", () =>
+      Promise.resolve(this.durableObjectStub.runtimeState()),
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
+  }
+
+  #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
+    return retryIdempotentDurableObjectOperation({
+      operation: call,
+      onRetry: ({ attempt, error, maxAttempts }) => {
+        console.info("idempotent stream read retrying after Durable Object became unavailable", {
+          attempt,
+          error,
+          maxAttempts,
+          operation,
+          path: this.props.path,
+          projectId: this.props.projectId,
+        });
+      },
+    });
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -2187,8 +2211,16 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** Commit one mount's changes to its repo's main branch. */
   commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
-    // One-shot: a lost acknowledgement does not prove the commit was not created.
-    return this.durableObjectStub.gitCommit(input);
+    const command: WorkspaceCommitCommand = {
+      input,
+      operationId: crypto.randomUUID(),
+    };
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.gitCommit(command),
+      operation: "git.commit",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** One mount's repo history, newest first. */
@@ -5535,7 +5567,28 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     executionId: string;
     result: unknown;
   }> {
-    return await this.#durableObject.runScript(code);
+    // Mint the execution identity OUTSIDE the hosting Durable Object. If its
+    // incarnation dies after journaling the request or settlement but before
+    // this acknowledgement arrives, the retry carries the same identity and
+    // the processor reads/rejoins that one durable execution.
+    const input = {
+      code,
+      executionId: crypto.randomUUID(),
+      expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+    };
+    return await retryIdempotentDurableObjectOperation({
+      operation: async () => await this.#durableObject.runScript(input),
+      onRetry: ({ attempt, error, maxAttempts }) => {
+        console.info("script run rejoining after Durable Object became unavailable", {
+          attempt,
+          error,
+          executionId: input.executionId,
+          maxAttempts,
+          path: this.#props.path,
+          projectId: this.#props.projectId,
+        });
+      },
+    });
   }
 
   /** Restart this scope's server-side object; the next request boots it fresh. */
@@ -7107,7 +7160,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       if (acquired.status === "rejected") {
         if (
           attempt < PROCESSOR_LIFECYCLE_MAX_ATTEMPTS &&
-          isDurableObjectLifecycleError(acquired.error)
+          isRetryableDurableObjectAvailabilityError(acquired.error)
         ) {
           console.info("processor relay retrying after Durable Object lifecycle reset", {
             attempt,
@@ -7136,7 +7189,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       if (
         outcome.status === "rejected" &&
         attempt < PROCESSOR_LIFECYCLE_MAX_ATTEMPTS &&
-        isDurableObjectLifecycleError(outcome.error)
+        isRetryableDurableObjectAvailabilityError(outcome.error)
       ) {
         // Deploys and evictions may reset a processor-hosting DO while its
         // facade property or method call is in flight. A fresh host stub

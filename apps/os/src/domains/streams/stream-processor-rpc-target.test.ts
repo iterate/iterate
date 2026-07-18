@@ -173,6 +173,50 @@ describe("StreamRpcTarget", () => {
     }
   });
 
+  it("retries plain Stream reads across a deployment reset", async () => {
+    const lifecycleError = Object.assign(new Error("code was updated"), {
+      durableObjectReset: true,
+    });
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 1,
+      path: "/events",
+      type: "events.iterate.com/test/read-after-rollout",
+    } satisfies StreamEvent;
+    const getEvent = vi
+      .fn<() => Promise<StreamEvent | undefined>>()
+      .mockRejectedValueOnce(lifecycleError)
+      .mockResolvedValueOnce(event);
+    const getEvents = vi
+      .fn<() => Promise<StreamEvent[]>>()
+      .mockRejectedValueOnce(lifecycleError)
+      .mockResolvedValueOnce([event]);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return { getEvent, getEvents } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    try {
+      await expect(stream.getEvent({ offset: 1 })).resolves.toEqual(event);
+      await expect(stream.getEvents()).resolves.toEqual([event]);
+      expect(getEvent).toHaveBeenCalledTimes(2);
+      expect(getEvents).toHaveBeenCalledTimes(2);
+      expect(info).toHaveBeenCalledWith(
+        "idempotent stream read retrying after Durable Object became unavailable",
+        expect.objectContaining({ attempt: 1, operation: "getEvent", path: "/events" }),
+      );
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("does not replay a mixed append batch when any event lacks an idempotency key", async () => {
     const lifecycleError = Object.assign(new Error("code was updated"), {
       durableObjectReset: true,
@@ -652,6 +696,41 @@ describe("ProcessorRelayRpcTarget", () => {
       state: { converged: true },
     });
     expect(acquisitions).toBe(3);
+  });
+
+  it("re-dials when a nested Stream reset has crossed the host RPC boundary", async () => {
+    let acquisitions = 0;
+    const serializedReset = new Error(
+      "stream-unavailable: Durable Object reset because its code was updated.",
+    );
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        const acquisition = acquisitions;
+        return Promise.resolve({
+          [Symbol.dispose]: vi.fn(),
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => {
+            if (acquisition === 1) throw serializedReset;
+            return { offset: 2, state: { converged: true } };
+          },
+          waitUntilProcessed: async () => undefined,
+        });
+      },
+    });
+
+    await expect(relay.snapshot()).resolves.toEqual({
+      offset: 2,
+      state: { converged: true },
+    });
+    expect(acquisitions).toBe(2);
   });
 
   it("re-dials once when a deploy resets the host during facade acquisition", async () => {

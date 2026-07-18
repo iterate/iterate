@@ -31,6 +31,16 @@ export type WorkspaceCommitInput = {
   scope?: string;
 };
 
+/**
+ * Internal replay identity minted by the stateless WorkspaceGit RpcTarget.
+ * Keeping it outside the Workspace Durable Object lets a fresh incarnation
+ * rejoin a commit whose first acknowledgement was lost during a rollout.
+ */
+export type WorkspaceCommitCommand = {
+  input: WorkspaceCommitInput;
+  operationId: string;
+};
+
 /** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
 export type WorkspaceCommitResult = {
   branch: string;

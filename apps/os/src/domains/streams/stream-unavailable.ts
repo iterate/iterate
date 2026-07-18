@@ -52,12 +52,14 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
 export const IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS = 3;
 
 /**
- * Retry an explicitly idempotent Durable Object operation only when workerd
- * classifies the rejection as a lifecycle failure. This helper deliberately
- * says "idempotent" in its name: callers must prove that a committed result
- * whose acknowledgement was lost can be replayed without duplicating or
- * changing the outcome. Application errors are never retried, and repeated
- * lifecycle failures stay bounded and observable through `onRetry`.
+ * Retry an explicitly idempotent Durable Object operation when workerd
+ * classifies the direct rejection as a lifecycle failure OR when a nested
+ * Stream call carries that classification through RPC as `stream-unavailable`.
+ * This helper deliberately says "idempotent" in its name: callers must prove
+ * that a committed result whose acknowledgement was lost can be replayed
+ * without duplicating or changing the outcome. Application errors are never
+ * retried, and repeated availability failures stay bounded and observable
+ * through `onRetry`.
  */
 export async function retryIdempotentDurableObjectOperation<Result>(args: {
   operation: () => Promise<Result>;
@@ -69,7 +71,7 @@ export async function retryIdempotentDurableObjectOperation<Result>(args: {
     } catch (error) {
       if (
         attempt === IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS ||
-        !isDurableObjectLifecycleError(error)
+        !isRetryableDurableObjectAvailabilityError(error)
       ) {
         throw error;
       }
@@ -106,6 +108,19 @@ export function rethrowStreamUnavailable(error: unknown): never {
  */
 export function isStreamUnavailableError(error: unknown): boolean {
   return error instanceof Error && error.message.includes(STREAM_UNAVAILABLE_MESSAGE_PREFIX);
+}
+
+/**
+ * Whether an idempotent caller may replay a Durable Object operation after
+ * either the direct workerd lifecycle rejection OR the product-level tag a
+ * nested Stream call carries across an intervening Workers RPC boundary.
+ *
+ * Keep this separate from {@link isDurableObjectLifecycleError}: the latter
+ * deliberately describes only workerd's local flags. The serialized Stream
+ * tag is the same failure class after those flags have been stripped by RPC.
+ */
+export function isRetryableDurableObjectAvailabilityError(error: unknown): boolean {
+  return isDurableObjectLifecycleError(error) || isStreamUnavailableError(error);
 }
 
 /** Whether a rejection is the stream DO's explicitly modelled waiter timeout. */

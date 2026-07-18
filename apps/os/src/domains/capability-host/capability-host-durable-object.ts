@@ -10,6 +10,7 @@ import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
+  type RunScriptCommand,
   type CapabilityHostProcessorReads,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
@@ -152,8 +153,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return this.#capabilityHostProcessor.revokeCapability(input);
   }
 
-  runScript(code: string): Promise<RunScriptResult> {
-    return this.#capabilityHostProcessor.runScript(code);
+  runScript(input: RunScriptCommand): Promise<RunScriptResult> {
+    return this.#capabilityHostProcessor.runScript(input);
   }
 
   describeCapabilities(): Promise<CapabilityDescription[]> {

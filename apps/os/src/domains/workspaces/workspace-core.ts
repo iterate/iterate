@@ -1,12 +1,19 @@
 import { minimatch } from "minimatch";
 import { Workspace } from "@cloudflare/shell";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
-import type { RepoFileChange } from "../repos/types.ts";
+import type {
+  CommitRepoFilesInput,
+  CommitRepoFilesResult,
+  RepoCommitCommand,
+  RepoFileChange,
+} from "../repos/types.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
+import { stableSha256 } from "../workers/utils.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
+  WorkspaceCommitCommand,
   WorkspaceChange,
   WorkspaceCommitInput,
   WorkspaceCommitResult,
@@ -24,6 +31,7 @@ import { filterPublishablePaths } from "./overlay-ignore.ts";
 // scan. Writes are serialized on the write chain, so read-modify-write of the
 // single record cannot lose updates.
 const WHITEOUTS_KEY = "whiteouts:v1";
+const WORKSPACE_COMMIT_KEY_PREFIX = "workspace-commit:v1:";
 
 const DEFAULT_COMMIT_AUTHOR = {
   email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
@@ -47,6 +55,7 @@ export interface MountRepoAccess {
     changes: RepoFileChange[];
     message: string;
   }): Promise<{ branch: string; changedPaths: string[]; commitOid: string; noChanges: boolean }>;
+  commitFilesCommand(command: RepoCommitCommand): Promise<CommitRepoFilesResult>;
   log(input: { branch?: string; limit?: number }): Promise<{
     commits: {
       author: { email: string; name: string };
@@ -55,6 +64,42 @@ export interface MountRepoAccess {
       timestamp: number;
     }[];
   }>;
+}
+
+type WorkspaceCommitStage = {
+  fingerprint: string;
+  localFiles: { contentHash: string; path: string }[];
+  mountPath: string;
+  repoPath: string;
+  whiteoutPaths: string[];
+};
+
+type WorkspaceCommitRecord = {
+  inputHash: string;
+  result?: WorkspaceCommitResult;
+  stage: WorkspaceCommitStage;
+  state: "pending" | "committed" | "completed";
+  version: 1;
+};
+
+function isWorkspaceCommitRecord(value: unknown): value is WorkspaceCommitRecord {
+  if (value === null || typeof value !== "object") return false;
+  const record = value as Partial<WorkspaceCommitRecord>;
+  return (
+    record.version === 1 &&
+    typeof record.inputHash === "string" &&
+    record.stage !== undefined &&
+    (record.state === "pending" ||
+      ((record.state === "committed" || record.state === "completed") &&
+        record.result !== undefined))
+  );
+}
+
+function workspaceCommitStorageKey(operationId: string): string {
+  if (!/^[0-9a-z-]{36}$/i.test(operationId)) {
+    throw new Error("workspace commit operationId must be a UUID.");
+  }
+  return `${WORKSPACE_COMMIT_KEY_PREFIX}${operationId}`;
 }
 
 /** The slice of a Durable Object's synchronous kv the core keeps its bookkeeping in. */
@@ -623,19 +668,63 @@ export class WorkspaceCore {
 
   /**
    * Commit the local changes under ONE mount to that repo's MAIN branch via
-   * its own `commitFiles` lane — the same lane as that repo's direct
-   * `commitFiles`, so head cursors, worker rebuilds, and GitHub mirrors fire
-   * exactly as for a direct commit. `scope` names the mount; it may be omitted
-   * when exactly one mount is dirty. Commits never span mounts, never list an
-   * unrelated mount's repository, and on success clear ONLY the committed
-   * mount's local copies and whiteouts — every other mount's uncommitted work
-   * (including pending deletions under a deeper mount's subtree) survives.
+   * its replayable `commitFilesCommand` lane. `scope` names the mount; it may
+   * be omitted when exactly one mount is dirty. Commits never span mounts,
+   * never list an unrelated mount's repository, and on success clear ONLY the
+   * exact local files and whiteouts captured by this command — every other
+   * mount's uncommitted work (including pending deletions under a deeper
+   * mount's subtree) survives.
    */
   async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
+    return this.gitCommitCommand({ input, operationId: crypto.randomUUID() });
+  }
+
+  /**
+   * Replayable form used by WorkspaceGitRpcTarget. Its operation identity is
+   * minted outside this Durable Object, so a rollout can replace the object
+   * between mutation and acknowledgement without turning the retry into a
+   * second commit.
+   */
+  async gitCommitCommand(command: WorkspaceCommitCommand): Promise<WorkspaceCommitResult> {
+    const { input } = command;
     if (typeof input.message !== "string" || input.message.trim() === "") {
       throw new Error("commit message must be a non-empty string.");
     }
+    const storageKey = workspaceCommitStorageKey(command.operationId);
+    const inputHash = await stableSha256({ input, type: "workspace-commit-command" });
     return this.#serializeWrite(async () => {
+      const recorded = this.#kv.get<unknown>(storageKey);
+      if (recorded !== undefined) {
+        if (!isWorkspaceCommitRecord(recorded)) {
+          throw new Error(`Workspace commit receipt "${command.operationId}" is corrupt.`);
+        }
+        if (recorded.inputHash !== inputHash) {
+          throw new Error(
+            `Workspace commit operation "${command.operationId}" was replayed with different input.`,
+          );
+        }
+        if (recorded.state === "completed") return recorded.result!;
+
+        const snapshot = await this.#mountSnapshot();
+        this.#assertRecordedCommitMount(snapshot, recorded.stage);
+        if (recorded.state === "committed") {
+          return await this.#finishCommittedWorkspaceCommand(storageKey, recorded, snapshot);
+        }
+
+        const captured = await this.#captureCommitStage(snapshot, recorded.stage.mountPath);
+        if (captured.stage.fingerprint !== recorded.stage.fingerprint) {
+          throw this.#workspaceCommitConflict(command.operationId);
+        }
+        return await this.#commitCapturedWorkspaceCommand({
+          captured,
+          command,
+          inputHash,
+          record: recorded,
+          snapshot,
+          storageKey,
+        });
+      }
+
       const snapshot = await this.#mountSnapshot();
       const grouped = this.#groupLocalAndWhiteouts(snapshot, await this.#localFilePaths());
 
@@ -680,11 +769,7 @@ export class WorkspaceCore {
         );
       }
 
-      const { changes, localPaths, staleWhiteouts } = await this.#classifyMount(
-        snapshot,
-        grouped,
-        mountPath,
-      );
+      const { changes, staleWhiteouts } = await this.#classifyMount(snapshot, grouped, mountPath);
       // Heal crash residue FIRST: a whiteout masking nothing at HEAD (a prior
       // commit died between the repo write and cleanup) would otherwise mark
       // this mount dirty forever and hide a future re-add of the file.
@@ -697,51 +782,171 @@ export class WorkspaceCore {
         throw new Error(`Nothing to commit — no changes under the mount at "${mountPath}".`);
       }
 
-      const toRepoPath = (path: string) =>
-        mountPath === "/" ? path.slice(1) : path.slice(mountPath.length + 1);
-      const repoChanges: RepoFileChange[] = [];
-      for (const path of localPaths) {
-        const bytes = await this.#workspace.readFileBytes(path);
-        if (bytes === null) continue;
-        repoChanges.push({ path: toRepoPath(path), ...encodeRepoContent(bytes) });
-      }
-      for (const change of changes) {
-        if (change.change === "deleted") {
-          repoChanges.push({ delete: true, path: toRepoPath(change.path) });
-        }
-      }
-
-      const result = await this.#repo(mount.repoPath).commitFiles({
-        author: input.author ?? DEFAULT_COMMIT_AUTHOR,
-        changes: repoChanges,
-        message: input.message,
-      });
-
-      // The changes are on that repo's main; clear ONLY what this mount owns.
-      // Ownership is ROUTED against the snapshot, never subtree containment:
-      // a "/" commit must not consume a deeper mount's pending deletions.
-      const whiteouts = this.#whiteouts();
-      let whiteoutsChanged = false;
-      for (const key of Object.keys(whiteouts)) {
-        if (routeMount(snapshot.mounts, key)?.mountPath !== mountPath) continue;
-        delete whiteouts[key];
-        whiteoutsChanged = true;
-      }
-      if (whiteoutsChanged) this.#kv.put(WHITEOUTS_KEY, whiteouts);
-      for (const path of localPaths) {
-        await this.#workspace.rm(path, { force: true, recursive: true });
-      }
-
-      return {
-        branch: result.branch,
-        changedPaths: result.changedPaths
-          .map((path) => `${mountPath === "/" ? "" : mountPath}/${path.replace(/^\//, "")}`)
-          .sort(),
-        commitOid: result.commitOid,
-        mount: mountPath,
-        repoPath: mount.repoPath,
+      // Re-capture after stale-whiteout healing. This snapshot is the durable
+      // ownership claim used for both replay validation and eventual cleanup.
+      const captured = await this.#captureCommitStage(snapshot, mountPath);
+      const record: WorkspaceCommitRecord = {
+        inputHash,
+        stage: captured.stage,
+        state: "pending",
+        version: 1,
       };
+      this.#kv.put(storageKey, record);
+      return await this.#commitCapturedWorkspaceCommand({
+        captured,
+        command,
+        inputHash,
+        record,
+        snapshot,
+        storageKey,
+      });
     });
+  }
+
+  async #captureCommitStage(
+    snapshot: MountSnapshot,
+    mountPath: string,
+  ): Promise<{ repoChanges: RepoFileChange[]; stage: WorkspaceCommitStage }> {
+    const mount = snapshot.mounts[mountPath]!;
+    const grouped = this.#groupLocalAndWhiteouts(snapshot, await this.#localFilePaths());
+    const localPaths = (
+      await this.#publishableLocalPaths(mountPath, grouped.localByMount.get(mountPath)!)
+    ).sort();
+    const whiteoutPaths = [...grouped.whiteoutsByMount.get(mountPath)!].sort();
+    const toRepoPath = (path: string) =>
+      mountPath === "/" ? path.slice(1) : path.slice(mountPath.length + 1);
+    const localChanges = await Promise.all(
+      localPaths.map(async (path): Promise<RepoFileChange> => {
+        const bytes = await this.#workspace.readFileBytes(path);
+        if (bytes === null) {
+          throw new Error(`Workspace overlay file "${path}" disappeared while staging commit.`);
+        }
+        return { path: toRepoPath(path), ...encodeRepoContent(bytes) };
+      }),
+    );
+    const localFiles = await Promise.all(
+      localChanges.map(async (change, index) => ({
+        contentHash: await stableSha256(change),
+        path: localPaths[index]!,
+      })),
+    );
+    const stageWithoutFingerprint = {
+      localFiles,
+      mountPath,
+      repoPath: mount.repoPath,
+      whiteoutPaths,
+    };
+    return {
+      repoChanges: [
+        ...localChanges,
+        ...whiteoutPaths.map((path): RepoFileChange => ({ delete: true, path: toRepoPath(path) })),
+      ],
+      stage: {
+        ...stageWithoutFingerprint,
+        fingerprint: await stableSha256({
+          ...stageWithoutFingerprint,
+          type: "workspace-commit-stage",
+        }),
+      },
+    };
+  }
+
+  async #commitCapturedWorkspaceCommand(args: {
+    captured: { repoChanges: RepoFileChange[]; stage: WorkspaceCommitStage };
+    command: WorkspaceCommitCommand;
+    inputHash: string;
+    record: WorkspaceCommitRecord;
+    snapshot: MountSnapshot;
+    storageKey: string;
+  }): Promise<WorkspaceCommitResult> {
+    const repoInput: CommitRepoFilesInput = {
+      author: args.command.input.author ?? DEFAULT_COMMIT_AUTHOR,
+      changes: args.captured.repoChanges,
+      message: args.command.input.message,
+    };
+    const result = await this.#repo(args.record.stage.repoPath).commitFilesCommand({
+      input: repoInput,
+      operationId: args.command.operationId,
+    });
+    const workspaceResult: WorkspaceCommitResult = {
+      branch: result.branch,
+      changedPaths: result.changedPaths
+        .map(
+          (path) =>
+            `${args.record.stage.mountPath === "/" ? "" : args.record.stage.mountPath}/${path.replace(/^\//, "")}`,
+        )
+        .sort(),
+      commitOid: result.commitOid,
+      mount: args.record.stage.mountPath,
+      repoPath: args.record.stage.repoPath,
+    };
+    const committed: WorkspaceCommitRecord = {
+      inputHash: args.inputHash,
+      result: workspaceResult,
+      stage: args.record.stage,
+      state: "committed",
+      version: 1,
+    };
+    this.#kv.put(args.storageKey, committed);
+    return await this.#finishCommittedWorkspaceCommand(args.storageKey, committed, args.snapshot);
+  }
+
+  async #finishCommittedWorkspaceCommand(
+    storageKey: string,
+    record: WorkspaceCommitRecord,
+    snapshot: MountSnapshot,
+  ): Promise<WorkspaceCommitResult> {
+    const captured = await this.#captureCommitStage(snapshot, record.stage.mountPath);
+    const expectedFiles = new Map(
+      record.stage.localFiles.map((file) => [file.path, file.contentHash] as const),
+    );
+    const remainingLocalPaths: string[] = [];
+    for (const file of captured.stage.localFiles) {
+      if (expectedFiles.get(file.path) !== file.contentHash) {
+        throw this.#workspaceCommitConflict(storageKey.slice(WORKSPACE_COMMIT_KEY_PREFIX.length));
+      }
+      remainingLocalPaths.push(file.path);
+    }
+    const expectedWhiteouts = new Set(record.stage.whiteoutPaths);
+    if (captured.stage.whiteoutPaths.some((path) => !expectedWhiteouts.has(path))) {
+      throw this.#workspaceCommitConflict(storageKey.slice(WORKSPACE_COMMIT_KEY_PREFIX.length));
+    }
+
+    const whiteouts = this.#whiteouts();
+    let whiteoutsChanged = false;
+    for (const path of captured.stage.whiteoutPaths) {
+      if (whiteouts[path] === undefined) continue;
+      delete whiteouts[path];
+      whiteoutsChanged = true;
+    }
+    if (whiteoutsChanged) this.#kv.put(WHITEOUTS_KEY, whiteouts);
+    for (const path of remainingLocalPaths) {
+      await this.#workspace.rm(path, { force: true, recursive: true });
+    }
+
+    const completed: WorkspaceCommitRecord = { ...record, state: "completed" };
+    this.#kv.put(storageKey, completed);
+    return completed.result!;
+  }
+
+  #assertRecordedCommitMount(snapshot: MountSnapshot, stage: WorkspaceCommitStage): void {
+    const current = snapshot.mounts[stage.mountPath];
+    if (
+      current === undefined ||
+      current.repoPath !== stage.repoPath ||
+      current.policy !== "commit-to-main"
+    ) {
+      throw new Error(
+        `Workspace commit recovery conflict: mount "${stage.mountPath}" no longer names the writable repo "${stage.repoPath}".`,
+      );
+    }
+  }
+
+  #workspaceCommitConflict(operationId: string): Error {
+    return new Error(
+      `Workspace commit recovery conflict for operation "${operationId}": ` +
+        "the staged overlay changed after the repo commit began; no local files were removed.",
+    );
   }
 
   /** One mounted repo's main-branch history, newest first. */

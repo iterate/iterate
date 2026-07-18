@@ -14,7 +14,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
-  WorkspaceCommitInput,
+  WorkspaceCommitCommand,
   WorkspaceCommitResult,
   WorkspaceGitLogEntry,
   WorkspaceGitLogInput,
@@ -363,9 +363,9 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#core.gitStatus();
   }
 
-  async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
+  async gitCommit(command: WorkspaceCommitCommand): Promise<WorkspaceCommitResult> {
     await this.#ensureCreated();
-    return this.#core.gitCommit(input);
+    return this.#core.gitCommitCommand(command);
   }
 
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {

@@ -31,10 +31,12 @@ import type {
   GithubResetResult,
   GithubSyncResult,
   RepoCommitDetails,
+  RepoCommitCommand,
   RepoFileChange,
   RepoLogCommit,
   RepoLogResult,
 } from "./types.ts";
+import { executeRepoCommitCommand } from "./repo-commit-command.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { replaceArtifactWithEmptyRepo } from "./artifact-replacement.ts";
 import {
@@ -529,6 +531,18 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     return this.#serializeWrite(() => this.#commitFiles(input));
+  }
+
+  /** @internal Replayable workspace-to-repo commit boundary. */
+  commitFilesCommand(command: RepoCommitCommand): Promise<CommitRepoFilesResult> {
+    return this.#serializeWrite(async () => {
+      const parsed = parseCommitFilesInput(command.input);
+      return await executeRepoCommitCommand({
+        command: { ...command, input: parsed },
+        commit: (input) => this.#commitFiles(input),
+        kv: this.ctx.storage.kv,
+      });
+    });
   }
 
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
