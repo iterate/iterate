@@ -726,7 +726,11 @@ test("Project worker processEventBatch receives events from every project stream
   const crossPosted = project.streams.get("/cross-posted");
   const copied = crossPosted.waitForEvent({
     eventTypes: ["events.iterate.com/test/cross-posted"],
-    timeoutMs: 30_000,
+    // The first delivery after the commit above blocks on a COLD container
+    // build of the new head (npm install + wrangler bundle in the builder
+    // pool, 30-60s live; queues behind other builds under full-lane load) —
+    // the wait asserts delivery HAPPENS, not that it beats a cold build.
+    timeoutMs: 180_000,
   });
 
   const [sourceEvent] = await project.streams.get(sourcePath).append({

@@ -177,7 +177,14 @@ export function workerBuildRecipe(input: {
       ...("package.json" in input.files
         ? [
             {
-              command: "npm install --ignore-scripts --no-audit --no-fund --omit=dev",
+              // --prefer-offline: resolve from the runner's npm cache without
+              // registry freshness checks — on a warm builder-pool member this
+              // is the difference between ~23s and a few seconds per build,
+              // and delivery to a freshly committed worker waits on exactly
+              // this step. (NOT --no-package-lock: that would also stop npm
+              // READING a committed lockfile, and lockfiles are honored here.)
+              command:
+                "npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline",
               timeoutMs: NPM_INSTALL_TIMEOUT_MS,
             },
           ]
