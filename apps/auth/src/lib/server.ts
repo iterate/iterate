@@ -66,7 +66,10 @@ export type OAuthInfra = {
   httpOptions: () => { [oauth.allowInsecureRequests]: true } | undefined;
   toTokenSet: (token: oauth.TokenEndpointResponse, existing?: TokenSet | null) => TokenSet;
   doRefresh: (tokenSet: TokenSet) => Promise<TokenSet | null>;
-  getUserInfo: (accessToken: string) => Promise<UserInfoClaims | null>;
+  getUserInfo: (
+    accessToken: string,
+    accessTokenClaims: AccessTokenClaims,
+  ) => Promise<UserInfoClaims | null>;
   cookieOpts: () => { httpOnly: true; path: string; sameSite: "Lax"; secure: boolean };
   resource: () => string;
   audiences: () => string[];
@@ -214,9 +217,19 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     });
   }
 
-  async function getUserInfo(accessToken: string): Promise<UserInfoClaims | null> {
+  async function getUserInfo(
+    accessToken: string,
+    accessTokenClaims: AccessTokenClaims,
+  ): Promise<UserInfoClaims | null> {
     const as = await getAuthorizationServer();
     if (!as.userinfo_endpoint) {
+      return null;
+    }
+
+    const accessTokenAudiences = Array.isArray(accessTokenClaims.aud)
+      ? accessTokenClaims.aud
+      : [accessTokenClaims.aud];
+    if (!accessTokenAudiences.includes(as.userinfo_endpoint)) {
       return null;
     }
 
@@ -417,7 +430,9 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
       }
 
       try {
-        const userInfo = includeUserInfo ? await getUserInfo(tokenSet.accessToken) : null;
+        const userInfo = includeUserInfo
+          ? await getUserInfo(tokenSet.accessToken, verification.accessToken)
+          : null;
 
         return {
           session: buildAuthenticatedSession(
@@ -674,7 +689,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
     let userInfo: UserInfoClaims | null;
     try {
-      userInfo = await getUserInfo(tokenSet.accessToken);
+      userInfo = await getUserInfo(tokenSet.accessToken, verification.accessToken);
     } catch {
       deleteCookie(c, SESSION_COOKIE, cookieOpts());
       return c.json({ authenticated: false } satisfies SessionResponse, 401);
