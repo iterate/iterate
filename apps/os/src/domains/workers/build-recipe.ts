@@ -100,8 +100,21 @@ const ENTRY_SHIM_FILE = `${RESERVED_PREFIX}.entry.ts`;
  * caller serves the building page while the build finishes into the cache). */
 const NPM_INSTALL_TIMEOUT_MS = 150_000;
 const BUNDLE_TIMEOUT_MS = 90_000;
+/** The vite lane installs devDependencies (a react+vite tree is heavier) and
+ * runs a real framework build; both get wider hard bounds. */
+const VITE_INSTALL_TIMEOUT_MS = 240_000;
+const VITE_BUILD_TIMEOUT_MS = 240_000;
+/** Where the vite lane's collected outputs live and the wrapper module the
+ * collector generates around them. */
+const VITE_OUTPUT_DIR = "dist";
+const ENTRY_WRAPPER_MODULE = `${RESERVED_PREFIX}.entry.js`;
+const VITE_ASSETS_MODULE = `${RESERVED_PREFIX}.assets.js`;
 
 export type WorkerBuildRecipe = {
+  /** Which lane produced this recipe — runners pick output collection by it:
+   * "wrangler" outputs are a flat outputDir (collectRecipeOutputs), "vite"
+   * outputs are the nested dist/ tree (collectViteRecipeOutputs). */
+  pipeline: "wrangler" | "vite";
   /** Shell commands, run in order in the build directory. Fixed strings by
    * construction — nothing user-controlled is ever interpolated into one. */
   commands: { command: string; timeoutMs: number }[];
@@ -142,8 +155,92 @@ export function workerBuildRecipe(input: {
     // meaning under this pipeline.
     throw new Error("bundle: false requires loader-ready inline JavaScript files.");
   }
-  for (const name of Object.keys(input.files)) assertSafeSourcePath(name);
+  const files = applyRootDir(input.files, input.options.rootDir);
+  for (const name of Object.keys(files)) assertSafeSourcePath(name);
+  if (input.options.pipeline === "vite") {
+    return viteAppRecipe(files);
+  }
+  return wranglerRecipe({ files, options: input.options });
+}
 
+/** Re-root the file map at `rootDir` (a repo can host an app in a
+ * subdirectory with its own package.json/config); files outside it drop. */
+function applyRootDir(
+  files: Record<string, string>,
+  rootDir: string | undefined,
+): Record<string, string> {
+  if (rootDir === undefined) return files;
+  const prefix = `${rootDir.replace(/^\/+|\/+$/g, "")}/`;
+  const rooted = Object.fromEntries(
+    Object.entries(files)
+      .filter(([name]) => name.startsWith(prefix))
+      .map(([name, content]) => [name.slice(prefix.length), content]),
+  );
+  if (Object.keys(rooted).length === 0) {
+    throw new Error(`rootDir "${rootDir}" matches no files in the worker source.`);
+  }
+  return rooted;
+}
+
+/**
+ * The "vite" pipeline: the source is a real Vite/TanStack-Start app that owns
+ * its build — `npm install` (WITH devDependencies; vite lives there) then the
+ * app's own `npm run build`, expected to produce the @cloudflare/vite-plugin
+ * layout (dist/server worker modules + dist/client browser assets). Unlike
+ * the wrangler lane, the build EXECUTES project code (vite config, plugins,
+ * the app's build script) inside the builder container — which is why
+ * runtime artifacts are project-scoped (build-key.ts) and this lane is never
+ * seeded into the trusted tier. Outputs are collected by
+ * collectViteRecipeOutputs, which wraps the built worker with a generated
+ * entry that serves the client assets.
+ */
+function viteAppRecipe(files: Record<string, string>): WorkerBuildRecipe {
+  const packageJson = files["package.json"];
+  if (packageJson === undefined) {
+    throw new Error('The "vite" pipeline needs a package.json with a build script.');
+  }
+  let hasBuildScript = false;
+  try {
+    const parsed = JSON.parse(packageJson) as { scripts?: Record<string, string> };
+    hasBuildScript = typeof parsed.scripts?.build === "string";
+  } catch {
+    // The install step will fail on the malformed manifest with npm's own,
+    // clearer error.
+    hasBuildScript = true;
+  }
+  if (!hasBuildScript) {
+    throw new Error('The "vite" pipeline needs a "build" script in package.json.');
+  }
+  return {
+    commands: [
+      {
+        // Same nub-first shape as the wrangler lane but WITHOUT --prod /
+        // --omit=dev: vite and the app's build tooling are devDependencies.
+        // --ignore-scripts still blocks install-time lifecycle scripts; the
+        // build script below is where project code deliberately runs.
+        command:
+          "{ command -v nub >/dev/null && timeout -k 5 60 nub install --ignore-scripts --prefer-offline --node-linker hoisted; } || npm install --ignore-scripts --no-audit --no-fund --prefer-offline",
+        timeoutMs: VITE_INSTALL_TIMEOUT_MS,
+      },
+      {
+        command: "npm run build",
+        timeoutMs: VITE_BUILD_TIMEOUT_MS,
+      },
+    ],
+    files: {
+      ...files,
+      // devDependencies stay: this lane installs them (see above).
+    },
+    mainModule: ENTRY_WRAPPER_MODULE,
+    outputDir: VITE_OUTPUT_DIR,
+    pipeline: "vite",
+  };
+}
+
+function wranglerRecipe(input: {
+  files: Record<string, string>;
+  options: WorkerBuildOptions;
+}): WorkerBuildRecipe {
   const entryPoint = input.options.entryPoint ?? "worker.ts";
   if (!(entryPoint in input.files)) {
     throw new Error(`Entry point "${entryPoint}" is not in the worker source files.`);
@@ -236,6 +333,7 @@ export function workerBuildRecipe(input: {
     },
     mainModule: entryEmitName(ENTRY_SHIM_FILE),
     outputDir: OUTPUT_DIR,
+    pipeline: "wrangler",
   };
 }
 
@@ -290,6 +388,90 @@ export function collectRecipeOutputs(
   }
   return { mainModule: recipe.mainModule, modules };
 }
+
+/**
+ * Shape the vite lane's collected `dist/` tree into loader-ready modules:
+ * `dist/server/**` JavaScript is kept verbatim (path-preserved, so the built
+ * entry's relative chunk imports keep resolving), `dist/client/**` becomes a
+ * generated assets module, and a generated wrapper entry serves those assets
+ * ahead of the built worker's own fetch while re-exporting its named exports
+ * (Durable Object classes included) for stateful hosting.
+ *
+ * Text assets only: the worker loader stores text modules, so a binary
+ * client asset (png/ico/woff) is a build failure with a clear message — the
+ * minimal seeded app ships none, and real ones belong in project files/R2.
+ */
+export function collectViteRecipeOutputs(outputs: Record<string, string>): {
+  mainModule: string;
+  modules: Record<string, string>;
+} {
+  const SERVER_ENTRY = "dist/server/index.js";
+  const modules: Record<string, string> = {};
+  const assets: Record<string, { contentType: string; body: string }> = {};
+  for (const [name, content] of Object.entries(outputs)) {
+    if (name.startsWith("dist/server/")) {
+      if (name.endsWith(".map") || name.includes("/.vite/") || name.endsWith("wrangler.json")) {
+        continue;
+      }
+      if (!name.endsWith(".js") && !name.endsWith(".mjs")) continue;
+      modules[name] = content;
+      continue;
+    }
+    if (name.startsWith("dist/client/")) {
+      const path = name.slice("dist/client".length);
+      if (path === "/.assetsignore" || name.endsWith(".map")) continue;
+      const contentType = ASSET_CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)];
+      if (contentType === undefined) {
+        throw new Error(
+          `Client asset "${name}" is not a text type the dynamic worker lane can serve; ` +
+            `text assets only (js, css, html, svg, json, txt).`,
+        );
+      }
+      assets[path] = { contentType, body: content };
+    }
+  }
+  if (!(SERVER_ENTRY in modules)) {
+    throw new Error(
+      `Vite build did not produce "${SERVER_ENTRY}" ` +
+        `(got: ${Object.keys(modules).join(", ") || "nothing"}); ` +
+        `the "vite" pipeline expects a @cloudflare/vite-plugin build.`,
+    );
+  }
+  modules[VITE_ASSETS_MODULE] = `export const ASSETS = ${JSON.stringify(assets)};`;
+  modules[ENTRY_WRAPPER_MODULE] = [
+    `import * as server from "./${SERVER_ENTRY}";`,
+    `import { ASSETS } from "./${VITE_ASSETS_MODULE}";`,
+    `export * from "./${SERVER_ENTRY}";`,
+    `const fallback = server.default;`,
+    `export default {`,
+    `  async fetch(request, env, ctx) {`,
+    `    const url = new URL(request.url);`,
+    `    const asset = ASSETS[url.pathname];`,
+    `    if (asset !== undefined && (request.method === "GET" || request.method === "HEAD")) {`,
+    `      return new Response(request.method === "HEAD" ? null : asset.body, {`,
+    `        headers: {`,
+    `          "cache-control": "public, max-age=31536000, immutable",`,
+    `          "content-type": asset.contentType,`,
+    `        },`,
+    `      });`,
+    `    }`,
+    `    return fallback.fetch(request, env, ctx);`,
+    `  },`,
+    `};`,
+  ].join("\n");
+  return { mainModule: ENTRY_WRAPPER_MODULE, modules };
+}
+
+const ASSET_CONTENT_TYPES: Record<string, string> = {
+  css: "text/css; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  js: "text/javascript; charset=utf-8",
+  json: "application/json",
+  mjs: "text/javascript; charset=utf-8",
+  svg: "image/svg+xml",
+  txt: "text/plain; charset=utf-8",
+  webmanifest: "application/manifest+json",
+};
 
 /** Wrangler emits the entry under its own base name with a `.js` extension
  * (nested entry directories do not survive into the outdir). */
