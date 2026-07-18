@@ -255,12 +255,16 @@ export function useStreamViewPanels(): {
     inspectedScriptExecutionId != null;
   const processorsPanelOpen =
     !inspectorOpen && (search.panel === true || focusedProcessorKey != null);
+  // The agent details sheet exists only on agent chat pages and the Events
+  // sheet only on full-panel layouts, so the two can never render together;
+  // `agent` therefore must not suppress `events` (a stray ?agent=true on a
+  // catalog URL would otherwise dead-lock the Events sheet). The openers keep
+  // the params mutually exclusive for shareable URLs.
   const agentDetailsOpen = !inspectorOpen && !processorsPanelOpen && search.agent === true;
   // Full-panel layouts render inspectors inside the Events sheet. A direct
   // `?llmRequest=` / `?scriptExecution=` link therefore opens that containing
   // sheet even when `events=true` was not part of the shared URL.
-  const eventsSheetOpen =
-    !processorsPanelOpen && !agentDetailsOpen && (search.events === true || inspectorOpen);
+  const eventsSheetOpen = !processorsPanelOpen && (search.events === true || inspectorOpen);
   const inspectEvent = useCallback(
     (offset: number) => setSearch({ ...RELEASE_PANEL_EDGE, event: offset }),
     [setSearch],
