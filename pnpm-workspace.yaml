@@ -51,6 +51,7 @@ minimumReleaseAgeExclude:
   - '@iterate-com/capnweb'
 
 onlyBuiltDependencies:
+  - '@posthog/cli'
   - '@tailwindcss/oxide'
   - esbuild
   - lightningcss

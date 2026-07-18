@@ -20,7 +20,6 @@ export function osPosthogContext(
   session: PublicSessionResponse | null,
   project: RouteProject | null,
 ): {
-  eventProperties: PosthogProperties;
   groups: PosthogGroup[];
   person: PosthogPerson;
 } | null {
@@ -36,7 +35,6 @@ export function osPosthogContext(
     personProperties.email_verified = session.user.emailVerified;
   }
 
-  const eventProperties: PosthogProperties = {};
   const groups: PosthogGroup[] = [];
   // A project-scoped operator grant uses an artificial `operator:<project>`
   // organization solely as an authorization boundary. It is not a product
@@ -48,7 +46,6 @@ export function osPosthogContext(
         ? project.organizationId
         : (session.session.activeOrganizationId ?? null);
   if (organizationId) {
-    eventProperties.organization_id = organizationId;
     const organization = session.session.organizations.find(
       (candidate) => candidate.id === organizationId,
     );
@@ -65,7 +62,6 @@ export function osPosthogContext(
   }
 
   if (project) {
-    eventProperties.project_id = project.id;
     const projectProperties: PosthogProperties = {
       id: project.id,
       name: project.slug,
@@ -80,7 +76,6 @@ export function osPosthogContext(
   }
 
   return {
-    eventProperties,
     person: {
       distinctId: session.user.id,
       properties: personProperties,

@@ -7,6 +7,7 @@ export interface SetupPosthogOptions {
   proxyUrl?: string;
   uiHost?: string;
   appStage?: string;
+  capturePageviews?: boolean;
   sessionRecording?: boolean;
 }
 
@@ -21,6 +22,11 @@ export interface PosthogGroup {
   type: string;
   key: string;
   properties: PosthogProperties;
+}
+
+export interface PosthogContext {
+  person: PosthogPerson;
+  groups: PosthogGroup[];
 }
 
 declare global {
@@ -46,20 +52,34 @@ function resolveBrowserUrl(url?: string) {
 }
 
 function buildPosthogInitOptions(options: SetupPosthogOptions) {
+  const sessionRecording = options.sessionRecording !== false;
   return {
-    api_host: resolveBrowserUrl(options.proxyUrl ?? "/api/integrations/posthog/proxy"),
+    api_host: resolveBrowserUrl(options.proxyUrl ?? "/e"),
     ui_host: resolveBrowserUrl(options.uiHost ?? "https://eu.posthog.com"),
-    defaults: "2026-01-30" as const,
+    defaults: "2026-06-25" as const,
+    person_profiles: "identified_only" as const,
+    capture_pageview: options.capturePageviews === false ? false : ("history_change" as const),
     capture_pageleave: true,
-    capture_exceptions: true,
-    ...(options.sessionRecording === false
-      ? {}
-      : {
+    capture_exceptions: {
+      capture_unhandled_errors: true,
+      capture_unhandled_rejections: true,
+      capture_console_errors: false,
+    },
+    disable_session_recording: !sessionRecording,
+    disable_capture_url_hashes: true,
+    mask_all_element_attributes: true,
+    mask_all_text: true,
+    strict_script_versioning: true,
+    ...(sessionRecording
+      ? {
           session_recording: {
             maskAllInputs: true,
             maskTextSelector: "*",
+            recordBody: false,
+            recordHeaders: false,
           },
-        }),
+        }
+      : {}),
     loaded: options.appStage
       ? (client: import("posthog-js").PostHogInterface) => {
           client.register({
@@ -85,14 +105,15 @@ function setupPosthog(client: import("posthog-js").PostHog, options: SetupPostho
 let posthogInitStarted = false;
 let posthogClientPromise: Promise<import("posthog-js").PostHog> | undefined;
 let posthogAppStage: string | undefined;
-const registeredContextPropertyNames = new Set<string>();
+let appliedContextSignature: string | undefined;
+let identifiedPersonSignature: string | undefined;
 const identifiedGroupMetadata = new Map<string, string>();
 
 /**
  * Once-per-app-load PostHog initialization. Nothing in our apps reads the
- * PostHog React context, so there is no provider or Effect: autocapture,
- * pageviews, session recording, and exception capture are all configured
- * through `init`. This would run at module scope per React's guidance for app
+ * PostHog React context, so there is no provider: autocapture, session replay,
+ * feature flags, surveys, and exception capture all run through `init`. This
+ * would run at module scope per React's guidance for app
  * initialization, but the api key only arrives with loader data — so the
  * once-guard lives here at module scope and the first render with config in
  * hand kicks it off. Idempotent, so safe to call during render.
@@ -101,64 +122,94 @@ export function initPosthog(options: SetupPosthogOptions) {
   if (posthogInitStarted || !loadPosthog || !shouldEnablePosthog(options.apiKey)) return;
   posthogInitStarted = true;
   posthogAppStage = options.appStage;
-  posthogClientPromise = loadPosthog().then((posthogModule) => {
+  const clientPromise = loadPosthog().then((posthogModule) => {
     setupPosthog(posthogModule.default, options);
     return posthogModule.default;
+  });
+  posthogClientPromise = clientPromise;
+  void clientPromise.catch((error: unknown) => {
+    if (posthogClientPromise === clientPromise) {
+      posthogInitStarted = false;
+      posthogClientPromise = undefined;
+    }
+    console.error("PostHog browser SDK failed to load", error);
   });
 }
 
 function withPosthogClient(action: (client: import("posthog-js").PostHog) => void) {
   const clientPromise = posthogClientPromise;
   if (!clientPromise) return;
-  void clientPromise.then(action);
+  void clientPromise.then(action, () => undefined);
 }
 
-/**
- * Apply the complete authenticated analytics context in one ordered operation.
- * `identify` must precede `group`: posthog-js uses the current person identity
- * when it emits group metadata and attaches group keys to later events.
- */
-export function syncPosthogContext(input: {
-  eventProperties: PosthogProperties;
-  person: PosthogPerson;
-  groups: PosthogGroup[];
-  resetIdentity?: boolean;
-}) {
+/** Synchronize identity and groups without recording a navigation. */
+export function syncPosthogContext(input: PosthogContext | null) {
+  withPosthogClient((client) => applyPosthogContext(client, input));
+}
+
+/** Apply identity/groups, then capture the resolved TanStack location. */
+export function capturePosthogPageview(input: PosthogContext | null, href?: string) {
   withPosthogClient((client) => {
-    if (input.resetIdentity) resetPosthogClient(client);
-    client.identify(input.person.distinctId, input.person.properties);
-
-    for (const propertyName of registeredContextPropertyNames) {
-      if (!Object.hasOwn(input.eventProperties, propertyName)) client.unregister(propertyName);
-    }
-    if (Object.keys(input.eventProperties).length > 0) client.register(input.eventProperties);
-    registeredContextPropertyNames.clear();
-    for (const propertyName of Object.keys(input.eventProperties)) {
-      registeredContextPropertyNames.add(propertyName);
-    }
-
-    client.resetGroups();
-    for (const group of input.groups) {
-      const metadataKey = JSON.stringify([group.type, group.key]);
-      const metadataSignature = JSON.stringify(group.properties);
-      const metadata =
-        identifiedGroupMetadata.get(metadataKey) === metadataSignature
-          ? undefined
-          : group.properties;
-      client.group(group.type, group.key, metadata);
-      identifiedGroupMetadata.set(metadataKey, metadataSignature);
-    }
+    applyPosthogContext(client, input);
+    const currentUrl = resolveBrowserUrl(href);
+    client.capture("$pageview", currentUrl ? { $current_url: currentUrl } : undefined);
   });
 }
 
-/** Reset both the identified person and persistent group keys after sign-out. */
-export function resetPosthogIdentity() {
-  withPosthogClient(resetPosthogClient);
+/** Capture errors handled by framework error boundaries. */
+export function capturePosthogException(error: unknown) {
+  withPosthogClient((client) => client.captureException(error));
+}
+
+function applyPosthogContext(client: import("posthog-js").PostHog, input: PosthogContext | null) {
+  const signature = JSON.stringify(input);
+  if (signature === appliedContextSignature) return;
+
+  if (!input) {
+    if (
+      typeof client.get_property("$user_id") === "string" ||
+      Object.keys(client.getGroups()).length > 0
+    ) {
+      resetPosthogClient(client);
+    }
+    appliedContextSignature = signature;
+    return;
+  }
+
+  const personSignature = JSON.stringify(input.person);
+  const currentUserId = client.get_property("$user_id");
+  if (typeof currentUserId === "string" && currentUserId !== input.person.distinctId) {
+    resetPosthogClient(client);
+  }
+  if (identifiedPersonSignature !== personSignature) {
+    client.identify(input.person.distinctId, input.person.properties);
+    identifiedPersonSignature = personSignature;
+  }
+
+  const desiredGroupTypes = new Set(input.groups.map((group) => group.type));
+  let currentGroups = client.getGroups();
+  if (Object.keys(currentGroups).some((type) => !desiredGroupTypes.has(type))) {
+    client.resetGroups();
+    currentGroups = {};
+  }
+  for (const group of input.groups) {
+    const metadataSignature = JSON.stringify([group.key, group.properties]);
+    const metadataChanged = identifiedGroupMetadata.get(group.type) !== metadataSignature;
+    if (currentGroups[group.type] !== group.key || metadataChanged) {
+      client.group(group.type, group.key, metadataChanged ? group.properties : undefined);
+    }
+    identifiedGroupMetadata.set(group.type, metadataSignature);
+  }
+  for (const type of identifiedGroupMetadata.keys()) {
+    if (!desiredGroupTypes.has(type)) identifiedGroupMetadata.delete(type);
+  }
+  appliedContextSignature = signature;
 }
 
 function resetPosthogClient(client: import("posthog-js").PostHog) {
   client.reset();
-  registeredContextPropertyNames.clear();
+  appliedContextSignature = undefined;
+  identifiedPersonSignature = undefined;
   identifiedGroupMetadata.clear();
   if (posthogAppStage) client.register({ $environment: posthogAppStage });
 }

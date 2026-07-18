@@ -1,88 +1,129 @@
 # PostHog
 
-OS and Semaphore initialize PostHog through the shared UI package. The
-marketing site has a separate provider. OS also exports its non-ephemeral
-production durable-event feed. OS uses PostHog people plus organization and
-project groups as one shared product-analytics model. Browser activity uses
-both group dimensions; machine-authored stream activity uses only project.
+OS and Semaphore use the shared browser integration in
+`packages/ui/src/components/posthog.tsx`. OS also sends its complete
+non-ephemeral production durable-event feed and reports unhandled backend
+exceptions. All traffic goes to the EU PostHog project.
 
-## OS identity and groups
+## Browser integration
 
-The authenticated user is the PostHog person. After authentication, OS calls
-`identify` with the immutable user ID and current user properties. It resets the
-SDK on sign-out or a user change so one browser cannot leak identity or groups
-into the next session. A user is not also modelled as a group.
+The shared SDK initialization enables Product Analytics, autocapture, feature
+flags, surveys, web analytics, session replay, and browser exception tracking.
+Replay masks text, attributes, and inputs; request and response bodies and
+headers remain disabled. TanStack Router supplies resolved pageviews and its
+global `defaultOnCatch` reports errors handled by route boundaries.
+
+The authenticated user is the PostHog person. OS calls `identify` with the
+immutable user ID and resets the SDK on sign-out or a user change. With
+`person_profiles: "identified_only"`, anonymous events do not create person
+profiles.
 
 OS has two group types:
 
-- `organization`, keyed by the immutable organization ID;
-- `project`, keyed by the immutable project ID.
+- `organization`, keyed by immutable organization ID;
+- `project`, keyed by immutable project ID.
 
-The browser attaches the active organization and route project to subsequent
-events and also registers `organization_id` and `project_id` as ordinary event
-properties. Ordinary properties keep HogQL queries and basic breakdowns simple;
-the group keys enable group funnels, cohorts, properties, feature flags, and
-experiments. Operator-only synthetic authorization organizations are excluded
-because they are not product organizations.
+The browser synchronizes the active organization and route project with the
+SDK before capturing the resolved pageview. PostHog then attaches that
+persistent group context to subsequent autocapture, replay, exception, and
+custom events. A user is not also modelled as a group. Project-operator auth
+uses a synthetic organization internally; that authorization-only value is
+not sent as an analytics group.
 
-Machine-authored stream facts do not have a human actor. They use one stable,
-namespaced PostHog distinct ID per deployment/project instead. Every exported
-`stream:append` is linked only to its `project` group. The authentic root
-project birth emits the project group record and metadata. These rows are
-intentionally identified and therefore intentionally incur both
-identified-event and Group Analytics processing. The exporter does not read the
-project directory or derive an organization for each event; project is the
-complete grouping boundary for the machine feed.
+## First-party proxy
 
-## Identity Boundary
+Both TanStack Start apps expose `/e/$` as a small same-origin proxy:
 
-The shared provider does not accept PostHog distinct or session IDs from URL
-parameters because query parameters are untrusted input. Any future
-cross-domain identity handoff needs a separately reviewed, server-issued,
-integrity-protected design.
+- `/e/static/*` and `/e/array/*` go to `eu-assets.i.posthog.com`;
+- all other paths go to `eu.i.posthog.com`;
+- application cookies are removed before forwarding.
 
-## Key Files
-
-| File                                                       | Purpose                                   |
-| ---------------------------------------------------------- | ----------------------------------------- |
-| `packages/ui/src/components/posthog.tsx`                   | Shared OS/Semaphore client initialization |
-| `packages/ui/src/apps/providers.tsx`                       | Initializes PostHog in shared app shells  |
-| `apps/iterate-com/backend/components/posthog-provider.tsx` | PostHog init for marketing site           |
-| `apps/os/src/components/posthog-context.tsx`               | Synchronizes OS browser person and groups |
-| `apps/os/src/routes/posthog-proxy.$.ts`                    | Worker proxy route for PostHog ingest     |
-| `apps/os/src/domains/integrations/posthog.ts`              | Production durable stream event exporter  |
-| `packages/shared/src/posthog/`                             | Shared PostHog ingest proxy helper        |
+PostHog is configured with `api_host: "/e"` and
+`ui_host: "https://eu.posthog.com"`. Keep the `/e` path obscure and stable;
+changing it requires updating both the route and SDK configuration.
 
 ## Durable stream feed
 
 Only `os-prd` exports durable stream events. Preview and local workers produce
-synthetic projects at CI scale and must acknowledge the durable PostHog
-subscription without sending it to PostHog. Ephemeral events are excluded in
-both the subscription and capture paths. Production events retain the complete
-committed stream fact, bounded by the documented 100 KiB JSON limit, with
-an immutable project group key and ordinary `project_id` property.
+synthetic projects at CI scale and acknowledge the durable subscription
+without sending those facts to PostHog. Ephemeral events are excluded in both
+the subscription and capture paths.
 
-PostHog bills Product Analytics by captured event count. Once Group Analytics
-is enabled, all identified events in the PostHog project are processed by that
-add-on, not only events containing a group key. Cost forecasts must therefore
-use organization-wide tier placement as well as the source's event rate; the
-same 40,000 events/day can have materially different marginal cost depending on
-whether the free and first-paid bands were already consumed.
+Every production row is a `stream:append` event containing the complete
+committed `StreamEvent`. The only payload reduction is deterministic JSON
+truncation when an individual event exceeds 100 KiB; the truncation flag and
+original byte count remain indexed.
 
-See the
-[2026-07-18 stream cost investigation](./posthog-stream-cost-investigation-2026-07-18.md)
-for the environment attribution, payload analysis, loop checks, emergency
-control, cost model, and monitoring recommendations.
+Machine events do not pretend to have a human actor. They use one stable,
+namespaced distinct ID per deployment/project and carry
+`$groups: { project: projectId }`. The authentic root project birth emits the
+project group metadata. The exporter does not query the project directory or
+derive an organization for machine traffic; project is its complete grouping
+boundary.
+
+These events are intentionally identified and grouped. Once Group Analytics is
+enabled, PostHog charges identified-event and group processing according to
+the organization's aggregate tier placement, not merely the number of unique
+profiles. See the
+[2026-07-18 cost investigation](./posthog-stream-cost-investigation-2026-07-18.md).
+
+## Exception tracking
+
+Browser exceptions are captured by PostHog's standard JS exception integration
+and TanStack Router's global caught-error hook. OS backend boundaries create a
+fresh `posthog-node` client per Cloudflare invocation, use `flushAt: 1` and
+`flushInterval: 0`, and flush via `waitUntil`. Nested request and server-function
+boundaries deduplicate against the same Cloudflare execution context. When a
+user or project is already known, the exception carries that person and
+project group; capturing telemetry can never replace the original product
+error.
+
+The production project's error-tracking project-wide and per-issue ingestion
+limits were both unset when audited on 2026-07-18. Configure explicit warning
+and billing limits in PostHog before materially expanding exception volume;
+limits can permanently drop data, so their values and owner belong in the
+operational rollout rather than source code.
+
+## Source maps and credentials
+
+`@posthog/rollup-plugin` runs only for deployed OS builds. It uploads both the
+browser and Cloudflare Worker source maps, injects PostHog chunk IDs used for
+symbolication, and deletes local map files after upload.
+
+Doppler supplies two different credential classes:
+
+- `APP_CONFIG_POSTHOG` contains the public project ingest key used at runtime;
+- `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are build-only source-map
+  credentials passed to Vite by `apps/os/scripts/deploy.ts`.
+
+Never add the personal API key or project ID to Wrangler bindings. Production
+and preview use separate PostHog projects, and each deploy uploads maps to the
+project selected by that environment's Doppler config.
+
+## Key files
+
+| File                                          | Purpose                                                                        |
+| --------------------------------------------- | ------------------------------------------------------------------------------ |
+| `packages/ui/src/components/posthog.tsx`      | Shared browser SDK initialization, identity, groups, pageviews, and exceptions |
+| `packages/ui/src/apps/providers.tsx`          | Initializes PostHog in shared app shells                                       |
+| `apps/os/src/components/posthog-context.tsx`  | Maps OS auth and resolved routes to browser context                            |
+| `apps/os/src/routes/e.$.ts`                   | OS proxy route                                                                 |
+| `apps/semaphore/src/routes/e.$.ts`            | Semaphore proxy route                                                          |
+| `packages/shared/src/posthog/posthog.ts`      | Streaming EU proxy helper                                                      |
+| `apps/os/src/domains/integrations/posthog.ts` | Production durable stream exporter                                             |
+| `apps/os/src/observability/posthog.ts`        | Cloudflare backend exception capture                                           |
+| `apps/os/vite.config.ts`                      | Frontend and Worker source-map upload                                          |
 
 ## Verification
 
-1. `apps/os/src/lib/posthog-url-bootstrap.test.ts` proves URL parameters cannot
-   influence initialization and verifies identify/group/reset ordering.
-2. `apps/os/src/components/posthog-context.test.ts` verifies the user,
-   organization, project, route, and operator-session model.
-3. `apps/os/src/domains/integrations/posthog.test.ts` verifies every production
-   stream row's identity and group mapping, durable payload preservation,
-   environment gate, retry identity, and group metadata.
-4. Browse authenticated organization and project routes and confirm page and
-   interaction events resolve to the same project group as `stream:append`
-   events; browser events additionally resolve to their organization group.
+The unit tests cover browser initialization and identity ordering, resolved
+route context, proxy routing, complete durable payload preservation, stable
+project identity, environment gating, exception delivery, and source-map build
+credentials. Before deployment, run the normal repository gate and React
+Doctor. A preview acceptance check must additionally confirm that:
+
+1. browser and Worker symbol sets upload to the preview PostHog project;
+2. no `.map` files are served publicly after the build;
+3. a deliberate browser error and Worker error both resolve to their original
+   TypeScript locations;
+4. `/e` supports capture, flags, surveys, and session-replay asset requests.

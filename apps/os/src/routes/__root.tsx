@@ -75,7 +75,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 const EVENT_DOCS_RESERVED_ROOT_SEGMENTS = new Set([
   "admin",
   "api",
-  "posthog-proxy",
+  "e",
   "projects",
   "sign-in",
   "sign-up",
@@ -108,6 +108,11 @@ function RootComponent() {
   return (
     <AppProviders
       config={config}
+      posthog={{
+        appStage: config.cloudflare.workerName,
+        capturePageviews: false,
+        proxyUrl: "/e",
+      }}
       devtools={
         OSDevtools ? (
           <Suspense fallback={null}>

@@ -16,8 +16,10 @@ import {
 import {
   principalFromAccessToken,
   principalFromSession,
+  getUserPrincipal,
   type Principal,
 } from "~/auth/principal.ts";
+import { withPosthogExceptionCapture } from "~/observability/posthog.ts";
 
 // Registered as requestMiddleware in src/start.ts — `type: "request"` makes
 // early `Response` returns part of the contract (and the context it passes to
@@ -56,15 +58,30 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
 
     const resolvedAuth = await resolveRequestAuth({ auth, context, request });
 
-    const result = await next({
-      context: {
-        principal: resolvedAuth.principal,
-        operatorSession: resolvedAuth.operatorSession,
-        iterateAuthSession: resolvedAuth.session,
-        iterateAuthError: resolvedAuth.error,
-        rawRequest: request,
+    const user = getUserPrincipal(resolvedAuth.principal);
+    const result = await withPosthogExceptionCapture(
+      {
+        config: context.config,
+        distinctId: user?.userId ?? resolvedAuth.operatorSession?.grant.operatorId,
+        operation: context.executionCtx,
+        projectId:
+          resolvedAuth.operatorSession?.grant.kind === "project"
+            ? resolvedAuth.operatorSession.grant.project.id
+            : requestProjectId(request, user?.projects ?? []),
+        request,
+        waitUntil: context.waitUntil,
       },
-    });
+      () =>
+        next({
+          context: {
+            principal: resolvedAuth.principal,
+            operatorSession: resolvedAuth.operatorSession,
+            iterateAuthSession: resolvedAuth.session,
+            iterateAuthError: resolvedAuth.error,
+            rawRequest: request,
+          },
+        }),
+    );
 
     const setCookie = resolvedAuth.responseHeaders.get("set-cookie");
     if (setCookie) {
@@ -74,6 +91,33 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
     return result;
   },
 );
+
+export function requestProjectId(request: Request, projects: Array<{ id: string; slug: string }>) {
+  const requestUrl = new URL(request.url);
+  const pathnames = [requestUrl.pathname];
+  const referrer = request.headers.get("referer");
+  if (referrer) {
+    try {
+      const referrerUrl = new URL(referrer);
+      if (referrerUrl.origin === requestUrl.origin) pathnames.push(referrerUrl.pathname);
+    } catch {
+      // A malformed/spoofed referrer is not analytics identity.
+    }
+  }
+
+  for (const pathname of pathnames) {
+    const encodedSlug = /^\/projects\/([^/]+)/u.exec(pathname)?.[1];
+    if (!encodedSlug) continue;
+    try {
+      const slug = decodeURIComponent(encodedSlug);
+      const project = projects.find((candidate) => candidate.slug === slug);
+      if (project) return project.id;
+    } catch {
+      // Keep looking; malformed percent escapes cannot identify a project.
+    }
+  }
+  return undefined;
+}
 
 /** GET/HEAD requests under the client build's asset prefix (including sourcemaps). */
 export function isPublicAssetRequest(request: Request): boolean {

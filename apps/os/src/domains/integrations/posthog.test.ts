@@ -265,6 +265,12 @@ describe("first-party PostHog stream integration", () => {
     expect(JSON.stringify((capturedBirth.properties as Record<string, unknown>).stream_event)).toBe(
       JSON.stringify(created),
     );
+
+    const ephemeralFetch = acceptingFetch();
+    const ephemeralArgs = captureArgs([{ ...created, ephemeral: true }]);
+    ephemeralArgs.batch.path = "/";
+    await capturePosthogStreamEventBatch(ephemeralArgs, { fetch: ephemeralFetch });
+    expect(ephemeralFetch).not.toHaveBeenCalled();
   });
 
   it("does not overwrite project group metadata from ordinary stream births", async () => {

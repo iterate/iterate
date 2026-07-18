@@ -48,10 +48,6 @@ describe("OS PostHog browser context", () => {
         slug: "difference-engine",
       }),
     ).toEqual({
-      eventProperties: {
-        organization_id: "org_123",
-        project_id: "prj_123",
-      },
       person: {
         distinctId: "usr_123",
         properties: {
@@ -97,7 +93,6 @@ describe("OS PostHog browser context", () => {
 
   it("keeps organization context on authenticated pages outside a project", () => {
     expect(osPosthogContext(authenticatedSession(), null)).toMatchObject({
-      eventProperties: { organization_id: "org_123" },
       groups: [
         {
           type: "organization",

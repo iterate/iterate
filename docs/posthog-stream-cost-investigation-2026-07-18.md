@@ -14,8 +14,7 @@ transformation protects existing preview deployments while they update.
   intentional product cost.
 - Identify signed-in browser users as people. Use Group Analytics for their UI
   activity and curated product events, with `organization` and `project` as
-  the group types, while also registering
-  `organization_id` and `project_id` as ordinary event properties.
+  the group types.
 - Do not create a `user` group. The identified person already is the user.
 - Do not export the synthetic durable feed from local development or preview
   deployments.
@@ -45,7 +44,7 @@ The staging rate projects to 86.9 million events per 30-day month if sustained.
 Using PostHog's public July 2026 Product Analytics tiers, the **base analytics
 charge alone** projects to about $2,332/month, or $77.73/day. Because the stream
 events currently create person profiles, identified-event processing projects
-to another roughly $2,860/month, or $95.33/day. Group Analytics can add a third
+to another roughly $2,902.20/month, or $96.74/day. Group Analytics can add a third
 charge. The actual invoice depends on organization-wide tier allocation,
 enabled add-ons, discounts, and the partial month; the API available to this
 investigation does not expose the invoice.
@@ -98,9 +97,7 @@ Signed-in web UI events are different. They should have a real person profile
 so funnels, cohorts, person properties, flags, and cross-session behavior can
 use the authenticated user. The browser now calls `identify(user.id, …)` and
 then attaches `organization` and `project` groups. It resets identity on
-sign-out and clears/replaces groups when route context changes. The ordinary ID
-properties provide the cheaper fallback for filters and breakdowns if Group
-Analytics is not enabled.
+sign-out and clears/replaces groups when route context changes.
 
 ## Timeline
 

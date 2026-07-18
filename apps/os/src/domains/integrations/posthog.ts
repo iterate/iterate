@@ -88,6 +88,7 @@ function groupIdentifyEvents(args: {
     if (
       batch.path !== "/" ||
       event.path !== "/" ||
+      event.ephemeral === true ||
       event.type !== "events.iterate.com/project/created" ||
       event.idempotencyKey !== `project-created:${projectId}`
     ) {
