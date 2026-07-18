@@ -58,11 +58,23 @@ export function pinnedAgentShortcuts(forest: readonly AgentTreeNode[]): AgentTre
   walkAgentForest(forest, (node) => {
     if (node.agent.summary.pinned) nodes.push(node);
   });
-  return nodes.toSorted(
-    (left, right) =>
-      right.aggregateLastWorkAt.localeCompare(left.aggregateLastWorkAt) ||
-      left.agent.path.localeCompare(right.agent.path),
-  );
+  return nodes.toSorted(compareRecentNodes);
+}
+
+/** Sidebar selection still honors pin/root caps, but presentation is one
+ * recency-ordered list: pinning or attention state never jumps stale work over
+ * a more recently active agent. */
+export function sidebarAgentShortcuts(
+  forest: readonly AgentTreeNode[],
+  pinnedLimit: number,
+  rootLimit: number,
+): AgentTreeNode[] {
+  const pinned = pinnedAgentShortcuts(forest).slice(0, pinnedLimit);
+  const roots = forest
+    .filter((node) => !node.agent.summary.pinned)
+    .toSorted(compareRecentNodes)
+    .slice(0, rootLimit);
+  return [...pinned, ...roots].toSorted(compareRecentNodes);
 }
 
 const AGENT_TREE_SHAPE = {
@@ -174,6 +186,13 @@ function finalizeNode(node: AgentTreeNode): void {
 function compareStructuralNodes(left: AgentTreeNode, right: AgentTreeNode): number {
   return (
     displayPriority(left) - displayPriority(right) ||
+    right.aggregateLastWorkAt.localeCompare(left.aggregateLastWorkAt) ||
+    left.agent.path.localeCompare(right.agent.path)
+  );
+}
+
+function compareRecentNodes(left: AgentTreeNode, right: AgentTreeNode): number {
+  return (
     right.aggregateLastWorkAt.localeCompare(left.aggregateLastWorkAt) ||
     left.agent.path.localeCompare(right.agent.path)
   );

@@ -1,5 +1,6 @@
 import { useCallback, useState, type FormEvent, type MouseEvent } from "react";
 import { ChevronRight, Copy, Pencil, Star } from "lucide-react";
+import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
@@ -12,13 +13,25 @@ import {
   bindingUrl,
 } from "./agent-presentation.ts";
 import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-tree.ts";
+import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
 import {
   deriveAgentDisplayState,
+  deriveAgentRuntimeDisplayState,
   type AgentBinding,
   type AgentDisplayState,
   type AgentRecord,
 } from "~/domains/agents/agent-presence.ts";
+import { formatElapsedSeconds } from "~/lib/feed-format.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
+
+const LIVE_RUNTIME_TICK_MS = 100;
+
+const WAITING_FOR_LABEL = {
+  user_input: "Needs input",
+  external_event: "Waiting for external event",
+  timer: "Waiting for timer",
+} as const;
 
 /**
  * Two-line sidebar shortcut: channel icon, title, live activity, and the
@@ -75,6 +88,7 @@ export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen:
 export function AgentListRow({
   node,
   nowMs,
+  runtimeTransition,
   expanded,
   onOpen,
   onTogglePinned,
@@ -82,15 +96,17 @@ export function AgentListRow({
 }: {
   node: AgentTreeNode;
   nowMs: number;
+  runtimeTransition?: AgentRuntimeTransition;
   expanded: boolean;
   onOpen: () => void;
   onTogglePinned: () => void | Promise<unknown>;
   onToggleChildren?: () => void;
 }) {
   const agent = node.agent;
-  const displayState = agentNodeDisplayState(node);
+  const runtime = runtimeTransition?.runtime ?? node.aggregateRuntime;
+  const runtimeState = deriveAgentRuntimeDisplayState(runtime);
+  const displayState = runtimeState === "idle" ? agentNodeDisplayState(node) : runtimeState;
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const description = agent.summary.activity ?? agent.summary.description;
   const descendantCount = node.aggregateAgentCount - 1;
   const expandable = node.children.length > 0 && onToggleChildren !== undefined;
   return (
@@ -98,6 +114,7 @@ export function AgentListRow({
       className="group/agent relative flex items-start gap-2 border-b py-2.5 pr-2 hover:bg-accent/40"
       data-agent-path={agent.path}
       data-agent-state={displayState}
+      data-agent-runtime-state={runtimeState}
       data-agent-variant="catalog"
     >
       <span className="flex w-4 shrink-0 justify-end pt-0.5">
@@ -147,19 +164,23 @@ export function AgentListRow({
           </time>
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="shrink-0">{state.label}</span>
+          {agent.summary.activity === undefined ? null : (
+            <>
+              <span className="min-w-0 truncate">{agent.summary.activity}</span>
+              <span aria-hidden>·</span>
+            </>
+          )}
+          <AgentRuntimeStatus
+            runtimeState={runtimeState}
+            since={runtimeTransition?.since ?? agent.timestamps.runtimeUpdatedAt}
+          />
           {descendantCount > 0 ? (
             <span className="shrink-0">
               · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
             </span>
           ) : null}
-          {description === undefined ? null : (
-            <span className="min-w-0 truncate">· {description}</span>
-          )}
-          <BindingLink
-            binding={agent.binding}
-            className="relative z-10 ml-auto max-w-48 shrink-0"
-          />
+          <BindingLink binding={agent.binding} className="relative z-10 max-w-48 shrink-0" />
+          <AgentWaitingBadge waitingFor={agent.summary.waitingFor} />
         </div>
       </div>
       <PinButton
@@ -168,6 +189,45 @@ export function AgentListRow({
         className="absolute right-1 top-1.5 opacity-0 focus-visible:opacity-100 group-hover/agent:opacity-100"
       />
     </div>
+  );
+}
+
+function AgentRuntimeStatus({
+  runtimeState,
+  since,
+}: {
+  runtimeState: "running_code" | "waiting_for_model" | "queued" | "idle";
+  since?: string;
+}) {
+  const active = runtimeState !== "idle";
+  const sinceMs = since === undefined ? null : Date.parse(since);
+  const nowMs = useTickingNowMs(LIVE_RUNTIME_TICK_MS, active && sinceMs !== null);
+  const label =
+    runtimeState === "running_code"
+      ? "Running code"
+      : runtimeState === "idle"
+        ? "Idle"
+        : "Waiting for response";
+  const elapsed = active && sinceMs !== null ? formatElapsedSeconds(nowMs - sinceMs) : null;
+
+  return (
+    <span className="shrink-0 tabular-nums" data-testid="agent-runtime-status" title={since}>
+      {label}
+      {elapsed === null ? null : ` ${elapsed}`}
+    </span>
+  );
+}
+
+function AgentWaitingBadge({ waitingFor }: { waitingFor: AgentRecord["summary"]["waitingFor"] }) {
+  if (waitingFor === undefined) return null;
+  return (
+    <Badge
+      variant="secondary"
+      className="relative z-10 ml-auto"
+      data-agent-waiting-for={waitingFor}
+    >
+      {WAITING_FOR_LABEL[waitingFor]}
+    </Badge>
   );
 }
 

@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import { agentCommandAccessibleLabel } from "./agent-presentation.ts";
 import {
@@ -12,6 +12,10 @@ import { buildAgentForest } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 
 const CREATED_AT = "2026-07-17T10:00:00.000Z";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function record(path: string, input: Partial<AgentRecord> = {}): AgentRecord {
   return {
@@ -121,6 +125,66 @@ describe("Agent presentation family", () => {
     // The catalog row stays terse: no runtime-count chips, no path text.
     expect(markup).not.toContain("1 script");
     expect(markup).not.toContain(">/agents/release<");
+  });
+
+  test("catalog separates LLM activity, deterministic timed runtime, and waiting input", () => {
+    vi.useFakeTimers();
+    const now = Date.parse("2026-07-17T10:00:10.000Z");
+    vi.setSystemTime(now);
+    const agent = record("/agents/research", {
+      summary: {
+        pinned: false,
+        activity: "Researching booze",
+        waitingFor: "user_input",
+      },
+    });
+    const [node] = buildAgentForest({ [agent.path]: agent });
+    if (node === undefined) throw new Error("missing test node");
+
+    const markup = renderToStaticMarkup(
+      <AgentListRow
+        node={node}
+        nowMs={now}
+        runtimeTransition={{
+          runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
+          sinceOffset: 3,
+          since: "2026-07-17T10:00:06.600Z",
+        }}
+        expanded={false}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-agent-runtime-state="running_code"');
+    expect(markup).toContain("Running code 3.4s");
+    expect(markup).toContain('data-agent-waiting-for="user_input"');
+    expect(markup).toContain("Needs input");
+    expect(markup.indexOf("Researching booze")).toBeLessThan(markup.indexOf("Running code"));
+    expect(markup.indexOf("Running code")).toBeLessThan(markup.indexOf("Needs input"));
+  });
+
+  test("waiting requirements are badges and never replace deterministic Idle", () => {
+    const agent = record("/agents/parked", {
+      summary: { pinned: false, waitingFor: "timer" },
+    });
+    const [node] = buildAgentForest({ [agent.path]: agent });
+    if (node === undefined) throw new Error("missing test node");
+
+    const markup = renderToStaticMarkup(
+      <AgentListRow
+        node={node}
+        nowMs={Date.parse(CREATED_AT)}
+        expanded={false}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-agent-runtime-state="idle"');
+    expect(markup).toContain('data-slot="badge"');
+    expect(markup).toContain("Idle");
+    expect(markup).toContain("Waiting for timer");
   });
 
   test("detail renders the complete path, self state, and every available exact timestamp", () => {

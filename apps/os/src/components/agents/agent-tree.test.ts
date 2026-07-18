@@ -1,7 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import { serialize } from "capnweb";
-import { buildAgentForest, flattenVisibleAgentRows, pinnedAgentShortcuts } from "./agent-tree.ts";
+import {
+  buildAgentForest,
+  flattenVisibleAgentRows,
+  pinnedAgentShortcuts,
+  sidebarAgentShortcuts,
+} from "./agent-tree.ts";
 import {
   AGENT_ACTIVITY_MAX_LENGTH,
   AGENT_BINDING_CONNECTION_MAX_LENGTH,
@@ -116,6 +121,28 @@ describe("agent forest", () => {
       "/agents/alpha",
       "/agents/middle",
       "/agents/zebra",
+    ]);
+  });
+
+  test("sorts sidebar shortcuts only by most recent activity", () => {
+    const forest = buildAgentForest({
+      "/agents/old-running": agent("/agents/old-running", {
+        runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
+        timestamps: { createdAt, lastWorkAt: "2026-07-17T10:01:00.000Z" },
+      }),
+      "/agents/pinned": agent("/agents/pinned", {
+        summary: { pinned: true },
+        timestamps: { createdAt, lastWorkAt: "2026-07-17T10:02:00.000Z" },
+      }),
+      "/agents/newest": agent("/agents/newest", {
+        timestamps: { createdAt, lastWorkAt: "2026-07-17T10:03:00.000Z" },
+      }),
+    });
+
+    expect(sidebarAgentShortcuts(forest, 5, 8).map((node) => node.agent.path)).toEqual([
+      "/agents/newest",
+      "/agents/pinned",
+      "/agents/old-running",
     ]);
   });
 

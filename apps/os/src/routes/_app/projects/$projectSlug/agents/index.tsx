@@ -41,6 +41,7 @@ function ProjectAgentsIndexContent() {
       panel={
         <AgentCatalog
           agents={agents}
+          projectId={project.id}
           projectSlug={params.projectSlug}
           onOpen={(path) => void navigate(linkOptionsForStreamPath(params.projectSlug, path))}
           onTogglePinned={(agent) =>
