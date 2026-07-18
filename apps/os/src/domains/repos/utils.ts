@@ -80,9 +80,10 @@ export function isRepoNotSeededError(error: unknown): boolean {
  * ref (an empty Artifacts remote answers HEAD with a branch that has no
  * commits, observed as either "Could not find refs/heads/master" or "Could
  * not find main" depending on whether isomorphic-git resolves HEAD or an
- * explicitly requested branch), or the Artifacts repo itself missing
- * (`NOT_FOUND` — created lazily by the bootstrap saga). Anything else returns
- * unchanged.
+ * explicitly requested branch), or the Artifacts repo itself missing or not
+ * materialized yet (`NOT_FOUND`, `IMPORT_IN_PROGRESS`, or
+ * `FORK_IN_PROGRESS` — created lazily by the bootstrap saga). Anything else
+ * returns unchanged.
  */
 export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
@@ -90,8 +91,10 @@ export function classifyRepoAccessError(error: unknown, branch?: string): unknow
     branch !== undefined &&
     typeof message === "string" &&
     (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
+  const artifactNotReady =
+    code === "NOT_FOUND" || code === "IMPORT_IN_PROGRESS" || code === "FORK_IN_PROGRESS";
   const notSeeded =
-    code === "NOT_FOUND" ||
+    artifactNotReady ||
     (code === "NotFoundError" &&
       typeof message === "string" &&
       (message.includes("refs/") || missingRequestedBranch));

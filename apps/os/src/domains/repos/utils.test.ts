@@ -78,6 +78,14 @@ describe("classifyRepoAccessError", () => {
     expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
   });
 
+  test.each(["IMPORT_IN_PROGRESS", "FORK_IN_PROGRESS"])(
+    "wraps an Artifacts repo that is still being materialized (%s)",
+    (code) => {
+      const raw = Object.assign(new Error("repository is currently being created"), { code });
+      expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
+    },
+  );
+
   test("wraps an explicitly requested branch missing from an empty Artifacts repo", () => {
     const raw = Object.assign(new Error("Could not find main."), {
       code: "NotFoundError",

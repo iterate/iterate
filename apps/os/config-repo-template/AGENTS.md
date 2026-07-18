@@ -21,9 +21,11 @@ bundler follows imports), and npm dependencies declared in `package.json` are
 installed at build time. The platform's capability types and worker base
 classes come from the `iterate` package — `import { IterateWorkerEntrypoint,
 IterateDurableObject, type StreamEvent } from "iterate/sdk"`. It's a
-devDependency here: the platform supplies `iterate/sdk` to every worker build
-as a virtual module, so the build never installs it; run `npm install` to get
-typechecking and editor support.
+devDependency here: the platform supplies the runtime `iterate/*` subpaths to
+every worker build as virtual modules, so the build never installs them; run
+`npm install` to get typechecking and editor support. Shared external runtimes
+used by those modules, such as `@iterate-com/capnweb`, remain ordinary
+dependencies so app code and the platform module share one implementation.
 
 Every worker class — the root project worker AND the apps — extends one of
 the two sdk base classes: `IterateWorkerEntrypoint` (stateless) or
@@ -35,9 +37,8 @@ into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
 The example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless, extends
-`IterateWorkerEntrypoint`), `InternalApp` (stateless and protected by
-`itx.auth.get({ policy: "project-member" }).fetch(request)`), and
-`CounterApp` (stateful, extends
+`IterateWorkerEntrypoint`), `InternalApp` (stateless, with authenticated HTML
+and a Cap'n Web API), and `CounterApp` (stateful, extends
 `IterateDurableObject` — a mini client-side app whose count updates live over
 a WebSocket at `/ws`).
 The router dispatches every app request through `this.fetchDynamicWorker(req,
@@ -60,6 +61,20 @@ results are serialized copies, so it can serve data but never a socket.
 shape for anything real-time. Method calls on apps
 (`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP
 rides the fetch lane.
+
+`InternalApp` is the canonical authenticated userspace-app shape. Ordinary
+HTTP routes first call
+`itx.auth.get({ policy: "project-member" }).fetch(request)`: a Response means
+auth owns the request (login, callback, logout, or rejection), while `null`
+means continue with the original, unconsumed Request. Its `/api` route is an
+unauthenticated Cap'n Web root containing only `authenticate(credentials)`.
+That method calls the same bound auth policy with the WebSocket upgrade Request
+and returns an app-defined `InternalAppSession` RpcTarget. Give that target only
+the authority this UI needs; never return the project-wide `itx` capability to
+the browser. `iterate/app` supplies the server-side Cap'n Web host plus
+`LiveState` and its read-only `LiveStateRpcTarget`, so dynamic apps use the same
+snapshot-and-patch protocol as first-party apps without hiding the capability
+graph behind a framework helper.
 
 To give agents a new capability surface, add a getter or method to the
 default-export worker class: the platform dispatches dotted

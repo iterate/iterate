@@ -5,6 +5,7 @@
   // tsc instead (see the sdk entry in tsdown.config.ts + the build script).
   "files": [
     "src/sdk.ts",
+    "src/app.ts",
     "src/client.ts",
     "src/live-state.ts",
     "src/node.ts",

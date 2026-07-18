@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { handleProjectAuthFetch, handleProjectAuthStart } from "./project-auth.ts";
+import {
+  authenticateProjectRequest,
+  handleProjectAuthFetch,
+  handleProjectAuthStart,
+} from "./project-auth.ts";
 
 const appOrigin = "https://internal--demo.iterate.app";
 const osOrigin = "https://os.iterate.com";
@@ -44,7 +48,10 @@ describe("project auth partial fetch", () => {
         headers: { "content-type": "text/plain", origin: appOrigin },
         method: "POST",
       }),
-      vi.fn(async () => ({ expiresAt: Math.floor(Date.now() / 1000) + 600 })),
+      vi.fn(async () => ({
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+        userId: "usr_one",
+      })),
     );
     expect(response?.status).toBe(200);
     expect(response?.headers.get("set-cookie")).toMatch(
@@ -54,7 +61,10 @@ describe("project auth partial fetch", () => {
   });
 
   test("continues without consuming the request while the cookie remains valid", async () => {
-    const validate = vi.fn(async () => ({ expiresAt: Math.floor(Date.now() / 1000) + 600 }));
+    const validate = vi.fn(async () => ({
+      expiresAt: Math.floor(Date.now() / 1000) + 600,
+      userId: "usr_one",
+    }));
     const request = new Request(`${appOrigin}/private`, {
       body: "app-owned-body",
       headers: { cookie: "iterate-project-auth=signed-token" },
@@ -107,6 +117,81 @@ describe("project auth partial fetch", () => {
   });
 });
 
+describe("project auth actor exchange", () => {
+  test("returns the actor for an exact-origin app session without consuming a body", async () => {
+    const request = new Request(`${appOrigin}/api`, {
+      body: "app-owned-body",
+      headers: {
+        cookie: "iterate-project-auth=signed-token",
+        origin: appOrigin,
+      },
+      method: "POST",
+    });
+    const validateSession = vi.fn(async () => ({
+      expiresAt: Math.floor(Date.now() / 1000) + 600,
+      userId: "usr_one",
+    }));
+
+    await expect(
+      authenticateProjectRequest({
+        credentials: { type: "from-server-cookie" },
+        projectId,
+        request,
+        validateSession,
+      }),
+    ).resolves.toMatchObject({ userId: "usr_one" });
+    expect(request.bodyUsed).toBe(false);
+    expect(validateSession).toHaveBeenCalledWith({
+      audience: appOrigin,
+      projectId,
+      token: "signed-token",
+    });
+  });
+
+  test("rejects missing sessions, absent or hostile origins, and unknown credential shapes", async () => {
+    const validateSession = vi.fn(async () => ({ expiresAt: 1, userId: "usr_one" }));
+    await expect(
+      authenticateProjectRequest({
+        credentials: { type: "from-server-cookie" },
+        projectId,
+        request: new Request(`${appOrigin}/api`, { headers: { origin: appOrigin } }),
+        validateSession,
+      }),
+    ).rejects.toMatchObject({ name: "ProjectAuthenticationError" });
+    await expect(
+      authenticateProjectRequest({
+        credentials: { type: "from-server-cookie" },
+        projectId,
+        request: new Request(`${appOrigin}/api`, {
+          headers: { cookie: "iterate-project-auth=signed-token" },
+        }),
+        validateSession,
+      }),
+    ).rejects.toMatchObject({ name: "ProjectAuthenticationError" });
+    await expect(
+      authenticateProjectRequest({
+        credentials: { type: "from-server-cookie" },
+        projectId,
+        request: new Request(`${appOrigin}/api`, {
+          headers: {
+            cookie: "iterate-project-auth=signed-token",
+            origin: "https://evil.example",
+          },
+        }),
+        validateSession,
+      }),
+    ).rejects.toMatchObject({ name: "ProjectAuthenticationError" });
+    await expect(
+      authenticateProjectRequest({
+        credentials: { type: "from-server-cookie", extra: true } as never,
+        projectId,
+        request: new Request(`${appOrigin}/api`),
+        validateSession,
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+  });
+});
+
 describe("project auth start", () => {
   test("uses the existing OS login when there is no OS session", async () => {
     const response = await start(null);
@@ -137,7 +222,7 @@ function projectFetch(
     audience: string;
     projectId: string;
     token: string;
-  }) => Promise<{ expiresAt: number } | null> = vi.fn(async () => null),
+  }) => Promise<{ expiresAt: number; userId: string } | null> = vi.fn(async () => null),
 ): Promise<Response | null> {
   return handleProjectAuthFetch({
     osBaseUrl: osOrigin,

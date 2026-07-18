@@ -7,7 +7,7 @@ import {
   WORKER_FETCH_DISPATCH_HEADER,
   withWorkerFetchDispatchHeader,
   workerBuildingResponse,
-  workerBuildStatusResponse,
+  workerBuildStatus,
 } from "./worker-fetch-dispatch.ts";
 
 function namedError(name: string, message: string): Error {
@@ -73,21 +73,19 @@ describe("worker fetch dispatch header", () => {
   test("the classifier answers build-lifecycle errors with their pages, nothing else", async () => {
     // Errors arrive over RPC name-preserved, class identity lost — so the
     // classifier is exercised exactly the way real hops see them.
-    const building = workerBuildStatusResponse(
-      namedError("WorkerBuildInProgressError", "still building"),
-    );
-    expect(building).toMatchObject({ status: 503 });
+    const building = workerBuildStatus(namedError("WorkerBuildInProgressError", "still building"));
+    expect(building).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
     expect(
-      workerBuildStatusResponse(namedError("RepoNotSeededError", "config repo is still seeding")),
-    ).toMatchObject({ status: 503 });
+      workerBuildStatus(namedError("RepoNotSeededError", "config repo is still seeding")),
+    ).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
 
-    const failed = workerBuildStatusResponse(
+    const failed = workerBuildStatus(
       namedError("WorkerBuildFailedError", "Expected ; but found is"),
     );
-    expect(failed).toMatchObject({ status: 500 });
-    expect(await failed!.text()).toContain("Expected ; but found is");
+    expect(failed).toMatchObject({ outcome: "worker_build_failed", response: { status: 500 } });
+    expect(await failed!.response.text()).toContain("Expected ; but found is");
 
-    expect(workerBuildStatusResponse(new Error("anything else"))).toBeNull();
+    expect(workerBuildStatus(new Error("anything else"))).toBeNull();
   });
 
   test("upgrade detection is header-cased", () => {

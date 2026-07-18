@@ -324,6 +324,12 @@ export interface ProjectAuth {
   /** Bind a project-member gate to this itx's project. */
   get(policy: ProjectAuthPolicy): ProjectAuth;
   /**
+   * Exchange an exact-origin app cookie for its authenticated actor. An app's
+   * unauthenticated Cap'n Web root uses this to construct its own session
+   * RpcTarget; the browser never receives the project's itx.
+   */
+  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
+  /**
    * Own login, callback, logout, and the host-only cookie. Returns null only
    * when this request belongs to a current project member. Like any partial
    * fetch, a null result leaves the request body untouched for the app.
@@ -2232,6 +2238,12 @@ export type CfMarkdownConversionResult = {
 
 /** A declarative access rule for a project-host web app. */
 export type ProjectAuthPolicy = { policy: "project-member" };
+
+/** Browser credentials accepted by a project app's unauthenticated RPC root. */
+export type ProjectAuthCredentials = { type: "from-server-cookie" };
+
+/** Identity proven by the app-origin session, safe for app-defined authorization. */
+export type ProjectAuthActor = { expiresAt: number; userId: string };
 
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,

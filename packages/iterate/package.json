@@ -26,6 +26,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./app": "./src/app.ts",
     "./client": "./src/client.ts",
     "./live-state": "./src/live-state.ts",
     "./node": "./src/node.ts",
@@ -43,6 +44,11 @@
         "types": "./dist/index.d.mts",
         "import": "./dist/index.mjs",
         "default": "./dist/index.mjs"
+      },
+      "./app": {
+        "types": "./dist/app.d.ts",
+        "import": "./dist/app.mjs",
+        "default": "./dist/app.mjs"
       },
       "./client": {
         "types": "./dist/client.d.ts",

@@ -98,6 +98,26 @@ test("the seeded internal app authenticates a real project member", async ({ bas
     .waitFor({ timeout: 30_000 });
   await page.getByText(marker).waitFor();
 
+  // `/api` is an unauthenticated Cap'n Web root. The page explicitly
+  // exchanges its exact-origin app cookie for an app-defined session target;
+  // only that attenuated target (not project ITX) reaches the browser.
+  await page
+    .locator("#identity")
+    .filter({ hasText: /^authenticated as \S+$/ })
+    .waitFor();
+  const refresh = page.getByRole("button", { name: "refresh over Cap'n Web" });
+
+  // Prove the session's LiveState channel, rather than the initial HTML: add
+  // an event after render, invoke the app-session RPC method, and wait for the
+  // pushed snapshot/patch projection to repaint the page.
+  const liveMarker = `capnweb-live-state-${crypto.randomUUID()}`;
+  await root.append({
+    type: "events.iterate.test/spec/internal-app-live-state",
+    payload: { marker: liveMarker },
+  });
+  await refresh.click();
+  await page.getByText(liveMarker).waitFor();
+
   // Partial-fetch fall-through must preserve the original request. Exercise
   // that contract across the real dynamic-worker + ITX RPC boundary, not just
   // in the auth helper: the protected app reads this POST body after auth has

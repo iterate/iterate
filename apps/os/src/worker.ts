@@ -22,7 +22,7 @@ import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
 import {
   WORKER_FETCH_DISPATCH_HEADER,
-  workerBuildStatusResponse,
+  workerBuildStatus,
 } from "./domains/workers/worker-fetch-dispatch.ts";
 import { applyProjectWorkerOverlay } from "./domains/workers/worker-serve-overlay.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
@@ -225,8 +225,11 @@ async function apiFetch(
       // a failed first-ever build shows the builder's error. Both self-heal —
       // once a good build exists, the runner serves it stale instead of
       // landing here.
-      const buildStatus = workerBuildStatusResponse(error);
-      if (buildStatus !== null) return buildStatus;
+      const buildStatus = workerBuildStatus(error);
+      if (buildStatus !== null) {
+        wideLogger.setOutcome(buildStatus.outcome);
+        return buildStatus.response;
+      }
       throw error;
     }
   }

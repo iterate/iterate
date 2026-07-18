@@ -300,9 +300,12 @@ import type {
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
 import {
+  authenticateProjectRequest,
   handleProjectAuthFetch,
   parseProjectAuthPolicy,
   projectAuthRequestFromRpc,
+  type ProjectAuthActor,
+  type ProjectAuthCredentials,
   type ProjectAuthPolicy,
   type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
@@ -5345,15 +5348,36 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
 
 /** A partial fetch: return its response, or continue the app when it returns null. */
 class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; policy?: ProjectAuthPolicy; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
   /** Bind a project-member gate to this itx's project. */
   get(policy: ProjectAuthPolicy): ProjectAuthRpcTarget {
-    parseProjectAuthPolicy(policy);
-    return this;
+    return new ProjectAuthRpcTarget({
+      ...this.props,
+      policy: parseProjectAuthPolicy(policy),
+    });
+  }
+
+  /**
+   * Exchange an exact-origin app cookie for its authenticated actor. An app's
+   * unauthenticated Cap'n Web root uses this to construct its own session
+   * RpcTarget; the browser never receives the project's itx.
+   */
+  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
+  async authenticate(
+    request: ProjectAuthRpcMetadata | Request,
+    credentials: ProjectAuthCredentials,
+  ): Promise<ProjectAuthActor> {
+    this.#assertConfigured();
+    return await authenticateProjectRequest({
+      credentials,
+      projectId: this.props.projectId,
+      request: projectAuthRequestFromRpc(request),
+      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+    });
   }
 
   /**
@@ -5363,12 +5387,19 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
    */
   fetch(request: Request): Promise<Response | null>;
   async fetch(request: ProjectAuthRpcMetadata | Request): Promise<Response | null> {
+    this.#assertConfigured();
     return await handleProjectAuthFetch({
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
       validateSession: (input) => env.AUTH.validateProjectAppSession(input),
     });
+  }
+
+  #assertConfigured(): void {
+    if (this.props.policy === undefined) {
+      throw new Error('Configure project auth with auth.get({ policy: "project-member" }) first.');
+    }
   }
 }
 /**
@@ -5379,7 +5410,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
   ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
-  auth: 'Project-member web auth: auth.get({ policy: "project-member" }).fetch(request).',
+  auth: 'Project-member web auth: auth.get({ policy: "project-member" }).fetch(request), or authenticate(request, credentials) to construct an app RPC session.',
   browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",

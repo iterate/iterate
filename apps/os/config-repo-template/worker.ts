@@ -2,10 +2,19 @@ import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
   itxProjectStream,
+  type ItxBinding,
   type Project,
+  type ProjectAuthActor,
+  type ProjectAuthCredentials,
   type StreamEvent,
   type StreamEventInput,
 } from "iterate/sdk";
+import {
+  LiveState,
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+} from "iterate/app";
 import {
   type StreamSubscriberWakeRequest,
   type StreamSubscriberWakeResponse,
@@ -412,38 +421,206 @@ export class HelloApp extends IterateWorkerEntrypoint {
   }
 }
 
-// A project-member-only app. Auth is a partial fetch: return its response when
-// non-null, and continue the app only when it returns null.
+type InternalAppState = { events: StreamEvent[]; refreshedAt: string };
+
+// The unauthenticated capability at /api. It has one door: turn the app's
+// exact-origin HttpOnly cookie into an actor, then let userspace decide which
+// authority that actor receives. The project itx never reaches the browser.
+class PublicInternalApi extends RpcTarget {
+  constructor(
+    private readonly app: InternalApp,
+    private readonly itxBinding: ItxBinding,
+    private readonly request: Request,
+  ) {
+    super();
+  }
+
+  async authenticate(credentials: ProjectAuthCredentials): Promise<InternalAppSession> {
+    using itx = await this.itxBinding.get();
+    const actor = await itx.auth
+      .get({ policy: "project-member" })
+      .authenticate(this.request, credentials);
+    const session = new InternalAppSession(this.app, actor);
+    await session.refresh();
+    return session;
+  }
+}
+
+// This is the authority the app chooses to give an authenticated browser.
+// It can identify itself, refresh the event projection, and subscribe to that
+// projection. It cannot access arbitrary project ITX methods.
+class InternalAppSession extends RpcTarget {
+  readonly #state = new LiveState<InternalAppState>({ events: [], refreshedAt: "" });
+  readonly #liveState = new LiveStateRpcTarget(this.#state, {
+    // A previously granted live sub-capability must not outlive the actor
+    // that authorized it. The target drops the subscriber before forwarding
+    // the first post-expiry update, while retaining the real remote callback.
+    authorize: () => this.#assertActive(),
+  });
+
+  constructor(
+    private readonly app: InternalApp,
+    private readonly actor: ProjectAuthActor,
+  ) {
+    super();
+  }
+
+  get me(): ProjectAuthActor {
+    this.#assertActive();
+    return this.actor;
+  }
+
+  get liveState(): LiveStateRpcTarget<InternalAppState> {
+    this.#assertActive();
+    return this.#liveState;
+  }
+
+  async refresh(): Promise<void> {
+    this.#assertActive();
+    this.#state.setState({
+      events: await this.app.readLatestEvents(),
+      refreshedAt: new Date().toISOString(),
+    });
+  }
+
+  #assertActive(): void {
+    if (this.actor.expiresAt <= Math.floor(Date.now() / 1000)) {
+      throw new Error("This app session has expired; reconnect to authenticate again.");
+    }
+  }
+}
+
+// A project-member-only app. Ordinary pages use auth as a partial fetch.
+// /api stays an unauthenticated Cap'n Web root and authenticates explicitly
+// in-band, exactly like the first-party OS API.
 export class InternalApp extends IterateWorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/api") {
+      return newWorkersWebSocketRpcResponse(
+        request,
+        new PublicInternalApi(this, this.env.ITX, request),
+      );
+    }
+
     using itx = await this.env.ITX.get();
-    const auth = await itx.auth.get({ policy: "project-member" }).fetch(request);
-    if (auth) return auth;
+    const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(request);
+    if (authResponse) return authResponse;
 
     // A null auth result leaves the original request untouched, so normal app
     // routes can still read its body. This echo route makes that contract easy
     // to exercise in the seeded browser proof.
-    const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/echo") {
       return new Response(await request.text(), {
         headers: { "cache-control": "no-store", "content-type": "text/plain" },
       });
     }
 
+    const events = await this.readLatestEvents();
+    let nonceBytes = "";
+    for (const byte of crypto.getRandomValues(new Uint8Array(18))) {
+      nonceBytes += String.fromCharCode(byte);
+    }
+    const nonce = btoa(nonceBytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+    const apiPath = JSON.stringify(`${request.headers.get("x-iterate-url-prefix") ?? ""}/api`);
+    return new Response(
+      `<!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width">
+            <title>Project events</title>
+          </head>
+          <body>
+            <main>
+              <h1>Latest project root events</h1>
+              <p id="identity">authenticating API…</p>
+              <button id="refresh" disabled>refresh over Cap'n Web</button>
+              <p id="refresh-status" hidden></p>
+              <form action="/_iterate/auth/logout" method="post"><button>Sign out</button></form>
+              <pre id="events">${escapeHtml(JSON.stringify(events, null, 2))}</pre>
+            </main>
+            <script type="module" nonce="${nonce}">
+              import { newWebSocketRpcSession } from "https://cdn.jsdelivr.net/npm/@iterate-com/capnweb@0.10.0/dist/index.js";
+
+              const identity = document.getElementById("identity");
+              const refresh = document.getElementById("refresh");
+              const refreshStatus = document.getElementById("refresh-status");
+              const events = document.getElementById("events");
+              const endpoint = new URL(${apiPath}, location.href);
+              endpoint.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+              const publicApi = newWebSocketRpcSession(endpoint.toString());
+
+              try {
+                const session = await publicApi.authenticate({ type: "from-server-cookie" });
+                const me = await session.me;
+                identity.textContent = "authenticated as " + me.userId;
+                refresh.disabled = false;
+
+                const showError = (error) => {
+                  refresh.disabled = false;
+                  refreshStatus.hidden = false;
+                  refreshStatus.removeAttribute("data-spinner");
+                  refreshStatus.dataset.type = "error";
+                  refreshStatus.textContent = error instanceof Error ? error.message : String(error);
+                };
+                const renderCurrent = async (update) => {
+                  try {
+                    const state = update.type === "snapshot" ? update.state : await session.liveState.get();
+                    events.textContent = JSON.stringify(state, null, 2);
+                    refresh.disabled = false;
+                    refreshStatus.hidden = true;
+                    refreshStatus.removeAttribute("data-spinner");
+                    refreshStatus.removeAttribute("data-type");
+                  } catch (error) {
+                    showError(error);
+                  }
+                };
+                const subscription = await session.liveState.subscribe((update) => {
+                  void renderCurrent(update);
+                });
+                refresh.onclick = async () => {
+                  refresh.disabled = true;
+                  refreshStatus.hidden = false;
+                  refreshStatus.dataset.spinner = "true";
+                  refreshStatus.removeAttribute("data-type");
+                  refreshStatus.textContent = "refreshing…";
+                  try {
+                    await session.refresh();
+                  } catch (error) {
+                    showError(error);
+                  }
+                };
+                addEventListener("pagehide", () => {
+                  subscription[Symbol.dispose]();
+                  session[Symbol.dispose]();
+                  publicApi[Symbol.dispose]();
+                }, { once: true });
+              } catch (error) {
+                identity.textContent = error instanceof Error ? error.message : String(error);
+              }
+            </script>
+          </body>
+        </html>`,
+      {
+        headers: {
+          "cache-control": "no-store",
+          "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+          "content-type": "text/html; charset=utf-8",
+          "x-content-type-options": "nosniff",
+        },
+      },
+    );
+  }
+
+  async readLatestEvents(): Promise<StreamEvent[]> {
+    using itx = await this.env.ITX.get();
     const snapshot = await itx.processor.snapshot();
     const events = await itx.streams.get("/").getEvents({
       afterOffset: Math.max(0, snapshot.offset - 25),
       limit: 25,
     });
-    return new Response(
-      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Project events</title></head><body><main><h1>Latest project root events</h1><form action="/_iterate/auth/logout" method="post"><button>Sign out</button></form><pre>${escapeHtml(JSON.stringify(events.slice().reverse(), null, 2))}</pre></main></body></html>`,
-      {
-        headers: {
-          "cache-control": "no-store",
-          "content-type": "text/html; charset=utf-8",
-        },
-      },
-    );
+    return events.slice().reverse();
   }
 }
 

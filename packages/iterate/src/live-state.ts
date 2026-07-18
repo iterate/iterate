@@ -9,6 +9,12 @@ export { applyPatch, diff } from "./itx/live-state/diff.ts";
 export type { LiveStatePatch, LiveUpdate } from "./itx/live-state/protocol.ts";
 export { LiveState, type LiveStateSubscription } from "./itx/live-state/engine.ts";
 export {
+  LiveStateRpcTarget,
+  type LiveStateRpc,
+  type LiveStateRpcTargetOptions,
+  type LiveStateSubscriptionHandle,
+} from "./itx/live-state/rpc-target.ts";
+export {
   disposeIgnoredRpcResult,
   isThenable,
   retainCallback,
