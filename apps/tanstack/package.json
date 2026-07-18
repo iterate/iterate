@@ -1,0 +1,36 @@
+{
+  "name": "@iterate-com/tanstack",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Multiplayer todo lists: a minimal TanStack Start app whose worker entry is a Durable Object — todos in DO SQLite via sqlfu, fanned out to every open browser over Cap'n Web live state.",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build && tsc --noEmit",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "playwright": "playwright test e2e/playwright",
+    "test:e2e": "pnpm playwright"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.170.10",
+    "@tanstack/react-start": "^1.168.18",
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "iterate": "workspace:*",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "sqlfu": "0.1.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@iterate-com/shared": "workspace:*",
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "vite": "^8.0.16",
+    "wrangler": "catalog:cloudflare"
+  }
+}
