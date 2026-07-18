@@ -22,7 +22,7 @@ was 96 consecutive green runs at roughly 2.2–2.9 minutes end to end.
 
 ## Current headline
 
-The final uncommitted candidate now matches the intended critical-path model.
+The last retry-disabled pre-commit candidate matched the intended critical-path model.
 A retry-disabled full OS fleet against the exact deployed tree passed 43 files
 (156 tests, plus one expected failure and two skips) in **69.76s**. The tests
 represented 755.21 aggregate seconds of work; the longest file took 51.77s and
@@ -52,6 +52,33 @@ and must remain explicit in the PR.
 This local proof does **not** count toward acceptance. The candidate must first
 be committed and deployed from one immutable head, then pass the 25-run Depot
 marathon and the separate 15+-PR contention campaign.
+
+The first exact-head run after the latest main merges, head `aec3810caff45bd20efacb04dd403a61d1fc232b`
+([Depot attempt `15jqdcwl8b`](https://depot.dev/orgs/0p91s0lz49/workflows/7ds1ghdfgm?job=xcg4rjxzh7&attempt=15jqdcwl8b)),
+kept the intended topology: all five deploys overlapped, all five app test lanes
+overlapped, and OS smoke, TUI, Vitest, and Playwright overlapped. OS deploy was
+68.9s; Playwright passed 57 tests in 86s; Vitest passed 43 files in 124.9s. The
+run is not an acceptance run: Vitest absorbed six retries and exceeded its 100s
+phase budget, so the immutable-head counter remains **0/25**.
+
+Five retries came from the first concurrently initialized catalogue pool. Each
+failed with `waitUntilEvent timed out after 4993ms`. This was not a project
+creation rejection or an unbounded preview-capacity failure. Project birth
+already appended the root capability host, scheduler, config repo, and email
+router streams concurrently, but then deliberately dialled their four processor
+readiness barriers one at a time under one 60s deadline. The fourth barrier
+therefore began only after the first three had consumed about 55s. All four
+fixed-fanout, independently bounded barriers now start together; a unit test
+holds the first barrier while proving the other three have already started and
+that project birth still waits for every one.
+
+The sixth retry exposed a separate readiness-test bug. The seeded `hello` app
+probe accepted any 2xx response, so it returned successfully when the root
+static HTML shell answered the named-app request; the immediately following
+script then tried to parse that HTML as JSON. The probe now requires the exact
+semantic `{ app: "hello", path: "/script" }` response and treats a temporary 2xx
+wrong target as bounded not-yet-ready evidence. Neither fix reduces test
+parallelism or hides an error behind a whole-test retry.
 
 The initial serialized runner was structurally incapable of meeting the target.
 

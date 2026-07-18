@@ -744,6 +744,8 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
 async function waitForSeededHelloWorker(project: Pick<Project, "worker">): Promise<void> {
   const deadline = Date.now() + 90_000;
   let buildingResponses = 0;
+  let wrongTargetResponses = 0;
+  let lastWrongTargetBody = "";
 
   for (;;) {
     const response = await project.worker.fetch(
@@ -758,18 +760,46 @@ async function waitForSeededHelloWorker(project: Pick<Project, "worker">): Promi
           const body = (await response.text()).slice(0, 500);
           throw new Error(`Seeded hello worker returned HTTP ${response.status}: ${body}`);
         }
-        if (buildingResponses > 0) {
+        const body = await response.text();
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          payload = undefined;
+        }
+        if (
+          typeof payload === "object" &&
+          payload !== null &&
+          "app" in payload &&
+          payload.app === "hello" &&
+          "path" in payload &&
+          payload.path === "/script"
+        ) {
+          if (buildingResponses > 0 || wrongTargetResponses > 0) {
+            console.log(
+              `[worker-readiness] seeded hello app became ready after ${buildingResponses} marked building and ${wrongTargetResponses} wrong-target response(s)`,
+            );
+          }
+          return;
+        }
+
+        // A 2xx response is not sufficient readiness evidence: while the
+        // named app is becoming routable, the root static shell can answer
+        // this request. Only the hello app's semantic response proves the
+        // exact route the following script will use is ready.
+        wrongTargetResponses += 1;
+        lastWrongTargetBody = body.slice(0, 500);
+        if (wrongTargetResponses === 1) {
           console.log(
-            `[worker-readiness] seeded hello app became ready after ${buildingResponses} marked building response(s)`,
+            `[worker-readiness] seeded hello route returned a different 2xx target; waiting for exact app readiness`,
           );
         }
-        return;
-      }
-
-      buildingResponses += 1;
-      const retryAfterSeconds = Number(response.headers.get("retry-after"));
-      if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
-        waitMs = retryAfterSeconds * 1_000;
+      } else {
+        buildingResponses += 1;
+        const retryAfterSeconds = Number(response.headers.get("retry-after"));
+        if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+          waitMs = retryAfterSeconds * 1_000;
+        }
       }
     } finally {
       disposeRpcResult(response);
@@ -778,7 +808,9 @@ async function waitForSeededHelloWorker(project: Pick<Project, "worker">): Promi
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       throw new Error(
-        `Seeded hello worker stayed in its marked building state for ${buildingResponses} responses`,
+        `Seeded hello worker never became the exact named route ` +
+          `(${buildingResponses} building, ${wrongTargetResponses} wrong-target responses; ` +
+          `last wrong-target body: ${lastWrongTargetBody || "none"})`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, remainingMs)));

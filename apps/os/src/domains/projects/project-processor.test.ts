@@ -121,9 +121,7 @@ describe("ProjectProcessor bootstrap", () => {
     });
   });
 
-  it("does not finish project birth until every sibling processor has folded its batch", async () => {
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+  it("starts every sibling birth barrier together and waits for all of them", async () => {
     const releases = {} as Record<Exclude<ProcessorName, "email">, () => void>;
     const barriers = {} as Record<Exclude<ProcessorName, "email">, Promise<void>>;
     for (const processor of ["capability-host", "scheduler", "repo"] as const) {
@@ -142,38 +140,22 @@ describe("ProjectProcessor bootstrap", () => {
       settled = true;
     });
 
-    await processorWaitStarted["capability-host"];
+    await Promise.all(Object.values(processorWaitStarted));
     expect(settled).toBe(false);
-    expect(processorWaits).toEqual([{ offset: 3, processor: "capability-host" }]);
-
-    now += 10_000;
-    releases["capability-host"]();
-    await processorWaitStarted.scheduler;
-    expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
-      { offset: 2, processor: "scheduler" },
-    ]);
-
-    now += 5_000;
-    releases.scheduler();
-    await processorWaitStarted.repo;
-    expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
-      { offset: 2, processor: "scheduler" },
-      { offset: 3, processor: "repo" },
-    ]);
-
-    now += 5_000;
-    releases.repo();
-    await processorWaitStarted.email;
     expect(processorWaits).toEqual([
       { offset: 3, processor: "capability-host" },
       { offset: 2, processor: "scheduler" },
       { offset: 3, processor: "repo" },
       { offset: 3, processor: "email" },
     ]);
-    expect(processorWaitTimeouts).toEqual([60_000, 50_000, 45_000, 40_000]);
+    expect(processorWaitTimeouts).toEqual([60_000, 60_000, 60_000, 60_000]);
 
+    releases.scheduler();
+    releases.repo();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releases["capability-host"]();
     await delivery;
     expect(settled).toBe(true);
   });

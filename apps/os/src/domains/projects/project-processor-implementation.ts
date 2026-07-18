@@ -285,48 +285,39 @@ export class ProjectProcessor extends StreamProcessor<
           // processors it created: once the Project birth is processed, every
           // universally available project capability must have folded its own
           // complete birth batch too.
-          // These remote processor facades are nested inside the Project
-          // processor's own blocking frame. Keep one acknowledgement in
-          // flight at a time: the sibling streams already start concurrently
-          // from the append batch above, so this does not serialize their
-          // processing; it only avoids retaining four cross-DO facade calls
-          // through one frame. Every wait is bounded so a broken sibling
-          // fails the frame and enters ordinary durable redelivery instead of
-          // pinning project creation forever.
-          const siblingBirthDeadline = Date.now() + SIBLING_BIRTH_BARRIER_TIMEOUT_MS;
-          const remainingSiblingBirthWaitMs = () => {
-            const remaining = siblingBirthDeadline - Date.now();
-            if (remaining <= 0) {
-              throw new Error(
-                `project sibling birth barrier timed out after ${SIBLING_BIRTH_BARRIER_TIMEOUT_MS}ms`,
-              );
-            }
-            return remaining;
-          };
-          await timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
-            this.deps.itx.capabilityHost.processor.waitUntilProcessed({
-              offset: capabilityHostOffset,
-              timeoutMs: remainingSiblingBirthWaitMs(),
-            }),
-          );
-          await timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
-            this.deps.itx.scheduler.processor.waitUntilProcessed({
-              offset: schedulerOffset,
-              timeoutMs: remainingSiblingBirthWaitMs(),
-            }),
-          );
-          await timedStep("create-timing", timing, "wait-config-repo-birth", () =>
-            this.deps.itx.repo.processor.waitUntilProcessed({
-              offset: configRepoOffset,
-              timeoutMs: remainingSiblingBirthWaitMs(),
-            }),
-          );
-          await timedStep("create-timing", timing, "wait-email-router-birth", () =>
-            this.deps.itx.email.processor.waitUntilProcessed({
-              offset: emailRouterOffset,
-              timeoutMs: remainingSiblingBirthWaitMs(),
-            }),
-          );
+          // Appending the sibling streams concurrently does not guarantee
+          // their processors have all been dialled yet. Start every independent
+          // readiness barrier together so one cold sibling cannot consume the
+          // shared deadline before a later sibling has even begun. The fan-out
+          // is fixed at four and every call remains independently bounded, so
+          // a broken sibling still fails the frame and enters ordinary durable
+          // redelivery instead of pinning project creation forever.
+          await Promise.all([
+            timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
+              this.deps.itx.capabilityHost.processor.waitUntilProcessed({
+                offset: capabilityHostOffset,
+                timeoutMs: SIBLING_BIRTH_BARRIER_TIMEOUT_MS,
+              }),
+            ),
+            timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
+              this.deps.itx.scheduler.processor.waitUntilProcessed({
+                offset: schedulerOffset,
+                timeoutMs: SIBLING_BIRTH_BARRIER_TIMEOUT_MS,
+              }),
+            ),
+            timedStep("create-timing", timing, "wait-config-repo-birth", () =>
+              this.deps.itx.repo.processor.waitUntilProcessed({
+                offset: configRepoOffset,
+                timeoutMs: SIBLING_BIRTH_BARRIER_TIMEOUT_MS,
+              }),
+            ),
+            timedStep("create-timing", timing, "wait-email-router-birth", () =>
+              this.deps.itx.email.processor.waitUntilProcessed({
+                offset: emailRouterOffset,
+                timeoutMs: SIBLING_BIRTH_BARRIER_TIMEOUT_MS,
+              }),
+            ),
+          ]);
         });
         break;
       }
