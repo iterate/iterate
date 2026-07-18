@@ -52,20 +52,19 @@ export interface Env {
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
   /**
-   * The builder sidecar (src/builder.ts): bundles dynamic worker source into
-   * loader-ready artifacts, called on artifact-cache misses. The only script
-   * carrying the bundler toolchain (esbuild-wasm, ~14MB) — the "+1" in the
-   * one-worker topology, kept out of this script so the product stays small.
-   * The builder does NOT carry this Env; its whole binding set is the
-   * artifact cache (see its BuilderEnv).
+   * Local dev only: the vite dev server's `/__dev/worker-build` endpoint URL
+   * (generate-wrangler-config.ts sets it under `pnpm dev`). When present,
+   * dynamic worker builds run the shared build recipe on the HOST toolchain
+   * via this endpoint instead of the project's builder sandbox — local dev
+   * has no containers. Never set in deployed envs.
    */
-  BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
+  WORKER_BUILD_DEV_ENDPOINT?: string;
   /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types
    * validation and `itx.docs.typecheck`. The only script carrying the
-   * TypeScript compiler (tswasm, ~30MB wasm) — same quarantine story as
-   * BUILDER.
+   * TypeScript compiler (tswasm, ~30MB wasm) quarantined out of the product
+   * script.
    */
   TYPECHECKER: Service<
     import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
@@ -107,6 +106,15 @@ export interface Env {
   >;
   SANDBOX_STANDARD_4: DurableObjectNamespace<
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
+  >;
+  /**
+   * The deployment's worker-builder pool — stock SDK sandboxes that run every
+   * dynamic-worker build. Platform infrastructure, not project sandboxes: no
+   * catalogue, no streams, and project code can never reach this binding
+   * (src/domains/workers/builder-pool.ts).
+   */
+  WORKER_BUILDER: DurableObjectNamespace<
+    import("./domains/workers/builder-pool-sandbox.ts").WorkerBuilderDurableObject
   >;
   /**
    * Workspace persistence for sandbox containers. Container disk is

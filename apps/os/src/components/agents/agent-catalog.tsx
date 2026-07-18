@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "@tanstack/react-router";
+import { useLiveState } from "iterate/react";
 import { Search } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
@@ -18,12 +19,14 @@ export function AgentCatalog({
   agents,
   onOpen,
   onTogglePinned,
+  projectId,
   projectSlug,
 }: {
   /** Undefined for the one round trip before live state arrives. */
   agents: Record<string, AgentRecord> | undefined;
   onOpen: (path: string) => void;
   onTogglePinned: (agent: AgentRecord) => void | Promise<unknown>;
+  projectId: string;
   projectSlug: string;
 }) {
   const [query, setQuery] = useState("");
@@ -116,9 +119,10 @@ export function AgentCatalog({
                       paddingLeft: `${Math.min(row.depth, 6) * 16}px`,
                     }}
                   >
-                    <AgentListRow
+                    <LiveAgentListRow
                       node={node}
                       nowMs={nowMs}
+                      projectId={projectId}
                       expanded={row.expanded}
                       onOpen={() => onOpen(node.agent.path)}
                       onTogglePinned={() => onTogglePinned(node.agent)}
@@ -135,4 +139,22 @@ export function AgentCatalog({
       </div>
     </section>
   );
+}
+
+/** Runtime is transient agent live state, so only the bounded virtualized rows
+ * subscribe to it. The 5,000-agent collection projection remains summary-only. */
+function LiveAgentListRow({
+  node,
+  projectId,
+  ...props
+}: Omit<ComponentProps<typeof AgentListRow>, "runtimeTransition"> & {
+  projectId: string;
+}) {
+  const runtimeTransition = useLiveState(
+    (itx) => itx.agents.get(node.agent.path).liveState,
+    (state) => state.runtimeChange,
+    [node.agent.path],
+    { slug: projectId },
+  ).value;
+  return <AgentListRow {...props} node={node} runtimeTransition={runtimeTransition} />;
 }

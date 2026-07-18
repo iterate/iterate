@@ -7,8 +7,18 @@ import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import { AgentCatalog } from "./agent-catalog.tsx";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 
+const { runtimeTransitions } = vi.hoisted(() => ({
+  runtimeTransitions: new Map<string, unknown>(),
+}));
+
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children?: React.ReactNode }) => <a href="#new-agent">{children}</a>,
+}));
+
+vi.mock("iterate/react", () => ({
+  useLiveState: (_node: unknown, _selector: unknown, deps: readonly string[]) => ({
+    value: runtimeTransitions.get(deps[0] ?? ""),
+  }),
 }));
 
 const reactEnvironment = globalThis as typeof globalThis & {
@@ -35,6 +45,7 @@ function rect(height: number, top = 0): DOMRect {
 }
 
 beforeEach(() => {
+  runtimeTransitions.clear();
   reactEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
   observedTargets = new WeakSet<Element>();
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
@@ -106,6 +117,11 @@ function record(index: number): AgentRecord {
 }
 
 test("a 5,000-agent catalog mounts bounded rows and patches one visible row", async () => {
+  runtimeTransitions.set("/agents/load-0000", {
+    runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
+    sinceOffset: 4,
+    since: "2026-07-17T10:00:04.000Z",
+  });
   const agents = Object.fromEntries(
     Array.from({ length: 5_000 }, (_, index) => {
       const agent = record(index);
@@ -122,6 +138,7 @@ test("a 5,000-agent catalog mounts bounded rows and patches one visible row", as
         agents={records}
         onOpen={() => undefined}
         onTogglePinned={() => undefined}
+        projectId="prj_scale"
         projectSlug="scale"
       />,
     );
@@ -131,6 +148,12 @@ test("a 5,000-agent catalog mounts bounded rows and patches one visible row", as
   expect(mountedBefore.length).toBeGreaterThan(5);
   expect(mountedBefore.length).toBeLessThanOrEqual(30);
   expect(container.textContent).toContain("5000");
+  expect(
+    container
+      .querySelector('[data-agent-path="/agents/load-0000"]')
+      ?.getAttribute("data-agent-runtime-state"),
+  ).toBe("running_code");
+  expect(container.textContent).toContain("Running code");
 
   const path = "/agents/load-0000";
   const updated = {
@@ -176,6 +199,7 @@ test("search reveals matching descendants without changing the collapsed tree", 
         agents={agents}
         onOpen={() => undefined}
         onTogglePinned={() => undefined}
+        projectId="prj_search"
         projectSlug="search"
       />,
     ),

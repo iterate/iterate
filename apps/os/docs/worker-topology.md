@@ -19,20 +19,26 @@ CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
 container-backed CloudflareSandbox (`sandbox/Dockerfile`, built by
 `wrangler deploy`).
 
-## The builder sidecar (the "+1")
+## The typechecker sidecar (the "+1")
 
-One deliberate exception to "one worker": dynamic worker BUILDS run in a
-separate `os-<env>-builder` worker ([`src/builder.ts`](../src/builder.ts),
-generated config `wrangler.builder.jsonc`) — the only script carrying the
-bundler toolchain (esbuild-wasm, ~14MB), so the product script stays small.
-It is the minimum possible worker: a pure build function (files in, artifact
-out) whose only binding is the `WORKER_BUILD_CACHE` KV — no DOs, no routes,
-no secrets. The os worker calls it via the `BUILDER` service binding on
-artifact-cache misses; deploy.ts deploys it first (a name binding to a
-missing script fails the deploy). Local dev runs it as a vite
-`auxiliaryWorkers` entry in the same workerd. Slated for deletion when
-builds move into the sandbox container
-([tasks/os-sandbox-worker-builds.md](../../../tasks/os-sandbox-worker-builds.md)).
+One deliberate exception to "one worker": `itx.docs.typecheck` runs in a
+separate `os-<env>-typechecker` worker (`src/typechecker.ts`, generated
+config `wrangler.typechecker.jsonc`) — the only script carrying the
+TypeScript compiler (tswasm, ~30MB wasm), so the product script stays small.
+It is the minimum possible worker: a pure function (files in, diagnostics
+out) with no bindings at all. The os worker calls it via the `TYPECHECKER`
+service binding; deploy.ts deploys it first (a name binding to a missing
+script fails the deploy). Local dev runs it as a vite `auxiliaryWorkers`
+entry in the same workerd.
+
+Dynamic worker BUILDS carry no sidecar at all: on artifact-cache misses the
+os worker drives the project's builder sandbox — real `npm install` plus
+pinned wrangler inside an ordinary project container
+(`src/domains/workers/build-backend.ts`); local dev runs the identical
+recipe on the host toolchain via the dev server's `/__dev/worker-build`
+endpoint. The retired `os-<env>-builder` workers (the old esbuild-wasm
+bundler) still exist on Cloudflare — workers are never deleted — but nothing
+binds them.
 
 ## Why one worker
 

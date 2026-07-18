@@ -88,6 +88,13 @@ export function workerBuildingResponse(): Response {
 export function workerBuildStatus(
   error: unknown,
 ): { outcome: "worker_build_failed" | "worker_building"; response: Response } | null {
+  // RepoNotSeededError: a browser can reach a project host inside the
+  // project's BIRTH window — the config repo's stream exists before its seed
+  // commit lands (../repos/utils.ts), so the source resolve answers "not
+  // seeded YET, retry". That is the building page's exact contract (poll,
+  // self-heal into the app); letting it escape crashed the worker with a
+  // Cloudflare 1101 on a fresh project's first app request (observed live on
+  // preview e2e, 2026-07-17).
   if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
     return { outcome: "worker_building", response: workerBuildingResponse() };
   }

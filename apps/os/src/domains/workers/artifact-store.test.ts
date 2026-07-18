@@ -97,15 +97,17 @@ describe("KvWorkerBuildArtifactStore", () => {
     expect(await store(kv).isBuildInFlight("abc123")).toBe(false);
   });
 
-  it("round-trips a build failure with a short TTL", async () => {
+  it("round-trips a build failure with a bounded TTL", async () => {
     const kv = new FakeKv();
     const failure = { at: "2026-07-17T00:00:00.000Z", commitOid: "c0ffee", message: "boom" };
     expect(await store(kv).getBuildFailure("abc123")).toBeNull();
     await store(kv).putBuildFailure("abc123", failure);
     expect(await store(kv).getBuildFailure("abc123")).toEqual(failure);
-    // Deliberately short-lived: a transient failure must heal on its own.
-    expect(kv.putTtls[0]).toBeLessThanOrEqual(10 * 60);
-    expect(kv.putTtls[0]).toBeGreaterThan(0);
+    // Long enough that broken-head retry loops replay instead of rebuilding
+    // (container churn), short enough that a mislabelled transient failure
+    // (npm weather) heals within the hour.
+    expect(kv.putTtls[0]).toBeLessThanOrEqual(60 * 60);
+    expect(kv.putTtls[0]).toBeGreaterThanOrEqual(10 * 60);
   });
 
   it("bounds failure messages — they travel in a response header per request", () => {

@@ -726,7 +726,17 @@ export class StreamSubscribers {
           // flight bumped the epoch, and this ack no-ops instead of
           // clobbering it — the next iteration re-reads the row and drains
           // from wherever the seek pointed.
-          this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          try {
+            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          } catch (error) {
+            // The receiver already accepted the batch, but the local cursor
+            // did not durably advance. Preserve at-least-once delivery by
+            // recording the same bounded retry/backoff as a transport
+            // failure; the pre-dispatch watchdog remains the final fallback
+            // if even that local write cannot complete.
+            this.#onDeliveryFailure(subscriptionKey, error, row.attempt);
+            return;
+          }
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }

@@ -1,19 +1,7 @@
 import type { WorkerBuildOptions } from "./schemas.ts";
 import { stableSha256 } from "./utils.ts";
 import { WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } from "./artifact-store.ts";
-
-/**
- * Kept in sync with the `@cloudflare/worker-bundler` dependency in
- * apps/os/package.json (pinned there and asserted by build-key.test.ts). The
- * bundler version participates in the build key so upgrading the bundler
- * invalidates cached artifacts instead of serving output from an older
- * toolchain. The bundler is ALSO pnpm-patched
- * (patches/@cloudflare__worker-bundler@0.2.1.patch) — editing the patch
- * changes build output at the same version, so bump
- * WORKER_BUILD_ARTIFACT_SCHEMA_VERSION with it (same rule as the builtin
- * shim list in materialize.ts).
- */
-export const WORKER_BUNDLER_VERSION = "0.2.1";
+import { BUILD_TOOLCHAIN_VERSION } from "./build-recipe.ts";
 
 /**
  * A worker file source with all late-bound identity resolved: repo branches
@@ -28,8 +16,8 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
  *
  * A plain type, not a schema: only the trusted resolver constructs this
  * value (worker-loader.ts resolveFileSource), hashes it into the key, and
- * expands it to a file map before anything crosses a boundary — the builder
- * RPC receives files by value and validates its own input.
+ * expands it to a file map before anything crosses a boundary — the build
+ * backend receives files by value (build-backend.ts).
  */
 export type ResolvedWorkerFileSource =
   | {
@@ -58,20 +46,38 @@ export type WorkerBuildInput = {
 };
 
 /**
- * Deterministic identity of one build: normalized source snapshot, Cloudflare
- * build options, bundler/runtime version inputs, compatibility settings, and
- * the artifact schema version. Same input, same key — concurrent callers
- * converge on one artifact and a repeated request is a cache hit.
+ * Deterministic identity of one build: normalized source snapshot, build
+ * options, the toolchain pin, compatibility settings, and the artifact schema
+ * version. Same input, same key — concurrent callers converge on one artifact
+ * and a repeated request is a cache hit.
+ *
+ * This content-only key is the TRUSTED tier: artifacts under it may be served
+ * to ANY project, so only trusted builders (the deploy-time template seeder —
+ * real CI toolchain, no project influence) may ever write it. Runtime builds
+ * run in the project's own builder sandbox, whose output a project-trusted
+ * principal can influence, so they read and write the project-scoped
+ * {@link projectWorkerBuildKey} instead.
  */
 export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
   return await stableSha256({
     artifactSchemaVersion: WORKER_BUILD_ARTIFACT_SCHEMA_VERSION,
-    bundlerVersion: WORKER_BUNDLER_VERSION,
     compatibilityDate: input.compatibilityDate,
     compatibilityFlags: input.compatibilityFlags,
     options: input.options,
     source: normalizeResolvedSource(input.source),
+    toolchainVersion: BUILD_TOOLCHAIN_VERSION,
     type: "worker-build-key",
+  });
+}
+
+/** The runtime tier's key: the content-only {@link workerBuildKey} plus the
+ * project identity, so artifacts built in one project's builder sandbox are
+ * never served to another project. */
+export async function projectWorkerBuildKey(projectId: string, sharedKey: string): Promise<string> {
+  return await stableSha256({
+    projectId,
+    sharedKey,
+    type: "project-worker-build-key",
   });
 }
 

@@ -105,6 +105,10 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
     // projections) and WORKER (stateful facets) namespaces.
     path.endsWith("/domains/workers/worker-loader.ts") ||
     path.endsWith("/domains/workers/worker-runner.ts") ||
+    // The platform's builder-sandbox get-or-create (dynamic worker builds)
+    // mints sandbox + catalogue-stream stubs with the same claim discipline
+    // as itx.sandboxes.create in rpc-targets.ts.
+    path.endsWith("/domains/sandboxes/builder-sandbox.ts") ||
     // Engine loopback/egress seams that mint project/stream stubs.
     path.endsWith("/domains/itx/itx-entrypoint.ts") ||
     path.endsWith("/domains/itx/utils.ts") ||

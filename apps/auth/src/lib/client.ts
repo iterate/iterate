@@ -7,14 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { SessionResponse } from "./server.ts";
-export type {
-  AuthenticateResult,
-  AuthenticatedSession,
-  AuthSession,
-  AuthUser,
-  SessionResponse,
-} from "./server.ts";
+import type { SessionResponse } from "./session.ts";
+export type { SessionResponse } from "./session.ts";
 
 export type PublicSessionResponse =
   | { authenticated: false }
@@ -32,22 +26,12 @@ type RefreshOptions = {
   force?: boolean;
 };
 
-export type AuthClient = ReturnType<typeof createIterateAuthClient>;
-
-export type AuthClientContextValue = {
+type AuthClientContextValue = {
   session: PublicSessionResponse | null;
   loading: boolean;
   signIn: (options?: LoginOptions) => void;
   signOut: () => Promise<void>;
   refresh: (options?: RefreshOptions) => Promise<void>;
-};
-
-export type AuthClientProviderProps = {
-  children: ReactNode;
-  client?: AuthClient;
-  initialSession: PublicSessionResponse;
-  globalSignOut?: boolean;
-  signOutReturnTo?: string | (() => string);
 };
 
 type IterateAuthClientConfig = {
@@ -119,6 +103,14 @@ const AuthClientContext = createContext<AuthClientContextValue | null>(null);
 
 const defaultAuthClient = createIterateAuthClient();
 
+type AuthClientProviderProps = {
+  children: ReactNode;
+  client?: ReturnType<typeof createIterateAuthClient>;
+  initialSession: PublicSessionResponse;
+  globalSignOut?: boolean;
+  signOutReturnTo?: string | (() => string);
+};
+
 export function AuthClientProvider({
   children,
   client = defaultAuthClient,
@@ -178,7 +170,7 @@ export function useAuthClient() {
   return value;
 }
 
-export function toPublicSessionResponse(session: SessionResponse): PublicSessionResponse {
+function toPublicSessionResponse(session: SessionResponse): PublicSessionResponse {
   if (!session.authenticated) {
     return { authenticated: false };
   }

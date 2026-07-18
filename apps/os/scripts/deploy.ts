@@ -58,10 +58,18 @@ import {
 import { waitForContainerRollouts } from "./container-rollout-readiness.ts";
 import { ensureWorkerQueues } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
+import { seedTemplateWorkerArtifact } from "./lib/seed-template-worker-artifact.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 const OS_DEPLOY_LABEL = "apps/os";
 const OS_APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const WORKER_BUILDER_CONTAINER_CLASS = "WorkerBuilderDurableObject";
+const OS_CONTAINER_CLASS_NAMES = [
+  ...SANDBOX_INSTANCE_TYPES.map(
+    (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+  ),
+  WORKER_BUILDER_CONTAINER_CLASS,
+];
 
 /** Preview OS always runs its first-party integration proof against the
  * sibling dummy Petshop. Keep the formerly optional deployment setting from
@@ -120,8 +128,7 @@ async function smokeAuthRpc(env: DeployedEnv, label: string) {
 }
 
 function previewContainerApplicationNames(env: DeployedEnv): string[] {
-  return SANDBOX_INSTANCE_TYPES.map((instanceType) => {
-    const className = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className;
+  return OS_CONTAINER_CLASS_NAMES.map((className) => {
     const applicationName = cloudflareContainerApplicationName({
       className,
       workerName: env.osWorkerName,
@@ -213,21 +220,11 @@ export default async function deploy(
       // both see the identical environment-specific config.
       writeWranglerConfig();
     },
-    prepareForUpload: async (ctx, _secretValues, credentials) => {
-      // The sidecars deploy before the main upload: the os worker's BUILDER/TYPECHECKER
-      // service bindings are by name, and a binding to a not-yet-existing
-      // script fails the deploy. They are independent of each other and of
-      // the queue/R2/container prerequisites. None writes Vite inputs, so the
-      // shared deploy pipeline overlaps this measured ~10s remote phase with
-      // the main build, then joins both before upload. Sidecars have no
-      // secrets and no Vite build — wrangler bundles their entries directly
-      // (the toolchain wasm rides as a wasm module). Builder skew window:
-      // between this deploy and the os deploy (or if the os deploy fails), a
-      // bundler/schema-version bump means the os worker hashes the OLD key
-      // prefix while the builder writes the new one — the cache runs cold
-      // (correct output via by-value returns, every request rebuilds) until
-      // the os deploy lands. If "cache never hits" appears mid-rollout,
-      // finish the deploy.
+    prepareForUpload: async (ctx, secretValues, credentials) => {
+      // Every item below is independent of the Vite build and of its peers,
+      // but must finish before the main OS upload. Keep the Cloudflare
+      // control-plane round trips, host-side template build, and typechecker
+      // sidecar off one another's critical paths.
       await Promise.all([
         // Wrangler validates these bindings at upload, so every resource must
         // exist before deployApp uploads the main OS version.
@@ -246,19 +243,36 @@ export default async function deploy(
           ensureContainerClasses({
             ctx,
             workerName: ctx.env.osWorkerName,
-            containerClassNames: SANDBOX_INSTANCE_TYPES.map(
-              (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-            ),
+            containerClassNames: OS_CONTAINER_CLASS_NAMES,
             compatibilityDate: COMPATIBILITY_DATE,
           }),
         ),
-        ...["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"].map((sidecarConfig) =>
-          runTimedDeployPhase(OS_DEPLOY_LABEL, `prepare: ${sidecarConfig}`, () =>
-            runAsync(
-              "pnpm",
-              ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name],
-              { cwd: OS_APP_ROOT, env: credentials },
-            ),
+        // Fresh projects use this trusted artifact instead of cold-starting a
+        // builder container during projects.create. Runtime config and this
+        // seed share the exact preview package spec set in prepare above.
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: template worker artifact", () =>
+          seedTemplateWorkerArtifact({
+            accountId: ctx.env.cloudflareAccountId,
+            apiToken: credentials.CLOUDFLARE_API_TOKEN!,
+            iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
+            kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
+          }),
+        ),
+        // The builder is now a container app on the main OS worker. Only the
+        // typechecker remains a separately deployed worker service binding.
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: wrangler.typechecker.jsonc", () =>
+          runAsync(
+            "pnpm",
+            [
+              "exec",
+              "wrangler",
+              "deploy",
+              "--config",
+              "wrangler.typechecker.jsonc",
+              "--env",
+              ctx.name,
+            ],
+            { cwd: OS_APP_ROOT, env: credentials },
           ),
         ),
       ]);

@@ -504,6 +504,9 @@ describe("preview test commands", () => {
     const workflow = parseYaml(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ) as { jobs: { preview: { "timeout-minutes": number } } };
+    // Six minutes of bounded slot acquisition plus the 210s eligible-run
+    // budget fit under this final backstop; independent test lanes stay
+    // parallel even when a builder-container retry is needed.
     expect(workflow.jobs.preview["timeout-minutes"]).toBe(10);
   });
 });

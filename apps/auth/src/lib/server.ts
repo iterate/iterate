@@ -10,53 +10,25 @@ import {
 } from "jose";
 import * as oauth from "oauth4webapi";
 import { z } from "zod/v4";
-import {
-  ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
-  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
-  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
-  ITERATE_IS_ADMIN_CLAIM,
-  ITERATE_ORGANIZATIONS_CLAIM,
-  IterateAuthAccessTokenOrganizationClaim,
-  IterateAuthOrganizationClaim,
-  IterateAuthProjectClaim,
-  ITERATE_ROLE_CLAIM,
-  type IterateAuthOrganizationClaim as IterateAuthOrganizationClaimType,
-  type IterateAuthProjectClaim as IterateAuthProjectClaimType,
-} from "@iterate-com/shared/auth-claims";
 import { expandOAuthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
+import {
+  AccessTokenClaims,
+  buildAuthenticatedSession,
+  IdTokenClaims,
+  identityFromAccessToken,
+  identityFromSession,
+  TokenSet,
+  UserInfoClaims,
+  type AuthenticatedIdentity,
+  type AuthenticatedSession,
+  type SessionResponse,
+} from "./session.ts";
+import { createSingleFlight } from "./single-flight.ts";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
-export const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
+const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
 const SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 const REFRESH_SKEW_MS = 30_000;
-
-/**
- * Collapses concurrent calls keyed by the same string into a single in-flight
- * promise. The OAuth refresh-token grant rotates the refresh token and revokes
- * the whole family if a rotated token is presented twice, so two requests
- * carrying the same session cookie must not both hit the token endpoint —
- * otherwise the loser's "reuse" nukes the session and logs the user out. The
- * entry is removed once settled so the next (rotated) token starts fresh.
- */
-export function createSingleFlight<T>(): (key: string, fn: () => Promise<T>) => Promise<T> {
-  const inFlight = new Map<string, Promise<T>>();
-  return (key, fn) => {
-    const existing = inFlight.get(key);
-    if (existing) return existing;
-    // Clear inside the awaited promise's own finally so the entry is gone the
-    // moment callers observe the result — the next (rotated-token) cycle starts
-    // clean, while everyone racing the current cycle still shares this flight.
-    const flight = (async () => {
-      try {
-        return await fn();
-      } finally {
-        inFlight.delete(key);
-      }
-    })();
-    inFlight.set(key, flight);
-    return flight;
-  };
-}
 
 export type IterateAuthConfig = {
   issuer?: string;
@@ -70,133 +42,6 @@ export type IterateAuthConfig = {
   authHandlerBasePath?: string;
 };
 
-const TokenSet = z.object({
-  accessToken: z.string(),
-  accessTokenExpiresAt: z.number(),
-  idToken: z.string(),
-  refreshToken: z.string().optional(),
-  scope: z.string().optional(),
-  tokenType: z.string(),
-});
-
-export type TokenSet = z.infer<typeof TokenSet>;
-
-const IdTokenClaims = z.looseObject({
-  sub: z.string(),
-  email: z.string(),
-  name: z.string().optional(),
-  picture: z.string().optional(),
-  given_name: z.string().optional(),
-  family_name: z.string().optional(),
-  email_verified: z.boolean().optional(),
-  iss: z.string(),
-  aud: z.string(),
-  iat: z.number(),
-  exp: z.number(),
-  [ITERATE_IS_ADMIN_CLAIM]: z.boolean().optional(),
-  [ITERATE_ROLE_CLAIM]: z.string().nullable().optional(),
-});
-
-const AccessTokenClaims = z.looseObject({
-  sub: z.string(),
-  scope: z.string(),
-  scopes: z.array(z.string()).optional(),
-  sid: z.string().optional(),
-  azp: z.string().optional(),
-  iss: z.string(),
-  aud: z.union([z.string(), z.array(z.string())]),
-  iat: z.number(),
-  exp: z.number(),
-  [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: z
-    .array(IterateAuthAccessTokenOrganizationClaim)
-    .optional(),
-  [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: z.array(IterateAuthProjectClaim).optional(),
-});
-
-const UserInfoClaims = z.looseObject({
-  sub: z.string(),
-  [ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM]: z.string().nullable().optional(),
-  [ITERATE_ORGANIZATIONS_CLAIM]: z.array(IterateAuthOrganizationClaim).optional(),
-});
-
-export type IdTokenClaims = z.infer<typeof IdTokenClaims>;
-export type AccessTokenClaims = z.infer<typeof AccessTokenClaims>;
-export type UserInfoClaims = z.infer<typeof UserInfoClaims>;
-
-export type AuthUser = {
-  id: string;
-  email: string;
-  name?: string;
-  picture?: string;
-  givenName?: string;
-  familyName?: string;
-  emailVerified?: boolean;
-  role?: string | null;
-  isAdmin?: boolean;
-};
-
-export type AuthSession = {
-  expiresAt: number;
-  scope: string;
-  sessionId?: string;
-  activeOrganizationId?: string | null;
-  organizations: IterateAuthOrganizationClaimType[];
-  projects: IterateAuthProjectClaimType[];
-};
-
-export type AuthenticatedSession = {
-  user: AuthUser;
-  session: AuthSession;
-  tokenClaims: {
-    accessToken: AccessTokenClaims;
-    idToken: IdTokenClaims;
-  };
-};
-
-function buildAuthenticatedSession(
-  accessToken: AccessTokenClaims,
-  idToken: IdTokenClaims,
-  userInfo: UserInfoClaims | null,
-): AuthenticatedSession {
-  const accessTokenOrganizations =
-    accessToken[ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]?.map((organization) => ({
-      ...organization,
-      name:
-        userInfo?.[ITERATE_ORGANIZATIONS_CLAIM]?.find(
-          (userInfoOrganization) => userInfoOrganization.id === organization.id,
-        )?.name ??
-        organization.name ??
-        organization.slug,
-    })) ?? null;
-
-  return {
-    user: {
-      id: idToken.sub,
-      email: idToken.email,
-      name: idToken.name,
-      picture: idToken.picture,
-      givenName: idToken.given_name,
-      familyName: idToken.family_name,
-      emailVerified: idToken.email_verified,
-      role: idToken[ITERATE_ROLE_CLAIM] ?? null,
-      isAdmin: idToken[ITERATE_IS_ADMIN_CLAIM] ?? false,
-    },
-    session: {
-      expiresAt: accessToken.exp,
-      scope: accessToken.scope,
-      sessionId: accessToken.sid,
-      activeOrganizationId: userInfo?.[ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM] ?? null,
-      organizations: accessTokenOrganizations ?? userInfo?.[ITERATE_ORGANIZATIONS_CLAIM] ?? [],
-      projects: accessToken[ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM] ?? [],
-    },
-    tokenClaims: { accessToken, idToken },
-  };
-}
-
-export type SessionResponse =
-  | { authenticated: false }
-  | ({ authenticated: true } & AuthenticatedSession);
-
 const OAuthState = z.object({
   nonce: z.string(),
   returnTo: z.string().optional(),
@@ -209,7 +54,8 @@ type OAuthState = z.infer<typeof OAuthState>;
 /** Key resolver handed to jose's jwtVerify (local baked set, remote set, or the stale-bake fallback chain built in createIterateAuth). */
 type JWKS = JWTVerifyGetKey;
 
-type OAuthInfra = {
+/** Internal dependency boundary used by the owning package's tests. */
+export type OAuthInfra = {
   issuerURL: URL;
   jwks: JWKS;
   oauthClient: oauth.Client;
@@ -407,12 +253,7 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
   };
 }
 
-export type AuthenticateResult = {
-  session: AuthenticatedSession | null;
-  responseHeaders: Headers;
-};
-
-export type AuthenticateErrorReason =
+type AuthenticateErrorReason =
   | "session_cookie_parse_failed"
   | "session_refresh_failed"
   | "access_token_verify_failed"
@@ -424,15 +265,46 @@ export type AuthenticateErrorEvent = {
   error: unknown;
 };
 
-export type AuthenticateOptions = {
+type SessionAuthenticationOptions = {
   /**
    * Fetch fresh userinfo claims from the issuer while authenticating a cookie
-   * session. Route and API auth should usually leave this disabled so JWT
-   * validation stays local to the worker isolate.
+   * session. Defaults to false so route and API auth keep JWT validation local
+   * to the worker isolate.
    */
   includeUserInfo?: boolean;
-  /** Reports why a present session cookie could not become an authenticated session. */
+  /** Reports failed session work, including a non-fatal refresh before successful verification. */
   onError?: (event: AuthenticateErrorEvent) => void;
+  /**
+   * Whether this call may rotate the refresh token. Use `"never"` when the
+   * surrounding transport cannot return `Set-Cookie` (notably an in-band RPC
+   * authentication method). WebSocket upgrades are always treated as
+   * `"never"` regardless of this option.
+   */
+  refresh?: "if-needed" | "never";
+};
+
+/** The credential, if any, proven by one relying-party request. */
+type Authentication =
+  | {
+      credential: "session";
+      identity: AuthenticatedIdentity;
+      session: AuthenticatedSession;
+      responseHeaders: Headers;
+    }
+  | {
+      accessToken: AccessTokenClaims;
+      credential: "bearer";
+      identity: AuthenticatedIdentity;
+      responseHeaders: Headers;
+    }
+  | {
+      credential: null;
+      responseHeaders: Headers;
+    };
+
+type SessionAuthentication = {
+  session: AuthenticatedSession | null;
+  responseHeaders: Headers;
 };
 
 export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfra) {
@@ -448,18 +320,26 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
     return serialize(SESSION_COOKIE, JSON.stringify(tokenSet), { ...cookieOpts(), expires });
   }
 
+  function responseHeadersForRefresh(tokenSet: TokenSet, refreshed: boolean): Headers {
+    const responseHeaders = new Headers();
+    if (refreshed) responseHeaders.set("Set-Cookie", serializeSessionCookie(tokenSet));
+    return responseHeaders;
+  }
+
   return {
     async authenticate({
       headers,
-      includeUserInfo = true,
+      includeUserInfo = false,
       onError,
-    }: { headers: Headers } & AuthenticateOptions): Promise<AuthenticateResult> {
+      refresh = "if-needed",
+    }: { headers: Headers } & SessionAuthenticationOptions): Promise<SessionAuthentication> {
       const cookieJar = parse(headers.get("Cookie") ?? "");
-      if (!cookieJar) return { session: null, responseHeaders: new Headers() };
+      const rawTokenSet = cookieJar?.[SESSION_COOKIE];
+      if (!rawTokenSet) return { session: null, responseHeaders: new Headers() };
 
       let tokenSet: TokenSet;
       try {
-        tokenSet = TokenSet.parse(JSON.parse(cookieJar[SESSION_COOKIE]));
+        tokenSet = TokenSet.parse(JSON.parse(rawTokenSet));
       } catch (error) {
         onError?.({ reason: "session_cookie_parse_failed", error });
         return { session: null, responseHeaders: new Headers() };
@@ -467,17 +347,17 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
       if (!tokenSet.idToken) return { session: null, responseHeaders: new Headers() };
 
-      // WebSocket upgrades can't carry Set-Cookie back to the browser, so a
-      // refresh here would rotate the refresh token into a response the
-      // client can never store — burning the session. Upgrades authenticate
-      // with the current access token only; once it expires they fail until
-      // a regular request refreshes the cookie and the client reconnects.
+      // Some transports cannot carry Set-Cookie back to the browser. A refresh
+      // there would rotate the token into a response the client cannot store,
+      // burning the session. Such requests authenticate with the current
+      // access token only; after expiry, a normal HTTP request must refresh it.
       const isWebSocketUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
+      const mayRefresh = refresh === "if-needed" && !isWebSocketUpgrade;
       const accessTokenExpired = tokenSet.accessTokenExpiresAt <= Date.now();
       const accessTokenExpiresSoon = tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS;
 
       let refreshed = false;
-      if (accessTokenExpiresSoon && !isWebSocketUpgrade) {
+      if (accessTokenExpiresSoon && mayRefresh) {
         try {
           const newTokenSet = await doRefresh(tokenSet);
           if (newTokenSet) {
@@ -510,7 +390,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
         !verification.ok &&
         tokenSet.refreshToken &&
         !refreshed &&
-        !isWebSocketUpgrade &&
+        mayRefresh &&
         hasJwtShapedTokens(tokenSet)
       ) {
         try {
@@ -533,16 +413,11 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
       if (!verification.ok) {
         onError?.({ reason: verification.reason, error: verification.error });
-        return { session: null, responseHeaders: new Headers() };
+        return { session: null, responseHeaders: responseHeadersForRefresh(tokenSet, refreshed) };
       }
 
       try {
         const userInfo = includeUserInfo ? await getUserInfo(tokenSet.accessToken) : null;
-
-        const responseHeaders = new Headers();
-        if (refreshed) {
-          responseHeaders.set("Set-Cookie", serializeSessionCookie(tokenSet));
-        }
 
         return {
           session: buildAuthenticatedSession(
@@ -550,11 +425,11 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
             verification.idToken,
             userInfo,
           ),
-          responseHeaders,
+          responseHeaders: responseHeadersForRefresh(tokenSet, refreshed),
         };
       } catch (error) {
         onError?.({ reason: "session_claims_parse_failed", error });
-        return { session: null, responseHeaders: new Headers() };
+        return { session: null, responseHeaders: responseHeadersForRefresh(tokenSet, refreshed) };
       }
     },
     async authenticateBearer({ headers }: { headers: Headers }): Promise<AccessTokenClaims | null> {
@@ -923,14 +798,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
   }
 
-  return {
-    handler(request: Request): Response | Promise<Response> {
-      return app.fetch(request);
-    },
-  };
+  return (request: Request): Response | Promise<Response> => app.fetch(request);
 }
 
-export function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigins: string[]) {
+function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigins: string[]) {
   const fallbackOrigin = allowedOrigins[0];
   if (!fallbackOrigin) {
     throw new Error("resolveAllowedReturnTo requires at least one allowed origin");
@@ -944,7 +815,24 @@ export function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigin
   }
 }
 
-export function createIterateAuth(config: IterateAuthConfig) {
+/** Iterate auth composed as an ordinary partial fetch plus explicit credential checks. */
+interface IterateAuth {
+  readonly authHandlerBasePath: string;
+  /** Return a response for an auth-owned route, or `null` without consuming the request. */
+  fetch(request: Request): Promise<Response | null>;
+  /** Authenticate a browser session first, then a bearer token. */
+  authenticate(
+    options: { headers: Headers } & SessionAuthenticationOptions,
+  ): Promise<Authentication>;
+  /** Authenticate only the session cookie. */
+  authenticateSession(
+    options: { headers: Headers } & SessionAuthenticationOptions,
+  ): Promise<SessionAuthentication>;
+  /** Authenticate only an OAuth bearer token. */
+  authenticateBearer(options: { headers: Headers }): Promise<AccessTokenClaims | null>;
+}
+
+export function createIterateAuth(config: IterateAuthConfig): IterateAuth {
   if (!config.clientId || !config.clientSecret || !config.redirectURI) {
     throw new Error(
       "Missing required OAuth client configuration: clientId, clientSecret, and redirectURI are required",
@@ -974,22 +862,63 @@ export function createIterateAuth(config: IterateAuthConfig) {
   })();
   const infra = createOAuthInfra(config, jwks);
 
-  const routes = createAuthHandler(config, infra);
+  const fetchAuthRoute = createAuthHandler(config, infra);
   const middleware = createAuthMiddleware(config, infra);
   const authHandlerBasePath = normalizeAuthHandlerBasePath(config.authHandlerBasePath);
 
   return {
     authHandlerBasePath,
-    handler: routes.handler,
-    handleRequest(request: Request): Response | Promise<Response> | null {
+    async fetch(request: Request): Promise<Response | null> {
       if (!isAuthHandlerRequest(request, authHandlerBasePath)) {
         return null;
       }
-      return routes.handler(request);
+      return fetchAuthRoute(request);
     },
-    authenticate: middleware.authenticate,
+    async authenticate(options): Promise<Authentication> {
+      const session = await middleware.authenticate(options);
+      if (session.session) {
+        return {
+          credential: "session",
+          identity: identityFromSession(session.session),
+          session: session.session,
+          responseHeaders: session.responseHeaders,
+        };
+      }
+
+      const accessToken = await middleware.authenticateBearer({ headers: options.headers });
+      if (accessToken) {
+        return {
+          accessToken,
+          credential: "bearer",
+          identity: identityFromAccessToken(accessToken),
+          responseHeaders: session.responseHeaders,
+        };
+      }
+
+      return { credential: null, responseHeaders: session.responseHeaders };
+    },
+    authenticateSession: middleware.authenticate,
     authenticateBearer: middleware.authenticateBearer,
   };
+}
+
+/** Preserve headers emitted while authenticating when returning the app response. */
+export function withAuthenticationResponseHeaders(
+  response: Response,
+  authenticationHeaders: Headers,
+): Response {
+  if ([...authenticationHeaders].length === 0) return response;
+
+  // A 101/WebSocket response cannot be reconstructed. Authentication never
+  // refreshes on an upgrade, so that path emits no headers and returns above.
+  const merged = new Response(response.body, response);
+  for (const [name, value] of authenticationHeaders) {
+    if (name.toLowerCase() !== "set-cookie") merged.headers.append(name, value);
+  }
+  for (const cookie of authenticationHeaders.getSetCookie()) {
+    merged.headers.append("set-cookie", cookie);
+  }
+  return merged;
 }
 
 export function isAuthHandlerRequest(
