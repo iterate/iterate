@@ -60,9 +60,11 @@ import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import {
   decideHeadResolution,
+  isObservedPushRecord,
   observeExternalPushTransition,
   recordOwnPushTransition,
   shouldRetryHeadResolution,
+  type ObservedPush,
   type RepoHeadAuthority,
 } from "./repo-head-authority.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
@@ -138,7 +140,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       // also satisfies every older push delivery. syncFromGithub derives a
       // bounded depth that still retains the previous Artifacts head.
       syncFromGithubPush: async () => await this.syncFromGithub(),
-      observeArtifactPush: (input) => this.#observeExternalPush(input.branch, input.afterCommitOid),
+      observeArtifactPush: (input) =>
+        this.#observeExternalPush(input.branch, {
+          afterCommitOid: input.afterCommitOid,
+          beforeCommitOid: input.beforeCommitOid,
+        }),
       taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
     }),
     { recovery: true },
@@ -214,7 +220,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     // to the pre-push head forever.
     const decision = decideHeadResolution(this.#branchAuthority(branch), head.commitOid);
     if (!decision.cache) return { branch, ...head };
-    if (decision.settlesExpectedTip) this.ctx.storage.kv.delete(repoExpectedTipStorageKey(branch));
     this.ctx.storage.kv.put(repoHeadStorageKey(branch), head);
     return { branch, ...head };
   }
@@ -478,8 +483,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     // authorities and may be NEWER — never overwrite it (getHead's rule).
     const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (decision.cache && !isRepoHeadRecord(raced)) {
-      if (decision.settlesExpectedTip)
-        this.ctx.storage.kv.delete(repoExpectedTipStorageKey(branch));
       this.ctx.storage.kv.put(repoHeadStorageKey(branch), { commitOid: head.oid, contentHash });
     }
     if (decision.cache) this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, head.oid);
@@ -614,7 +617,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     // briefly clone the previous tip even after emitting its push event; the
     // recorded oid makes #checkout retry that stale clone instead of letting
     // it repopulate the just-cleared unpinned HEAD snapshot.
-    this.#observeExternalPush(input.branch, input.afterCommitOid);
+    this.#observeExternalPush(input.branch, {
+      afterCommitOid: input.afterCommitOid,
+      beforeCommitOid: input.beforeCommitOid,
+    });
     const previous =
       input.beforeCommitOid === null
         ? {}
@@ -640,50 +646,49 @@ export class RepoDurableObject extends DurableObject<Env> {
   /**
    * Queue-delivered push observation. Cloudflare Queues does not guarantee
    * publication-order delivery, and commit oids carry no order — so external
-   * observations NEVER assign cursors. Each non-duplicate observation
-   * INVALIDATES the durable head record and tree sentinel and records the
-   * observed `after` oid as the authority's settle evidence: the next read
-   * re-resolves against the ACTUAL remote head and only a resolution SHOWING
-   * that oid may be durably re-cached — anything else (an eventually
-   * consistent replica still serving any pre-push tip) is served once,
-   * uncached ({@link decideHeadResolution}). `null` records a ref deletion.
-   * The recently-observed set absorbs redeliveries in any permutation, so a
-   * late duplicate cannot re-open a settled authority. The DO's own
-   * serialized write lanes stay on {@link #recordPushedHead} — their pushes
-   * really are ordered.
+   * observations NEVER assign cursors. Each observation joins the branch's
+   * observed `(before, after)` window; the chain's FRONTIER (afters no
+   * observed push builds upon) is the only set of resolutions the clone
+   * lanes may durably cache — anything else (an eventually consistent
+   * replica still serving any pre-push tip, or a push delivered out of
+   * order) is served once, uncached ({@link decideHeadResolution}). A `null`
+   * after records a ref deletion. Redeliveries and provably-superseded late
+   * pushes change nothing and keep the warm cache. The DO's own serialized
+   * write lanes stay on {@link #recordPushedHead} — their pushes really are
+   * ordered.
    */
-  #observeExternalPush(branch: string, afterCommitOid: string | null) {
-    const observedKey = `repo-observed-push:${branch}`;
-    const observedValue = afterCommitOid ?? OBSERVED_DELETION_SENTINEL;
-    const rawObserved = this.ctx.storage.kv.get<unknown>(observedKey);
-    const observed = Array.isArray(rawObserved)
-      ? (rawObserved as string[])
-      : typeof rawObserved === "string"
-        ? [rawObserved]
-        : [];
-    if (observed.includes(observedValue)) return;
-    this.ctx.storage.kv.put(observedKey, [...observed, observedValue].slice(-OBSERVED_PUSH_MEMORY));
-    const transition = observeExternalPushTransition(this.#branchAuthority(branch), afterCommitOid);
-    // An echo of this object's own push proves the remote caught up with the
-    // read-your-write floor — nothing to invalidate.
+  #observeExternalPush(branch: string, push: ObservedPush) {
+    const transition = observeExternalPushTransition(this.#branchAuthority(branch), push);
+    this.#writeBranchAuthority(branch, transition.authority);
     if (!transition.invalidate) return;
     if (branch === REPO_DEFAULT_BRANCH) {
       this.#headFilesSnapshot.clear();
       this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
-    this.#writeBranchAuthority(branch, transition.authority);
   }
 
   #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
     if (result.noChanges) return;
+    // The pre-push head record (the write lanes re-record AFTER this) is the
+    // push's parent as far as this cache knew it — that pair lets the
+    // observed window prune a late-delivered external push from before this
+    // write. A missing record reads as null, which prunes nothing: safe.
+    const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(result.branch));
+    const beforeCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
     if (result.branch === REPO_DEFAULT_BRANCH) {
       this.#headFilesSnapshot.clear();
       // The head moved: the tree sentinel is stale (the write lanes re-record
       // the head RECORD themselves right after this).
       this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
-    this.#writeBranchAuthority(result.branch, recordOwnPushTransition(result.commitOid));
+    this.#writeBranchAuthority(
+      result.branch,
+      recordOwnPushTransition(this.#branchAuthority(result.branch), {
+        beforeCommitOid,
+        commitOid: result.commitOid,
+      }),
+    );
   }
 
   #invalidateArtifactState(branch: string) {
@@ -693,24 +698,27 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
     this.#artifactTokenPromise = undefined;
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
-    this.#writeBranchAuthority(branch, { expectedTip: undefined, pushedFloor: undefined });
+    this.#writeBranchAuthority(branch, { observedPushes: [], pushedFloor: undefined });
   }
 
-  /** The branch's head authority, read fresh from durable storage (sync). */
+  /** The branch's head authority, read fresh from durable storage (sync).
+   * Elements failing validation — including legacy bare-oid values from the
+   * pre-frontier scheme — read as absent; the next observation rebuilds the
+   * window. */
   #branchAuthority(branch: string): RepoHeadAuthority {
-    const rawExpected = this.ctx.storage.kv.get<unknown>(repoExpectedTipStorageKey(branch));
+    const rawObserved = this.ctx.storage.kv.get<unknown>(repoObservedPushesStorageKey(branch));
+    const observedPushes = Array.isArray(rawObserved)
+      ? rawObserved.filter(isObservedPushRecord)
+      : [];
     const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
-    return {
-      expectedTip: isExpectedTipRecord(rawExpected) ? rawExpected : undefined,
-      pushedFloor: typeof pushed === "string" ? pushed : undefined,
-    };
+    return { observedPushes, pushedFloor: typeof pushed === "string" ? pushed : undefined };
   }
 
   #writeBranchAuthority(branch: string, authority: RepoHeadAuthority) {
-    if (authority.expectedTip === undefined) {
-      this.ctx.storage.kv.delete(repoExpectedTipStorageKey(branch));
+    if (authority.observedPushes.length === 0) {
+      this.ctx.storage.kv.delete(repoObservedPushesStorageKey(branch));
     } else {
-      this.ctx.storage.kv.put(repoExpectedTipStorageKey(branch), authority.expectedTip);
+      this.ctx.storage.kv.put(repoObservedPushesStorageKey(branch), authority.observedPushes);
     }
     if (authority.pushedFloor === undefined) {
       this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
@@ -1867,30 +1875,11 @@ function repoPushedHeadStorageKey(branch: string) {
   return `repo-pushed-head:${branch}`;
 }
 
-/** An observed-but-unsettled external push: `{ afterCommitOid }` is the only
- * resolution the clone lanes may durably cache for the branch until it is
- * seen ({@link decideHeadResolution}); `afterCommitOid: null` = ref deleted. */
-function repoExpectedTipStorageKey(branch: string): string {
-  return `repo-expected-tip:${branch}`;
+/** The branch's observed push window — `(before, after)` pairs whose frontier
+ * is the set of cacheable resolutions ({@link decideHeadResolution}). */
+function repoObservedPushesStorageKey(branch: string): string {
+  return `repo-observed-push:${branch}`;
 }
-
-function isExpectedTipRecord(value: unknown): value is { afterCommitOid: string | null } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "afterCommitOid" in value &&
-    (typeof (value as { afterCommitOid: unknown }).afterCommitOid === "string" ||
-      (value as { afterCommitOid: unknown }).afterCommitOid === null)
-  );
-}
-
-/** How many recent external-push observations to remember for redelivery
- * dedup. Far above any realistic queue redelivery window; bounded so the
- * record cannot grow with repo history. */
-const OBSERVED_PUSH_MEMORY = 16;
-
-/** Stands in for `afterCommitOid: null` (ref deletion) in the observed set. */
-const OBSERVED_DELETION_SENTINEL = "@deleted";
 
 /** The git-over-HTTPS remote of a linked GitHub repository. */
 function githubRemoteUrl(link: { owner: string; repo: string }): string {

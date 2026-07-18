@@ -247,11 +247,15 @@ export class SchedulerProcessor extends StreamProcessor<
       for (const [index, event] of committed.entries()) {
         if (event === undefined) continue;
         const { entry, idempotencyKey, key } = keyed[index]!;
-        const payload = event.payload as { key?: unknown; scheduledFor?: unknown };
+        const payload: unknown = event.payload;
         const matches =
           event.type === "events.iterate.com/scheduler/trigger-requested" &&
-          payload?.key === key &&
-          payload?.scheduledFor === new Date(entry.nextTriggerAt!).toISOString();
+          typeof payload === "object" &&
+          payload !== null &&
+          "key" in payload &&
+          payload.key === key &&
+          "scheduledFor" in payload &&
+          payload.scheduledFor === new Date(entry.nextTriggerAt!).toISOString();
         if (!matches) {
           console.error(
             `scheduler occurrence key "${idempotencyKey}" is occupied by a foreign event ` +

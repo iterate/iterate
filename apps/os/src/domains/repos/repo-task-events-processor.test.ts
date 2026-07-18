@@ -23,6 +23,7 @@ function newRepoProcessor(
   }) => Promise<{ commitOid: string }> = async () => ({ commitOid: "github-head" }),
   observeArtifactPush: (input: {
     afterCommitOid: string | null;
+    beforeCommitOid: string | null;
     branch: string;
   }) => void = () => {},
 ) {
@@ -389,9 +390,14 @@ describe("RepoProcessor task change events", () => {
 
     expect(observeArtifactPush).toHaveBeenCalledWith({
       afterCommitOid: "after456",
+      beforeCommitOid: "before123",
       branch: "main",
     });
-    expect(observeArtifactPush).toHaveBeenCalledWith({ afterCommitOid: null, branch: "main" });
+    expect(observeArtifactPush).toHaveBeenCalledWith({
+      afterCommitOid: null,
+      beforeCommitOid: "after456",
+      branch: "main",
+    });
     // The deletion produced no commit fact — only the live push did.
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/repo/commit-completed"),

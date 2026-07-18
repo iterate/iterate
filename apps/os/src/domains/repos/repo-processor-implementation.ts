@@ -12,10 +12,15 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
-  /** Invalidate the branch-head cache authority for a queue-observed push —
+  /** Feed a queue-observed push into the branch-head cache authority —
    * INCLUDING ref deletions (`afterCommitOid: null`), which produce no
-   * commit facts but must still evict a warm head/tree. */
-  observeArtifactPush(input: { afterCommitOid: string | null; branch: string }): void;
+   * commit facts but must still evict a warm head/tree. The before oid lets
+   * the authority prune out-of-order deliveries. */
+  observeArtifactPush(input: {
+    afterCommitOid: string | null;
+    beforeCommitOid: string | null;
+    branch: string;
+  }): void;
   taskChangesForArtifactPush(input: {
     afterCommitOid: string | null;
     beforeCommitOid: string | null;
@@ -143,6 +148,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       // head authority. Only the commit-diff work below needs a commit.
       this.deps.observeArtifactPush({
         afterCommitOid: push.afterCommitOid ?? null,
+        beforeCommitOid: push.beforeCommitOid ?? null,
         branch: push.branch,
       });
       const commitOid = push.afterCommitOid;
