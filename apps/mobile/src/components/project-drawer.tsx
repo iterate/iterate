@@ -11,7 +11,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 type ProjectDrawerProps = {
@@ -29,6 +29,7 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
     staleTime: Infinity,
   });
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const drawerWidth = Math.min(width * 0.82, 340);
   const translateX = useRef(new Animated.Value(-drawerWidth)).current;
 
@@ -90,7 +91,17 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
           <Animated.View
             style={[styles.drawer, { width: drawerWidth, transform: [{ translateX }] }]}
           >
-            <SafeAreaView style={styles.safeArea}>
+            <View
+              style={[
+                styles.safeArea,
+                {
+                  paddingBottom: insets.bottom + spacing.lg,
+                  paddingLeft: insets.left + spacing.lg,
+                  paddingRight: insets.right + spacing.lg,
+                  paddingTop: insets.top + spacing.lg,
+                },
+              ]}
+            >
               <View style={styles.brand}>
                 <Image source={require("../../assets/images/icon.png")} style={styles.logo} />
                 <View style={styles.brandCopy}>
@@ -128,7 +139,7 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                   onPress={() => close(() => router.push("/projects"))}
                 />
               </View>
-            </SafeAreaView>
+            </View>
           </Animated.View>
         </View>
       </Modal>
@@ -166,7 +177,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 0,
   },
-  safeArea: { flex: 1, padding: spacing.lg },
+  safeArea: { flex: 1 },
   brand: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
   logo: { borderRadius: radius.sm, height: 42, width: 42 },
   brandCopy: { flex: 1 },
