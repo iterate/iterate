@@ -54,10 +54,13 @@ export class WorkerBuilderDurableObject extends Sandbox<Env> {
   override labels = { app: "iterate-os", component: "worker-builder" };
 }
 
-/** The builder for a build key, as the stock SDK client. */
+/** The builder for a build key, as the stock SDK client. `attempt` > 0
+ * addresses the failover member (next slot in ring order) when the key's own
+ * member is sick — see builderPoolMember. */
 export function getBuilderSandbox(
   namespace: DurableObjectNamespace<WorkerBuilderDurableObject>,
   buildKey: string,
+  attempt = 0,
 ): WorkerBuilderDurableObject {
-  return getSandbox(namespace, builderPoolMember(buildKey));
+  return getSandbox(namespace, builderPoolMember(buildKey, attempt));
 }

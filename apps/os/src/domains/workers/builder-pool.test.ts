@@ -23,4 +23,15 @@ describe("builderPoolMember", () => {
     );
     expect(members.size).toBe(WORKER_BUILDER_POOL_SIZE);
   });
+
+  it("failover attempts walk the ring away from the sick member and wrap", () => {
+    const key = "wb2-failover-key";
+    const primarySlot = Number(builderPoolMember(key).replace("worker-builder-", ""));
+    for (let attempt = 0; attempt < WORKER_BUILDER_POOL_SIZE * 2; attempt++) {
+      expect(builderPoolMember(key, attempt)).toBe(
+        `worker-builder-${(primarySlot + attempt) % WORKER_BUILDER_POOL_SIZE}`,
+      );
+    }
+    expect(builderPoolMember(key, 1)).not.toBe(builderPoolMember(key));
+  });
 });

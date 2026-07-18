@@ -76,12 +76,36 @@ async function buildInSandbox(
   recipe: WorkerBuildRecipe,
   input: { buildKey: string },
 ): Promise<{ mainModule: string; modules: Record<string, string> }> {
+  // One failover hop: the key's own member first (warm npm cache), then the
+  // next slot in ring order. A sick member — container that never places,
+  // toolchain install that hangs — otherwise owns every retry of its
+  // keyspace, because delivery retries recompute the same affinity (observed
+  // live: one wedged member failed five e2e specs while healthy members'
+  // keys all passed). Only PLAIN errors fail over; a WorkerBuildFailedError
+  // is deterministic for this source and would fail identically anywhere.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await buildOnPoolMember(recipe, input, attempt);
+    } catch (error) {
+      if (error instanceof WorkerBuildFailedError) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function buildOnPoolMember(
+  recipe: WorkerBuildRecipe,
+  input: { buildKey: string },
+  attempt: number,
+): Promise<{ mainModule: string; modules: Record<string, string> }> {
   // Deferred import: builder-pool-sandbox pulls the sandbox SDK
   // (`cloudflare:workers`), which only loads inside workerd — and this module
   // sits on import chains that node-side unit tests load. Only the deployed
   // lane reaches this line.
   const { getBuilderSandbox } = await import("./builder-pool-sandbox.ts");
-  const sandbox = getBuilderSandbox(env.WORKER_BUILDER, input.buildKey);
+  const sandbox = getBuilderSandbox(env.WORKER_BUILDER, input.buildKey, attempt);
 
   // Ephemeral by choice: the pool's containers snapshot nothing, so build
   // trees and the npm cache live only while a container stays up — good
@@ -107,9 +131,22 @@ async function buildInSandbox(
     // exec hanging fleet-wide. A failed install throws a PLAIN error —
     // provisioning weather, retryable, never recorded as a build failure of
     // the source.
+    //
+    // The install is SERIALIZED per container behind flock with a re-check
+    // inside the lock: on a fresh member, an e2e-style burst lands several
+    // concurrent builds that would each see "no wrangler" and race the same
+    // `npm install -g` — concurrent global installs of one package are a
+    // known npm corruption/hang case, observed live wedging a member's every
+    // install at the old 120s budget. Losers of the race wait on the lock,
+    // re-check, and skip. The coreutils-timeout wrap kills a genuinely hung
+    // install IN the container (the SDK timeout alone leaves the orphan npm
+    // holding the lock for the next attempt).
     const toolchain = await session.exec(
-      `command -v wrangler >/dev/null || npm install -g wrangler@${WRANGLER_VERSION} --no-audit --no-fund`,
-      { timeout: 120_000 },
+      withCommandTimeout(
+        `command -v wrangler >/dev/null || flock /tmp/.builder-toolchain.lock sh -c 'command -v wrangler >/dev/null || npm install -g wrangler@${WRANGLER_VERSION} --no-audit --no-fund'`,
+        TOOLCHAIN_TIMEOUT_MS,
+      ),
+      { timeout: TOOLCHAIN_TIMEOUT_MS + 30_000 },
     );
     if (!toolchain.success) {
       throw new Error(
@@ -183,6 +220,12 @@ async function buildInSandbox(
     await sandbox.deleteSession(session.id).catch(() => {});
   }
 }
+
+/** Cold-member toolchain budget: a fresh container may pay boot + npm's
+ * registry fetch of wrangler (workerd's platform binary is the bulk) while
+ * the whole pool is placing at once — 120s was observed genuinely too tight
+ * on a first-deploy blast; 300s is comfortable and still bounded. */
+const TOOLCHAIN_TIMEOUT_MS = 300_000;
 
 /** Wrap one build step so a hang is killed IN the container and reported as
  * coreutils' exit 124 — the verified-timeout contract the failure classifier
