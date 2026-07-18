@@ -95,6 +95,17 @@ function isWorkspaceCommitRecord(value: unknown): value is WorkspaceCommitRecord
   );
 }
 
+function isWorkspaceCommitCommand(
+  value: WorkspaceCommitInput | WorkspaceCommitCommand,
+): value is WorkspaceCommitCommand {
+  const candidate = value as Partial<WorkspaceCommitCommand>;
+  return (
+    typeof candidate.operationId === "string" &&
+    candidate.input !== null &&
+    typeof candidate.input === "object"
+  );
+}
+
 function workspaceCommitStorageKey(operationId: string): string {
   if (!/^[0-9a-z-]{36}$/i.test(operationId)) {
     throw new Error("workspace commit operationId must be a UUID.");
@@ -675,8 +686,19 @@ export class WorkspaceCore {
    * mount's uncommitted work (including pending deletions under a deeper
    * mount's subtree) survives.
    */
-  async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
-    return this.gitCommitCommand({ input, operationId: crypto.randomUUID() });
+  async gitCommit(
+    inputOrCommand: WorkspaceCommitInput | WorkspaceCommitCommand,
+  ): Promise<WorkspaceCommitResult> {
+    // Rollout compatibility is permanent at this RPC boundary: older
+    // stateless callers send WorkspaceCommitInput directly, while current
+    // callers mint the operation id outside the Durable Object so a reset can
+    // replay the same mutation. A new DO must accept both shapes while either
+    // worker version can still be serving traffic.
+    return this.gitCommitCommand(
+      isWorkspaceCommitCommand(inputOrCommand)
+        ? inputOrCommand
+        : { input: inputOrCommand, operationId: crypto.randomUUID() },
+    );
   }
 
   /**

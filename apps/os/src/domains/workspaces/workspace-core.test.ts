@@ -290,19 +290,19 @@ describe("git status, commit, and log", () => {
     expect(files.has("/config/worker.ts")).toBe(false);
   });
 
-  test("replays a completed workspace result without consuming a later edit", async () => {
+  test("accepts the replay command at the rollout-compatible gitCommit boundary", async () => {
     const { config, core } = subject();
     const command = {
       input: { message: "update worker" },
       operationId: "92df645d-0a83-41e2-a249-11f2927068fc",
     };
     await core.writeFile("/config/worker.ts", "changed");
-    const first = await core.gitCommitCommand(command);
+    const first = await core.gitCommit(command);
 
     // Simulate a lost edge acknowledgement followed by unrelated later work
     // before the transport replays the original command.
     await core.writeFile("/config/worker.ts", "later edit");
-    await expect(core.gitCommitCommand(command)).resolves.toEqual(first);
+    await expect(core.gitCommit(command)).resolves.toEqual(first);
     await expect(core.readFile("/config/worker.ts")).resolves.toBe("later edit");
     expect(config.commits).toHaveLength(1);
   });

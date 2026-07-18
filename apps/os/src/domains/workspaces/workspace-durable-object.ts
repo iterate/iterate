@@ -15,6 +15,7 @@ import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
   WorkspaceCommitCommand,
+  WorkspaceCommitInput,
   WorkspaceCommitResult,
   WorkspaceGitLogEntry,
   WorkspaceGitLogInput,
@@ -363,9 +364,11 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#core.gitStatus();
   }
 
-  async gitCommit(command: WorkspaceCommitCommand): Promise<WorkspaceCommitResult> {
+  async gitCommit(
+    inputOrCommand: WorkspaceCommitInput | WorkspaceCommitCommand,
+  ): Promise<WorkspaceCommitResult> {
     await this.#ensureCreated();
-    return this.#core.gitCommitCommand(command);
+    return this.#core.gitCommit(inputOrCommand);
   }
 
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {

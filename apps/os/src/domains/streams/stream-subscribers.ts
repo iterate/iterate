@@ -84,6 +84,14 @@ import {
   SKIP_CONFIRM_ATTEMPTS,
 } from "./subscriber-math.ts";
 
+/**
+ * A remote delivery is protected by the Durable Object alarm before the call
+ * crosses an isolate boundary. If its incarnation disappears without an
+ * outcome, the alarm wakes a fresh one and the lagging cursor redelivers.
+ * Kept inside the public stream-wait deadline so recovery stays transparent.
+ */
+const DELIVERY_WATCHDOG_MS = 5_000;
+
 /** Serializable debug view of one live connection, for `runtimeState()`. */
 export type ConnectionRuntimeState = {
   subscriptionType: StreamSubscriptionType;
@@ -265,8 +273,10 @@ type StreamSubscribersHooks = {
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
   random(): number;
-  /** Arm the Durable Object alarm for the earliest pending retry. */
-  armAlarm(atMs: number): void;
+  /** Durably arm the Durable Object alarm no later than this deadline. */
+  armAlarm(atMs: number): Promise<void>;
+  /** Repoint the alarm to the exact deadline derived from every obligation. */
+  repointAlarm(atMs: number | null): Promise<void>;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
 };
@@ -301,6 +311,8 @@ export class StreamSubscribers {
    */
   #tearingDown = false;
   readonly #pushDrains = new Set<string>();
+  /** Successor wake owned by each currently crossing-isolate attempt. */
+  readonly #deliveryWatchdogs = new Map<string, number>();
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
   /** Consecutive poison skips per key (no intervening success) — see MAX_CONSECUTIVE_SKIPS. */
@@ -372,10 +384,10 @@ export class StreamSubscribers {
     }
   }
 
-  /** The DO alarm handler body: retry whatever is due, then re-arm. */
+  /** The DO alarm handler body: retry whatever is due, then exactly re-arm. */
   onAlarm(): void {
     this.wake();
-    this.#armAlarmFromStore();
+    this.#hooks.keepAlive(this.#repointAlarmFromStore());
   }
 
   // ===========================================================================
@@ -486,6 +498,7 @@ export class StreamSubscribers {
     this.#pokesInFlight.add(subscriptionKey);
     const work = (async () => {
       try {
+        await this.#armDeliveryWatchdog(subscriptionKey);
         // A poke that outlives its timeout still eventually settles with a
         // RETAINED sink; dropping that undisposed would leak a session-pinning
         // stub on exactly the wedged-subscriber occasions the timeout exists
@@ -556,6 +569,8 @@ export class StreamSubscribers {
         this.#onDeliveryFailure(subscriptionKey, error);
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
+        this.#deliveryWatchdogs.delete(subscriptionKey);
+        await this.#repointAlarmFromStore();
       }
     })();
     this.#hooks.keepAlive(work);
@@ -652,6 +667,7 @@ export class StreamSubscribers {
           const dispatchAtMs = this.#hooks.now();
           this.#hooks.recordEgress(matched.length, deliveredBytes);
           try {
+            await this.#armDeliveryWatchdog(subscriptionKey);
             if (config.delivery.mode === "webhook") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
               await withDeliveryTimeout(
@@ -716,6 +732,8 @@ export class StreamSubscribers {
         }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
+        this.#deliveryWatchdogs.delete(subscriptionKey);
+        await this.#repointAlarmFromStore();
       }
     })();
     this.#hooks.keepAlive(
@@ -876,7 +894,7 @@ export class StreamSubscribers {
       nextAttemptAt,
       error: errorMessage(error),
     });
-    this.#hooks.armAlarm(nextAttemptAt);
+    this.#hooks.keepAlive(this.#hooks.armAlarm(nextAttemptAt));
   }
 
   /**
@@ -914,21 +932,56 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
   }
 
-  #armAlarmFromStore(): void {
+  #repointAlarmFromStore(): Promise<void> {
     // Not a bare MIN over the rows: parked rows keep their cursor but must
-    // not drive the alarm, and a row whose retry is IN FLIGHT this very turn
-    // still carries its (past) due time until the attempt settles — re-arming
-    // from either spins the alarm at zero delay.
-    const subscriptions = this.#durableSubscriptions();
+    // not drive the alarm. A row whose retry is IN FLIGHT this very turn still
+    // carries its (past) due time until the attempt settles, so it gets a fresh
+    // watchdog rather than a past-timestamp hot loop.
+    const state = this.#hooks.coreState();
+    const subscriptions = this.#durableSubscriptions(state);
+    const now = this.#hooks.now();
     let next: number | null = null;
     for (const row of this.#hooks.store.list()) {
-      if (row.nextAttemptAt === null) continue;
       const key = row.subscriptionKey;
-      if (subscriptions[key]?.parkedAtOffset !== undefined) continue;
-      if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
-      if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
+      const subscription = subscriptions[key];
+      if (subscription === undefined || subscription.parkedAtOffset !== undefined) continue;
+
+      const inFlight = this.#pushDrains.has(key) || this.#pokesInFlight.has(key);
+      if (inFlight) {
+        let watchdogAt = this.#deliveryWatchdogs.get(key);
+        if (watchdogAt === undefined || watchdogAt <= now) {
+          watchdogAt = now + DELIVERY_WATCHDOG_MS;
+          this.#deliveryWatchdogs.set(key, watchdogAt);
+        }
+        if (next === null || watchdogAt < next) next = watchdogAt;
+        continue;
+      }
+
+      if (row.nextAttemptAt !== null) {
+        if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
+        continue;
+      }
+
+      // A lagging push row with no in-memory drain means the previous
+      // incarnation vanished before it could record an outcome. Wake it
+      // again. Wake-mode rows with a live connection are observational and
+      // deliberately stay behind while that connection owns delivery.
+      if (
+        row.ackedOffset < state.maxOffset &&
+        !(subscription.config.delivery.mode === "wake" && this.#connections.has(key))
+      ) {
+        const watchdogAt = now + DELIVERY_WATCHDOG_MS;
+        if (next === null || watchdogAt < next) next = watchdogAt;
+      }
     }
-    if (next !== null) this.#hooks.armAlarm(next);
+    return this.#hooks.repointAlarm(next);
+  }
+
+  /** Persist the successor wake before starting a remote delivery attempt. */
+  #armDeliveryWatchdog(subscriptionKey: string): Promise<void> {
+    const watchdogAt = this.#hooks.now() + DELIVERY_WATCHDOG_MS;
+    this.#deliveryWatchdogs.set(subscriptionKey, watchdogAt);
+    return this.#hooks.armAlarm(watchdogAt);
   }
 
   // ===========================================================================

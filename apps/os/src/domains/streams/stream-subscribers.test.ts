@@ -157,6 +157,7 @@ function makeHarness() {
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
   const armedAlarms: number[] = [];
+  const repointedAlarms: (number | null)[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
@@ -205,46 +206,54 @@ function makeHarness() {
   };
 
   let storageReads = 0;
-  const subscribers = new StreamSubscribers({
-    idleTeardownMs: 60_000,
-    hooks: {
-      readEvents: ({ afterOffset, limit }) => {
-        storageReads += 1;
-        return log
-          .filter((event) => event.offset > afterOffset)
-          .slice(0, limit)
-          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+  const makeSubscribers = () =>
+    new StreamSubscribers({
+      idleTeardownMs: 60_000,
+      hooks: {
+        readEvents: ({ afterOffset, limit }) => {
+          storageReads += 1;
+          return log
+            .filter((event) => event.offset > afterOffset)
+            .slice(0, limit)
+            .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+        },
+        coreState: (): CoreProcessorState =>
+          CoreProcessorContract.stateSchema.parse({
+            projectId: "p1",
+            path: "/t",
+            createdAt: streamCreatedAt,
+            maxOffset: assignedMaxOffset,
+            configuredSubscribersByKey: configured,
+          }),
+        platformSubscriptions: () => platformConfigured,
+        store,
+        dial,
+        appendFact: (event) => {
+          facts.push(event);
+          // Mimic the core reducer: a parked fact folds into desired state, and
+          // the spine reads parked-ness from coreState().
+          if (event.type === PARKED) {
+            const payload = event.payload as { subscriptionKey: string; atOffset: number };
+            const entry = configured[payload.subscriptionKey];
+            if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
+            const platformEntry = platformConfigured[payload.subscriptionKey];
+            if (platformEntry !== undefined) platformEntry.parkedAtOffset = payload.atOffset;
+          }
+        },
+        recordEgress: (count, bytes) => egress.push({ count, bytes }),
+        now: () => now,
+        random: () => 0.5,
+        armAlarm: async (atMs) => {
+          armedAlarms.push(atMs);
+        },
+        repointAlarm: async (atMs) => {
+          repointedAlarms.push(atMs);
+          if (atMs !== null) armedAlarms.push(atMs);
+        },
+        keepAlive: (promise) => kept.push(promise),
       },
-      coreState: (): CoreProcessorState =>
-        CoreProcessorContract.stateSchema.parse({
-          projectId: "p1",
-          path: "/t",
-          createdAt: streamCreatedAt,
-          maxOffset: assignedMaxOffset,
-          configuredSubscribersByKey: configured,
-        }),
-      platformSubscriptions: () => platformConfigured,
-      store,
-      dial,
-      appendFact: (event) => {
-        facts.push(event);
-        // Mimic the core reducer: a parked fact folds into desired state, and
-        // the spine reads parked-ness from coreState().
-        if (event.type === PARKED) {
-          const payload = event.payload as { subscriptionKey: string; atOffset: number };
-          const entry = configured[payload.subscriptionKey];
-          if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
-          const platformEntry = platformConfigured[payload.subscriptionKey];
-          if (platformEntry !== undefined) platformEntry.parkedAtOffset = payload.atOffset;
-        }
-      },
-      recordEgress: (count, bytes) => egress.push({ count, bytes }),
-      now: () => now,
-      random: () => 0.5,
-      armAlarm: (atMs) => armedAlarms.push(atMs),
-      keepAlive: (promise) => kept.push(promise),
-    },
-  });
+    });
+  const subscribers = makeSubscribers();
 
   /** Await every kept promise (and any it spawned), then flush microtask chains. */
   const settle = async () => {
@@ -261,6 +270,7 @@ function makeHarness() {
     store,
     facts,
     armedAlarms,
+    repointedAlarms,
     egress,
     pokes,
     pushes,
@@ -271,6 +281,10 @@ function makeHarness() {
     platformConfigured,
     log,
     settle,
+    abandonInFlightWork: () => {
+      kept.length = 0;
+    },
+    reincarnate: makeSubscribers,
     append: (...events: StreamEvent[]) => {
       assignedMaxOffset = Math.max(assignedMaxOffset, ...events.map((event) => event.offset));
       return log.push(...events);
@@ -429,6 +443,7 @@ describe("StreamSubscribers", () => {
       "k",
     );
     expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
+    expect(h.repointedAlarms.at(-1)).toBeNull();
 
     h.append(evt(4, "d"), evt(5, "e"));
     h.subscribers.wake();
@@ -460,6 +475,38 @@ describe("StreamSubscribers", () => {
 
     expect(h.pushes).toHaveLength(1);
     expect(h.row("k")?.ackedOffset).toBe(5);
+  });
+
+  it("a durable watchdog redelivers after the original incarnation disappears mid-push", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    let attempt = 0;
+    let watchdogWasArmedBeforeDial = false;
+    h.dialImpl.push = async () => {
+      attempt += 1;
+      watchdogWasArmedBeforeDial = h.armedAlarms.length > 0;
+      if (attempt === 1) await new Promise<void>(() => undefined);
+    };
+
+    h.subscribers.wake();
+    await vi.waitFor(() => expect(h.pushes).toHaveLength(1));
+    expect(watchdogWasArmedBeforeDial).toBe(true);
+    const watchdogAt = Math.min(...h.armedAlarms);
+    expect(watchdogAt).toBeGreaterThan(h.now());
+
+    // Cloudflare can discard waitUntil work when a DO incarnation is
+    // replaced. Preserve the durable row/alarm, but forget that incarnation's
+    // in-memory promise and drain reservation.
+    h.abandonInFlightWork();
+    h.advanceTo(watchdogAt + 1);
+    const recovered = h.reincarnate();
+    recovered.onAlarm();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(2);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, nextAttemptAt: null });
   });
 
   it("c. retry/backoff/alarm: failures back off exponentially, the alarm retries, success clears", async () => {
@@ -793,7 +840,7 @@ describe("StreamSubscribers", () => {
       });
 
     for (let i = 0; i < 5; i += 1) h.subscribers.wake();
-    expect(h.pokes).toHaveLength(1);
+    await vi.waitFor(() => expect(h.pokes).toHaveLength(1));
 
     resolvePoke({ checkpointOffset: 2, sink });
     await h.settle();

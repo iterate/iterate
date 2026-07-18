@@ -43,6 +43,7 @@ import {
   isDurableObjectLifecycleError,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
+import { StreamAlarm } from "./stream-alarm.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -119,6 +120,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
+  readonly #alarm = new StreamAlarm({
+    storage: this.ctx.storage,
+    keepAlive: (promise) => this.#runInBackground(() => promise),
+  });
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -166,7 +171,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#alarm.armNoLaterThan(atMs),
+      repointAlarm: (atMs) => this.#alarm.repoint(atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -230,33 +236,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
-  alarm(): void {
-    this.#alarmArmedForMs = null;
+  async alarm(): Promise<void> {
+    await this.#alarm.fired();
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
     this.#flushCoreProcessorState();
-  }
-
-  /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
-   */
-  #alarmArmedForMs: number | null = null;
-
-  /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
-    }
   }
 
   // ===========================================================================

@@ -148,7 +148,8 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       recordEgress: () => undefined,
       now: () => Date.now(),
       random: () => 0.5,
-      armAlarm: () => undefined,
+      armAlarm: async () => undefined,
+      repointAlarm: async () => undefined,
       keepAlive: (promise) => void kept.push(promise),
     },
   });
