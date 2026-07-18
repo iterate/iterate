@@ -11,12 +11,6 @@ export type RouteProject = {
   slug: string;
 };
 
-export type OsPosthogContext = {
-  eventProperties: PosthogProperties;
-  groups: PosthogGroup[];
-  person: PosthogPerson;
-};
-
 /**
  * The authenticated user is a PostHog person. Organization and project are
  * group types; modelling the user as a third group would duplicate identity
@@ -25,7 +19,11 @@ export type OsPosthogContext = {
 export function osPosthogContext(
   session: PublicSessionResponse | null,
   project: RouteProject | null,
-): OsPosthogContext | null {
+): {
+  eventProperties: PosthogProperties;
+  groups: PosthogGroup[];
+  person: PosthogPerson;
+} | null {
   if (!session?.authenticated) return null;
 
   const personProperties: PosthogProperties = {
