@@ -239,6 +239,10 @@ describe("userspace GitHub pull-request routing", () => {
     });
     const task = JSON.stringify(test.appendBatches[0]?.events[2]);
     expect(task).toContain("complete changed-file list");
+    expect(task).toContain("octokit.paginate");
+    expect(task).toContain("GET /repos/{owner}/{repo}/pulls/{pull_number}/files");
+    expect(task).toContain("Never pass an `octokit.rest` method to `octokit.paginate`");
+    expect(task).toContain("Return plain JSON data from the script");
     expect(task).toContain("exactly one consolidated COMMENT review");
     expect(task).toContain("iterate-lint-disable-next-line");
     expect(task).toContain("structure/no-small-single-use-helper");
