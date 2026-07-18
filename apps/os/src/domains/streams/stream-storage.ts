@@ -789,7 +789,12 @@ type SubscriptionCursorRowRecord = {
 };
 
 function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
-  const nextAttemptAt = earliestDeadline(record.watchdog_at, record.retry_at);
+  const nextAttemptAt =
+    record.watchdog_at === null
+      ? record.retry_at
+      : record.retry_at === null
+        ? record.watchdog_at
+        : Math.min(record.watchdog_at, record.retry_at);
   return {
     subscriptionKey: record.subscription_key,
     ackedOffset: record.acked_offset,
@@ -803,14 +808,6 @@ function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorR
     consecutivePoisonSkips: record.consecutive_poison_skips,
     epoch: record.epoch,
   };
-}
-
-function earliestDeadline(...deadlines: Array<number | null>): number | null {
-  let earliest: number | null = null;
-  for (const deadline of deadlines) {
-    if (deadline !== null && (earliest === null || deadline < earliest)) earliest = deadline;
-  }
-  return earliest;
 }
 
 function addLegacyEventPath(value: unknown, path: string): unknown {
