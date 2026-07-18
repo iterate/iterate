@@ -61,6 +61,22 @@ export type WorkerBuildOptions = {
    * skips the build pipeline entirely. */
   bundle?: boolean;
   minify?: boolean;
+  /**
+   * Which build pipeline turns the source into loader-ready modules.
+   * "wrangler" (default): the platform's own bundle — dependency install +
+   * wrangler dry-run, source code is PARSED but never executed. "vite": the
+   * source's OWN `pnpm run build` by default (a real Vite/TanStack-Start app)
+   * — install includes
+   * devDependencies and the build EXECUTES project code in the builder, so
+   * runtime artifacts stay project-scoped and the output is collected from
+   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +
+   * dist/client assets, served by a generated wrapper entry).
+   */
+  pipeline?: "wrangler" | "vite";
+  /** Build from this subdirectory of the resolved source: files outside it
+   * are dropped and paths are re-rooted, so a repo can host an app at e.g.
+   * `apps/tanstack/` with its own package.json and config. */
+  rootDir?: string;
   /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
    * runtime rides in this way). A source's own entry wins over the platform's. */
   virtualModules?: Record<string, string>;
@@ -241,6 +257,8 @@ export const WorkerBuildOptions = z.strictObject({
   bundle: z.boolean().optional(),
   entryPoint: z.string().optional(),
   minify: z.boolean().optional(),
+  pipeline: z.enum(["wrangler", "vite"]).optional(),
+  rootDir: z.string().optional(),
   virtualModules: z.record(z.string(), z.string()).optional(),
 }) satisfies z.ZodType<WorkerBuildOptions, unknown>;
 

@@ -37,6 +37,9 @@ type TelegramProcessorDeps = {
   telegramAccessSettingsUrl(input: { connection: string; projectId: string }): Promise<string>;
 };
 
+export const TELEGRAM_ACCESS_WELCOME_TEXT =
+  "Hello! You now have access to this Iterate project through this bot. Send me a message to get started.";
+
 export class TelegramProcessor extends StreamProcessor<
   TelegramProcessorContract,
   TelegramProcessorDeps
@@ -134,6 +137,7 @@ export class TelegramProcessor extends StreamProcessor<
     appendTo,
     blockProcessorWhile,
     event,
+    previousState,
     runInBackground,
     state,
   }: Parameters<StreamProcessor<TelegramProcessorContract>["processEvent"]>[0]): undefined {
@@ -142,6 +146,26 @@ export class TelegramProcessor extends StreamProcessor<
     if (event.type === "events.iterate.com/telegram/created") return;
     const connection = state.birthCertificate?.config.connection;
     if (connection === undefined) return;
+    if (event.type === "events.iterate.com/telegram/access-configured") {
+      if (!webhookAckIsFresh(event, this.deps.now())) return;
+      const previouslyAllowed = new Set(previousState.allowedUserIds);
+      for (const userId of state.allowedUserIds) {
+        if (previouslyAllowed.has(userId)) continue;
+        // Like the pre-access denial, this is a useful notification rather
+        // than an authorization obligation. A blocked bot must not hold the
+        // router checkpoint and wedge later inbound traffic.
+        runInBackground(async () => {
+          await this.deps.sendTelegramMessage({
+            connection,
+            body: {
+              chat_id: coerceTelegramId(userId),
+              text: TELEGRAM_ACCESS_WELCOME_TEXT,
+            },
+          });
+        });
+      }
+      return;
+    }
     if (event.type !== "events.iterate.com/telegram/webhook-received") return;
 
     // The router deliberately does not decide whether an update is meaningful

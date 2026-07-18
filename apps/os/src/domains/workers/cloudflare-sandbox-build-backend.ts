@@ -3,6 +3,7 @@ import { builderPoolMember, WORKER_BUILDER_POOL_SIZE } from "./builder-pool.ts";
 import { getBuilderSandbox, type WorkerBuilderDurableObject } from "./builder-pool-sandbox.ts";
 import {
   collectRecipeOutputs,
+  collectViteRecipeOutputs,
   NUB_VERSION,
   PNPM_VERSION,
   workerBuildRecipe,
@@ -179,7 +180,14 @@ async function buildOnPoolMember(
     }
 
     phase = "outputs";
-    const listing = await sandbox.exec(`ls -1A '${recipe.outputDir}'`, {
+    // Wrangler emits one flat directory (whose dot-prefixed entry requires
+    // -A); Vite emits a nested dist tree whose keys retain the dist/ prefix
+    // expected by collectViteRecipeOutputs.
+    const listCommand =
+      recipe.pipeline === "vite"
+        ? `find '${recipe.outputDir}' -type f`
+        : `ls -1A '${recipe.outputDir}'`;
+    const listing = await sandbox.exec(listCommand, {
       cwd: buildDir,
       env: EXEC_ENV,
       timeout: 30_000,
@@ -187,21 +195,35 @@ async function buildOnPoolMember(
     if (!listing.success) {
       throw new Error(`could not list worker build outputs: ${listing.stderr}`);
     }
+    const names = listing.stdout
+      .split("\n")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0)
+      .filter(
+        (name) =>
+          !(recipe.pipeline === "vite" && (name.endsWith(".map") || name.includes("/.vite/"))),
+      );
     const outputs = Object.fromEntries(
       await Promise.all(
-        listing.stdout
-          .split("\n")
-          .map((name) => name.trim())
-          .filter((name) => name.length > 0)
-          .map(async (name) => {
-            const read = await sandbox.readFile(`${buildDir}/${recipe.outputDir}/${name}`);
-            if (!read.success) throw new Error(`could not read worker build output "${name}"`);
-            return [name, read.content] as const;
-          }),
+        names.map(async (name) => {
+          const path =
+            recipe.pipeline === "vite"
+              ? `${buildDir}/${name}`
+              : `${buildDir}/${recipe.outputDir}/${name}`;
+          const read = await sandbox.readFile(path);
+          if (!read.success) throw new Error(`could not read worker build output "${name}"`);
+          return [name, read.content] as const;
+        }),
       ),
     );
     try {
-      attemptResult = { status: "built", output: collectRecipeOutputs(recipe, outputs) };
+      attemptResult = {
+        status: "built",
+        output:
+          recipe.pipeline === "vite"
+            ? collectViteRecipeOutputs(outputs)
+            : collectRecipeOutputs(recipe, outputs),
+      };
     } catch (error) {
       throw new WorkerBuildFailedError(buildFailureMessageFromError(error), { cause: error });
     }

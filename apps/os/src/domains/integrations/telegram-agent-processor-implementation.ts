@@ -490,14 +490,14 @@ function telegramWebhookAgentInput(
   if (placeholders.length > 0) {
     lines.push(
       "",
-      `Media in this message (not directly viewable in v1 — reply accordingly if asked about it): ${placeholders.join(" ")}`,
+      `Media in this message (file_id is in the raw payload): ${placeholders.join(" ")}`,
     );
   }
   return lines.join("\n");
 }
 
-/** Bracketed placeholders for the media a message carries — the v1 stand-in
- * for actually downloading Telegram files. */
+/** Bracketed hints for the media a message carries; the raw payload retains
+ * the file ids the agent can download through token-safe project egress. */
 function telegramMediaPlaceholders(payload: unknown): string[] {
   const update = readRecord(readRecord(payload)?.body);
   const message =

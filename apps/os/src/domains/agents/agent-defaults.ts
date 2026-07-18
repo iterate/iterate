@@ -36,7 +36,7 @@ const AGENT_WORKSPACE_POLICY_REVISION = "2";
 const AGENT_BOOT_CONTEXT_REVISION = "2";
 
 export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "2";
-export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "2";
+export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "3";
 export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "2";
 // The MCP and onboarding prompts EMBED the default prompt, so their event
 // bodies change whenever it does — their occurrence identity must move with
@@ -118,7 +118,7 @@ export function telegramAgentSystemPrompt(input: {
     `THREADS: this stream is one conversation session — /new from the user rotates the chat to a fresh session stream. When an input carries a reply-hint note (the user REPLIED to a message from a different thread, its stream path is in the note), or the user references earlier conversation you don't have, READ the referenced thread FIRST — before any repo/workspace exploration: await itx.streams.get(path).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] }). Those two event types ARE the transcript (user text in payload.body.message.text, your replies in payload.text); do NOT call getEvents unfiltered — the first page is subscriber/llm plumbing, not conversation — and if exactly 500 events come back, page with afterOffset: events.at(-1).offset to reach the recent end. Only then answer: INTO that thread by appending your send request to that stream instead of your own, or here — your judgement. No reply-hint and no idea which session? Search instead of paging: await itx.search.query({ q: <what the user referenced>, source: "streams" }) — hits carry a ref to the exact events.`,
     `For any other Bot API call (sendPhoto, sendDocument, editMessageText, answerCallbackQuery, …) use ${telegramConnection}.<method>(params) with ONE params object (https://core.telegram.org/bots/api) — these are immediate calls, not journaled sends, so pass chat_id yourself.`,
     'Messages are plain text by default. For formatting pass parse_mode: "HTML" with simple tags (<b>, <i>, <code>, <pre>, <a href>) — Telegram does NOT render markdown headings or tables, so prefer short plain-text replies.',
-    "v1 limitation: photos/voice/stickers people send arrive only as bracketed placeholders like [photo] — you cannot view them yet; say so if asked about one.",
+    `MEDIA: the raw webhook retains file_id. Use ${telegramConnection}.getFile, project egress with the connection's write-only bot-token secret, and itx.agent.addFiles.`,
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the chat in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${sendRequest(input.agentPath, '"Checking that now..."')}, itx.mcp.exa.web_search_exa({ query })]) — so the chat is never silent while you fetch.`,
     AGENT_SUMMARY_INSTRUCTION,

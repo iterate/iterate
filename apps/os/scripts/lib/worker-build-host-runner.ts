@@ -2,8 +2,8 @@
  * Run the shared dynamic-worker build recipe on the HOST node toolchain — the
  * runner behind local dev's `/__dev/worker-build` endpoint and the deploy-time
  * template seeder. `wrangler` resolves through apps/os's own node_modules/.bin,
- * so the pin is the SAME one the build key names (build-recipe.test.ts asserts
- * the three-way lockstep with WRANGLER_VERSION and the sandbox image).
+ * so the pin is the SAME one the build key names (build-key.test.ts asserts
+ * lockstep with the workspace pin used by this host runner and the backend).
  */
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   collectRecipeOutputs,
+  collectViteRecipeOutputs,
   type WorkerBuildRecipe,
 } from "../../src/domains/workers/build-recipe.ts";
 
@@ -43,12 +44,34 @@ export async function runWorkerBuildRecipeOnHost(
 
     const outputDir = join(buildDir, recipe.outputDir);
     const outputs: Record<string, string> = {};
-    for (const entry of await readdir(outputDir, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      outputs[entry.name] = await readFile(join(outputDir, entry.name), "utf8");
+    if (recipe.pipeline === "vite") {
+      // The vite lane's output is the nested dist/ tree; keys carry the
+      // dist/ prefix the collector expects. Maps and vite manifests are
+      // skipped before read, mirroring the sandbox runner.
+      const walk = async (dir: string, prefix: string) => {
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          const path = join(dir, entry.name);
+          const key = `${prefix}${entry.name}`;
+          if (entry.isDirectory()) await walk(path, `${key}/`);
+          else if (entry.isFile() && !key.endsWith(".map") && !key.includes("/.vite/")) {
+            outputs[key] = await readFile(path, "utf8");
+          }
+        }
+      };
+      await walk(outputDir, `${recipe.outputDir}/`);
+    } else {
+      for (const entry of await readdir(outputDir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        outputs[entry.name] = await readFile(join(outputDir, entry.name), "utf8");
+      }
     }
     try {
-      return { status: "ok", ...collectRecipeOutputs(recipe, outputs) };
+      return {
+        status: "ok",
+        ...(recipe.pipeline === "vite"
+          ? collectViteRecipeOutputs(outputs)
+          : collectRecipeOutputs(recipe, outputs)),
+      };
     } catch (error) {
       return {
         status: "build-failed",

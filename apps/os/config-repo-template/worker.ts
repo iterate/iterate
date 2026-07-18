@@ -114,6 +114,37 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         },
       });
     }
+    if (app === "tanstack") {
+      // A real TanStack Start app living at apps/tanstack in this repo: the
+      // platform's "vite" pipeline runs ITS OWN `pnpm run build` and serves
+      // the built pages + client assets; its /api rides into the app's
+      // Durable Object (TanstackTodos — SQLite todos via sqlfu, live state
+      // over Cap'n Web). Pages are gated to project members HERE; /api is
+      // the unauthenticated Cap'n Web root that authenticates in-band from
+      // the app cookie, exactly like the internal app.
+      const tanstackSource = {
+        files: { type: "repo", repoPath: "/repos/config" },
+        options: { pipeline: "vite", rootDir: "apps/tanstack" },
+      } as const;
+      const url = new URL(req.url);
+      if (url.pathname === "/api") {
+        return this.fetchDynamicWorker(req, {
+          type: "stateful",
+          path: "/",
+          className: "TanstackTodos",
+          durableWorkerKey: "app-tanstack",
+          source: tanstackSource,
+        });
+      }
+      using itx = await this.env.ITX.get();
+      const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (authResponse) return authResponse;
+      return this.fetchDynamicWorker(req, {
+        type: "stateless",
+        path: "/",
+        source: tanstackSource,
+      });
+    }
     if (app === "counter") {
       return this.fetchDynamicWorker(req, {
         type: "stateful",
@@ -144,6 +175,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
+                <li><a href="${appUrl("tanstack")}">tanstack</a> (TanStack Start todos: SQLite Durable Object, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
                 <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor)</li>
               </ul>
