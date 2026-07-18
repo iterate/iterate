@@ -11,7 +11,9 @@ export function PosthogContextSync() {
   const project = useMemo(() => {
     let activeProject: RouteProject | null = null;
     for (const match of matches) {
-      const candidate = (match.context as { project?: unknown } | undefined)?.project;
+      const { context } = match;
+      if (typeof context !== "object" || context === null || !("project" in context)) continue;
+      const candidate = context.project;
       if (isRouteProject(candidate)) activeProject = candidate;
     }
     return activeProject;
@@ -48,10 +50,12 @@ export function PosthogContextSync() {
 
 function isRouteProject(value: unknown): value is RouteProject {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Partial<RouteProject>;
   return (
-    typeof candidate.id === "string" &&
-    typeof candidate.slug === "string" &&
-    (typeof candidate.organizationId === "string" || candidate.organizationId === null)
+    "id" in value &&
+    typeof value.id === "string" &&
+    "slug" in value &&
+    typeof value.slug === "string" &&
+    "organizationId" in value &&
+    (typeof value.organizationId === "string" || value.organizationId === null)
   );
 }

@@ -127,4 +127,42 @@ describe("shared PostHog initialization", () => {
 
     await vi.waitFor(() => expect(posthogReset).toHaveBeenCalledOnce());
   });
+
+  it("identifies unchanged group metadata again after resetting identity", async () => {
+    vi.stubEnv("SSR", false);
+    mockPosthog();
+    vi.stubGlobal("window", {
+      location: { origin: "https://os.iterate.com" },
+    });
+
+    const { initPosthog, resetPosthogIdentity, syncPosthogContext } =
+      await import("@iterate-com/ui/components/posthog");
+    const group = {
+      type: "project",
+      key: "prj_123",
+      properties: { id: "prj_123", slug: "difference-engine" },
+    };
+    initPosthog({ apiKey: "phc_test" });
+    syncPosthogContext({
+      eventProperties: { project_id: "prj_123" },
+      person: { distinctId: "usr_123", properties: {} },
+      groups: [group],
+    });
+    await vi.waitFor(() => expect(posthogGroup).toHaveBeenCalledOnce());
+
+    resetPosthogIdentity();
+    await vi.waitFor(() => expect(posthogReset).toHaveBeenCalledOnce());
+    syncPosthogContext({
+      eventProperties: { project_id: "prj_123" },
+      person: { distinctId: "usr_456", properties: {} },
+      groups: [group],
+    });
+
+    await vi.waitFor(() => expect(posthogGroup).toHaveBeenCalledTimes(2));
+    expect(posthogGroup.mock.calls[1]).toEqual([
+      "project",
+      "prj_123",
+      { id: "prj_123", slug: "difference-engine" },
+    ]);
+  });
 });

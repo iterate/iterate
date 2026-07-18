@@ -159,5 +159,6 @@ export function resetPosthogIdentity() {
 function resetPosthogClient(client: import("posthog-js").PostHog) {
   client.reset();
   registeredContextPropertyNames.clear();
+  identifiedGroupMetadata.clear();
   if (posthogAppStage) client.register({ $environment: posthogAppStage });
 }
