@@ -6813,6 +6813,11 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
 };
 
 const PROCESSOR_WAIT_REACQUIRE_MS = 10_000;
+// A rolling Worker deployment can replace two successive host incarnations
+// before Durable Object placement converges. Processor facade calls are
+// read/wait operations, so re-dialing a third incarnation is safe; the public
+// wait deadline still bounds the whole operation.
+const PROCESSOR_LIFECYCLE_MAX_ATTEMPTS = 3;
 
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
@@ -6887,7 +6892,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
           )
         : settleByDeadline(promise, expiresAt, Date.now);
 
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= PROCESSOR_LIFECYCLE_MAX_ATTEMPTS; attempt += 1) {
       let processor: StreamProcessorRpc<State> | undefined;
       const acquisition = this.#processor();
       const acquired = await settle(acquisition);
@@ -6901,8 +6906,14 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
         return acquired;
       }
       if (acquired.status === "rejected") {
-        if (attempt === 1 && isDurableObjectLifecycleError(acquired.error)) {
-          console.info("processor relay retrying after Durable Object lifecycle reset");
+        if (
+          attempt < PROCESSOR_LIFECYCLE_MAX_ATTEMPTS &&
+          isDurableObjectLifecycleError(acquired.error)
+        ) {
+          console.info("processor relay retrying after Durable Object lifecycle reset", {
+            attempt,
+            maxAttempts: PROCESSOR_LIFECYCLE_MAX_ATTEMPTS,
+          });
           continue;
         }
         return acquired;
@@ -6925,14 +6936,17 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       }
       if (
         outcome.status === "rejected" &&
-        attempt === 1 &&
+        attempt < PROCESSOR_LIFECYCLE_MAX_ATTEMPTS &&
         isDurableObjectLifecycleError(outcome.error)
       ) {
         // Deploys and evictions may reset a processor-hosting DO while its
         // facade property or method call is in flight. A fresh host stub
-        // reaches the replacement incarnation; retry exactly once. App errors
-        // are never retried, and a second lifecycle failure propagates.
-        console.info("processor relay retrying after Durable Object lifecycle reset");
+        // reaches the replacement incarnation. App errors are never retried;
+        // repeated lifecycle resets are bounded by the constant above.
+        console.info("processor relay retrying after Durable Object lifecycle reset", {
+          attempt,
+          maxAttempts: PROCESSOR_LIFECYCLE_MAX_ATTEMPTS,
+        });
         continue;
       }
       return outcome;

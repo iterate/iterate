@@ -1,21 +1,20 @@
 // Durable stream-topology announcements.
 //
-// A non-root stream owns one internal push subscription. Its one journaled
-// request is delivered through the ordinary stream spine to the project root,
-// which idempotently appends `child-stream-created` to every ancestor. The
-// source cursor advances only after every append resolves, so an eviction or
-// transient ancestor failure is a redelivery, not a silently orphaned stream.
+// A non-root stream owns one derived platform push subscription. Its existing
+// `stream/created` birth fact is the trigger delivered through the ordinary
+// stream spine to the project root, which idempotently appends
+// `child-stream-created` to every ancestor. The source cursor advances only
+// after every append resolves, so an eviction or transient ancestor failure is
+// a redelivery, not a silently orphaned stream. Deriving the obligation from
+// the birth fact keeps platform plumbing out of the public stream log.
 
 import type { StreamEventInput, StreamPushEventBatch } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "./core-processor-contract.ts";
 
 export const ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY = "platform:ancestor-announcements";
-export const ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE =
-  "events.iterate.com/internal/stream-ancestor-announcement-requested";
 
-/** True for facts that can configure, advance, park, or trigger the platform obligation. */
+/** True for facts that can configure, advance, or park the platform obligation. */
 export function isAncestorAnnouncementPlatformEvent(event: StreamEventInput): boolean {
-  if (event.type === ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE) return true;
   switch (event.type) {
     case "events.iterate.com/stream/subscription-configured":
     case "events.iterate.com/stream/subscription-removed":
@@ -43,22 +42,9 @@ export function ancestorAnnouncementSubscriptionPayload(): SubscriptionConfigure
       expression: ["streams", ["get", "/"], "acceptAncestorAnnouncements"],
     },
     description: "Maintain this stream's child-stream-created facts on every ancestor.",
-    selector: { eventTypes: [ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE] },
+    selector: { eventTypes: ["events.iterate.com/stream/created"] },
+    deliver: "all",
   };
-}
-
-/** Install/repair the durable delivery and put one item after its initial cursor. */
-export function ancestorAnnouncementSetupEvents(): [StreamEventInput, StreamEventInput] {
-  return [
-    {
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: ancestorAnnouncementSubscriptionPayload(),
-    },
-    {
-      type: ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE,
-      payload: {},
-    },
-  ];
 }
 
 /** Validate one internal delivery and construct its idempotent ancestor appends. */
@@ -71,25 +57,22 @@ export function buildAncestorAnnouncementAppends(
   if (batch.configuredEvent.path !== batch.path) {
     throw new Error("ancestor-announcement delivery coordinates do not match its config event");
   }
-  const configuredPayload = batch.configuredEvent.payload as
-    | { subscriptionKey?: unknown }
-    | undefined;
-  if (configuredPayload?.subscriptionKey !== ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY) {
-    throw new Error("ancestor-announcement delivery has the wrong configured payload");
+  if (batch.configuredEvent.type !== "events.iterate.com/stream/created") {
+    throw new Error("ancestor-announcement delivery was not derived from stream creation");
   }
 
-  const requests = batch.events.filter(
-    (event) => event.type === ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE,
-  );
-  if (requests.length === 0) {
-    throw new Error("ancestor-announcement delivery contains no request fact");
+  const births = batch.events.filter((event) => event.type === "events.iterate.com/stream/created");
+  if (births.length !== 1) {
+    throw new Error("ancestor-announcement delivery must contain exactly one stream birth fact");
   }
   if (
-    requests.some(
-      (event) => event.path !== batch.path || event.source?.crossPostedFrom !== undefined,
-    )
+    births.some((event) => event.path !== batch.path || event.source?.crossPostedFrom !== undefined)
   ) {
-    throw new Error("ancestor-announcement request must be a first-hand fact on its source stream");
+    throw new Error("ancestor-announcement birth must be a first-hand fact on its source stream");
+  }
+  const birthPayload = births[0]!.payload as { path?: unknown; projectId?: unknown } | undefined;
+  if (birthPayload?.path !== batch.path || birthPayload.projectId !== batch.projectId) {
+    throw new Error("ancestor-announcement birth coordinates do not match its delivery");
   }
 
   return ancestorPaths(batch.path).map((path) => ({

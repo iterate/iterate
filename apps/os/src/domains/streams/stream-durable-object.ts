@@ -21,7 +21,6 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import {
   ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY,
-  ancestorAnnouncementSetupEvents,
   ancestorAnnouncementSubscriptionPayload,
   buildAncestorAnnouncementAppends,
 } from "./ancestor-announcements.ts";
@@ -35,6 +34,7 @@ import {
 import {
   StreamSubscribers,
   type ConnectionRuntimeState,
+  type DurableSubscription,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
@@ -136,6 +136,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
+      platformSubscriptions: (state) => this.#platformSubscriptions(state),
       store: this.#subscriptionCursorStore,
       dial: createSubscriberDial({
         projectId: this.name.projectId,
@@ -221,10 +222,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
-    // This is also a deploy-time migration for streams born before durable
-    // ancestor delivery existed. It installs one journaled obligation after
-    // the subscription cursor, rather than relying on a droppable closure.
-    this.#ensureAncestorAnnouncementSubscription();
     this.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: crypto.randomUUID() },
@@ -684,6 +681,13 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       case "events.iterate.com/stream/subscription-configured": {
         const event = parse("events.iterate.com/stream/subscription-configured", args.event);
+        // State v15 derives this platform obligation from stream/created. A
+        // short-lived preview build journaled it as an ordinary config event;
+        // ignore that reserved key on replay so platform plumbing cannot
+        // become user-visible desired state.
+        if (event.payload.subscriptionKey === ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
         return this.#reduceCircuitBreaker({
           event: args.event,
           state: {
@@ -715,6 +719,15 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       case "events.iterate.com/stream/subscription-parked": {
         const event = parse("events.iterate.com/stream/subscription-parked", args.event);
+        if (event.payload.subscriptionKey === ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY) {
+          return this.#reduceCircuitBreaker({
+            event: args.event,
+            state: {
+              ...next,
+              ancestorAnnouncementParkedAtOffset: event.payload.atOffset,
+            },
+          });
+        }
         const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
         // A parked fact for a since-removed subscription folds to nothing.
         if (existing === undefined) {
@@ -737,6 +750,12 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       case "events.iterate.com/stream/subscription-resumed": {
         const event = parse("events.iterate.com/stream/subscription-resumed", args.event);
+        if (event.payload.subscriptionKey === ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY) {
+          return this.#reduceCircuitBreaker({
+            event: args.event,
+            state: { ...next, ancestorAnnouncementParkedAtOffset: null },
+          });
+        }
         const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
         if (existing === undefined) {
           return this.#reduceCircuitBreaker({ event: args.event, state: next });
@@ -834,11 +853,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
         return;
       }
-      case "events.iterate.com/stream/resumed":
-        // A paused pre-migration stream could not install its internal config
-        // in the constructor. Repair it in the first unpaused commit turn.
-        this.#ensureAncestorAnnouncementSubscription();
-        return;
       default:
         return;
     }
@@ -890,27 +904,30 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Install, repair, or explicitly resume the stream's durable topology obligation. */
-  #ensureAncestorAnnouncementSubscription(): void {
-    const state = this.#coreProcessorState;
-    if (state.path === undefined || state.path === "/" || state.paused) return;
-
-    const expected = ancestorAnnouncementSubscriptionPayload();
-    const existing = state.configuredSubscribersByKey[ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY];
+  /** Platform delivery derived from the immutable birth fact, with no extra log rows. */
+  #platformSubscriptions(state: CoreProcessorState): Record<string, DurableSubscription> {
     if (
-      existing !== undefined &&
-      jsonValuesEqual(existing.latestConfiguredEvent.payload, expected)
+      state.path === undefined ||
+      state.path === "/" ||
+      state.projectId === undefined ||
+      state.createdAt === undefined
     ) {
-      if (existing.parkedAtOffset !== undefined) {
-        this.append({
-          type: "events.iterate.com/stream/subscription-resumed",
-          payload: { subscriptionKey: ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY },
-        });
-      }
-      return;
+      return {};
     }
-
-    this.append(...ancestorAnnouncementSetupEvents());
+    return {
+      [ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY]: {
+        config: ancestorAnnouncementSubscriptionPayload(),
+        configuredEvent: {
+          type: "events.iterate.com/stream/created",
+          offset: 1,
+          createdAt: state.createdAt,
+          payload: { projectId: state.projectId, path: state.path },
+        },
+        ...(state.ancestorAnnouncementParkedAtOffset === null
+          ? {}
+          : { parkedAtOffset: state.ancestorAnnouncementParkedAtOffset }),
+      },
+    };
   }
 
   /**
@@ -996,8 +1013,23 @@ export class StreamDurableObject extends DurableObject<Env> {
       // so every survivor gets an immediate fresh try under the new fold.
       reconcileSubscriptionCursorRows(
         this.#subscriptionCursorStore,
-        new Set(Object.keys(state.configuredSubscribersByKey)),
+        new Set([
+          ...Object.keys(state.configuredSubscribersByKey),
+          ...Object.keys(this.#platformSubscriptions(state)),
+        ]),
       );
+      // v15 introduces this derived obligation. Replaying from the immutable
+      // birth is idempotent and also repairs any cursor left by the temporary
+      // preview implementation that used the same reserved key. Later state
+      // migrations preserve its progress instead of replaying every birth.
+      const predatesDerivedAncestorDelivery =
+        typeof storedVersion !== "number" || storedVersion < 15;
+      if (
+        predatesDerivedAncestorDelivery &&
+        this.#subscriptionCursorStore.get(ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY)
+      ) {
+        this.#subscriptionCursorStore.setCursor(ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY, 0);
+      }
     }
 
     if (!storedStateIsCurrent || state.maxOffset !== storedState.maxOffset) {
@@ -1139,7 +1171,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
-    if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
+    if (
+      this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined ||
+      this.#platformSubscriptions(this.#coreProcessorState)[subscriptionKey] !== undefined
+    ) {
       throw new Error(`subscriptionKey "${subscriptionKey}" is reserved for a durable subscriber`);
     }
     if (

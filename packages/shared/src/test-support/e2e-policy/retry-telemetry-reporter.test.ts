@@ -60,7 +60,7 @@ test("records and prints the failed-attempt error retained after a passing retry
       },
     ]);
     expect(log).toHaveBeenCalledWith(
-      "[retry-telemetry] 1 test(s) needed retries: eventually passes (x1; first failure: expected first attempt to pass)",
+      "[retry-telemetry] 1 test(s) needed retries: eventually passes (x1; first failure: expected first attempt to pass; location: at example.ts:12:3)",
     );
   } finally {
     rmSync(tempDirectory, { recursive: true, force: true });

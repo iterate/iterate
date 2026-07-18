@@ -1,32 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamPushEventBatch } from "iterate/processors";
 import {
-  ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE,
   ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY,
-  ancestorAnnouncementSetupEvents,
+  ancestorAnnouncementSubscriptionPayload,
   ancestorPaths,
   buildAncestorAnnouncementAppends,
   isAncestorAnnouncementPlatformEvent,
 } from "./ancestor-announcements.ts";
 
 describe("durable ancestor announcements", () => {
-  it("installs a push obligation with its request after the initial cursor", () => {
-    const [configured, requested] = ancestorAnnouncementSetupEvents();
-
-    expect(configured).toMatchObject({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        subscriptionKey: ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY,
-        delivery: {
-          mode: "push",
-          expression: ["streams", ["get", "/"], "acceptAncestorAnnouncements"],
-        },
-        selector: { eventTypes: [ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE] },
+  it("derives a replay-all push obligation from the existing stream birth", () => {
+    expect(ancestorAnnouncementSubscriptionPayload()).toEqual({
+      subscriptionKey: ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY,
+      delivery: {
+        mode: "push",
+        expression: ["streams", ["get", "/"], "acceptAncestorAnnouncements"],
       },
-    });
-    expect(requested).toEqual({
-      type: ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE,
-      payload: {},
+      description: "Maintain this stream's child-stream-created facts on every ancestor.",
+      selector: { eventTypes: ["events.iterate.com/stream/created"] },
+      deliver: "all",
     });
   });
 
@@ -50,9 +42,12 @@ describe("durable ancestor announcements", () => {
   });
 
   it("identifies platform-owned trigger and subscription lifecycle facts", () => {
-    const [configured, requested] = ancestorAnnouncementSetupEvents();
-    expect(isAncestorAnnouncementPlatformEvent(configured)).toBe(true);
-    expect(isAncestorAnnouncementPlatformEvent(requested)).toBe(true);
+    expect(
+      isAncestorAnnouncementPlatformEvent({
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: ancestorAnnouncementSubscriptionPayload(),
+      }),
+    ).toBe(true);
     expect(
       isAncestorAnnouncementPlatformEvent({
         type: "events.iterate.com/stream/subscription-cursor-set",
@@ -93,29 +88,27 @@ function announcement(path: string, childPath: string) {
 }
 
 function announcementBatch(path: string): StreamPushEventBatch {
-  const requested: StreamEvent = {
-    type: ANCESTOR_ANNOUNCEMENT_REQUESTED_EVENT_TYPE,
-    payload: {},
+  const created: StreamEvent = {
+    type: "events.iterate.com/stream/created",
+    payload: { projectId: "prj_test", path },
     path,
-    offset: 4,
+    offset: 1,
     createdAt: "2026-07-18T00:00:00.000Z",
   };
   return {
     projectId: "prj_test",
     path,
-    events: [requested],
+    events: [created],
     streamMaxOffset: 4,
     subscriptionKey: ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY,
-    deliveryId: `${ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY}:4-4`,
+    deliveryId: `${ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY}:1-4`,
     attempt: 1,
     configuredEvent: {
-      type: "events.iterate.com/stream/subscription-configured",
-      offset: 3,
+      type: "events.iterate.com/stream/created",
+      offset: 1,
       createdAt: "2026-07-18T00:00:00.000Z",
       path,
-      payload: {
-        subscriptionKey: ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY,
-      },
+      payload: { projectId: "prj_test", path },
     },
   };
 }

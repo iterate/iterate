@@ -97,9 +97,12 @@ export class RetryTelemetryReporter {
       if (retried.length > 0) {
         const details = retried
           .map((record) => {
-            const firstFailure = record.errors[0]?.message;
+            const firstError = record.errors[0];
+            const firstFailure = firstError?.message;
             const cause = firstFailure ? `; first failure: ${oneLine(firstFailure)}` : "";
-            return `${record.fullName} (x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"}${cause})`;
+            const location = firstStackLocation(firstError?.stack);
+            const source = location ? `; location: ${location}` : "";
+            return `${record.fullName} (x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"}${cause}${source})`;
           })
           .join("; ");
         console.log(`[retry-telemetry] ${retried.length} test(s) needed retries: ${details}`);
@@ -127,4 +130,12 @@ function toRetriedTestError(error: unknown): RetriedTestError {
 function oneLine(message: string): string {
   const compact = message.replace(/\s+/g, " ").trim();
   return compact.length > 400 ? `${compact.slice(0, 397)}...` : compact;
+}
+
+function firstStackLocation(stack: string | undefined): string | undefined {
+  const location = stack
+    ?.split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("at "));
+  return location === undefined ? undefined : oneLine(location);
 }

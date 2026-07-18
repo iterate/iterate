@@ -63,7 +63,10 @@ import { EventSelector } from "./event-selector.ts";
 //      Live ephemeral consumers are runtime state (the in-memory connection
 //      table); dead ones used to linger here forever when their disconnect
 //      fact was lost to an eviction or deploy rollover.
-export const CORE_STATE_VERSION = 14;
+// - 15: the platform ancestor-announcement subscription is derived from the
+//      existing stream birth instead of adding plumbing events to the public
+//      log; its rare parked transition is retained alongside public config.
+export const CORE_STATE_VERSION = 15;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -299,6 +302,8 @@ export const CoreProcessorContract = defineProcessorContract({
     eventCount: z.number().int().min(0).default(0),
     maxOffset: z.number().int().min(0).default(0),
     childPaths: z.array(z.string().trim().min(1)).default([]),
+    /** Parked cursor for the platform-owned ancestor-announcement obligation. */
+    ancestorAnnouncementParkedAtOffset: z.number().int().min(0).nullable().default(null),
     paused: z.boolean().default(false),
     pauseReason: z.string().nullable().default(null),
     circuitBreaker: z

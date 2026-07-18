@@ -544,6 +544,42 @@ describe("ProcessorRelayRpcTarget", () => {
     }
   });
 
+  it("re-dials through two consecutive deployment resets", async () => {
+    let acquisitions = 0;
+    const lifecycleReset = Object.assign(
+      new Error("Durable Object reset because its code was updated."),
+      { durableObjectReset: true },
+    );
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        const acquisition = acquisitions;
+        return Promise.resolve({
+          [Symbol.dispose]: vi.fn(),
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => {
+            if (acquisition <= 2) throw lifecycleReset;
+            return { offset: 2, state: { converged: true } };
+          },
+          waitUntilProcessed: async () => undefined,
+        });
+      },
+    });
+
+    await expect(relay.snapshot()).resolves.toEqual({
+      offset: 2,
+      state: { converged: true },
+    });
+    expect(acquisitions).toBe(3);
+  });
+
   it("re-dials once when a deploy resets the host during facade acquisition", async () => {
     let acquisitions = 0;
     const processor = {

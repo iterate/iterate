@@ -148,11 +148,12 @@ export type StreamPushEventBatch = {
   /** 1-based consecutive attempt count for this batch. */
   attempt: number;
   /**
-   * The committed `subscription-configured` event this delivery serves — so a
-   * receiver can configure itself from committed stream state without a
-   * side-channel registry (which stream, which selector, whose params).
-   * Narrowed to the fields the fold stores; an honest shape instead of a
-   * `StreamEvent` cast that pretends metadata/source survived.
+   * The committed trigger fact this delivery serves. This is normally the
+   * `subscription-configured` event, so a receiver can self-configure from
+   * committed stream state; platform-derived obligations may instead name the
+   * existing fact they derive from. Narrowed to the fields the fold stores;
+   * an honest shape instead of a `StreamEvent` cast that pretends
+   * metadata/source survived.
    */
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
@@ -228,7 +229,7 @@ export type StreamWebhookDelivery = {
   deliveryId: string;
   /** 1-based consecutive attempt count for this event. */
   attempt: number;
-  /** The committed `subscription-configured` event this delivery serves (see {@link StreamPushEventBatch}). */
+  /** The committed trigger fact this delivery serves (see {@link StreamPushEventBatch}). */
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 

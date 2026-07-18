@@ -22,7 +22,11 @@ import type {
 import { CoreProcessorContract } from "./core-processor-contract.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
-import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
+import {
+  StreamSubscribers,
+  type DurableSubscription,
+  type SubscriberDial,
+} from "./stream-subscribers.ts";
 import {
   MAX_DELIVERY_ATTEMPTS,
   SKIP_CONFIRM_ATTEMPTS,
@@ -156,6 +160,7 @@ function makeHarness() {
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
+  const platformConfigured: Record<string, DurableSubscription> = {};
 
   const pokes: StreamSubscriberWakeRequest[] = [];
   const pushes: StreamPushEventBatch[] = [];
@@ -218,6 +223,7 @@ function makeHarness() {
           maxOffset: assignedMaxOffset,
           configuredSubscribersByKey: configured,
         }),
+      platformSubscriptions: () => platformConfigured,
       store,
       dial,
       appendFact: (event) => {
@@ -228,6 +234,8 @@ function makeHarness() {
           const payload = event.payload as { subscriptionKey: string; atOffset: number };
           const entry = configured[payload.subscriptionKey];
           if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
+          const platformEntry = platformConfigured[payload.subscriptionKey];
+          if (platformEntry !== undefined) platformEntry.parkedAtOffset = payload.atOffset;
         }
       },
       recordEgress: (count, bytes) => egress.push({ count, bytes }),
@@ -260,6 +268,7 @@ function makeHarness() {
     webhooks,
     dialImpl,
     configured,
+    platformConfigured,
     log,
     settle,
     append: (...events: StreamEvent[]) => {
@@ -354,6 +363,46 @@ function makeSink() {
 }
 
 describe("StreamSubscribers", () => {
+  it("derived platform push uses its committed birth trigger without public config", async () => {
+    const h = makeHarness();
+    const key = "platform:ancestor-announcements";
+    h.platformConfigured[key] = {
+      config: {
+        subscriptionKey: key,
+        delivery: { mode: "push", expression: ["streams", ["get", "/"], "accept"] },
+        selector: { eventTypes: ["events.iterate.com/stream/created"] },
+        deliver: "all",
+      },
+      configuredEvent: {
+        type: "events.iterate.com/stream/created",
+        offset: 1,
+        createdAt: new Date(1).toISOString(),
+        payload: { projectId: "p1", path: "/t" },
+      },
+    };
+    h.append(
+      evt(1, "events.iterate.com/stream/created", { projectId: "p1", path: "/t" }),
+      evt(2, "events.iterate.com/stream/woken"),
+    );
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.configured).toEqual({});
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]).toMatchObject({
+      subscriptionKey: key,
+      events: [{ type: "events.iterate.com/stream/created", offset: 1 }],
+      configuredEvent: {
+        type: "events.iterate.com/stream/created",
+        offset: 1,
+        path: "/t",
+        payload: { projectId: "p1", path: "/t" },
+      },
+    });
+    expect(h.row(key)).toMatchObject({ ackedOffset: 2, attempt: 0 });
+  });
+
   it("a. push happy path: drains to the tail, acks, and resumes from the cursor", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);

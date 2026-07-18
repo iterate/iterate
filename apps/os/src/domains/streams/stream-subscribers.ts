@@ -221,6 +221,19 @@ export type SubscriberDial = {
   webhook(url: string, delivery: StreamWebhookDelivery): Promise<void>;
 };
 
+/**
+ * One durable delivery obligation after public and platform-derived
+ * subscriptions have been combined. `configuredEvent` is the committed fact
+ * the obligation derives from: normally `subscription-configured`; platform
+ * topology may derive one from an existing birth fact without polluting the
+ * public log with plumbing.
+ */
+export type DurableSubscription = {
+  config: SubscriptionConfiguredPayload;
+  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "payload">;
+  parkedAtOffset?: number;
+};
+
 /** The policy/storage seams the owning Stream Durable Object provides. */
 type StreamSubscribersHooks = {
   /**
@@ -231,6 +244,8 @@ type StreamSubscribersHooks = {
   readEvents(args: { afterOffset: number; limit: number }): SizedStreamEvent[];
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
+  /** Extra platform obligations deterministically derived from committed core state. */
+  platformSubscriptions?(state: CoreProcessorState): Record<string, DurableSubscription>;
   /** The spine's durable cursor rows (SQLite next to the event log). */
   store: SubscriptionCursorStore;
   /** Transport quarantine (see {@link SubscriberDial}). */
@@ -306,6 +321,20 @@ export class StreamSubscribers {
   constructor(args: { idleTeardownMs: number; hooks: StreamSubscribersHooks }) {
     this.#hooks = args.hooks;
     this.#idleTeardownMs = args.idleTeardownMs;
+  }
+
+  #durableSubscriptions(state = this.#hooks.coreState()): Record<string, DurableSubscription> {
+    const configured = Object.fromEntries(
+      Object.entries(state.configuredSubscribersByKey).map(([subscriptionKey, entry]) => [
+        subscriptionKey,
+        {
+          config: entry.latestConfiguredEvent.payload,
+          configuredEvent: entry.latestConfiguredEvent,
+          ...(entry.parkedAtOffset === undefined ? {} : { parkedAtOffset: entry.parkedAtOffset }),
+        },
+      ]),
+    );
+    return { ...configured, ...this.#hooks.platformSubscriptions?.(state) };
   }
 
   // ===========================================================================
@@ -398,9 +427,9 @@ export class StreamSubscribers {
     const state = this.#hooks.coreState();
     const now = this.#hooks.now();
 
-    for (const [subscriptionKey, entry] of Object.entries(state.configuredSubscribersByKey)) {
-      const config = entry.latestConfiguredEvent.payload;
-      const configOffset = entry.latestConfiguredEvent.offset;
+    for (const [subscriptionKey, entry] of Object.entries(this.#durableSubscriptions(state))) {
+      const config = entry.config;
+      const configOffset = entry.configuredEvent.offset;
 
       // The per-mode initial-cursor policy lives in ONE place
       // (subscriber-math.initialCursorFor) so this and the config side effect
@@ -465,11 +494,11 @@ export class StreamSubscribers {
         const response = await withDeliveryTimeout(pokePromise, `poke ${subscriptionKey}`, {
           onLateResolve: (late) => late.sink[Symbol.dispose](),
         });
-        const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+        const current = this.#durableSubscriptions()[subscriptionKey];
         if (
           current === undefined ||
-          current.latestConfiguredEvent.offset !== configOffset ||
-          current.latestConfiguredEvent.payload.delivery.mode !== "wake"
+          current.configuredEvent.offset !== configOffset ||
+          current.config.delivery.mode !== "wake"
         ) {
           response.sink[Symbol.dispose]();
           // The fence dropped a stale poke, but the CURRENT config (if any) is
@@ -546,9 +575,9 @@ export class StreamSubscribers {
       try {
         for (;;) {
           const state = this.#hooks.coreState();
-          const entry = state.configuredSubscribersByKey[subscriptionKey];
+          const entry = this.#durableSubscriptions(state)[subscriptionKey];
           if (entry === undefined || entry.parkedAtOffset !== undefined) return;
-          const config = entry.latestConfiguredEvent.payload;
+          const config = entry.config;
           if (config.delivery.mode === "wake") return;
           const row = this.#hooks.store.get(subscriptionKey);
           if (row === undefined) return;
@@ -607,11 +636,11 @@ export class StreamSubscribers {
 
           if (state.projectId === undefined || state.path === undefined) return;
           const configuredEvent = {
-            type: entry.latestConfiguredEvent.type,
-            offset: entry.latestConfiguredEvent.offset,
-            createdAt: entry.latestConfiguredEvent.createdAt,
+            type: entry.configuredEvent.type,
+            offset: entry.configuredEvent.offset,
+            createdAt: entry.configuredEvent.createdAt,
             path: state.path,
-            payload: entry.latestConfiguredEvent.payload,
+            payload: entry.configuredEvent.payload,
           };
 
           const deliveredBytes = matched.reduce(
@@ -862,10 +891,7 @@ export class StreamSubscribers {
     // key derived from the cursor would swallow it and the subscription would
     // retry forever without ever turning red again). Duplicate suppression
     // comes from the fold: while parked, the pump never runs this path.
-    if (
-      this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey]?.parkedAtOffset !==
-      undefined
-    ) {
+    if (this.#durableSubscriptions()[subscriptionKey]?.parkedAtOffset !== undefined) {
       return;
     }
     const row = this.#hooks.store.get(subscriptionKey);
@@ -893,12 +919,12 @@ export class StreamSubscribers {
     // not drive the alarm, and a row whose retry is IN FLIGHT this very turn
     // still carries its (past) due time until the attempt settles — re-arming
     // from either spins the alarm at zero delay.
-    const state = this.#hooks.coreState();
+    const subscriptions = this.#durableSubscriptions();
     let next: number | null = null;
     for (const row of this.#hooks.store.list()) {
       if (row.nextAttemptAt === null) continue;
       const key = row.subscriptionKey;
-      if (state.configuredSubscribersByKey[key]?.parkedAtOffset !== undefined) continue;
+      if (subscriptions[key]?.parkedAtOffset !== undefined) continue;
       if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
@@ -1315,7 +1341,7 @@ export class StreamSubscribers {
     const state = this.#hooks.coreState();
     const rows = new Map(this.#hooks.store.list().map((row) => [row.subscriptionKey, row]));
     return Object.fromEntries(
-      Object.entries(state.configuredSubscribersByKey).map(([subscriptionKey, entry]) => {
+      Object.entries(this.#durableSubscriptions(state)).map(([subscriptionKey, entry]) => {
         const row = rows.get(subscriptionKey);
         const ackedOffset = row?.ackedOffset ?? 0;
         const metrics = this.#subscriptionMetrics.get(subscriptionKey);
@@ -1324,7 +1350,7 @@ export class StreamSubscribers {
         return [
           subscriptionKey,
           {
-            mode: entry.latestConfiguredEvent.payload.delivery.mode,
+            mode: entry.config.delivery.mode,
             ackedOffset,
             lag: Math.max(0, state.maxOffset - ackedOffset),
             attempt: row?.attempt ?? 0,

@@ -167,21 +167,48 @@ defect: its first child stream and probe event persisted, but neither root nor
 parent ever received `child-stream-created`; the second attempt happened to
 land both. The old implementation launched those must-complete appends in a
 droppable `waitUntil` closure and had no durable obligation or guaranteed next
-wake. It is being replaced with one internal push subscription per non-root
-stream: a journaled request remains behind the source-owned cursor until the
-project root concurrently appends the idempotent fact to every ancestor. A
-partial fan-out or isolate loss therefore redelivers instead of orphaning the
-stream. Its trigger and subscription lifecycle are platform-owned at the
-public stream boundary, so user configuration cannot silently replace, seek,
-park, or remove the obligation.
+wake. The replacement uses one derived internal push subscription per non-root
+stream: the existing immutable `stream/created` fact remains behind a
+source-owned cursor until the project root concurrently appends the idempotent
+fact to every ancestor. A partial fan-out or isolate loss therefore redelivers
+instead of orphaning the stream. Its cursor and lifecycle are platform-owned at
+the public stream boundary, so user configuration cannot silently replace,
+seek, park, or remove the obligation; deriving it adds no plumbing facts to the
+public log.
 
 The other three first-attempt causes cannot be honestly inferred from the old
 artifact: the custom Vitest reporter recorded only test names and retry counts,
 even though Vitest 4.1.8 retains the failed-attempt errors after a retry passes.
-Experiment 9 adds those messages/stacks to JSON and the lane log, deploys the
-durable announcement fix, and deliberately keeps the high-concurrency shape
-for one diagnostic run. The result will decide whether twelve workers remain;
-blindly keeping them is not justified by an 8–9s gain and four hidden retries.
+Experiment 9 added those messages/stacks, deployed the first
+durable-announcement implementation, and deliberately kept the high-concurrency
+shape. It failed in **4m37s**
+([Depot job `vcnz94w71m`](https://depot.dev/orgs/0p91s0lz49/workflows/zjm1rk5d9p?job=vcnz94w71m)),
+but not because the preview was overloaded. Every app deployed in 7.0–68.3s;
+the implementation had appended an internal subscription config and trigger to
+every non-root stream, shifting the public log by two offsets. That broke 27
+tests deterministically: streams-example ran for 188.2s and failed 19 tests,
+while OS ran for 90.2s and failed three. There was no project-create rejection,
+capacity error, or concurrency-correlated transport failure.
+
+The final announcement design derives the push config and its trigger from the
+already-committed birth fact. Focused tests prove that the public configured
+subscription map stays empty, the receiver gets exactly the first-hand birth,
+and the durable cursor acknowledges through the later `stream/woken` fact. It
+therefore keeps the retry/park/alarm guarantees without changing the documented
+`stream/created` → `stream/woken` standalone contract.
+
+Experiment 9 also exposed two absorbed retries. The AI Gateway cache test had
+proved `cacheStatus: HIT` and then compared an eventual greeting that could
+come from a later project-specific tool turn; it now compares the byte-identical
+first provider response that the cache actually owns. The root-workspace retry
+was not a workspace operation or project-capacity failure: its first attempt
+created project `prj_234a8268aeb34a0e924eb961b212dc20`, then died during
+project readiness before issuing any workspace call. Cloudflare logged two
+successive processor-relay lifecycle resets at 09:19:37.040Z and 09:19:45.998Z
+while the deployment converged. The read-only relay tolerated only one. It now
+allows three total facade acquisitions under the same public deadline, with
+application failures still never retried; a regression test exercises two
+consecutive lifecycle resets before success.
 
 That run also exposed an independent resource leak in slot handover. Reset took
 131.3s and deleted only 100 AI Search instances before its 90s deadline. The
@@ -349,8 +376,11 @@ observable.
 | Counter click can be torn down before its fire-and-forget fetch leaves the browser.         | Confirmed / pending preview | Experiment 4 had a successful page and WebSocket but no increment POST; the failure artifact showed count 0, an enabled button, and no progress UI when the 1ms guard fired.                           | Keep `incrementing…` visible until the WebSocket repaint; surface fetch/socket failure as product error UI.                      |
 | Agent-script chat reflection is ordered relative to script settlement.                      | Refuted / fixed             | Experiment 7's first attempt settled at offset 28 and reflected the attached chat message at offset 30; the test read between them. Both service paths otherwise succeeded.                            | Await both durable events, then inspect history. Never rely on independent event ordering or absorb the race in retry.           |
 | Twelve Vitest workers are required to meet the target.                                      | Unproven / weak benefit     | Experiment 8 cut Vitest about 9s (114s → 105s), but total work rose 864 → 934 test-seconds and four tests retried. The run had no project-create or preview-capacity rejection.                        | Keep twelve for one instrumented diagnosis, then choose concurrency from clean repeated runs rather than retry-hidden wall time. |
-| Fire-and-forget ancestor appends eventually heal by themselves.                             | Refuted / fixed locally     | Experiment 8's first child/probe persisted permanently without either ancestor fact. The old closure had neither a cursor nor a guaranteed future wake.                                                | Deliver one journaled request through the durable push spine; ack only after idempotent concurrent fan-out to all ancestors.     |
-| Retry telemetry preserves the failed-attempt cause.                                         | Refuted / fixed locally     | The experiment-8 artifact named four retried tests but omitted their assertion errors, although Vitest's retained `result().errors` still contained them.                                              | Store error name/message/stack in retry JSON and print a bounded first-failure message in the lane log.                          |
+| Fire-and-forget ancestor appends eventually heal by themselves.                             | Refuted / fixed locally     | Experiment 8's first child/probe persisted permanently without either ancestor fact. The old closure had neither a cursor nor a guaranteed future wake.                                                | Derive a platform push from the immutable birth fact; ack only after idempotent concurrent fan-out to all ancestors.             |
+| Durable topology plumbing may consume public stream offsets.                                | Refuted / fixed locally     | Experiment 9's config+trigger implementation shifted every non-root stream by two and deterministically broke 27 contract assertions.                                                                  | Derive both config and trigger from `stream/created`; retain only the source-owned cursor row outside the public log.            |
+| The root-workspace retry was workspace or project-create overload.                          | Refuted                     | The first attempt never called a workspace operation. Project creation succeeded, then two deploy-rollover lifecycle resets crossed the relay while readiness bootstrapped.                            | Permit a bounded third read-only facade acquisition under the existing deadline; never retry application errors.                 |
+| The cache-hit greeting mismatch proved a bad AI Gateway replay.                             | Refuted / fixed locally     | The first request reported HIT; the assertion compared an eventual greeting that could be emitted by a later project-specific turn.                                                                    | Compare the cached first provider response body, not downstream agent behavior.                                                  |
+| Retry telemetry preserves the failed-attempt cause.                                         | Refuted / fixed locally     | The experiment-8 artifact named four retried tests but omitted their assertion errors, although Vitest's retained `result().errors` still contained them.                                              | Store name/message/stack in JSON and print bounded message plus first stack location in the lane log.                            |
 
 ## Immediate experiment order
 
@@ -388,12 +418,16 @@ observable.
    retries make the apparent gain unacceptable and exposed one permanent
    ancestor-announcement loss.**
 10. Put failed-attempt errors in retry telemetry and replace droppable ancestor
-    fan-out with a source-cursor-owned durable delivery. Re-run at the same
-    concurrency once to classify the sandbox, cross-post, and workspace
-    failures from their exact first-attempt assertions.
-11. Remove tests from the deployed lane where the asserted behavior is
+    fan-out with a source-cursor-owned durable delivery. **Experiment 9 was
+    diagnostic but red:** its first implementation consumed two public offsets;
+    it also exposed a false cache assertion and two consecutive deployment
+    resets during project readiness. No project-capacity error occurred.
+11. Deploy the zero-footprint derived delivery, exact cache proof, bounded
+    relay rollover handling, and console stack locations. Keep the same lane
+    concurrency so the result is comparable.
+12. Remove tests from the deployed lane where the asserted behavior is
     deterministic/local.
-12. Re-run until the whole check is under 3m repeatedly with zero retry telemetry
+13. Re-run until the whole check is under 3m repeatedly with zero retry telemetry
     and coherent post-run state.
 
 ## Cost and architecture watchpoints
@@ -407,11 +441,11 @@ observable.
   fails.
 - Fresh-project stress coverage should become a small named capacity test, not
   an emergent property of 200 unrelated tests.
-- Durable ancestor delivery adds one cursor/config row and one acknowledged
-  birth delivery per non-root stream. That is intentional persistent state in
-  exchange for eliminating an unobservable orphaning mode; the root still
-  fans all ancestor appends concurrently, and stable idempotency makes retries
-  cheap after partial success.
+- Durable ancestor delivery adds one cursor row and one acknowledged birth
+  delivery per non-root stream, but no public config or trigger facts. That is
+  intentional persistent state in exchange for eliminating an unobservable
+  orphaning mode; the root still fans all ancestor appends concurrently, and
+  stable idempotency makes retries cheap after partial success.
 - Keeping every behavioral assertion deployed magnifies Cloudflare project/DO,
   Artifacts, AI, and sandbox churn. Moving deterministic coverage local reduces
   both cost and platform-weather exposure without weakening the deployed
@@ -480,14 +514,27 @@ observable.
 - 2026-07-18: persisted stream state proved the first newborn-announcement
   attempt was permanently lost while the child/probe succeeded. The fix moves
   the must-complete fan-out onto the ordinary durable push spine, with one
-  source cursor, platform-owned lifecycle facts, and concurrent idempotent
-  ancestor appends. Retry telemetry now records Vitest's retained
-  failed-attempt errors so the remaining three retries can be diagnosed rather
-  than guessed.
-- Next: deploy those changes at the same diagnostic concurrency, use the exact
-  sandbox/cross-post/workspace first failures to fix or correctly model each,
-  then repeat sub-three-minute clean runs. PR comments mirror each experiment
-  and result rather than rewriting history here.
+  source cursor, platform-owned lifecycle, and concurrent idempotent ancestor
+  appends. Retry telemetry records Vitest's retained failed-attempt errors.
+- 2026-07-18: experiment 9 failed in 4m37s. Its first announcement design added
+  two public facts and deterministically shifted 27 offset/count assertions;
+  streams-example failed for 188.2s and OS for 90.2s. This was an implementation
+  defect, not preview overload, and no project-create/capacity failure occurred.
+- 2026-07-18: replaced those facts with a zero-footprint platform subscription
+  derived from `stream/created`. Focused tests prove exact birth delivery,
+  hidden config, and durable cursor advancement; the full 1,912-test OS unit
+  suite, shared suite, typechecks, lint, formatting, and Knip pass locally.
+- 2026-07-18: corrected the cache test to compare the cached provider response.
+  Cloudflare traces proved the workspace retry actually died during readiness
+  after project creation: two lifecycle resets crossed the relay nine seconds
+  apart. The relay now permits three bounded read-only attempts under the same
+  deadline and has a two-reset regression test. Console retry telemetry now
+  includes the first retained stack location because Depot-backed artifacts
+  are not accessible through the GitHub artifact endpoint.
+- Next: deploy these changes at the same diagnostic concurrency, fix every
+  remaining first-attempt failure, then start the 25-run clean sub-three-minute
+  proof and the separate 15+ simultaneous preview-slot churn campaign. PR
+  comments mirror each experiment and result rather than rewriting history here.
 
 <details>
 <summary>All 162 failed preview attempts</summary>
