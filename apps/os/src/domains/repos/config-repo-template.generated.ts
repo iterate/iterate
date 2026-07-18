@@ -395,9 +395,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"description\": \"Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports its runtime subpaths: the platform supplies those modules to every worker build, so the devDependency is only for typechecking and editor support after `npm install`.\",\n" +
       "  \"dependencies\": {\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"@tanstack/react-router\": \"1.170.15\",\n" +
-      "    \"react\": \"19.1.1\",\n" +
-      "    \"react-dom\": \"19.1.1\",\n" +
       "    \"zod\": \"4.3.6\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
@@ -408,144 +405,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "tanstack.tsx",
-    content:
-      "import {\n" +
-      "  createMemoryHistory,\n" +
-      "  createRootRoute,\n" +
-      "  createRoute,\n" +
-      "  createRouter,\n" +
-      "  Outlet,\n" +
-      "  RouterProvider,\n" +
-      "} from \"@tanstack/react-router\";\n" +
-      "import { renderToString } from \"react-dom/server\";\n" +
-      "import { IterateWorkerEntrypoint, type ProjectAuthActor } from \"iterate/sdk\";\n" +
-      "\n" +
-      "// A tiny server-rendered TanStack + React app behind project-member auth,\n" +
-      "// served at tanstack--<project>.<base>. Every request builds a router and\n" +
-      "// renders it to HTML in the worker — no client bundle, no hydration: the\n" +
-      "// worker build pipeline is npm + wrangler's bundler, so the full TanStack\n" +
-      "// Start toolchain (a Vite plugin) has nowhere to run. What this keeps from\n" +
-      "// Start is the shape: routes matched from the request path, an SSR document\n" +
-      "// per navigation, and a place hydration can later attach (see\n" +
-      "// tasks/tanstack-start-ssr-capnweb-bootstrap-ticket.md).\n" +
-      "//\n" +
-      "// Navigation is plain anchors and the routes close over their data instead of\n" +
-      "// using `Link`/`useRouteContext`: those APIs type against the one GLOBAL\n" +
-      "// TanStack `Register` (the OS dashboard's router, in the repo this template\n" +
-      "// typechecks inside), and without client-side routing `Link` renders an\n" +
-      "// anchor anyway.\n" +
-      "function buildRouter(input: { actor: ProjectAuthActor; pathname: string; projectId: string }) {\n" +
-      "  const rootRoute = createRootRoute({\n" +
-      "    component: () => (\n" +
-      "      <main>\n" +
-      "        <h1>TanStack on Iterate</h1>\n" +
-      "        <nav>\n" +
-      "          <a href=\"/\">home</a> · <a href=\"/about\">about</a>\n" +
-      "        </nav>\n" +
-      "        <Outlet />\n" +
-      "      </main>\n" +
-      "    ),\n" +
-      "  });\n" +
-      "  const indexRoute = createRoute({\n" +
-      "    getParentRoute: () => rootRoute,\n" +
-      "    path: \"/\",\n" +
-      "    component: () => (\n" +
-      "      <section>\n" +
-      "        <p>\n" +
-      "          Signed in as <strong>{input.actor.userId}</strong> on project{\" \"}\n" +
-      "          <code>{input.projectId}</code>.\n" +
-      "        </p>\n" +
-      "        <p>This page is React, routed by TanStack Router and rendered in your project worker.</p>\n" +
-      "      </section>\n" +
-      "    ),\n" +
-      "  });\n" +
-      "  const aboutRoute = createRoute({\n" +
-      "    getParentRoute: () => rootRoute,\n" +
-      "    path: \"/about\",\n" +
-      "    component: () => (\n" +
-      "      <section>\n" +
-      "        <p>\n" +
-      "          Server-side routing proof: this is a second route, matched from the request path and\n" +
-      "          rendered by the same router. Edit tanstack.tsx in the project repo to change it.\n" +
-      "        </p>\n" +
-      "      </section>\n" +
-      "    ),\n" +
-      "  });\n" +
-      "  return createRouter({\n" +
-      "    history: createMemoryHistory({ initialEntries: [input.pathname] }),\n" +
-      "    routeTree: rootRoute.addChildren([indexRoute, aboutRoute]),\n" +
-      "  });\n" +
-      "}\n" +
-      "\n" +
-      "// A project-member-only SSR app. The auth partial owns login/callback/logout\n" +
-      "// exactly as in InternalApp (worker.ts); a null result means this request is\n" +
-      "// a current project member, whose actor the page renders.\n" +
-      "export class TanstackApp extends IterateWorkerEntrypoint {\n" +
-      "  async fetch(request: Request): Promise<Response> {\n" +
-      "    using itx = await this.env.ITX.get();\n" +
-      "    const gate = itx.auth.get({ policy: \"project-member\" });\n" +
-      "    const authResponse = await gate.fetch(request);\n" +
-      "    if (authResponse) return authResponse;\n" +
-      "    const [actor, identity] = await Promise.all([\n" +
-      "      gate.authenticate(request, { type: \"from-server-cookie\" }),\n" +
-      "      itx.identity(),\n" +
-      "    ]);\n" +
-      "\n" +
-      "    const url = new URL(request.url);\n" +
-      "    const prefix = request.headers.get(\"x-iterate-url-prefix\") ?? \"\";\n" +
-      "    const pathname = url.pathname.startsWith(prefix)\n" +
-      "      ? url.pathname.slice(prefix.length) || \"/\"\n" +
-      "      : url.pathname;\n" +
-      "    const router = buildRouter({ actor, pathname, projectId: identity.projectId });\n" +
-      "    await router.load();\n" +
-      "\n" +
-      "    const body = renderToString(<RouterProvider router={router} />);\n" +
-      "    return new Response(\n" +
-      "      `<!doctype html>\n" +
-      "<html>\n" +
-      "  <head>\n" +
-      "    <meta charset=\"utf-8\">\n" +
-      "    <meta name=\"viewport\" content=\"width=device-width\">\n" +
-      "    <title>TanStack on Iterate</title>\n" +
-      "  </head>\n" +
-      "  <body>\n" +
-      "    ${body}\n" +
-      "    <form action=\"${escapeHtml(`${prefix}/_iterate/auth/logout`)}\" method=\"post\"><button>Sign out</button></form>\n" +
-      "  </body>\n" +
-      "</html>`,\n" +
-      "      {\n" +
-      "        headers: {\n" +
-      "          \"cache-control\": \"no-store\",\n" +
-      "          // SSR-only: no scripts at all, so the policy can say so.\n" +
-      "          \"content-security-policy\":\n" +
-      "            \"default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'\",\n" +
-      "          \"content-type\": \"text/html; charset=utf-8\",\n" +
-      "          \"x-content-type-options\": \"nosniff\",\n" +
-      "        },\n" +
-      "      },\n" +
-      "    );\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "function escapeHtml(value: string): string {\n" +
-      "  return value\n" +
-      "    .replaceAll(\"&\", \"&amp;\")\n" +
-      "    .replaceAll(\"<\", \"&lt;\")\n" +
-      "    .replaceAll(\">\", \"&gt;\")\n" +
-      "    .replaceAll('\"', \"&quot;\");\n" +
-      "}\n",
-  },
-  {
     path: "tsconfig.json",
     content:
       "{\n" +
-      "  \"include\": [\"**/*.ts\", \"**/*.tsx\"],\n" +
+      "  \"include\": [\"**/*.ts\"],\n" +
       "  \"compilerOptions\": {\n" +
       "    \"target\": \"ES2024\",\n" +
       "    \"module\": \"ESNext\",\n" +
       "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"jsx\": \"react-jsx\",\n" +
       "    \"allowImportingTsExtensions\": true,\n" +
       "    \"noEmit\": true,\n" +
       "    \"lib\": [\"ES2024\", \"ESNext.Disposable\"],\n" +
@@ -585,10 +452,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  GuestbookProcessor,\n" +
       "  guestbookStreamPath,\n" +
       "} from \"./guestbook.ts\";\n" +
-      "\n" +
-      "// The TanStack SSR example app lives in its own file; re-exported here so the\n" +
-      "// one-entryPoint build can serve it by entrypoint name (see fetch below).\n" +
-      "export { TanstackApp } from \"./tanstack.tsx\";\n" +
       "\n" +
       "// This is ordinary project policy. Every GitHub-linked project repository is\n" +
       "// in scope; no platform GitHub code knows that pull-request agents exist.\n" +
@@ -678,17 +541,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        },\n" +
       "      });\n" +
       "    }\n" +
-      "    if (app === \"tanstack\") {\n" +
-      "      return this.fetchDynamicWorker(req, {\n" +
-      "        type: \"stateless\",\n" +
-      "        path: \"/\",\n" +
-      "        entrypoint: \"TanstackApp\",\n" +
-      "        source: {\n" +
-      "          files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "          options: { entryPoint: \"worker.ts\" },\n" +
-      "        },\n" +
-      "      });\n" +
-      "    }\n" +
       "    if (app === \"counter\") {\n" +
       "      return this.fetchDynamicWorker(req, {\n" +
       "        type: \"stateful\",\n" +
@@ -719,7 +571,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
-      "                <li><a href=\"${appUrl(\"tanstack\")}\">tanstack</a> (React SSR, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor)</li>\n" +
       "              </ul>\n" +
