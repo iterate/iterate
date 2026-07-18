@@ -27,10 +27,17 @@ export function useTodoList(slug: string) {
     let subscription: { unsubscribe(): void } | undefined;
     const subscribe = async () => {
       // A revision gap in the store means a missed patch; resubscribing makes
-      // the server lead with a fresh snapshot, which the store folds in.
+      // the server lead with a fresh snapshot, which the store folds in. The
+      // disposed guard is load-bearing: the store outlives this effect (one
+      // ref across slug changes), so a straggler update from this session's
+      // dying WebSocket must not repopulate it after the next effect reset it
+      // for another list.
       subscription?.unsubscribe();
       subscription = await session.liveState.subscribe((update) => {
-        store.apply(update, () => void subscribe());
+        if (disposed) return;
+        store.apply(update, () => {
+          if (!disposed) void subscribe();
+        });
       });
     };
     void subscribe()
