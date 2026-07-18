@@ -6,7 +6,7 @@ export const AgentLlmRequestCancelReason = z.enum([
 ]);
 export type AgentLlmRequestCancelReason = z.infer<typeof AgentLlmRequestCancelReason>;
 
-export const AGENT_METADATA_CHANGED_EVENT_TYPE = "events.iterate.com/agent/metadata-changed";
+export const AGENT_SUMMARY_UPDATED_EVENT_TYPE = "events.iterate.com/agent/summary-updated";
 export const AGENT_BINDING_SET_EVENT_TYPE = "events.iterate.com/agent/binding-set";
 
 const AgentRuntimeCount = z.number().int().nonnegative();

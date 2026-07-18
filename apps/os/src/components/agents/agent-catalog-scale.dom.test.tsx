@@ -92,7 +92,7 @@ function record(index: number): AgentRecord {
   const path = `/agents/load-${String(index).padStart(4, "0")}`;
   return {
     path,
-    metadata: {
+    summary: {
       pinned: index < 5,
       title: `Load agent ${index}`,
       activity: `Processing fixture row ${index}`,
@@ -137,7 +137,7 @@ test("a 5,000-agent catalog mounts bounded rows and patches one visible row", as
     ...agents,
     [path]: {
       ...agents[path]!,
-      metadata: { ...agents[path]!.metadata, title: "Patched visible agent" },
+      summary: { ...agents[path]!.summary, title: "Patched visible agent" },
     },
   };
   const startedAt = performance.now();
@@ -158,7 +158,7 @@ test("search reveals matching descendants without changing the collapsed tree", 
   const child = {
     ...record(1),
     path: "/agents/research/bath",
-    metadata: {
+    summary: {
       pinned: false,
       title: "Bath cattle survey",
       activity: "Comparing nearby farms",

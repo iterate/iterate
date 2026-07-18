@@ -159,7 +159,7 @@ describe("Slack direct runtime presentation", () => {
     ]);
   });
 
-  it("does not let metadata delivery bypass the idle debounce", async () => {
+  it("does not let summary delivery bypass the idle debounce", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     const { calls, processor, runner, state, stream } = await setup();
@@ -178,7 +178,7 @@ describe("Slack direct runtime presentation", () => {
       sinceOffset: 26,
     });
     await stream.append({
-      type: "events.iterate.com/agent/metadata-changed",
+      type: "events.iterate.com/agent/summary-updated",
       payload: { pinned: true },
     });
     await runner.catchUp();
@@ -229,7 +229,7 @@ describe("Slack direct runtime presentation", () => {
     const { calls, processor, state } = await setup();
 
     processor.presentRuntimeTransition(
-      { ...state, metadata: { ...state.metadata, activity: "Checking CI" } },
+      { ...state, summary: { ...state.summary, activity: "Checking CI" } },
       {
         runtime: activeRuntime(),
         since: new Date(NOW).toISOString(),

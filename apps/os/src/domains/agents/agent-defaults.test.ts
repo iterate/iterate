@@ -176,7 +176,7 @@ describe("agentCreationForPath", () => {
       selector: {
         eventTypes: [
           "events.iterate.com/agent/created",
-          "events.iterate.com/agent/metadata-changed",
+          "events.iterate.com/agent/summary-updated",
         ],
       },
       delivery: { mode: "push", expression: ["agents", "processEvent"] },

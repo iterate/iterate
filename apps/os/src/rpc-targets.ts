@@ -28,7 +28,6 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
-import { AGENT_METADATA_CHANGED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
@@ -80,7 +79,6 @@ import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
-import { AgentMetadataPatch } from "./domains/agents/agent-presence.ts";
 import {
   AGENT_COLLECTION_PATH,
   type AgentCollectionProcessorState,
@@ -4555,23 +4553,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Merge human-readable metadata for this agent. Omitted properties remain
-   * unchanged; null clears an optional property; pinned false unpins. Title is
-   * a stable identity, activity is the current-condition sentence updated as
-   * work moves through phases, summary is one or two durable sentences, and
-   * waitingFor declares a semantic dependency once current runtime is zero.
-   */
-  async setMetadata(input: AgentMetadataPatch): Promise<StreamEvent> {
-    await this.#assertCreated();
-    const patch = AgentMetadataPatch.parse(input);
-    const [event] = await this.stream.append({
-      type: AGENT_METADATA_CHANGED_EVENT_TYPE,
-      payload: patch,
-    });
-    return event;
-  }
-
-  /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -4668,8 +4649,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
         create: "Create this agent and wait for its processors to consume the birth batch.",
-        setMetadata:
-          "Merge title, activity, summary, waitingFor, or project-global pinned presentation metadata.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
         message:
           "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
