@@ -460,7 +460,7 @@ return await itx.projects.get(pid).__describe();
     id: "workspace-edit-and-push",
     title: "Edit files in a workspace, then commit them to main",
     description:
-      'A workspace is an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) — which commits them straight to the config repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and resets the overlay to mirror the new main.',
+      'A workspace is a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. By default the config repo is mounted at "/", so reads see its latest main until a local write shadows a path. In an agent scope `itx.workspace` is YOUR workspace; itx.workspaces.get("/workspaces/<name>") addresses any other (first touch births it with the default mount table, so no create step is needed). Changes stay private until git.commit({ message }) — which commits ONE mount\'s changes straight to that repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and clears just that subtree. More repos mount into the tree via configure({ config: { mounts } }); commits never span mounts (pass { scope } when several are dirty).',
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { workspacePath?: string }) => {
       // The path IS the identity: same path, same filesystem. An agent's own
@@ -479,18 +479,20 @@ return await itx.projects.get(pid).__describe();
         newString: "status: reviewed",
       });
 
-      // What changed vs main, then one call ships it: commit() lands the changes
-      // on the config repo's MAIN branch — the project worker/website redeploys
-      // automatically (no add/push dance, .gitignored files are skipped).
-      const changes = await workspace.git.status();
+      // What changed (grouped by owning mount), then one call ships it:
+      // commit() lands the changes on the mounted repo's MAIN branch — the
+      // project worker/website redeploys automatically (no add/push dance,
+      // .gitignored files are skipped; scope is optional with one dirty mount).
+      const status = await workspace.git.status();
       const committed = await workspace.git.commit({ message: "Workspace example note" });
 
       return {
         readmePresent: readme !== null,
         edited,
-        changes,
+        status,
         commitOid: committed.commitOid,
         committedTo: committed.branch,
+        committedMount: committed.mount,
       };
     },
   }),
