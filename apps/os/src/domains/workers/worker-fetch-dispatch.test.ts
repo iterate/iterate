@@ -78,6 +78,14 @@ describe("worker fetch dispatch header", () => {
     expect(
       workerBuildStatus(namedError("RepoNotSeededError", "config repo is still seeding")),
     ).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
+    expect(
+      workerBuildStatus(
+        namedError(
+          "ArtifactsError",
+          'Repository "project--repo" is currently being created. The repository is not yet available. Retry after 5 seconds.',
+        ),
+      ),
+    ).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
 
     const failed = workerBuildStatus(
       namedError("WorkerBuildFailedError", "Expected ; but found is"),

@@ -86,6 +86,18 @@ describe("classifyRepoAccessError", () => {
     },
   );
 
+  test.each([
+    [10200, "NOT_FOUND"],
+    [10302, "IMPORT_IN_PROGRESS"],
+    [10303, "FORK_IN_PROGRESS"],
+  ])("wraps the Artifacts binding numeric code %s (%s)", (numericCode) => {
+    const raw = Object.assign(new Error("repository is not ready"), {
+      name: "ArtifactsError",
+      numericCode,
+    });
+    expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
+  });
+
   test("wraps an explicitly requested branch missing from an empty Artifacts repo", () => {
     const raw = Object.assign(new Error("Could not find main."), {
       code: "NotFoundError",
@@ -114,6 +126,21 @@ describe("classifyRepoAccessError", () => {
     ).toBe(true);
     expect(isRepoNotSeededError(new Error("x"))).toBe(false);
     expect(isRepoNotSeededError(null)).toBe(false);
+  });
+
+  test("matches the property-stripped Artifacts error observed across Workers RPC", () => {
+    const pending = Object.assign(
+      new Error(
+        'Repository "project--repo" is currently being created. The repository is not yet available. Retry after 5 seconds.',
+      ),
+      { name: "ArtifactsError" },
+    );
+    expect(isRepoNotSeededError(pending)).toBe(true);
+
+    const internal = Object.assign(new Error("unexpected storage failure"), {
+      name: "ArtifactsError",
+    });
+    expect(isRepoNotSeededError(internal)).toBe(false);
   });
 });
 

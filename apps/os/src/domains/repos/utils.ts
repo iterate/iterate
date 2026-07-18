@@ -62,8 +62,44 @@ export class RepoNotSeededError extends Error {
   override readonly name = RepoNotSeededError.NAME;
 }
 
+const ARTIFACTS_REPO_NOT_READY_CODES = new Set([
+  "NOT_FOUND",
+  "IMPORT_IN_PROGRESS",
+  "FORK_IN_PROGRESS",
+]);
+// The binding exposes both forms; 10200/10302/10303 are the documented
+// numericCode values for the three string codes above.
+const ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES = new Set([10200, 10302, 10303]);
+// Workers RPC can strip ArtifactsError's own code properties. Keep the
+// fallback specific to the service's retryable repository-lifecycle wording.
+const ARTIFACTS_REPO_NOT_READY_MESSAGE =
+  /^Repository "[^"]+" is currently being (?:created|imported|forked)\. The repository is not yet available\. Retry after \d+ seconds\.$/;
+
+function hasArtifactsRepoNotReadyCode(error: unknown): boolean {
+  const { code, numericCode } = (error ?? {}) as {
+    code?: unknown;
+    numericCode?: unknown;
+  };
+  return (
+    (typeof code === "string" && ARTIFACTS_REPO_NOT_READY_CODES.has(code)) ||
+    (typeof numericCode === "number" && ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES.has(numericCode))
+  );
+}
+
+function isArtifactsRepoNotReadyError(error: unknown): boolean {
+  const { message, name } = (error ?? {}) as { message?: unknown; name?: unknown };
+  return (
+    name === "ArtifactsError" &&
+    (hasArtifactsRepoNotReadyCode(error) ||
+      (typeof message === "string" && ARTIFACTS_REPO_NOT_READY_MESSAGE.test(message)))
+  );
+}
+
 export function isRepoNotSeededError(error: unknown): boolean {
-  return (error as { name?: string } | null)?.name === RepoNotSeededError.NAME;
+  return (
+    (error as { name?: string } | null)?.name === RepoNotSeededError.NAME ||
+    isArtifactsRepoNotReadyError(error)
+  );
 }
 
 /**
@@ -84,7 +120,7 @@ export function classifyRepoAccessError(error: unknown, branch?: string): unknow
     typeof message === "string" &&
     (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
   const artifactNotReady =
-    code === "NOT_FOUND" || code === "IMPORT_IN_PROGRESS" || code === "FORK_IN_PROGRESS";
+    hasArtifactsRepoNotReadyCode(error) || isArtifactsRepoNotReadyError(error);
   const notSeeded =
     artifactNotReady ||
     (code === "NotFoundError" &&
