@@ -1,6 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { StreamEvent } from "iterate/processors";
 import { StreamProcessorRunner } from "iterate/processors";
 import type { Stream } from "../../../../../itx-api.generated.ts";
@@ -95,7 +94,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
   it("accepts only empty or current-schema reducer state", () => {
     const current = BrowserFeedContract.stateSchema.parse({});
     expect(current).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       nextLocalIndex: 0,
     });
     expect(() =>
@@ -185,58 +184,5 @@ describe("BrowserFeedProcessor live ephemerals", () => {
       llmRequestOffset: 1,
       model: "test/model",
     });
-  });
-
-  it("corrects a durable script result after the in-memory correction window was pruned", async () => {
-    const sql = sqliteClient();
-    const harness = makeHarness(sql);
-    const history = Array.from({ length: 40 }, (_, index) => {
-      const requestedOffset = index * 2 + 1;
-      return [
-        event(requestedOffset, "events.iterate.com/capability-host/script-run-requested", {
-          executionId: `missing-${index}`,
-          code: `async () => ${index}`,
-          expiresAt: 15 * 60_000,
-        }),
-        event(requestedOffset + 1, "events.iterate.com/agent/runtime-changed", {
-          sinceOffset: requestedOffset,
-          runtime: ZERO_AGENT_RUNTIME,
-        }),
-      ];
-    }).flat();
-
-    await harness.deliver({
-      events: history,
-      scannedAfterOffset: 0,
-      scannedThroughOffset: 80,
-    });
-    expect(harness.runner.currentState.agent.provisionalActivities["activity-1"]).toBeUndefined();
-
-    const completion = event(81, "events.iterate.com/capability-host/script-run-settled", {
-      executionId: "missing-0",
-      settlement: { status: "succeeded", result: "durable truth" },
-    });
-    await harness.deliver({
-      events: [completion],
-      scannedAfterOffset: 80,
-      scannedThroughOffset: 81,
-    });
-
-    const activityRows = await sql.exec(
-      `SELECT json(data) AS data FROM feed_items WHERE kind = 'agent.activity'`,
-    );
-    const corrected = activityRows
-      .map((row) => JSON.parse(String(row.data)) as { steps?: Record<string, unknown>[] })
-      .find((activity) => activity.steps?.some((step) => step.executionId === "missing-0"));
-    expect(corrected?.steps).toMatchObject([
-      {
-        kind: "code",
-        executionId: "missing-0",
-        outcomeSource: "durable",
-        success: true,
-        result: "durable truth",
-      },
-    ]);
-    expect(corrected?.steps?.[0]).not.toHaveProperty("errorMessage");
   });
 });

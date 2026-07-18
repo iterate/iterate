@@ -672,6 +672,7 @@ test("global cross-posts stay in the global namespace — a project stream is un
   const marker = crypto.randomUUID();
   const globalPath = `/e2e/os-port/cross-post-global/source/${marker}`;
   const targetPath = `/e2e/os-port/cross-post-global/target/${marker}`;
+  const projectId = `prj_${crypto.randomUUID().replaceAll("-", "")}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
@@ -679,8 +680,16 @@ test("global cross-posts stay in the global namespace — a project stream is un
     secret: adminSecret(),
   });
   using project = itx.projects.create({
+    projectId,
     slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
+    waitUntilReady: false,
   });
+
+  // This test needs an existing project namespace, not a concurrently booting
+  // project. Supplying the fixture id avoids the auth mint lane; awaiting the
+  // identity keeps unrelated project bootstrap work out of the cross-post.
+  await project.identity();
+
   using globalSource = itx.streams.get(globalPath);
   using globalTarget = itx.streams.get(targetPath);
   using projectTarget = project.streams.get(targetPath);

@@ -6,7 +6,6 @@
 // is a pure paint of the agent's canonical metadata and exact runtime counts.
 
 import { z } from "zod";
-import { AgentRuntimeChange } from "@iterate-com/shared/agent-events";
 import { defineProcessorContract, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
@@ -33,12 +32,11 @@ import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-proc
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
-  version: "0.8.0",
+  version: "0.9.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     birthCertificate: SlackAgentBirthCertificate.nullable().default(null),
     metadata: AgentMetadata.prefault({}),
-    runtimeChange: AgentRuntimeChange.optional(),
     botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),
@@ -71,7 +69,6 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/metadata-changed",
-    "events.iterate.com/agent/runtime-changed",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
     // processor; the payload's processorSlug names which). MUST be consumed
     // (the runner throws at construction otherwise): appended when an

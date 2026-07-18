@@ -39,10 +39,16 @@ function ProjectAgentDetailContent() {
   const onboardingBirthRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const agents =
     useLiveState(
-      (itx) => itx.liveState,
+      (itx) => itx.agents.liveState,
       (state) => state.agents,
       [],
     ).value ?? {};
+  const agentRuntimeTransition = useLiveState(
+    (itx) => itx.agents.get(streamPath).liveState,
+    (state) => state.runtimeChange,
+    [streamPath],
+    { slug: project.id },
+  ).value;
 
   // THE onboarding-agent birth: the agent is deliberately not born during
   // project bootstrap (it costs a real LLM turn), so opening its chat is what
@@ -156,6 +162,7 @@ function ProjectAgentDetailContent() {
               path={streamPath}
               projectId={project.id}
               projectSlug={project.slug}
+              runtimeTransition={agentRuntimeTransition}
             />
           }
           emptyLabel="No events on this agent stream yet."
@@ -167,6 +174,7 @@ function ProjectAgentDetailContent() {
           }}
           projectId={project.id}
           projectSlug={project.slug}
+          agentRuntimeTransition={agentRuntimeTransition ?? null}
           streamPath={streamPath}
         />
       </div>
