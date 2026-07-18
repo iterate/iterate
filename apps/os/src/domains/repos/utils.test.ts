@@ -96,6 +96,21 @@ describe("classifyRepoAccessError", () => {
     },
   );
 
+  test("wraps the Artifacts materialization message when Workers RPC drops its code", () => {
+    // Preview trace 2026-07-18: the project had emitted project/ready, but a
+    // named app's fresh Repo DO received this message with no usable code.
+    // Classifying it lets ingress return the bounded Building (503) response
+    // instead of leaking an unexplained 500 during ordinary materialization.
+    const raw = new Error(
+      'Repository "prj_example--L3JlcG9zL2NvbmZpZw" is currently being created. The repository is not yet available. Retry after 5 seconds.',
+    );
+    const classified = classifyRepoAccessError(raw);
+
+    expect(classified).toBeInstanceOf(RepoNotSeededError);
+    expect(isRepoNotSeededError(classified)).toBe(true);
+    expect((classified as Error).cause).toBe(raw);
+  });
+
   test("wraps an explicitly requested branch missing from an empty Artifacts repo", () => {
     const raw = Object.assign(new Error("Could not find main."), {
       code: "NotFoundError",
@@ -114,6 +129,8 @@ describe("classifyRepoAccessError", () => {
       code: "NotFoundError",
     });
     expect(classifyRepoAccessError(object)).toBe(object);
+    const unrelatedCreation = new Error("Project is currently being created; retry later");
+    expect(classifyRepoAccessError(unrelatedCreation)).toBe(unrelatedCreation);
     expect(classifyRepoAccessError(undefined)).toBe(undefined);
     expect(classifyRepoAccessError("string error")).toBe("string error");
   });

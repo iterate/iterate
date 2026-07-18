@@ -36,7 +36,7 @@ import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
-  run,
+  runAsync,
   smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
@@ -143,21 +143,28 @@ export default async function deploy(
         secretName: RETIRED_AUTH_SERVICE_TOKEN,
         secrets: ctx.secrets,
       });
-      for (const secretName of RETIRED_WORKER_SECRETS) {
-        await assertWorkerSecretAbsent({
-          cf: ctx.cf,
-          workerName: ctx.env.osWorkerName,
-          secretName,
-        });
-      }
+      // The live-secret assertions and JWKS fetch are independent network
+      // reads. Complete them together before any deployed resource changes.
+      const [staticAuthJwks] = await Promise.all([
+        bakeStaticAuthJwks({
+          authBaseUrl: ctx.env.authBaseUrl,
+          envName: ctx.name,
+          dopplerConfig: ctx.env.dopplerConfig,
+          secrets: ctx.secrets,
+        }),
+        Promise.all(
+          RETIRED_WORKER_SECRETS.map((secretName) =>
+            assertWorkerSecretAbsent({
+              cf: ctx.cf,
+              workerName: ctx.env.osWorkerName,
+              secretName,
+            }),
+          ),
+        ),
+      ]);
 
       // Baked at deploy time, so it's the one secret not in secrets.required.
-      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
-        authBaseUrl: ctx.env.authBaseUrl,
-        envName: ctx.name,
-        dopplerConfig: ctx.env.dopplerConfig,
-        secrets: ctx.secrets,
-      });
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = staticAuthJwks;
 
       // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
       // so projects seeded there install that exact commit's pkg.pr.new build
@@ -178,52 +185,44 @@ export default async function deploy(
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
 
-      // Wrangler validates queue consumers during deploy, so the queue itself
-      // has to exist before uploading a version that binds it. Artifact event
-      // subscriptions are reconciled by ensure-resources because they are
-      // account-level producer wiring, not a code deploy prerequisite.
-      await ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName);
-
-      // Same rationale for R2: wrangler validates bucket bindings at upload,
-      // and the files bucket is new — existing envs (previews, prd) get it
-      // created here on their next deploy instead of a manual
-      // ensure-resources run per environment.
-      await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
-      // SEARCH_BUCKET (itx.search corpus, SPIKE) is likewise bound at upload
-      // time, so existing envs need it created on their next deploy too.
-      await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`);
-
-      // Sandbox container classes must exist container-enabled BEFORE the
-      // exports deploy — the exports reconciliation can't enable namespaces
-      // it creates (upstream gap; see ensureContainerClasses). Makes
-      // brand-new environments deployable from scratch; no-op everywhere
-      // else.
-      await ensureContainerClasses({
-        ctx,
-        workerName: ctx.env.osWorkerName,
-        containerClassNames: SANDBOX_INSTANCE_TYPES.map(
-          (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-        ),
-        compatibilityDate: COMPATIBILITY_DATE,
-      });
-
       // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER
       // service bindings are by name, and a binding to a not-yet-existing
-      // script fails the deploy. Sidecars have no secrets and no vite build —
-      // wrangler bundles their entries directly (the toolchain wasm rides as
-      // a wasm module). Builder skew window: between this deploy and the os
-      // deploy (or if the os deploy fails), a bundler/schema-version bump
-      // means the os worker hashes the OLD key prefix while the builder
-      // writes the new one — the cache runs cold (correct output via
-      // by-value returns, every request rebuilds) until the os deploy lands.
-      // If "cache never hits" appears mid-rollout, finish the deploy.
+      // script fails the deploy. They are independent of each other and of
+      // the queue/R2/container prerequisites, so all preparation runs in one
+      // parallel phase. Sidecars have no secrets and no vite build — wrangler
+      // bundles their entries directly (the toolchain wasm rides as a wasm
+      // module). Builder skew window: between this deploy and the os deploy
+      // (or if the os deploy fails), a bundler/schema-version bump means the
+      // os worker hashes the OLD key prefix while the builder writes the new
+      // one — the cache runs cold (correct output via by-value returns, every
+      // request rebuilds) until the os deploy lands. If "cache never hits"
+      // appears mid-rollout, finish the deploy.
       writeWranglerConfig();
-      for (const sidecarConfig of ["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"]) {
-        run("pnpm", ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name], {
-          cwd: fileURLToPath(new URL("..", import.meta.url)),
-          env: credentials,
-        });
-      }
+      const appRoot = fileURLToPath(new URL("..", import.meta.url));
+      await Promise.all([
+        // Wrangler validates these bindings at upload, so every resource must
+        // exist before deployApp uploads the main OS version.
+        ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName),
+        ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`),
+        ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`),
+        // Exports cannot enable namespaces they create (upstream gap), so the
+        // container classes must already be container-enabled.
+        ensureContainerClasses({
+          ctx,
+          workerName: ctx.env.osWorkerName,
+          containerClassNames: SANDBOX_INSTANCE_TYPES.map(
+            (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+          ),
+          compatibilityDate: COMPATIBILITY_DATE,
+        }),
+        ...["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"].map((sidecarConfig) =>
+          runAsync(
+            "pnpm",
+            ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name],
+            { cwd: appRoot, env: credentials },
+          ),
+        ),
+      ]);
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {

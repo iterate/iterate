@@ -496,14 +496,45 @@ export class CounterApp extends IterateDurableObject {
             <main>
               <p>count: <span id="n">${await this.current()}</span></p>
               <button id="b" disabled>increment</button>
-              <p id="s">connecting…</p>
+              <p id="s" data-spinner="true">connecting…</p>
             </main>
             <script>
               const button = document.getElementById("b");
-              button.onclick = () => fetch("${prefix}/increment", { method: "POST" });
+              const count = document.getElementById("n");
+              const status = document.getElementById("s");
+              let incrementPending = false;
+              const incrementFailed = () => {
+                if (!incrementPending) return;
+                incrementPending = false;
+                button.disabled = false;
+                status.removeAttribute("data-spinner");
+                status.dataset.type = "error";
+                status.textContent = "Increment failed.";
+              };
+              button.onclick = async () => {
+                incrementPending = true;
+                button.disabled = true;
+                status.hidden = false;
+                status.setAttribute("data-spinner", "true");
+                delete status.dataset.type;
+                status.textContent = "incrementing…";
+                try {
+                  const response = await fetch("${prefix}/increment", { method: "POST" });
+                  if (!response.ok) incrementFailed();
+                } catch { incrementFailed(); }
+              };
               const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
-              ws.onopen = () => { button.disabled = false; document.getElementById("s").remove(); };
-              ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
+              ws.onopen = () => { button.disabled = false; status.hidden = true; };
+              ws.onmessage = (event) => {
+                count.textContent = event.data;
+                if (incrementPending) {
+                  incrementPending = false;
+                  button.disabled = false;
+                  status.hidden = true;
+                }
+              };
+              ws.onerror = incrementFailed;
+              ws.onclose = incrementFailed;
             </script>
           </body>
         </html>`,

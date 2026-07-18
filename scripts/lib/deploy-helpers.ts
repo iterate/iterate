@@ -8,7 +8,7 @@
  * ensures, D1 wipes). Plain functions with explicit params — no config
  * machinery.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,33 @@ export function run(
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} exited with ${result.status}`);
   }
+}
+
+/** Async counterpart to {@link run}, for independent deploy steps that can overlap. */
+export async function runAsync(
+  command: string,
+  args: string[],
+  opts: { cwd: string; env?: Record<string, string> },
+): Promise<void> {
+  console.log(`$ ${command} ${args.join(" ")}`);
+  const child = spawn(command, args, {
+    cwd: opts.cwd,
+    stdio: "inherit",
+    env: { ...process.env, ...opts.env },
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else {
+        reject(
+          new Error(
+            `${command} ${args.join(" ")} exited with ${code ?? `signal ${signal ?? "unknown"}`}`,
+          ),
+        );
+      }
+    });
+  });
 }
 
 /**

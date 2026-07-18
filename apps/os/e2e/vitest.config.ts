@@ -103,22 +103,19 @@ export default defineConfig({
     // its own project against a deployed slot, so FILES are independent.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // 4 workers × maxConcurrency 2 = peak ~8 concurrent tests. History of
+    // 6 workers × maxConcurrency 2 = peak ~12 concurrent tests. History of
     // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
     // (DO-storage timeouts), 4×3 = ~12 still produced rotating
     // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
-    // while. A later peak-12 revalidation looked green, but the agent-presence
-    // preview lane (2026-07-17) exposed three Cloudflare Durable Object storage
-    // resets during concurrent project births; one was hidden by the suite's
-    // single retry and two recovered inside the birth saga. Re-running the
-    // complete runnable catalogue at peak 8 with retries disabled produced
-    // zero storage resets in the matching trace window. The preview runner
-    // overlaps this peak with Playwright's eight workers and the one TUI test:
-    // aggregate peak 17. That load is deliberate and measured; if it exposes
-    // a project-birth capacity defect, the run fails instead of permanently
-    // serializing independent suites. Keep this at 4 while the concurrent
-    // preview marathon and trace audit establish the next safe step.
-    maxWorkers: 4,
+    // while. Peak 12 was subsequently revalidated green, and the 2026-07-18
+    // trace audit showed project birth taking ~1,067 aggregate seconds across
+    // 176 successful creates without a capacity failure. The failures seen at
+    // lower concurrency were product lifecycle defects, not evidence that the
+    // preview slot needed protection from independent tests. The preview
+    // runner overlaps this peak with Playwright's eight workers and one TUI
+    // test: aggregate peak 21. Keep that load visible; project reuse removes
+    // needless births, while fresh-project lifecycle tests still exercise it.
+    maxWorkers: 6,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
     passWithNoTests: true,

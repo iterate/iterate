@@ -867,14 +867,45 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            <main>\n" +
       "              <p>count: <span id=\"n\">${await this.current()}</span></p>\n" +
       "              <button id=\"b\" disabled>increment</button>\n" +
-      "              <p id=\"s\">connecting…</p>\n" +
+      "              <p id=\"s\" data-spinner=\"true\">connecting…</p>\n" +
       "            </main>\n" +
       "            <script>\n" +
       "              const button = document.getElementById(\"b\");\n" +
-      "              button.onclick = () => fetch(\"${prefix}/increment\", { method: \"POST\" });\n" +
+      "              const count = document.getElementById(\"n\");\n" +
+      "              const status = document.getElementById(\"s\");\n" +
+      "              let incrementPending = false;\n" +
+      "              const incrementFailed = () => {\n" +
+      "                if (!incrementPending) return;\n" +
+      "                incrementPending = false;\n" +
+      "                button.disabled = false;\n" +
+      "                status.removeAttribute(\"data-spinner\");\n" +
+      "                status.dataset.type = \"error\";\n" +
+      "                status.textContent = \"Increment failed.\";\n" +
+      "              };\n" +
+      "              button.onclick = async () => {\n" +
+      "                incrementPending = true;\n" +
+      "                button.disabled = true;\n" +
+      "                status.hidden = false;\n" +
+      "                status.setAttribute(\"data-spinner\", \"true\");\n" +
+      "                delete status.dataset.type;\n" +
+      "                status.textContent = \"incrementing…\";\n" +
+      "                try {\n" +
+      "                  const response = await fetch(\"${prefix}/increment\", { method: \"POST\" });\n" +
+      "                  if (!response.ok) incrementFailed();\n" +
+      "                } catch { incrementFailed(); }\n" +
+      "              };\n" +
       "              const ws = new WebSocket((location.protocol === \"https:\" ? \"wss://\" : \"ws://\") + location.host + \"${prefix}/ws\");\n" +
-      "              ws.onopen = () => { button.disabled = false; document.getElementById(\"s\").remove(); };\n" +
-      "              ws.onmessage = (event) => { document.getElementById(\"n\").textContent = event.data; };\n" +
+      "              ws.onopen = () => { button.disabled = false; status.hidden = true; };\n" +
+      "              ws.onmessage = (event) => {\n" +
+      "                count.textContent = event.data;\n" +
+      "                if (incrementPending) {\n" +
+      "                  incrementPending = false;\n" +
+      "                  button.disabled = false;\n" +
+      "                  status.hidden = true;\n" +
+      "                }\n" +
+      "              };\n" +
+      "              ws.onerror = incrementFailed;\n" +
+      "              ws.onclose = incrementFailed;\n" +
       "            </script>\n" +
       "          </body>\n" +
       "        </html>`,\n" +

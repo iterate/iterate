@@ -86,6 +86,15 @@ export function isRepoNotSeededError(error: unknown): boolean {
  */
 export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  // Artifacts error codes do not reliably survive the Workers RPC boundary.
+  // Keep this match deliberately anchored to the exact service-authored
+  // materialization message observed in preview traces; a generic
+  // "currently being created" match could misclassify an unrelated defect.
+  const artifactStillMaterializing =
+    typeof message === "string" &&
+    /^Repository "[^"\r\n]+" is currently being created\. The repository is not yet available\. Retry after \d+ seconds?\.$/.test(
+      message,
+    );
   const missingRequestedBranch =
     branch !== undefined &&
     typeof message === "string" &&
@@ -94,6 +103,7 @@ export function classifyRepoAccessError(error: unknown, branch?: string): unknow
     code === "NOT_FOUND" ||
     code === "IMPORT_IN_PROGRESS" ||
     code === "FORK_IN_PROGRESS" ||
+    artifactStillMaterializing ||
     (code === "NotFoundError" &&
       typeof message === "string" &&
       (message.includes("refs/") || missingRequestedBranch));
