@@ -1,8 +1,14 @@
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
+import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
 import { PathFunctionTarget, startMockSlack } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
+
+const liveCapabilityProjectPool = createTestProjectPool({
+  size: 2,
+  slugPrefix: "live-cap-family",
+});
 
 // These are hand written tests - they MUST pass
 test("Nested plain-object live capability members survive after provideCapability returns", async () => {
@@ -13,7 +19,8 @@ test("Nested plain-object live capability members survive after provideCapabilit
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = providerItx.projects.create({ slug: `nested-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(providerItx);
+  using project = providerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
 
   using _toolsProvision = await project.provideCapability({
@@ -50,7 +57,8 @@ test("Live capabilities reject the removed target spelling", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `removed-target-${crypto.randomUUID()}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
 
   await expect(
     project.provideCapability({
@@ -73,7 +81,8 @@ test("Live capability values may have a domain member named capability", async (
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = providerItx.projects.create({ slug: `capability-field-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(providerItx);
+  using project = providerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
 
   using _toolsProvision = await project.provideCapability({
@@ -121,7 +130,8 @@ test("Live bare function capabilities survive provideCapability return", async (
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = providerItx.projects.create({ slug: `bare-function-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(providerItx);
+  using project = providerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
 
   using _addProvision = await project.provideCapability({
@@ -152,14 +162,13 @@ test("Top-level RpcTarget live capabilities dispatch by member path", async () =
       return a + b;
     }
   }
-  const marker = crypto.randomUUID();
-
   using providerSession = withItxSession();
   using providerItx = providerSession.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = providerItx.projects.create({ slug: `rpc-target-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(providerItx);
+  using project = providerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
 
   using _mathProvision = await project.provideCapability({
@@ -212,7 +221,8 @@ test("RpcTarget live capabilities can dispatch through nested RpcTarget getters"
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = providerItx.projects.create({ slug: `nested-rpc-target-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(providerItx);
+  using project = providerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
 
   using _slackProvision = await project.provideCapability({
@@ -255,7 +265,8 @@ test("Flattened live capabilities receive the remaining member path", async () =
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = providerItx.projects.create({ slug: `path-call-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(providerItx);
+  using project = providerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
 
   using _carrierProvision = await project.provideCapability({
@@ -293,7 +304,8 @@ test("Successful live capability replacement uses the new target", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `replace-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
 
   using _oldProvision = await project.provideCapability({
     path: ["replaceProbe"],
@@ -329,7 +341,8 @@ test("itx expression replacement records the recipe without evaluating it", asyn
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `failed-replace-live-${marker}` });
+  using projectLease = await liveCapabilityProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
 
   using _provision = await project.provideCapability({
     path: ["replaceProbe"],
@@ -369,7 +382,8 @@ test("Authenticated project can provide the Slack SDK as nested dotted functions
       secret: adminSecret(),
     });
 
-    using project = itx.projects.create({ slug: "slack-project" });
+    using projectLease = await liveCapabilityProjectPool.acquire(itx);
+    using project = itx.projects.get(projectLease.projectId);
     const description = await project.__describe();
 
     const slack = new WebClient("xoxb-not-a-real-token", {

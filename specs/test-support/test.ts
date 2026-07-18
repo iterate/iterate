@@ -6,10 +6,11 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
+import {
+  createProjectFixture as createForgedProjectFixture,
+  type ProjectIdentity,
+} from "./forged-session.ts";
 import { screenshot } from "./screenshot.ts";
-
-type ForgedProjectFixture = Awaited<ReturnType<typeof createForgedProjectFixture>>;
 
 const addPagePlugins = (page: Page, testInfo: TestInfo) =>
   addPlugins({
@@ -33,14 +34,18 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
 
 export const test = base.extend<{
   helpers: {
-    createFixture: (slugPrefix: string) => Promise<ForgedProjectFixture>;
+    createFixture: (
+      slugPrefix: string,
+      opts?: { project: ProjectIdentity },
+    ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
   helpers: async ({ baseURL, page }, use) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
     await use({
-      createFixture: (slugPrefix) => createForgedProjectFixture(slugPrefix, { baseURL, page }),
+      createFixture: (slugPrefix, opts) =>
+        createForgedProjectFixture(slugPrefix, { baseURL, page, project: opts?.project }),
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {

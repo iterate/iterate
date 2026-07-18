@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
+import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -11,6 +12,8 @@ import {
 } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
+const agentProjectPool = createTestProjectPool({ size: 2, slugPrefix: "agent-family" });
+
 // These are hand written tests - they MUST pass
 test("agent create installs only generic machinery; later events configure it", async () => {
   using session = withItxSession();
@@ -19,7 +22,8 @@ test("agent create installs only generic machinery; later events configure it", 
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: `agent-create-${crypto.randomUUID()}` });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
   await expect(
     (
@@ -95,7 +99,8 @@ test("Agent scripts update presentation metadata via itx.agent.setMetadata", asy
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-set-metadata" });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const agentPath = `/agents/set-metadata-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -146,7 +151,8 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-project-tool" });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -239,7 +245,8 @@ test("Agent create replays its earlier birth and setup events through its subscr
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: `agent-create-replay-${crypto.randomUUID()}` });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const agentPath = `/agents/create-replay-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
@@ -348,7 +355,8 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-only-tools" });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -487,7 +495,8 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "dynamic-worker-scope-cache" });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -546,7 +555,8 @@ test('An agent scope provides a capability to the whole project via capabilityHo
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "cross-scope-provide" });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -594,7 +604,8 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "worker-births-agents" });
+  using projectLease = await agentProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 

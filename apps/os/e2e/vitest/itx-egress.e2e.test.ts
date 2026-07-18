@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
 import { withTunnel } from "../test-support/tunnel.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
@@ -9,6 +10,8 @@ import {
 } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
+const secretProjectPool = createTestProjectPool({ size: 2, slugPrefix: "secret-family" });
+
 // These are hand written tests - they MUST pass
 test("public secret events can change egress but copied ciphertext cannot follow", async () => {
   await using original = await startEgressEcho();
@@ -18,7 +21,8 @@ test("public secret events can change egress but copied ciphertext cannot follow
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `secret-stream-forgery-${crypto.randomUUID()}` });
+  using projectLease = await secretProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const secretPath = `/secrets/stream-forgery/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
   await secret.create({
@@ -67,7 +71,8 @@ test("every egress-only update clears retained secret material", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `secret-repin-${crypto.randomUUID()}` });
+  using projectLease = await secretProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using secret = project.secrets.get(`/secrets/repin/${crypto.randomUUID()}`);
 
   await secret.create({
@@ -142,7 +147,8 @@ test("an in-flight refresh cannot resurrect material after an egress event", asy
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `secret-refresh-race-${crypto.randomUUID()}` });
+  using projectLease = await secretProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const secretPath = `/secrets/refresh-race/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
   await secret.create({
@@ -204,9 +210,8 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `secret-refresh-cleared-${crypto.randomUUID()}`,
-  });
+  using projectLease = await secretProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const secretPath = `/secrets/refresh-cleared/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
   const refresh = {
@@ -264,7 +269,8 @@ test("secret egress rejects a cross-origin redirect without forwarding material"
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `secret-redirect-${crypto.randomUUID()}` });
+  using projectLease = await secretProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const secretPath = `/secrets/redirect/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
 
@@ -295,7 +301,8 @@ test("URL-path secret material is not returned in Response metadata", async () =
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `secret-response-url-${crypto.randomUUID()}` });
+  using projectLease = await secretProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const secretPath = `/secrets/response-url/${crypto.randomUUID()}`;
   const material = `url-secret-${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);

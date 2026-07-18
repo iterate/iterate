@@ -3,7 +3,7 @@ import { spinnerWaiter } from "middlewright";
 import JSON5 from "json5";
 import { EXAMPLE_CASES } from "../apps/os/e2e/examples/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
-import { connectAdminItx } from "./test-support/forged-session.ts";
+import { connectAdminItx, createAdminProject } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
@@ -16,6 +16,24 @@ const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
 });
 
 test.describe("itx REPL catalogue examples", () => {
+  let workerProject: Awaited<ReturnType<typeof createAdminProject>> | undefined;
+
+  // With fullyParallel Playwright runs this hook executes once in each worker
+  // process. Examples in a worker run sequentially against one project, while
+  // unique markers/paths in example-cases.ts isolate all durable writes. A
+  // failed test restarts its worker and therefore gets a fresh project.
+  test.beforeAll(async ({ baseURL }) => {
+    if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+    workerProject = await createAdminProject({
+      baseUrl: baseURL,
+      slug: `repl-worker-${crypto.randomUUID().slice(0, 8)}`,
+    });
+  });
+
+  test.afterAll(async () => {
+    await workerProject?.[Symbol.asyncDispose]();
+  });
+
   for (const { example, exampleCase } of REPL_EXAMPLES) {
     test(`runs "${example.id}" through the project REPL`, async ({ baseURL, helpers, page }) => {
       // Cold-path examples declare their own completion budget (see
@@ -24,7 +42,10 @@ test.describe("itx REPL catalogue examples", () => {
       if (exampleCase.completionTimeoutMs) {
         test.setTimeout(exampleCase.completionTimeoutMs + 60_000);
       }
-      await using fixture = await helpers.createFixture(`repl-${example.id}`);
+      if (!workerProject) throw new Error("REPL worker project was not initialized.");
+      await using fixture = await helpers.createFixture(`repl-${example.id}`, {
+        project: workerProject.project,
+      });
       await page.goto(`/projects/${fixture.project.slug}/repl`);
       // exact: the project slug can contain "run", which substring-matches sidebar buttons
       await page.getByRole("button", { name: "Run", exact: true }).waitFor();

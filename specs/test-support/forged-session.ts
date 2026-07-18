@@ -46,16 +46,21 @@ export type MintedIterateSession = {
   idToken: string;
 };
 
+export type ProjectIdentity = { id: string; slug: string };
+
 let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
 
 export async function createProjectFixture(
   slugPrefix: string,
-  input: { baseURL: string | undefined; page: Page },
+  input: { baseURL: string | undefined; page: Page; project?: ProjectIdentity },
 ) {
   if (!input.baseURL) throw new Error("Playwright baseURL fixture is required.");
 
-  const projectSlug = uniqueFixtureSlug(slugPrefix);
-  const projectFixture = await createAdminProject({ baseUrl: input.baseURL, slug: projectSlug });
+  const projectSlug = input.project?.slug ?? uniqueFixtureSlug(slugPrefix);
+  const ownedProjectFixture = input.project
+    ? undefined
+    : await createAdminProject({ baseUrl: input.baseURL, slug: projectSlug });
+  const project = input.project ?? ownedProjectFixture!.project;
   try {
     const organization = {
       id: `org_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
@@ -69,9 +74,9 @@ export async function createProjectFixture(
       organizations: [organization],
       projects: [
         {
-          id: projectFixture.project.id,
+          id: project.id,
           organizationId: organization.id,
-          slug: projectFixture.project.slug,
+          slug: project.slug,
         },
       ],
     });
@@ -97,14 +102,14 @@ export async function createProjectFixture(
 
     return {
       organization,
-      project: projectFixture.project,
+      project,
       session,
       async [Symbol.asyncDispose]() {
-        await projectFixture[Symbol.asyncDispose]();
+        await ownedProjectFixture?.[Symbol.asyncDispose]();
       },
     };
   } catch (error) {
-    await projectFixture[Symbol.asyncDispose]();
+    await ownedProjectFixture?.[Symbol.asyncDispose]();
     throw error;
   }
 }

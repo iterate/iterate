@@ -27,8 +27,9 @@ const mobileWebUrl = `http://127.0.0.1:${mobileWebPort}`;
 export default defineConfig({
   testDir: "specs",
   testMatch: "**/*.spec.ts",
-  // Every spec provisions its own fixture project, so specs are independent.
-  // Parallel in CI against a deployed slot; sequential locally so a single
+  // Specs isolate mutable state with fresh projects or unique resource
+  // namespaces in worker-local projects, so they remain parallel-safe. Run
+  // parallel in CI against a deployed slot; sequential locally so a single
   // dev server isn't hammered.
   fullyParallel: !!process.env.CI,
   forbidOnly: !!process.env.CI,

@@ -9,6 +9,7 @@
 import { expect, test } from "vitest";
 import type { StreamEventBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
+import { createSharedTestProjectId } from "../test-support/create-shared-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -16,6 +17,7 @@ const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
 const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
 const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
+const getSharedStreamProjectId = createSharedTestProjectId({ slugPrefix: "stream-api-family" });
 const EXPECTED_POSTHOG_SUBSCRIPTION = {
   type: "events.iterate.com/stream/subscription-configured",
   idempotencyKey: "iterate-platform-posthog-subscription-v2",
@@ -106,8 +108,7 @@ test("project streams are born with the ordinary first-party PostHog subscriptio
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `posthog-birth-${RUN_SUFFIX}-${marker}` });
-  await project.__describe();
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using stream = project.streams.get(streamPath);
 
   await stream.append({
@@ -133,7 +134,7 @@ test("project code cannot forge the PostHog receiver through an impersonated pri
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `posthog-authority-${RUN_SUFFIX}-${marker}` });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   const projectId = (await project.__describe()).projectId;
 
   using impersonatedSession = withItxSession();
@@ -172,7 +173,7 @@ test("stream getEvents defaults to a bounded page and supports event type filter
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-get-events-${RUN_SUFFIX}-${marker}` });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using stream = project.streams.get(streamPath);
 
   const appendedEvents = await stream.append(
@@ -216,7 +217,7 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-subscribe-${RUN_SUFFIX}-${marker}` });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
@@ -273,7 +274,7 @@ test("state-only stream subscribe pushes initial state immediately, then state a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-state-${RUN_SUFFIX}-${marker}` });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
@@ -317,7 +318,7 @@ test("ephemeral events are raw-readable and delivered live, but never replayed t
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-ephemeral-${RUN_SUFFIX}-${marker}` });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using stream = project.streams.get(streamPath);
 
   // A live watcher attached BEFORE the appends.
@@ -448,7 +449,7 @@ test("crossPostTo copies matching events with source provenance", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-cross-post-${RUN_SUFFIX}-${marker}` });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   const projectDescription = await project.__describe();
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
@@ -501,9 +502,7 @@ test("cross-post conditions gate cross-posting on event content", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-cond-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 
@@ -546,9 +545,7 @@ test("cross-post subscriptions reject unparseable conditions before they commit"
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-bad-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using source = project.streams.get(sourcePath);
 
   // crossPostTo is sugar over appending subscription-configured; an
@@ -575,9 +572,7 @@ test("cross-post chains accumulate provenance hops and removeCrossPost stops for
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-chain-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using streamA = project.streams.get(pathA);
   using streamB = project.streams.get(pathB);
   using streamC = project.streams.get(pathC);
@@ -627,9 +622,7 @@ test("cross-posts do not recursively copy events that are already cross-posted",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-loop-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 
@@ -678,9 +671,7 @@ test("global cross-posts stay in the global namespace — a project stream is un
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   using globalSource = itx.streams.get(globalPath);
   using globalTarget = itx.streams.get(targetPath);
   using projectTarget = project.streams.get(targetPath);
@@ -730,9 +721,7 @@ test("crossPostTo transform reshapes the copied event and keeps the provenance c
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-xform-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = itx.projects.get(await getSharedStreamProjectId(itx));
   const projectDescription = await project.__describe();
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);

@@ -1,9 +1,12 @@
 import { expect, test } from "vitest";
+import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
+
+const connectProjectPool = createTestProjectPool({ size: 2, slugPrefix: "connect-family" });
 
 // These are hand written tests - they MUST pass
 test("OpenAPI built-in connects directly and mounts as a described capability", async () => {
@@ -16,7 +19,8 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
   });
 
   try {
-    using project = itx.projects.create({ slug: `openapi-${crypto.randomUUID()}` });
+    using projectLease = await connectProjectPool.acquire(itx);
+    using project = itx.projects.get(projectLease.projectId);
     const secretPath = `/secrets/openapi/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({
@@ -107,7 +111,8 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
   });
 
   try {
-    using project = itx.projects.create({ slug: `mcp-${crypto.randomUUID()}` });
+    using projectLease = await connectProjectPool.acquire(itx);
+    using project = itx.projects.get(projectLease.projectId);
     const secretPath = `/secrets/mcp/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({
@@ -192,7 +197,8 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
   });
 
   try {
-    using project = itx.projects.create({ slug: `expr-builtins-${crypto.randomUUID()}` });
+    using projectLease = await connectProjectPool.acquire(itx);
+    using project = itx.projects.get(projectLease.projectId);
     const secretPath = `/secrets/expr-builtins/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({
@@ -273,7 +279,8 @@ test("itx expression capabilities mount project workers, streams, method aliases
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `expr-project-${crypto.randomUUID()}` });
+  using projectLease = await connectProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
 
   const workerRef = {
     entrypoint: "Worker",
@@ -426,7 +433,8 @@ test("itx expression capabilities resolve aliases against the current itx host p
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `expr-agent-${crypto.randomUUID()}` });
+  using projectLease = await connectProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   const agentPath = `/agents/expr-agent-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -468,7 +476,8 @@ test("itx expression capabilities reject self-aliases at provide time", async ()
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `expr-self-${crypto.randomUUID()}` });
+  using projectLease = await connectProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
 
   await expect(
     project.provideCapability({
