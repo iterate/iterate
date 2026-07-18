@@ -7,7 +7,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { renderToString } from "react-dom/server";
-import { IterateWorkerEntrypoint, type ProjectAuthActor } from "iterate/sdk";
+import { IterateWorkerEntrypoint } from "iterate/sdk";
 
 // A tiny server-rendered TanStack + React app behind project-member auth,
 // served at tanstack--<project>.<base>. Every request builds a router and
@@ -23,7 +23,7 @@ import { IterateWorkerEntrypoint, type ProjectAuthActor } from "iterate/sdk";
 // TanStack `Register` (the OS dashboard's router, in the repo this template
 // typechecks inside), and without client-side routing `Link` renders an
 // anchor anyway.
-function buildRouter(input: { actor: ProjectAuthActor; pathname: string; projectId: string }) {
+function buildRouter(input: { pathname: string; projectId: string; projectName: string }) {
   const rootRoute = createRootRoute({
     component: () => (
       <main>
@@ -41,8 +41,8 @@ function buildRouter(input: { actor: ProjectAuthActor; pathname: string; project
     component: () => (
       <section>
         <p>
-          Signed in as <strong>{input.actor.userId}</strong> on project{" "}
-          <code>{input.projectId}</code>.
+          Serving project <strong>{input.projectName}</strong> (<code>{input.projectId}</code>) to a
+          signed-in member.
         </p>
         <p>This page is React, routed by TanStack Router and rendered in your project worker.</p>
       </section>
@@ -68,24 +68,29 @@ function buildRouter(input: { actor: ProjectAuthActor; pathname: string; project
 
 // A project-member-only SSR app. The auth partial owns login/callback/logout
 // exactly as in InternalApp (worker.ts); a null result means this request is
-// a current project member, whose actor the page renders.
+// a current project member. WHO the member is deliberately stays out of the
+// page lane: `auth.authenticate` is the explicit exchange for an app's
+// Cap'n Web root and requires a browser handshake's Origin header, which
+// top-level GET navigations never send — see InternalApp's /api for that
+// pattern.
 export class TanstackApp extends IterateWorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
     using itx = await this.env.ITX.get();
     const gate = itx.auth.get({ policy: "project-member" });
     const authResponse = await gate.fetch(request);
     if (authResponse) return authResponse;
-    const [actor, identity] = await Promise.all([
-      gate.authenticate(request, { type: "from-server-cookie" }),
-      itx.identity(),
-    ]);
+    const identity = await itx.identity();
 
     const url = new URL(request.url);
     const prefix = request.headers.get("x-iterate-url-prefix") ?? "";
     const pathname = url.pathname.startsWith(prefix)
       ? url.pathname.slice(prefix.length) || "/"
       : url.pathname;
-    const router = buildRouter({ actor, pathname, projectId: identity.projectId });
+    const router = buildRouter({
+      pathname,
+      projectId: identity.projectId,
+      projectName: identity.name,
+    });
     await router.load();
 
     const body = renderToString(<RouterProvider router={router} />);
