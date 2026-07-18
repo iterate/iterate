@@ -87,7 +87,7 @@ it("hosts a worker-builder pool app sized to the pool", async () => {
     );
     expect(pool, envName).toBeDefined();
     expect(pool?.max_instances, envName).toBe(WORKER_BUILDER_POOL_SIZE);
-    expect(pool?.instance_type, envName).toBe("basic");
+    expect(pool?.instance_type, envName).toBe("standard-3");
     expect(
       envBlock.durable_objects.bindings.find((b) => b.class_name === "WorkerBuilderDurableObject")
         ?.name,
@@ -240,8 +240,17 @@ it("keeps deployed sandbox capacity within account quota", () => {
     expect(
       containers.map((entry) => entry.instance_type),
       envName,
-      // The trailing basic entry is the worker-builder pool's own app.
-    ).toEqual(["lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4", "basic"]);
+      // The trailing standard-3 entry is the worker-builder pool's own app
+      // (npm + esbuild are CPU-bound; basic starved an e2e burst live).
+    ).toEqual([
+      "lite",
+      "basic",
+      "standard-1",
+      "standard-2",
+      "standard-3",
+      "standard-4",
+      "standard-3",
+    ]);
     for (const entry of containers) {
       expect(entry.max_instances, `${envName} ${entry.instance_type}`).toBeGreaterThan(0);
     }

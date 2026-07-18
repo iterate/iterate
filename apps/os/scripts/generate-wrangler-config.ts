@@ -235,10 +235,11 @@ const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; prod
     lite: { preview: 20, production: 50 },
     // Worker builds no longer draw on this fleet (the builder pool below is
     // its own app with its own cap) — this budget is pet sandboxes only. The
-    // per-project-builder era saturated 15/15 live; without builders, 15 is
-    // comfortable headroom for an e2e run's own pets.
-    basic: { preview: 15, production: 30 },
-    "standard-1": { preview: 5, production: 20 },
+    // per-project-builder era saturated 15/15 live; without builders, an e2e
+    // run's own pets use a handful, so preview trades the old headroom to the
+    // builder pool's memory reservation.
+    basic: { preview: 10, production: 30 },
+    "standard-1": { preview: 3, production: 20 },
     "standard-2": { preview: 2, production: 10 },
     "standard-3": { preview: 2, production: 5 },
     "standard-4": { preview: 1, production: 3 },
@@ -386,9 +387,17 @@ function workerBindings(input: {
         // The worker-builder pool: its own app so builder demand can NEVER
         // compete with pet sandboxes for placement. max_instances equals the
         // pool size — there are exactly that many member names.
+        //
+        // standard-3 (2 vCPU, 8 GiB), NOT basic: the pool concentrates every
+        // project's builds onto these few containers, and npm install +
+        // wrangler's esbuild bundle are CPU/IO-bound — on basic (1/4 vCPU) an
+        // e2e-style burst ran installs at 73–165s each (observed live), which
+        // blows delivery deadlines fleet-wide. With a 300s sleepAfter the
+        // fleet only exists during build bursts, so the bigger type costs
+        // active-minutes, not idle capacity.
         class_name: "WorkerBuilderDurableObject",
         image: "./sandbox/Dockerfile",
-        instance_type: "basic",
+        instance_type: "standard-3",
         max_instances: WORKER_BUILDER_POOL_SIZE,
         ssh: { enabled: true },
         authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
