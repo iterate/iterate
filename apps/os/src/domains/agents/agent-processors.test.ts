@@ -1,5 +1,6 @@
 import { describe, expect, it, test, vi } from "vitest";
 import type { z } from "zod";
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "iterate/processors/testing";
 import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
@@ -19,43 +20,13 @@ import {
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   DEFAULT_AGENT_SYSTEM_PROMPT,
-  deriveAgentBusy,
 } from "./agent-processor-contract.ts";
+import { deriveAgentDisplayState, deriveAgentRuntime } from "./agent-presence.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 
-/** The runner-backed fold read the REQUIRED `reads` dep serves (the idle
- * debounce timer's fire-time staleness check). */
-type AgentSnapshotReads = { snapshot(): Promise<{ offset: number; state: AgentState }> };
-
-/** The runner that ended up driving each processor, recorded by `agentRunner`
- * so `makeAgentProcessor`'s lazily-wired `reads` dep answers from it — the
- * unit-harness mirror of the DO wiring `registry.reads(processor)` after
- * registering it. */
-const runnerReadsByProcessor = new WeakMap<AgentProcessor, AgentSnapshotReads>();
-
-/**
- * AgentProcessor construction for these tests: identical to `new
- * AgentProcessor(...)` except the REQUIRED runner-backed `reads` dep is wired
- * lazily to whichever runner `agentRunner` ends up driving this processor
- * with (the processor instance holds no readable fold under runner drive).
- */
-function makeAgentProcessor(
-  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads">,
-): AgentProcessor {
-  const processor: AgentProcessor = new AgentProcessor({
-    ...deps,
-    reads: {
-      snapshot: () => {
-        const reads = runnerReadsByProcessor.get(processor);
-        if (reads === undefined) {
-          throw new Error("no runner drives this processor yet — agentRunner wires reads");
-        }
-        return reads.snapshot();
-      },
-    },
-  });
-  return processor;
+function makeAgentProcessor(deps: ConstructorParameters<typeof AgentProcessor>[0]): AgentProcessor {
+  return new AgentProcessor(deps);
 }
 
 /**
@@ -75,14 +46,10 @@ function agentRunner(
   stream: MemoryStream,
   opts: { seeded?: { offset: number; state: AgentState }; readPageSize?: number } = {},
 ) {
-  const track = <Runner extends AgentSnapshotReads>(runner: Runner): Runner => {
-    runnerReadsByProcessor.set(processor, runner);
-    return runner;
-  };
   const pageSize = opts.readPageSize === undefined ? {} : { readPageSize: opts.readPageSize };
   const seeded = opts.seeded;
   if (seeded === undefined) {
-    return track(new StreamProcessorRunner({ processor, stream, ...pageSize }));
+    return new StreamProcessorRunner({ processor, stream, ...pageSize });
   }
   let record: ProcessorProgress<AgentState> = {
     reduction: {
@@ -92,21 +59,19 @@ function agentRunner(
     },
     processing: { acknowledgedThroughOffset: seeded.offset, cursorRevision: 0 },
   };
-  return track(
-    new StreamProcessorRunner({
-      processor,
-      stream,
-      ...pageSize,
-      durability: {
-        progress: {
-          read: () => record,
-          commit: (progress) => {
-            record = progress;
-          },
+  return new StreamProcessorRunner({
+    processor,
+    stream,
+    ...pageSize,
+    durability: {
+      progress: {
+        read: () => record,
+        commit: (progress) => {
+          record = progress;
         },
       },
-    }),
-  );
+    },
+  });
 }
 
 const systemContext = (content = DEFAULT_AGENT_SYSTEM_PROMPT): StreamEventInput => ({
@@ -253,6 +218,39 @@ function scriptFailed(error: string) {
 }
 
 describe("minimal web-chat agent processors", () => {
+  it("exposes runtime transitions in reduced state without appending runtime events", async () => {
+    const stream = agentStream();
+    const [requested] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: DEFAULT_AGENT_MODEL, requestId: "llm-request:runtime-state" },
+    });
+
+    expect(reduceAgentEvents(stream.events).runtimeChange).toMatchObject({
+      runtime: { llmRequests: { requested: 1 } },
+      sinceOffset: requested!.offset,
+      since: requested!.createdAt,
+    });
+
+    const [completed] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-completed",
+      payload: {
+        durationMs: 1,
+        llmRequestOffset: requested!.offset,
+        result: { status: "success" },
+      },
+    });
+    expect(reduceAgentEvents(stream.events).runtimeChange).toMatchObject({
+      runtime: {
+        triggers: { pending: 0, runnable: 0 },
+        llmRequests: { scheduled: 0, requested: 0, started: 0 },
+        runningScripts: 0,
+      },
+      sinceOffset: completed!.offset,
+      since: completed!.createdAt,
+    });
+    expect(stream.events.some((event) => event.type.includes("runtime-changed"))).toBe(false);
+  });
+
   it("feeds a returned script result back as input and schedules another turn", async () => {
     const stream = agentStream();
     const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
@@ -772,7 +770,6 @@ describe("minimal web-chat agent processors", () => {
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agent/llm-request-scheduled",
-      "events.iterate.com/agent/status-changed",
     ]);
     expect(events[1]!.payload).toMatchObject({
       role: "user",
@@ -789,7 +786,11 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append(userContext("I raced agent setup"));
     await deliver();
-    expect(deriveAgentBusy(reduceAgentEvents(stream.events))).toBe(false);
+    expect(
+      deriveAgentDisplayState(
+        deriveAgentRuntime(reduceAgentEvents(stream.events), "agent/system-prompt"),
+      ),
+    ).toBe("idle");
     expect(
       stream.events.some(
         (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -1805,6 +1806,9 @@ describe("provider-neutral context projection", () => {
       events: stream.events,
       llmRequestOffset: requested.offset,
     });
+    expect(body.messages[0]?.content).toContain(
+      'itx.streams.get("/stream/path").getEvent({ offset: 123 })',
+    );
     for (const index of externalActors.keys()) {
       expect(
         body.messages.find((message) => message.content.endsWith(`external-${index}`)),
@@ -3054,515 +3058,99 @@ describe("token usage and history compaction", () => {
   });
 });
 
-describe("busy/idle status announcements", () => {
-  const userMessage = () => userContext("hi");
-  const announcements = (stream: MemoryStream) =>
-    stream.events
-      .filter((event) => event.type === "events.iterate.com/agent/status-changed")
-      .map((event) => event.payload);
-
-  it("announces busy immediately when a trigger queues a turn", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
-    const [, received] = await stream.append(systemContext(), userMessage());
-    await agentRunner(agent, stream).catchUp();
-
-    expect(announcements(stream)).toEqual([
-      { busy: true, phase: "llm", sinceOffset: received!.offset },
-    ]);
-  });
-
-  it("announces a debounced idle once the turn settles, then goes quiet", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      statusIdleDebounceMs: 0,
-      ai: {
-        async run() {
-          return { response: "All done." };
-        },
-      },
-    });
-    const runner = agentRunner(agent, stream);
-    const deliver = () => runner.catchUp();
-    await stream.append(systemContext(), userMessage());
-    await vi.waitFor(
-      async () => {
-        await deliver();
-        expect(announcements(stream)).toEqual([
-          { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
-          { busy: false, sinceOffset: expect.any(Number) },
-        ]);
-      },
-      { timeout: 5_000 },
-    );
-
-    // The announcement loop terminates: absorbing the idle announcement into
-    // the fold announces nothing further.
-    await deliver();
-    const journalLength = stream.events.length;
-    await deliver();
-    expect(stream.events.length).toBe(journalLength);
-  });
-
-  it("new work inside the idle debounce window leaves the blip out of the journal", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      statusIdleDebounceMs: 60_000,
-      ai: {
-        async run() {
-          return { response: "Done." };
-        },
-      },
-    });
-    const runner = agentRunner(agent, stream);
-    const deliver = () => runner.catchUp();
-    await stream.append(systemContext(), userMessage());
-    await vi.waitFor(
-      async () => {
-        await deliver();
-        expect(
-          stream.events.some(
-            (event) => event.type === "events.iterate.com/agent/llm-request-completed",
-          ),
-        ).toBe(true);
-      },
-      { timeout: 5_000 },
-    );
-    // Absorb the completion: the idle flip is folded and its debounce armed.
-    await deliver();
-    expect(announcements(stream)).toEqual([
-      { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
-    ]);
-
-    // A second message arrives inside the window: the pending idle is
-    // superseded WITHOUT its blip ever journaling, and the busy generation
-    // is re-announced at the new trigger's offset — so a stale idle append
-    // from the superseded timer (had it raced out) would be rejected by
-    // every consuming fold's sinceOffset guard.
-    await stream.append(userMessage());
-    await deliver();
-    const busyAnnouncements = announcements(stream) as { busy: boolean; sinceOffset: number }[];
-    expect(busyAnnouncements).toEqual([
-      { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
-      { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
-    ]);
-    expect(busyAnnouncements[1]!.sinceOffset).toBeGreaterThan(busyAnnouncements[0]!.sinceOffset);
-  });
-
-  it("the armed idle timer reads the committed fold at fire time: a busy event folded before the at-head pass suppresses the stale idle", async () => {
-    // The race this pins: with the idle debounce armed, a new busy-triggering
-    // event is REDUCED AND COMMITTED by the runner while the at-head pass
-    // that would announce the newer busy (and disarm the timer) has not run
-    // yet — a catch-up parked mid-journal. A fire-time check against a
-    // reconciler-refreshed memo still sees the old idle flip and appends a
-    // stale idle, which consuming folds ACCEPT (its sinceOffset is newer than
-    // the last announced busy) — briefly clearing a working agent. The check
-    // must read the CURRENT committed fold (the runner-backed `reads` dep),
-    // which already shows the busy flip.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const stream = agentStream();
-      // A settled, ANNOUNCED turn: the system prompt (1), the trigger (2), its
-      // busy announcement (3), and the request lifecycle (4-6). The requested
-      // event carries the exact key the replayed scheduled event's re-armed
-      // debounce timer re-derives, so its append dedupes into the seeded
-      // journal.
-      await stream.append(systemContext());
-      const [firstMessage] = await stream.append(userMessage());
-      await stream.append(
-        {
-          type: "events.iterate.com/agent/status-changed",
-          payload: { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
-        },
-        {
-          type: "events.iterate.com/agent/llm-request-scheduled",
-          payload: { debounceMs: 0, model: "gpt-test", requestId: "llm-request:gen-0" },
-        },
-        {
-          type: "events.iterate.com/agent/llm-request-requested",
-          idempotencyKey: "agent/llm-request-requested@4",
-          payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
-        },
-        {
-          type: "events.iterate.com/agent/llm-request-completed",
-          payload: { durationMs: 10, llmRequestOffset: 5, result: { status: "success" } },
-        },
-      );
-      // Hold the pull's empty tail read while armed, parking the catch-up
-      // right before its final at-head frame — the delivery gap the timer
-      // fires in.
-      let holdTail: Promise<void> | undefined;
-      const realReadEvents = stream.readEvents.bind(stream);
-      stream.readEvents = (input) => {
-        const pager = realReadEvents(input);
-        return {
-          next: async () => {
-            const page = await pager.next();
-            if (page.length === 0 && holdTail !== undefined) await holdTail;
-            return page;
-          },
-          [Symbol.dispose]() {},
-        };
-      };
-      const agent = makeAgentProcessor({
-        stream,
-        path: stream.path,
-        projectId: null,
-        statusIdleDebounceMs: 60_000,
-      });
-      // Page size 1 so the busy event's frame COMMITS before the held tail
-      // read (the at-head pulse fires only on the genuinely final page).
-      const runner = agentRunner(agent, stream, { readPageSize: 1 });
-      // Fold to the idle flip; the at-head pass arms its debounce timer.
-      await runner.catchUp();
-      expect(announcements(stream)).toEqual([
-        { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
-      ]);
-
-      // The busy trigger lands, with a successor event so its frame is not
-      // the final page; the parked pull reduces AND COMMITS it, then holds
-      // before the at-head pass. The successor is a CONSUMED lifecycle
-      // re-check (`stream/woken`), so this scenario exercises the normal
-      // consumed-event at-head pass. A final scan containing no consumed event
-      // would instead exercise the runner's eventless at-head pass.
-      const [busyMessage] = await stream.append(userMessage());
-      await stream.append({
-        type: "events.iterate.com/stream/woken",
-        payload: { incarnationId: "nudge" },
-      });
-      let releaseTail!: () => void;
-      holdTail = new Promise((resolve) => {
-        releaseTail = resolve;
-      });
-      const pull = runner.catchUp();
-      while ((await runner.snapshot()).offset < busyMessage!.offset) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-
-      // The debounce elapses INSIDE the gap. At fire time the committed fold
-      // already shows the busy flip, so the timer must swallow its idle.
-      await vi.advanceTimersByTimeAsync(60_000);
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(
-        (announcements(stream) as { busy?: boolean }[]).filter((patch) => patch.busy === false),
-      ).toEqual([]);
-
-      // Release the tail: the at-head pass announces the newer busy. The
-      // idle blip never journals at all.
-      releaseTail();
-      await pull;
-      expect(announcements(stream)).toEqual([
-        { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
-        { busy: true, phase: "llm", sinceOffset: busyMessage!.offset },
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("a revived incarnation announces a past-due idle flip immediately", async () => {
-    // A live run settles a turn, but dies before its idle debounce fires.
-    const stream = agentStream();
-    const live = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      statusIdleDebounceMs: 60_000,
-      ai: {
-        async run() {
-          return { response: "Done." };
-        },
-      },
-    });
-    const runner = agentRunner(live, stream);
-    const deliver = () => runner.catchUp();
-    await stream.append(systemContext(), userMessage());
-    await vi.waitFor(
-      async () => {
-        await deliver();
-        expect(
-          stream.events.some(
-            (event) => event.type === "events.iterate.com/agent/llm-request-completed",
-          ),
-        ).toBe(true);
-      },
-      { timeout: 5_000 },
-    );
-    await deliver();
-    expect(announcements(stream)).toEqual([
-      { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
-    ]);
-
-    // The revival folds the journal, finds the idle flip past due, and
-    // announces it inline — without dialing the AI for the settled request.
-    const revived = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      statusIdleDebounceMs: 60_000,
-      now: () => Date.now() + 120_000,
-      ai: {
-        async run(): Promise<never> {
-          throw new Error("revival must not dial the AI binding");
-        },
-      },
-    });
-    await agentRunner(revived, stream).catchUp();
-    expect(announcements(stream).at(-1)).toEqual({ busy: false, sinceOffset: expect.any(Number) });
-  });
-
-  it("a replayed settled turn with no prior announcements stays silent", async () => {
-    // A journal that folds trigger-through-completion to idle in ONE at-head
-    // page with nothing announced yet (a pre-announcement journal refolded
-    // after a contract deploy, or a synthetically seeded lifecycle) announces
-    // NEITHER busy nor idle: no surface ever painted anything, so there is
-    // nothing to clear — and an idle append here would fire once per
-    // historical agent journal on the first refold after a deploy.
-    const stream = agentStream();
-    await stream.append(
-      userMessage(),
-      {
-        type: "events.iterate.com/agent/llm-request-scheduled",
-        payload: { debounceMs: 0, model: "gpt-test", requestId: "llm-request:gen-0" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        // The key the replayed scheduled event's re-armed debounce timer will
-        // re-derive, so its append dedupes into this seeded event.
-        idempotencyKey: "agent/llm-request-requested@5",
-        payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 10, llmRequestOffset: 6, result: { status: "success" } },
-      },
-    );
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      statusIdleDebounceMs: 0,
-    });
-    const runner = agentRunner(agent, stream);
-    await runner.catchUp();
-    // Let the replayed scheduled event's re-armed timer fire and dedupe.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(announcements(stream)).toEqual([]);
-    expect(deriveAgentBusy(runner.currentState)).toBe(false);
-  });
-
-  it("a replayed settled turn with only authored patches journaled stays silent too", async () => {
-    // Same replay shape as above, but the journal carries an authored status
-    // patch — announcedStatus EXISTS without busy ever journaled. Idle is due
-    // only when a busy announcement stands, so this still announces nothing.
-    const stream = agentStream();
-    await stream.append(
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { title: "Lisbon trip" },
-      },
-      userMessage(),
-      {
-        type: "events.iterate.com/agent/llm-request-scheduled",
-        payload: { debounceMs: 0, model: "gpt-test", requestId: "llm-request:gen-0" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: "agent/llm-request-requested@6",
-        payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 10, llmRequestOffset: 7, result: { status: "success" } },
-      },
-    );
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      statusIdleDebounceMs: 0,
-    });
-    const runner = agentRunner(agent, stream);
-    await runner.catchUp();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(announcements(stream)).toEqual([{ title: "Lisbon trip" }]);
-    expect(runner.currentState.announcedStatus).toEqual({ title: "Lisbon trip" });
-  });
-
-  it("folds agent-authored patches into the status record without announcing anything", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
-    const runner = agentRunner(agent, stream);
-    const deliver = () => runner.catchUp();
-    await stream.append(systemContext(), {
-      type: "events.iterate.com/agent/status-changed",
-      payload: { title: "Lisbon trip", note: "Planning a trip", shortStatus: "comparing flights" },
-    });
-    await deliver();
-    expect(runner.currentState.announcedStatus).toEqual({
-      title: "Lisbon trip",
-      note: "Planning a trip",
-      shortStatus: "comparing flights",
-    });
-    // Authored fields alone announce nothing and trigger no turn.
-    const journalLength = stream.events.length;
-    await deliver();
-    expect(stream.events.length).toBe(journalLength);
-
-    // The platform's busy announcement then merges INTO the same record.
-    await stream.append(userMessage());
-    await deliver();
-    await deliver();
-    expect(runner.currentState.announcedStatus).toMatchObject({ busy: true, title: "Lisbon trip" });
-  });
-
-  it("announces the phase hand-off when a turn starts a script", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      statusIdleDebounceMs: 60_000,
-    });
-    const runner = agentRunner(agent, stream);
-    const deliver = () => runner.catchUp();
-    await stream.append(systemContext(), userMessage());
-    await deliver();
-    // The turn hands off to a script: busy stays true but the phase flips,
-    // so surfaces switch from "making an LLM request" to "running a script".
-    const [script] = await stream.append({
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { code: "async () => {}", executionId: "script-1", expiresAt: Date.now() + 60_000 },
-    });
-    await deliver();
-    await deliver();
-    expect(announcements(stream)).toEqual([
-      { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
-      { busy: true, phase: "script", sinceOffset: script!.offset },
-    ]);
-  });
-
-  it("clears an authored blocked flag with the next busy announcement", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
-    const runner = agentRunner(agent, stream);
-    const deliver = () => runner.catchUp();
-    // The agent ended a previous turn blocked on the human.
-    await stream.append(systemContext(), {
-      type: "events.iterate.com/agent/status-changed",
-      payload: { blocked: true, shortStatus: "waiting for the Acme API key" },
-    });
-    await deliver();
-    expect(runner.currentState.announcedStatus).toMatchObject({ blocked: true });
-
-    // The human replies: the busy announcement carries the unblock.
-    await stream.append(userMessage());
-    await deliver();
-    const announced = announcements(stream) as { blocked?: boolean }[];
-    expect(announced.at(-1)).toEqual({
-      busy: true,
-      phase: "llm",
-      sinceOffset: expect.any(Number),
-      blocked: false,
-    });
-    await deliver();
-    expect(runner.currentState.announcedStatus).toMatchObject({ blocked: false, busy: true });
-  });
-
-  it("the fold ignores a stale idle announcement that lost its race", () => {
-    const statusEvent = (payload: Record<string, unknown>, offset: number) => ({
-      type: "events.iterate.com/agent/status-changed",
-      payload,
-      offset,
-      createdAt: "2026-07-09T00:00:00.000Z",
-      path: "/agents/test",
-    });
-    const state = reduceAgentEvents([
-      statusEvent({ busy: true, sinceOffset: 4 }, 5),
-      // The debounce timer's idle append landed after newer busy work; its
-      // older sinceOffset must fold to nothing.
-      statusEvent({ busy: false, sinceOffset: 2 }, 6),
-    ]);
-    expect(state.announcedStatus).toEqual({ busy: true, sinceOffset: 4 });
-  });
-
-  it("derives script-turn hand-offs as busy, with only one-append idle gaps", () => {
-    const at = (offset: number, type: string, payload: Record<string, unknown>) => ({
+describe("semantic waiting", () => {
+  it("folds summaries and conditionally clears only the wait that preceded a wake", () => {
+    const event = (type: string, payload: Record<string, unknown>, offset: number) => ({
       type,
       payload,
       offset,
       createdAt: "2026-07-09T00:00:00.000Z",
       path: "/agents/test",
     });
-    const journal = [
-      at(1, "events.iterate.com/agents/context-added", {
-        role: "system",
-        key: "agent/system-prompt",
-        content: "You are a test agent.",
-      }),
-      at(2, "events.iterate.com/agents/context-added", {
-        role: "user",
-        content: "run it",
-        actor: { type: "user", origin: "web" },
-        llmRequestPolicy: { behaviour: "after-current-request" },
-      }),
-      at(3, "events.iterate.com/agent/llm-request-scheduled", {
-        debounceMs: 0,
-        model: "gpt-test",
-        requestId: "llm-request:gen-0",
-      }),
-      at(4, "events.iterate.com/agent/llm-request-requested", {
-        model: "gpt-test",
-        requestId: "llm-request:gen-0",
-      }),
-      at(5, "events.iterate.com/agent/llm-request-completed", {
-        durationMs: 10,
-        llmRequestOffset: 4,
-        result: { status: "success" },
-      }),
-    ];
-    // Trigger through completion: busy, no interruptions.
-    expect(deriveAgentBusy(reduceAgentEvents(journal.slice(0, 2)))).toBe(true);
-    expect(deriveAgentBusy(reduceAgentEvents(journal.slice(0, 4)))).toBe(true);
-    // The one-append gap: the completion folds before the extracted script
-    // request lands. This is the blip the idle announcement debounce covers.
-    expect(deriveAgentBusy(reduceAgentEvents(journal))).toBe(false);
+    const state = reduceAgentEvents([
+      event(AGENT_SUMMARY_UPDATED_EVENT_TYPE, { waitingFor: "user_input" }, 1),
+      event(
+        "events.iterate.com/agents/context-added",
+        {
+          role: "user",
+          content: "here is the answer",
+          actor: { type: "user", origin: "web" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+        2,
+      ),
+      event(AGENT_SUMMARY_UPDATED_EVENT_TYPE, { waitingFor: "timer" }, 3),
+      event(
+        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+        { waitingFor: null, clearWaitingForThroughOffset: 2 },
+        4,
+      ),
+    ]);
 
-    // The script request arrives: busy again.
-    const withScript = [
-      ...journal,
-      at(6, "events.iterate.com/capability-host/script-run-requested", {
-        code: "async () => {}",
-        executionId: "script-6",
-        expiresAt: Date.now() + 60_000,
-      }),
-    ];
-    expect(deriveAgentBusy(reduceAgentEvents(withScript))).toBe(true);
+    expect(state.summary.waitingFor).toBe("timer");
+    expect(state.waitingForSinceOffset).toBe(3);
+  });
 
-    // Script completion → rendered result input: the same one-append gap,
-    // then the re-queued loop turns the activity back to thinking.
-    const nextTurn = [
-      ...withScript,
-      at(7, "events.iterate.com/capability-host/script-run-settled", {
-        executionId: "script-6",
-        settlement: scriptSucceeded(null),
+  it("clears waiting for external input but not for a same-turn script result", async () => {
+    const externalStream = agentStream();
+    const external = makeAgentProcessor({
+      stream: externalStream,
+      path: externalStream.path,
+      projectId: null,
+    });
+    const externalRunner = agentRunner(external, externalStream);
+    await externalStream.append(
+      {
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+        payload: { waitingFor: "user_input" },
+      },
+      systemContext(),
+      userContext("hi"),
+    );
+    await externalRunner.catchUp();
+    await externalRunner.catchUp();
+    expect(externalStream.events).toContainEqual(
+      expect.objectContaining({
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+        payload: {
+          waitingFor: null,
+          clearWaitingForThroughOffset: expect.any(Number),
+        },
       }),
-      at(8, "events.iterate.com/agents/context-added", {
-        role: "developer",
-        content: "script result",
-        llmRequestPolicy: { behaviour: "after-current-request" },
-      }),
-    ];
-    expect(deriveAgentBusy(reduceAgentEvents(nextTurn))).toBe(true);
-    // Every flip is stamped with the event that caused it.
-    expect(reduceAgentEvents(nextTurn).status).toMatchObject({ busy: true, sinceOffset: 8 });
+    );
+    expect(externalRunner.currentState.summary.waitingFor).toBeUndefined();
+
+    const continuationStream = agentStream();
+    const continuation = makeAgentProcessor({
+      stream: continuationStream,
+      path: continuationStream.path,
+      projectId: null,
+    });
+    const continuationRunner = agentRunner(continuation, continuationStream);
+    await continuationStream.append(
+      {
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+        payload: { waitingFor: "timer" },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          actor: { type: "script", executionId: "script-1" },
+          content: "same-turn result",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+    );
+    await continuationRunner.catchUp();
+
+    expect(
+      continuationStream.events.some(
+        (event) =>
+          event.type === AGENT_SUMMARY_UPDATED_EVENT_TYPE &&
+          event.payload?.clearWaitingForThroughOffset !== undefined,
+      ),
+    ).toBe(false);
+    expect(continuationRunner.currentState.summary.waitingFor).toBe("timer");
   });
 });

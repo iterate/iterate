@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
+import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
+import {
+  mirrorLockVersionVector,
+  streamMirrorWriterLockName,
+} from "~/domains/streams/client-libraries/browser/stream-leader.ts";
 
 // Local reproduction of CI conditions (slow runner + real network to a deployed worker).
 // Example: E2E_CPU_THROTTLE=6 E2E_NET_LATENCY_MS=100 WORKER_URL=https://... pnpm playwright.
@@ -129,13 +134,13 @@ test("event type filter uses the indexed SQLite type column", async ({ page }) =
     payload: { streamPath, value: crypto.randomUUID() },
   });
   await expect(eventMeta(page, primaryType)).toHaveCount(2);
-  // 7 = the 3-event birth certificate + this page's subscriber-connected + 3 appends.
-  await expect(page.getByTestId("event-count")).toHaveText("7");
+  // 6 = the standalone birth certificate (created + woken), connection, and 3 appends.
+  await expect(page.getByTestId("event-count")).toHaveText("6");
 
   await expect(page.getByLabel("Event type filter")).toContainText(primaryType);
   await page.getByLabel("Event type filter").selectOption(primaryType);
-  await expect(page.getByTestId("event-count")).toHaveText("7");
-  await expect(page.getByTestId("filter-count")).toHaveText("2 filtered events / 7 total events");
+  await expect(page.getByTestId("event-count")).toHaveText("6");
+  await expect(page.getByTestId("filter-count")).toHaveText("2 filtered events / 6 total events");
   await expect(eventMeta(page, primaryType)).toHaveCount(2);
   await expect(eventMeta(page, secondaryType)).toHaveCount(0);
   await expect(eventMeta(page, "events.iterate.com/stream/created")).toHaveCount(0);
@@ -144,15 +149,15 @@ test("event type filter uses the indexed SQLite type column", async ({ page }) =
     type: secondaryType,
     payload: { streamPath, value: crypto.randomUUID() },
   });
-  await expect(page.getByTestId("event-count")).toHaveText("8");
+  await expect(page.getByTestId("event-count")).toHaveText("7");
   await expect(eventMeta(page, secondaryType)).toHaveCount(0);
 
   await appendComposerEvent(page, {
     type: primaryType,
     payload: { streamPath, value: crypto.randomUUID() },
   });
-  await expect(page.getByTestId("event-count")).toHaveText("9");
-  await expect(page.getByTestId("filter-count")).toHaveText("3 filtered events / 9 total events");
+  await expect(page.getByTestId("event-count")).toHaveText("8");
+  await expect(page.getByTestId("filter-count")).toHaveText("3 filtered events / 8 total events");
   await expect(eventMeta(page, primaryType)).toHaveCount(3);
 
   const downloadPromise = page.waitForEvent("download");
@@ -200,9 +205,9 @@ test("random bulk insert creates multiple filterable event types and shows filte
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 84 = birth certificate (3) + subscriber-connected + 80 random events.
-  await expect(page.getByTestId("event-count")).toHaveText("84", { timeout: 30_000 });
-  await expect(page.getByTestId("filter-count")).toHaveText("84 total events");
+  // 83 = standalone birth certificate (2) + subscriber-connected + 80 random events.
+  await expect(page.getByTestId("event-count")).toHaveText("83", { timeout: 30_000 });
+  await expect(page.getByTestId("filter-count")).toHaveText("83 total events");
 
   const generatedEventTypes = await page.getByLabel("Event type filter").evaluate((element) => {
     if (!(element instanceof HTMLSelectElement))
@@ -218,7 +223,7 @@ test("random bulk insert creates multiple filterable event types and shows filte
     throw new Error("random insert did not create a generated event type");
   await page.getByLabel("Event type filter").selectOption(selectedType);
   await expect(page.getByTestId("filter-count")).toHaveText(
-    /\d+ filtered events \/ 84 total events/,
+    /\d+ filtered events \/ 83 total events/,
   );
   await expect(eventMeta(page, selectedType).first()).toBeVisible();
 });
@@ -316,7 +321,7 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
 
-  const expectedCount = insertedCount + 4; // created + worker-feed config + woken + subscriber-connected
+  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
@@ -463,8 +468,8 @@ test("fresh runtime takes over when a legacy writer lock is still held", async (
 
   await page.goto(streamRoute({ path: streamPath }));
   await expect(page.getByTestId("subscription-status")).toHaveText("leader");
-  // 4 = the 3-event birth certificate + this page's own subscriber-connected.
-  await expect(page.getByTestId("event-count")).toHaveText("4");
+  // 3 = the standalone birth certificate + this page's own subscriber-connected.
+  await expect(page.getByTestId("event-count")).toHaveText("3");
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await legacyLockHolder.close();
@@ -624,8 +629,8 @@ test("scroll to bottom affordance counts new events while away from tail", async
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 84 = birth certificate (3) + subscriber-connected + 80 random events.
-  await expect(page.getByTestId("event-count")).toHaveText("84", { timeout: 30_000 });
+  // 83 = standalone birth certificate (2) + subscriber-connected + 80 random events.
+  await expect(page.getByTestId("event-count")).toHaveText("83", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
   await page.getByRole("button", { name: "Scroll to top" }).click();
@@ -659,8 +664,8 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 104 = birth certificate (3) + subscriber-connected + 100 random events.
-  await expect(page.getByTestId("event-count")).toHaveText("104", { timeout: 30_000 });
+  // 103 = standalone birth certificate (2) + subscriber-connected + 100 random events.
+  await expect(page.getByTestId("event-count")).toHaveText("103", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
   await scrollStreamBy(page, -500);
@@ -677,7 +682,7 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
     expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 }),
   ]);
 
-  await expect(page.getByTestId("event-count")).toHaveText("5104", { timeout: 60_000 });
+  await expect(page.getByTestId("event-count")).toHaveText("5103", { timeout: 60_000 });
   await expect(
     page.getByRole("button", { name: "Scroll to bottom, 5000 new events" }),
   ).toBeVisible();
@@ -713,8 +718,8 @@ test("expanding the tail event row at stream end stays above the composer", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 124 = birth certificate (3) + subscriber-connected + 120 random events.
-  await expect(page.getByTestId("event-count")).toHaveText("124", { timeout: 30_000 });
+  // 123 = standalone birth certificate (2) + subscriber-connected + 120 random events.
+  await expect(page.getByTestId("event-count")).toHaveText("123", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
   const tailRow = page.locator("[data-testid='virtual-row']").last().getByTestId("event-meta");
@@ -754,8 +759,8 @@ test("event row open and closed state survives virtual row unmounts", async ({ p
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 164 = birth certificate (3) + subscriber-connected + 160 random events.
-  await expect(page.getByTestId("event-count")).toHaveText("164", { timeout: 30_000 });
+  // 163 = standalone birth certificate (2) + subscriber-connected + 160 random events.
+  await expect(page.getByTestId("event-count")).toHaveText("163", { timeout: 30_000 });
 
   await page.getByRole("button", { name: "Scroll to top" }).click();
   const firstRow = eventRowByOffset(page, 1);
@@ -851,7 +856,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
 
-  const expectedCount = insertedCount + 4; // created + worker-feed config + woken + subscriber-connected
+  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
   });
@@ -899,8 +904,8 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
   try {
     const dbPath = join(tempDirectory, download.suggestedFilename());
     await download.saveAs(dbPath);
-    // 5 = birth certificate (3) + this page's subscriber-connected + 1 append.
-    expect(sqliteScalar(dbPath, `SELECT COUNT(*) FROM events`)).toBe("5");
+    // 4 = standalone birth certificate (2) + this page's connection + 1 append.
+    expect(sqliteScalar(dbPath, `SELECT COUNT(*) FROM events`)).toBe("4");
     expect(sqliteScalar(dbPath, `SELECT COUNT(*) FROM events WHERE type = '${type}'`)).toBe("1");
   } finally {
     rmSync(tempDirectory, { force: true, recursive: true });
@@ -912,14 +917,14 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
 test("kill reconnects and appends a new woken event", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
-  // 4 = the 3-event birth certificate + this page's own subscriber-connected.
-  await expect(page.getByTestId("event-count")).toHaveText("4");
+  // 3 = the standalone birth certificate + this page's own subscriber-connected.
+  await expect(page.getByTestId("event-count")).toHaveText("3");
 
   await page.getByRole("button", { name: "Kill" }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
   // The killed incarnation took every connection with it: the reboot appends a
   // fresh woken fact and the browser's reconnect a fresh subscriber-connected.
-  await expect(page.getByTestId("event-count")).toHaveText("6", { timeout: 30_000 });
+  await expect(page.getByTestId("event-count")).toHaveText("5", { timeout: 30_000 });
   await expect(eventMeta(page, "events.iterate.com/stream/woken")).toHaveCount(2);
 });
 
@@ -1090,13 +1095,13 @@ test("reset discards stale local rows and shows a fresh stream", async ({ page }
     payload: { streamPath, value: crypto.randomUUID() },
   });
   await expect(eventMeta(page, type).first()).toBeVisible();
-  // 5 = the 3-event birth certificate + this page's subscriber-connected + 1 append.
-  await expect(page.getByTestId("event-count")).toHaveText("5");
+  // 4 = the standalone birth certificate + this page's connection + 1 append.
+  await expect(page.getByTestId("event-count")).toHaveText("4");
 
   await page.getByRole("button", { name: "Reset", exact: true }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
-  // The wiped stream births fresh (3 events) and this page reconnects (+1).
-  await expect(page.getByTestId("event-count")).toHaveText("4", { timeout: 30_000 });
+  // The wiped stream births fresh (2 events) and this page reconnects (+1).
+  await expect(page.getByTestId("event-count")).toHaveText("3", { timeout: 30_000 });
   await expect(eventMeta(page, type)).toHaveCount(0);
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 });
@@ -1218,25 +1223,21 @@ async function holdLegacyWriterLock(page: Page, streamPath: string) {
 }
 
 async function holdCurrentWriterLock(page: Page, streamPath: string) {
-  await page.evaluate(async (path) => {
-    // Must match the lock a live mirror runtime requests, or the fresh tab below
-    // would elect itself leader and this "empty follower" test would be vacuous.
-    // Source of truth: streamMirrorWriterLockName + mirrorLockVersionVector in
-    // apps/os/.../browser/stream-leader.ts. Format:
-    //   stream-writer:<projectId>:<path>:browser-stream-mirror:<versionVector>
-    // versionVector = the canonical members' `<slug>@<schemaVersion>` sorted and
-    // joined by "|" (browser-feed@4, browser-raw-events@7). Bump here whenever a
-    // member's schemaVersion changes — that bump is exactly what this lock guards.
+  const lockName = streamMirrorWriterLockName({
+    projectId: "default",
+    streamPath,
+    versionVector: mirrorLockVersionVector(CANONICAL_MIRROR_PROCESSORS),
+  });
+  await page.evaluate(async (name) => {
+    // Derive this from the same canonical processor set as the live mirror. A
+    // stale lock name makes the test vacuous because the page elects itself.
     await new Promise<void>((resolve) => {
-      void navigator.locks.request(
-        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@4|browser-raw-events@7`,
-        async () => {
-          resolve();
-          await new Promise(() => {});
-        },
-      );
+      void navigator.locks.request(name, async () => {
+        resolve();
+        await new Promise(() => {});
+      });
     });
-  }, streamPath);
+  }, lockName);
 }
 
 function sqliteScalar(dbPath: string, sql: string) {

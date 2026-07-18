@@ -14,10 +14,14 @@
 // `cloudflare:workers` imports) so the embed stays self-contained.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
+  DynamicWorkerCapability,
   DynamicWorkerRef,
   ItxBinding,
   Project,
+  ProjectAuthActor,
+  ProjectAuthCredentials,
   ProjectAuthPolicy,
+  StatefulDynamicWorkerRef,
   StreamEvent,
   StreamEventPager,
   StreamPushEventBatch,
@@ -29,9 +33,16 @@ import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated.ts";
 
-/** The one binding the platform supplies to every dynamic worker: `get()`
- * for capability method calls, `fetch()` for HTTP into sibling workers. */
-type IterateEnv = { ITX: ItxBinding };
+/**
+ * What the platform supplies to every dynamic worker: the `ITX` binding
+ * (`get()` for capability method calls, `fetch()` for HTTP into sibling
+ * workers) and `ITERATE_WORKER_VERSION` — the worker's own content-addressed
+ * build identity, changing exactly when its source does. Pass the latter as
+ * the `version` of a hosted processor registry: a version change is what
+ * resets a crash-looping keepalive's backoff budget, so a broken-then-fixed
+ * worker recovers on its next build instead of waiting out the backoff.
+ */
+type IterateEnv = { ITX: ItxBinding; ITERATE_WORKER_VERSION: string };
 
 /**
  * The remote auth target cannot receive an ordinary Request just to inspect
@@ -45,6 +56,10 @@ type ProjectAuthMetadata = {
 };
 
 type RemoteProjectAuth = {
+  authenticate(
+    request: ProjectAuthMetadata,
+    credentials: ProjectAuthCredentials,
+  ): Promise<ProjectAuthActor>;
   get(policy: ProjectAuthPolicy): RemoteProjectAuth;
   fetch(request: ProjectAuthMetadata | Request): Promise<Response | null>;
 };
@@ -61,6 +76,9 @@ function requestMetadata(request: Request): ProjectAuthMetadata {
 
 function wrapProjectAuth(remote: RemoteProjectAuth): Project["auth"] {
   return {
+    async authenticate(request, credentials) {
+      return await remote.authenticate(requestMetadata(request), credentials);
+    },
     get(policy) {
       return wrapProjectAuth(remote.get(policy));
     },
@@ -177,6 +195,36 @@ function disposeStub(stub: unknown): void {
   } catch {}
 }
 
+/** Open a project itx session, use it, dispose it. RPC stubs from
+ * `env.ITX.get()` must not outlive the invocation that dialed them, so every
+ * operation opens its own session. */
+async function withProject<T>(env: IterateEnv, fn: (project: Project) => Promise<T>): Promise<T> {
+  const project = await env.ITX.get();
+  try {
+    return await fn(project);
+  } finally {
+    disposeStub(project);
+  }
+}
+
+/**
+ * A view of `target` with `overrides` in front and everything else passed
+ * through. Proxies (not spreads or Object.create) because DurableObjectState
+ * and DurableObjectStorage are host objects: their methods must be invoked
+ * with the REAL receiver or workerd throws "Illegal invocation".
+ */
+function overlay<T extends object>(target: T, overrides: Record<PropertyKey, unknown>): T {
+  return new Proxy(target, {
+    get(object, prop) {
+      // Own keys only: `in` would match Object.prototype inherits
+      // (toString, …) and shadow the host object's.
+      if (Object.hasOwn(overrides, prop)) return overrides[prop];
+      const value = Reflect.get(object, prop, object);
+      return typeof value === "function" ? value.bind(object) : value;
+    },
+  });
+}
+
 /**
  * A {@link ProcessorStream} over the project stream at `path`, dialed through
  * the platform ITX binding — the stream handle a worker-hosted stream
@@ -187,14 +235,8 @@ function disposeStub(stub: unknown): void {
  * session for its pager's lifetime (scope it with `using`, like any pager).
  */
 export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream {
-  const withStream = async <T>(fn: (stream: Project["streams"]) => Promise<T>): Promise<T> => {
-    const project = await env.ITX.get();
-    try {
-      return await fn(project.streams);
-    } finally {
-      disposeStub(project);
-    }
-  };
+  const withStream = <T>(fn: (streams: Project["streams"]) => Promise<T>): Promise<T> =>
+    withProject(env, (project) => fn(project.streams));
   return {
     append: (...events) => withStream((streams) => streams.get(path).append(...events)),
     getEvent: (args) => withStream((streams) => streams.get(path).getEvent(args)),
@@ -225,6 +267,62 @@ export function itxProjectStream(env: IterateEnv, path: string): ProcessorStream
     },
     at: (siblingPath) => itxProjectStream(env, siblingPath),
   };
+}
+
+/** Where the platform-delivered self ref lives in this worker's own storage
+ * (see {@link IterateDurableObject.__stashSelfRef}). */
+const SELF_REF_STORAGE_KEY = "iterate:self-ref";
+
+/**
+ * Durable alarms for a stateful dynamic worker, presented as the ordinary
+ * `DurableObjectState` alarm API — what `IterateDurableObject` installs as
+ * `this.ctx`, so alarms on stateful workers just work.
+ *
+ * workerd does not implement alarms for facet-hosted Durable Objects — the
+ * hosting model for stateful dynamic workers (workerd#6810; a facet
+ * `setAlarm` even appears to succeed, then poisons the commit path). So the
+ * platform Durable Object that hosts this worker keeps the real alarm on its
+ * behalf: the trio here dials `itx.workers.get(ref).setAlarm/getAlarm` on the
+ * worker's own ref — delivered by the host before any other traffic and
+ * stashed durably ({@link IterateDurableObject.__stashSelfRef}) — and the
+ * host's fire calls this class's `alarm(alarmInfo)` method, retried by the
+ * platform if it throws, exactly like a native alarm handler.
+ *
+ * Everything except the three alarm methods is the worker's own `ctx`,
+ * untouched (`storage.kv`, `waitUntil`, WebSocket APIs, …), so code written
+ * against this state uses only standard Durable Object concepts, and if
+ * workerd ships facet alarms the shim disappears without a caller changing.
+ * Honest divergences: the alarm methods ignore the native `options` bag,
+ * alarms armed inside `storage.transaction()` bypass the shim, and a class
+ * with no `alarm()` handler fails at fire time (native `setAlarm` rejects at
+ * arm time; the shim cannot check).
+ */
+function selfAlarmState<State extends DurableObjectState>(ctx: State, env: IterateEnv): State {
+  const withSelf = <T>(fn: (worker: DynamicWorkerCapability) => Promise<T>): Promise<T> => {
+    const ref = ctx.storage.kv.get<StatefulDynamicWorkerRef>(SELF_REF_STORAGE_KEY);
+    if (ref === undefined) {
+      // Unreachable after any platform contact — every call, fetch, and
+      // alarm fire delivers the ref first. Constructor bodies run before
+      // that first contact, hence the carve-out in the error.
+      throw new Error(
+        "this worker's own ref has not been delivered yet — alarms are unavailable in the " +
+          "constructor; arm from a handler instead",
+      );
+    }
+    return withProject(env, (project) => fn(project.workers.get(ref)));
+  };
+  return overlay(ctx, {
+    storage: overlay(ctx.storage, {
+      setAlarm: (scheduledTime: number | Date) =>
+        withSelf((worker) =>
+          worker.setAlarm(
+            typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime(),
+          ),
+        ),
+      deleteAlarm: () => withSelf((worker) => worker.setAlarm(null)),
+      getAlarm: () => withSelf((worker) => worker.getAlarm()),
+    }),
+  });
 }
 
 /**
@@ -292,12 +390,30 @@ export class IterateWorkerEntrypoint<
  * under a `durableWorkerKey`). Same platform surface as
  * `IterateWorkerEntrypoint` — see its docstring for the event-delivery and
  * capability-dispatch contracts — on a DurableObject, so state survives
- * across requests and WebSockets can be served from `fetch`.
+ * across requests and WebSockets can be served from `fetch`. Durable alarms
+ * work natively — `this.ctx.storage.setAlarm(...)` plus an `alarm()` method
+ * on the class — even though this object is hosted as a workerd facet with
+ * no alarms of its own; see {@link selfAlarmState} for the mechanism.
  */
 export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends DurableObject<Env> {
   constructor(ctx: ConstructorParameters<typeof DurableObject<Env>>[0], env: Env) {
     super(ctx, env);
     this.env = wrapIterateEnv(env);
+    // Read back through the property so the overlay carries the exact ctx
+    // type the base class declares in every typecheck context.
+    this.ctx = selfAlarmState(this.ctx, this.env);
+  }
+
+  /**
+   * Platform bootstrap door: the Durable Object hosting this worker delivers
+   * the worker's OWN ref here before any other traffic in its incarnation —
+   * a facet has no channel to learn its identity by itself, and the ref is
+   * what the alarm shim dials (`itx.workers.get(ref)` resolves back to the
+   * hosting DO). Stashed durably, so a warm facet under a fresh host needs
+   * no re-delivery to keep working.
+   */
+  __stashSelfRef(ref: StatefulDynamicWorkerRef): void {
+    this.ctx.storage.kv.put(SELF_REF_STORAGE_KEY, ref);
   }
 
   /** A real fetch hop into a sibling dynamic worker — see

@@ -448,12 +448,12 @@ describe("preview test commands", () => {
     expect(workflow).not.toContain("            /tmp/marathon");
   });
 
-  test("runs the OS TUI, vitest, and Playwright sub-lanes concurrently", () => {
+  test("keeps the OS TUI, vitest, and Playwright sub-lanes sequential", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    // The chromium install starts first in the background. TUI and Vitest run
-    // in the background alongside the foreground Playwright specs; every wait
-    // propagates its lane's exit code.
+    // Only the chromium download runs in the background: it does not touch the
+    // deployed slot. The three remote suites must not overlap their independent
+    // worker pools and accidentally exceed the slot's tested concurrency.
     const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts >";
     const e2eLane = "pnpm e2e --project node >";
     const playwrightSpec = "pnpm --dir ../.. spec";
@@ -463,15 +463,33 @@ describe("preview test commands", () => {
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
     expect(script).toContain('wait "$PW_INSTALL_PID"');
-    expect(script).toContain('wait "$TUI_PID"');
-    expect(script).toContain('wait "$E2E_PID"');
+    expect(script).not.toContain("TUI_PID");
+    expect(script).not.toContain("E2E_PID");
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
-    // Install kicks off before the lane and completes (wait) before the specs.
+    // Install kicks off first; each remote suite finishes before the next one
+    // starts, and the install is joined before Playwright needs Chromium.
     expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(tuiLane));
-    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(e2eLane));
+    expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(e2eLane));
+    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
+  });
+
+  test("budgets the serialized OS preview lane from its measured green floor", () => {
+    expect(cloudflarePreviewApps.os).toMatchObject({
+      previewDeployBudgetMs: 115_000,
+      previewTestBudgetMs: 560_000,
+    });
+
+    const workflow = parseYaml(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ) as { jobs: { preview: { "timeout-minutes": number } } };
+    // 20, not the serialized lanes' measured 15: the sandbox-build pipeline
+    // adds real builder-pool container builds across the worker specs, and
+    // the ceiling must fit one retry of the slowest container-heavy spec
+    // (15 killed a 55/56-green run mid-retry and lost its artifacts).
+    expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
   });
 });
 

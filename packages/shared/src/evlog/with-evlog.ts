@@ -31,7 +31,7 @@ export type { AppStdoutEvent, RequestLogEntry } from "./stdout.ts";
 
 const defaultRequestLogFilterRules = [
   AppRequestLogFilterRule.parse({
-    path: "/posthog-proxy/**",
+    path: "/e/**",
     statuses: [200, 204, 304],
     action: "drop",
   }),

@@ -5,13 +5,19 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "iterate/processors";
+import { sameIdempotentEvent } from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/processors";
+import { streamDeliveryAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
+import {
+  deploymentItxForInternal,
+  itxForScope,
+  StreamSubscriptionRpcTarget,
+} from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
@@ -27,7 +33,10 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
-import { STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX } from "./stream-unavailable.ts";
+import {
+  isDurableObjectLifecycleError,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
+} from "./stream-unavailable.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -38,6 +47,26 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+
+/**
+ * Observe fire-and-forget stream-core work without handing a rejected promise
+ * to `waitUntil`. A deployment replaces the current Durable Object
+ * incarnation and rejects its in-flight stub calls; that is a lifecycle
+ * interruption, while an application rejection remains an error.
+ */
+export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch (error) {
+    if (isDurableObjectLifecycleError(error)) {
+      console.info("stream core background work interrupted by durable object lifecycle", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    console.error("stream core background work failed", error);
+  }
+}
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -106,6 +135,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
+        createAuthorityRoot: () => this.#createSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -116,6 +146,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         try {
           this.append(event);
         } catch (error) {
+          if (isDurableObjectLifecycleError(error)) {
+            console.info("stream delivery fact append interrupted by durable object lifecycle", {
+              message: error instanceof Error ? error.message : String(error),
+              type: event.type,
+            });
+            return;
+          }
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
@@ -127,6 +164,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     },
   });
   #coreProcessorState: CoreProcessorState;
+
+  /**
+   * Creates a fresh in-isolate root for one stream delivery evaluation. It
+   * carries narrowly branded delivery auth and owns no Workers RPC lifetime.
+   */
+  #createSubscriberAuthorityRoot(): unknown {
+    const auth = streamDeliveryAuthContext();
+    return this.name.projectId === null
+      ? deploymentItxForInternal({ auth, ctx: this.ctx })
+      : itxForScope({ auth, ctx: this.ctx, path: "/", projectId: this.name.projectId });
+  }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -145,7 +193,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         type: "events.iterate.com/stream/created",
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
-      if (this.name.projectId !== null) {
+      // The standalone streams playground reuses this DO without hosting a
+      // project worker. Do not invent a fake subscriber there: OS's PROJECT
+      // binding is the capability that makes this feed real.
+      if (this.name.projectId !== null && "PROJECT" in this.env) {
         this.append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
@@ -159,9 +210,9 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "skip",
           } satisfies SubscriptionConfiguredPayload,
         });
-        // The standalone streams playground reuses this DO without OS's
-        // PostHog credential or receiver. Deployed OS environments require
-        // the credential, so its presence is the deployment boundary.
+        // The standalone streams playground also has no PostHog credential or
+        // receiver. Deployed OS environments require the credential, so its
+        // presence is the integration boundary.
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
@@ -379,6 +430,21 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** The committed head used to pin a recoverable public wait's replay cursor. */
   getMaxOffset(): number {
     return this.#coreProcessorState.maxOffset;
+  }
+
+  /**
+   * Both heads in one read, for exact-offset CAS appends that also need a
+   * fold barrier: `maxOffset` is the raw assignable head (ephemeral rows hold
+   * offsets too — the CAS target), while `maxDurableOffset` is the tail a
+   * default catch-up can actually fold through — the only head a
+   * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
+   * ephemeral suffix that processor reads never see.
+   */
+  getHeadOffsets(): { maxDurableOffset: number; maxOffset: number } {
+    return {
+      maxDurableOffset: this.#log.highestDurableOffset(),
+      maxOffset: this.#coreProcessorState.maxOffset,
+    };
   }
 
   // ===========================================================================
@@ -893,17 +959,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #runInBackground(work: () => Promise<unknown>): void {
-    let promise: Promise<unknown>;
-    try {
-      promise = work();
-    } catch (error) {
-      console.error("stream core background work failed", error);
-      return;
-    }
-    this.ctx.waitUntil(promise);
-    void promise.catch((error: unknown) => {
-      console.error("stream core background work failed", error);
-    });
+    this.ctx.waitUntil(settleStreamCoreBackgroundWork(work));
   }
 
   // ===========================================================================
@@ -1294,39 +1350,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 /** Idempotency deduplicates one logical event, not arbitrary writes sharing a
  * key. Provenance is deliberately excluded: a processor may retry the same
  * logical output after a deploy changes its source-version stamp. */
-function sameIdempotentEvent(existing: StreamEvent, requested: StreamEventInput): boolean {
-  return (
-    existing.type === requested.type &&
-    jsonValuesEqual(existing.payload, requested.payload) &&
-    jsonValuesEqual(existing.metadata, requested.metadata) &&
-    existing.ephemeral === requested.ephemeral
-  );
-}
-
-function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonValuesEqual(value, right[index]))
-    );
-  }
-  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
-    return false;
-  }
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord);
-  return (
-    leftKeys.length === Object.keys(rightRecord).length &&
-    leftKeys.every(
-      (key) =>
-        Object.hasOwn(rightRecord, key) && jsonValuesEqual(leftRecord[key], rightRecord[key]),
-    )
-  );
-}
 
 /**
  * What `append` accepts over the wire: a public event input plus the optional

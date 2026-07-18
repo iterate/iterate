@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "iterate/react";
+import { connectItx, useLiveState } from "iterate/react";
+import { AgentDetailsSheet } from "~/components/agents/agent-details-sheet.tsx";
 import { ONBOARDING_AGENT_PATH, ensureOnboardingAgentReady } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
@@ -36,6 +37,18 @@ function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
   const onboardingBirthRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const agents =
+    useLiveState(
+      (itx) => itx.agents.liveState,
+      (state) => state.agents,
+      [],
+    ).value ?? {};
+  const agentRuntimeTransition = useLiveState(
+    (itx) => itx.agents.get(streamPath).liveState,
+    (state) => state.runtimeChange,
+    [streamPath],
+    { slug: project.id },
+  ).value;
 
   // THE onboarding-agent birth: the agent is deliberately not born during
   // project bootstrap (it costs a real LLM turn), so opening its chat is what
@@ -91,8 +104,9 @@ function ProjectAgentDetailContent() {
     };
   }, [ensureOnboardingAgent]);
   // The stream view subscribes live, so a send needs no cache invalidation —
-  // the new events arrive over the socket. Agent setup is owned by project and
-  // agent processor facts; sendMessage only appends the user-facing input fact.
+  // the new events arrive over the socket. Agent setup is represented by
+  // explicit project and agent facts; sendMessage appends only the user-facing
+  // input fact.
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
   // are addressed by their stream path (e.g. "/agents/onboarding").
   async function submitAgentMessage(message: string) {
@@ -142,6 +156,15 @@ function ProjectAgentDetailContent() {
       <div className="flex min-h-0 flex-1 flex-col">
         <ProjectStreamView
           autoFocusMessageComposer
+          contextHeader={
+            <AgentDetailsSheet
+              agents={agents}
+              path={streamPath}
+              projectId={project.id}
+              projectSlug={project.slug}
+              runtimeTransition={agentRuntimeTransition}
+            />
+          }
           emptyLabel="No events on this agent stream yet."
           messageComposer={{
             onInterrupt: interruptAgentMessage,
@@ -151,6 +174,7 @@ function ProjectAgentDetailContent() {
           }}
           projectId={project.id}
           projectSlug={project.slug}
+          agentRuntimeTransition={agentRuntimeTransition ?? null}
           streamPath={streamPath}
         />
       </div>

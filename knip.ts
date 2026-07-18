@@ -28,6 +28,9 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/itx.ts",
       // Operational smoke for the create-project -> onboarding-greeting path.
       "e2e/vitest/onboarding-smoke.ts",
+      // Seeded as a standalone worker entry outside apps/os/src. Tests import
+      // parts of it, but the deployed config-repo worker uses the whole file.
+      "config-repo-template/worker.ts",
       // Used by apps/streams-example-app through its `~` alias into apps/os
       // src; knip does not resolve that cross-workspace alias.
       "src/domains/streams/client-libraries/processors/browser-event-feed/contract.ts",
@@ -86,6 +89,18 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
       // `~` alias; knip attributes that import to the OS workspace instead.
       "@journeyapps/wa-sqlite",
     ],
+    ignoreBinaries: ["playwright"],
+  };
+}
+
+function makeTanstackTodoWorkspace(): WorkspaceConfig {
+  return {
+    entry: ["vite.config.ts", "playwright.config.ts", "src/worker.ts!", "e2e/**/*.ts"],
+    project: ["src/**/*.{ts,tsx}!", "e2e/**/*.ts", "!dist/**!"],
+    vite: false,
+    // wrangler backs the @cloudflare/vite-plugin at runtime; nothing imports
+    // it directly in this minimal app.
+    ignoreDependencies: ["cloudflare", "wrangler"],
     ignoreBinaries: ["playwright"],
   };
 }
@@ -175,6 +190,7 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
+    "!apps/tanstack",
     "packages/*",
     "!packages/shared",
     "!packages/ui",
@@ -191,11 +207,13 @@ const config: KnipConfig = {
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
+    "apps/tanstack/src/router.tsx": ["exports"],
   },
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
+    "apps/tanstack": makeTanstackTodoWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),

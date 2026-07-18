@@ -1,9 +1,5 @@
-import type { AccessTokenClaims, AuthenticatedSession } from "@iterate-com/auth/server";
+import type { AuthenticatedIdentity } from "@iterate-com/auth/server";
 import {
-  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
-  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
-  ITERATE_IS_ADMIN_CLAIM,
-  ITERATE_ROLE_CLAIM,
   type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
@@ -54,43 +50,18 @@ export function createUserPrincipal(input: {
   };
 }
 
-export function principalFromSession(session: AuthenticatedSession): UserPrincipal {
+/** Adapt auth's credential-independent identity to OS capability authority. */
+export function principalFromIdentity(identity: AuthenticatedIdentity): UserPrincipal {
   return createUserPrincipal({
-    userId: session.user.id,
-    sessionId: session.session.sessionId,
-    email: session.user.email,
-    isAdmin: isAdminRole(session.user),
-    organizations: session.session.organizations.map((organization) => ({
-      id: organization.id,
-      name: organization.name,
-      slug: organization.slug,
-      role: organization.role,
-    })),
-    projects: session.session.projects,
-  });
-}
-
-export function principalFromAccessToken(accessToken: AccessTokenClaims): UserPrincipal {
-  // AccessTokenClaims is a loose object: a standard `email` claim rides along
-  // when the token carries one, without being part of the declared schema.
-  const email = (accessToken as { email?: unknown }).email;
-  return createUserPrincipal({
-    userId: accessToken.sub,
-    sessionId: accessToken.sid,
-    ...(typeof email === "string" && email.length > 0 ? { email } : {}),
-    isAdmin: isAdminRole({
-      isAdmin: accessToken[ITERATE_IS_ADMIN_CLAIM],
-      role: accessToken[ITERATE_ROLE_CLAIM],
-    }),
-    organizations: accessToken[ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM] ?? [],
-    projects: accessToken[ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM] ?? [],
+    userId: identity.userId,
+    sessionId: identity.sessionId,
+    email: identity.email,
+    isAdmin: identity.isAdmin,
+    organizations: identity.organizations,
+    projects: identity.projects,
   });
 }
 
 export function principalIsAdmin(principal: Principal): boolean {
   return principal.type === "admin" || principal.isAdmin;
-}
-
-function isAdminRole(input: { isAdmin?: unknown; role?: unknown } | null | undefined): boolean {
-  return input?.isAdmin === true || input?.role === "admin";
 }

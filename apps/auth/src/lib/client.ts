@@ -7,14 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { SessionResponse } from "./server.ts";
-export type {
-  AuthenticateResult,
-  AuthenticatedSession,
-  AuthSession,
-  AuthUser,
-  SessionResponse,
-} from "./server.ts";
+import type { SessionResponse } from "./session.ts";
+export type { SessionResponse } from "./session.ts";
 
 export type PublicSessionResponse =
   | { authenticated: false }
@@ -32,22 +26,12 @@ type RefreshOptions = {
   force?: boolean;
 };
 
-export type AuthClient = ReturnType<typeof createIterateAuthClient>;
-
-export type AuthClientContextValue = {
+type AuthClientContextValue = {
   session: PublicSessionResponse | null;
   loading: boolean;
   signIn: (options?: LoginOptions) => void;
   signOut: () => Promise<void>;
   refresh: (options?: RefreshOptions) => Promise<void>;
-};
-
-export type AuthClientProviderProps = {
-  children: ReactNode;
-  client?: AuthClient;
-  initialSession: PublicSessionResponse;
-  globalSignOut?: boolean;
-  signOutReturnTo?: string | (() => string);
 };
 
 type IterateAuthClientConfig = {
@@ -77,6 +61,16 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
     });
 
     if (!response.ok) return { authenticated: false };
+
+    if (response.headers.get("x-iterate-auth-stale-refresh")) {
+      // The server could not mint fresh tokens and served the cookie's old
+      // claims. Minted sessions (auth:mint) can never refresh — anything
+      // created after mint (organizations, projects) stays invisible until a
+      // real sign-in. The server log carries the exact reason.
+      console.warn(
+        "[iterate-auth] session refresh produced no fresh tokens; claims may be stale. Sign in again to pick up new organizations/projects.",
+      );
+    }
 
     return (await response.json()) as SessionResponse;
   }
@@ -108,6 +102,14 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
 const AuthClientContext = createContext<AuthClientContextValue | null>(null);
 
 const defaultAuthClient = createIterateAuthClient();
+
+type AuthClientProviderProps = {
+  children: ReactNode;
+  client?: ReturnType<typeof createIterateAuthClient>;
+  initialSession: PublicSessionResponse;
+  globalSignOut?: boolean;
+  signOutReturnTo?: string | (() => string);
+};
 
 export function AuthClientProvider({
   children,
@@ -168,7 +170,7 @@ export function useAuthClient() {
   return value;
 }
 
-export function toPublicSessionResponse(session: SessionResponse): PublicSessionResponse {
+function toPublicSessionResponse(session: SessionResponse): PublicSessionResponse {
   if (!session.authenticated) {
     return { authenticated: false };
   }

@@ -1,10 +1,10 @@
 # Preview CI performance
 
-The **Cloudflare Previews** check (deploy every app to a leased preview slot,
-then run the full e2e suite against it) is the slowest thing that runs on every
-PR push, so it gets a dedicated performance budget. As of 2026-07-02 it lands
-in **~2m30s** end-to-end. This doc explains how, and — more importantly — how
-to keep it there.
+The **Cloudflare Previews** check (deploy every affected app to a leased preview
+slot, then run its full e2e suite) is the slowest thing that runs on every PR
+push, so it gets a dedicated performance budget. As of 2026-07-18 an OS run
+lands in **~9m30s** end-to-end. This doc explains how, and — more importantly —
+how to keep it there.
 
 For the mechanics (where the workflows live, how to run them locally, the
 Doppler wiring), see [Depot CI](depot-ci.md). This doc is about speed
@@ -12,15 +12,17 @@ and cost.
 
 ## Where the time goes
 
-| Phase  | Budget   | Typical | What it is                              |
-| ------ | -------- | ------- | --------------------------------------- |
-| Pickup | —        | ~7s     | Depot CI assigns a runner               |
-| Setup  | —        | ~20s    | checkout + `pnpm install` + Doppler CLI |
-| Deploy | 55s (OS) | ~40s    | all apps deploy in parallel to the slot |
-| Tests  | 80s (OS) | ~60s    | full e2e against the deployed slot      |
+| Phase  | Budget    | Typical | What it is                                         |
+| ------ | --------- | ------- | -------------------------------------------------- |
+| Pickup | —         | ~7s     | Depot CI assigns a runner                          |
+| Setup  | —         | ~20s    | checkout + `pnpm install` + Doppler CLI            |
+| Deploy | 115s (OS) | ~90s    | affected apps deploy in dependency-ordered batches |
+| Tests  | 560s (OS) | ~7m20s  | smoke, TUI, Vitest, then Playwright                |
 
 The OS deploy and the OS e2e lane are the long poles; the other apps finish in
-seconds and run alongside OS.
+seconds and run alongside OS. The 15-minute workflow watchdog is an outer
+backstop, not the expected duration: the onboarding, TUI, Vitest, and
+Playwright lanes retain their dedicated 180–480-second watchdogs.
 
 ## The optimizations (and why each one is load-bearing)
 
@@ -32,24 +34,27 @@ seconds and run alongside OS.
   the PR-close cleanup — lives in one Depot workflow
   (`.depot/workflows/cloudflare-previews.yml`); there is no GitHub Actions
   preview workflow (see [Depot CI](depot-ci.md)).
-- **Deploys run in one parallel batch.** OS bakes the auth JWKS at deploy time,
-  but instead of waiting for auth to finish first, the OS deploy _polls_ the
-  slot's auth worker for JWKS (`bakeStaticAuthJwks` in `apps/os/scripts/deploy.ts`). All
-  apps deploy at once.
-- **File-level parallelism.** Every e2e test provisions its own project, so
-  files are independent; CI runs them in parallel (`fileParallelism`,
-  `maxWorkers: 4`, `retry: 1` in `apps/os/e2e/vitest.config.ts`). Intra-file
-  concurrency (`sequence.concurrent`) would go faster still, but the deployed
-  slot — not the runner — is the bottleneck: ~4 concurrent project creates is
-  the ceiling before "Durable Object storage operation exceeded timeout". The
-  real speedup for the slow itx suite is splitting its monolith file so
-  file-level parallelism covers it (`tasks/raise-e2e-maxconcurrency.md`).
-- **All test lanes run concurrently.** The `pnpm e2e` vitest suite (its `node`
-  project — engine e2e + itx catalogue matrix in one config) and the root
-  Playwright specs run at the same time against the slot, and the four apps'
-  suites run concurrently too (`scripts/preview/preview.ts`).
-- **Playwright runs 6 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
-  — every spec creates its own fixture project.
+- **Deploy dependencies are explicit.** Auth and Dummy Petshop deploy in
+  parallel, then OS deploys with Auth's JWKS and Petshop's preview URL. Apps
+  without an OS dependency continue in parallel; the ordering lives in
+  `scripts/preview/preview.ts` and is covered by its dependency-expansion tests.
+- **Parallelism is capped per deployed slot, not per runner process.** The OS
+  Vitest catalogue uses four workers with at most two concurrent tests each;
+  Playwright uses eight fully-parallel workers. Each suite therefore peaks at
+  eight remote tests. The TUI, Vitest, and Playwright suites run sequentially
+  against one OS preview slot: overlapping the two eight-wide worker pools
+  produced project-processor self-pull timeouts even though each suite was
+  clean in isolation. The other apps' independent preview suites may still run
+  concurrently (`scripts/preview/preview.ts`).
+- **File-level parallelism plus bounded intra-file concurrency.** Every Vitest
+  test provisions its own project, so files are independent (`fileParallelism`,
+  `maxWorkers: 4`, `sequence.concurrent`, `maxConcurrency: 2`, `retry: 1` in
+  `apps/os/e2e/vitest.config.ts`). The deployed slot — not the Depot runner —
+  is the bottleneck. The real speedup for the slow itx suite is splitting its
+  monolith file so file-level parallelism covers it.
+- **Playwright runs 8 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
+  — every spec creates its own fixture project, and the suite owns the slot
+  while it runs.
 - **One sequential create-saga smoke runs before the burst.** The first real
   project create pays the genuine cold-start costs (cold DO chain, repo seed,
   worker probe) once, sequentially, instead of surfacing as rotating timeout
@@ -95,8 +100,10 @@ creep visible. If you see one:
 - **Prefer test-level parallelism over adding lanes.** A new check that runs
   _after_ the existing lanes adds its whole duration to the critical path. If
   you must add coverage, fold it into an existing concurrent lane.
-- **Never serialize what can self-provision.** The apps' suites and the vitest
-  lanes run concurrently on purpose; keep it that way.
+- **Serialize only at the real contention boundary.** Different deployed apps'
+  suites run concurrently. OS's TUI, Vitest, and Playwright lanes stay
+  sequential because their independent fixtures still contend on one deployed
+  worker; restoring overlap requires evidence that the aggregate load is clean.
 - **Keep the create-saga smoke.** Removing it brings back the rotating
   "saw 0 events" cold-start flakes across the concurrent suites, which fail or
   retry and make runs _slower_, not faster.

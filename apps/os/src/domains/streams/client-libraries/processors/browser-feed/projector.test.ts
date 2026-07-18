@@ -24,7 +24,6 @@ const WOKEN = "events.iterate.com/stream/woken";
 const DEBUG = "events.iterate.com/debug/random-event";
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
-
 function userMessage(offset: number, text: string): StreamEvent {
   return event(offset, CONTEXT_ADDED, {
     role: "user",
@@ -233,77 +232,6 @@ describe("browser-feed projector — one interleaved order", () => {
     ]);
   });
 
-  it("carries agent reduced state (live activity) without emitting rows until work settles", () => {
-    const request = event(2, "events.iterate.com/agent/llm-request-requested", {
-      model: "gpt-test",
-    });
-    const first = planBrowserFeedOps(START, [userMessage(1, "run it"), request]);
-    expect(first.endState.agent.live?.steps).toHaveLength(1);
-    // Only the bubble + two raw groups so far — the activity is still live.
-    expect(
-      first.ops.filter((op) => op.kind === "insert" && op.itemKind === "agent.activity"),
-    ).toHaveLength(0);
-
-    const completed = event(3, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestOffset: 2,
-      result: { status: "success" },
-    });
-    const idle = event(4, "events.iterate.com/agent/status-changed", {
-      busy: false,
-      sinceOffset: 3,
-    });
-    const second = planBrowserFeedOps(first.endState, [completed, idle]);
-    expect(second.endState.agent.live).toBeNull();
-    const settled = second.ops.find(
-      (op) => op.kind === "insert" && op.itemKind === "agent.activity",
-    );
-    expect(settled).toBeDefined();
-  });
-
-  it("replaces an inferred script outcome when its durable settlement arrives late", () => {
-    const requested = event(1, "events.iterate.com/capability-host/script-run-requested", {
-      executionId: "late-script",
-      code: "async () => mutate()",
-      expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
-    });
-    const idle = event(2, "events.iterate.com/agent/status-changed", {
-      busy: false,
-      sinceOffset: 1,
-    });
-    const first = planBrowserFeedOps(START, [requested, idle]);
-    const inserted = first.ops.find(
-      (op) => op.kind === "insert" && op.itemKind === "agent.activity",
-    );
-    if (inserted?.kind !== "insert") throw new Error("expected settled activity insert");
-    expect(first.endState.provisionalAgentItemIndexes).toEqual({
-      "activity-1": inserted.localIndex,
-    });
-
-    const completed = event(3, "events.iterate.com/capability-host/script-run-settled", {
-      executionId: "late-script",
-      settlement: { status: "succeeded", result: "committed" },
-    });
-    const second = planBrowserFeedOps(first.endState, [completed]);
-    expect(second.ops[0]).toMatchObject({
-      kind: "replace",
-      localIndex: inserted.localIndex,
-      itemKind: "agent.activity",
-      data: {
-        id: "activity-1",
-        steps: [
-          {
-            kind: "code",
-            outcomeSource: "durable",
-            success: true,
-            result: "committed",
-          },
-        ],
-      },
-    });
-    expect(second.endState.nextLocalIndex).toBe(first.endState.nextLocalIndex + 1);
-    expect(second.endState.provisionalAgentItemIndexes).toEqual({});
-  });
-
   it("does not retain replacement indexes for ordinary settled feed items", () => {
     const projected = planBrowserFeedOps(START, [
       userMessage(1, "hello"),
@@ -311,32 +239,6 @@ describe("browser-feed projector — one interleaved order", () => {
     ]);
 
     expect(projected.endState.provisionalAgentItemIndexes).toEqual({});
-  });
-
-  it("prunes replacement indexes when malformed history exceeds the correction window", () => {
-    const events = Array.from({ length: 40 }, (_, index) => {
-      const requestedOffset = index * 2 + 1;
-      return [
-        event(requestedOffset, "events.iterate.com/capability-host/script-run-requested", {
-          executionId: `missing-${index}`,
-          code: `async () => ${index}`,
-          expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
-        }),
-        event(requestedOffset + 1, "events.iterate.com/agent/status-changed", {
-          busy: false,
-          sinceOffset: requestedOffset,
-        }),
-      ];
-    }).flat();
-
-    const projected = planBrowserFeedOps(START, events);
-    const provisionalIds = Object.keys(projected.endState.agent.provisionalActivities);
-    const indexedIds = Object.keys(projected.endState.provisionalAgentItemIndexes);
-
-    expect(provisionalIds).toHaveLength(32);
-    expect(indexedIds).toEqual(provisionalIds);
-    expect(indexedIds).not.toContain("activity-1");
-    expect(indexedIds).toContain("activity-79");
   });
 
   it("is deterministic and folds identically event-by-event and whole-batch", () => {

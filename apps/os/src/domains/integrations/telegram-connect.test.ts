@@ -565,7 +565,13 @@ async function startFakeTelegramApi(
       const path = request.url!;
       requests.push({ body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {}, path });
       const respond = (status: number, payload: unknown) => {
-        response.writeHead(status, { "content-type": "application/json" });
+        // This disposable server is recreated on an ephemeral port for every
+        // test. Do not leave an Undici keep-alive socket pooled across server
+        // lifetimes: it can make server.close() hang or race a reused port.
+        response.writeHead(status, {
+          connection: "close",
+          "content-type": "application/json",
+        });
         response.end(JSON.stringify(payload));
       };
       if (!path.startsWith(`/bot${BOT_TOKEN}/`)) {
@@ -606,7 +612,12 @@ async function startFakeTelegramApi(
     baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
     async [Symbol.asyncDispose]() {
-      await new Promise((resolve) => server.close(resolve));
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+        // close() first prevents new connections; the fake owns every
+        // remaining socket, so disposal can then terminate them immediately.
+        server.closeAllConnections();
+      });
     },
   };
 }

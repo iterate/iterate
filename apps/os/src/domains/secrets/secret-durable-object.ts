@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { LiveStateRpcTarget } from "iterate/live-state";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
@@ -8,7 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,

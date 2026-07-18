@@ -88,20 +88,20 @@ test("agent create installs only generic machinery; later events configure it", 
   );
 });
 
-test("Agent scripts update their own status record via itx.agent.setStatus", async () => {
+test("Agent scripts update their summary through the typed append door", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-set-status" });
-  const agentPath = `/agents/set-status-${crypto.randomUUID()}`;
+  using project = itx.projects.create({ slug: "agent-update-summary" });
+  const agentPath = `/agents/update-summary-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
 
-  const statusPatch = agent.stream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/status-changed"],
+  const summaryUpdate = agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/agent/summary-updated"],
     predicate: (event) =>
       (event.payload as { title?: string } | undefined)?.title === "Lisbon trip",
     timeoutMs: 30_000,
@@ -111,34 +111,34 @@ test("Agent scripts update their own status record via itx.agent.setStatus", asy
     agent.stream,
     fencedAgentScript(
       defineItxScript<{ agent: Agent }>(async (itx) => {
-        await itx.agent.setStatus({
-          title: "Lisbon trip",
-          note: "Planning a 3-day Lisbon trip.",
-          shortStatus: "comparing flights",
+        await itx.agent.append({
+          type: "events.iterate.com/agent/summary-updated",
+          payload: {
+            title: "Lisbon trip",
+            description: "Planning a three-day Lisbon trip and comparing the practical options.",
+            activity: "Comparing flights",
+          },
         });
       }).code,
     ),
   );
 
-  expect(await statusPatch).toMatchObject({
-    type: "events.iterate.com/agent/status-changed",
+  expect(await summaryUpdate).toMatchObject({
+    type: "events.iterate.com/agent/summary-updated",
     payload: {
       title: "Lisbon trip",
-      note: "Planning a 3-day Lisbon trip.",
-      shortStatus: "comparing flights",
+      description: "Planning a three-day Lisbon trip and comparing the practical options.",
+      activity: "Comparing flights",
     },
   });
 
-  // The merged record lands in the agent's reduced state (announcedStatus),
-  // which is what the project roster and every painter read.
+  // The same canonical summary fold feeds the project projection and painters.
   await waitForCondition(
     async () => {
       const snapshot = await agent.processor.snapshot();
-      const announced = (snapshot.state as { announcedStatus?: { title?: string } })
-        .announcedStatus;
-      return announced?.title === "Lisbon trip";
+      return snapshot.state.summary.title === "Lisbon trip";
     },
-    { description: "announcedStatus.title folded into agent state", timeoutMs: 30_000 },
+    { description: "summary.title folded into agent state", timeoutMs: 30_000 },
   );
 });
 
@@ -569,8 +569,8 @@ test('An agent scope provides a capability to the whole project via capabilityHo
         path: ["crossScopeProbe"],
         capability: { ping: () => "pong-from-agent-mount" },
       });
-      // Visible on the root host itself, and through the agent scope's own
-      // inheritance chain (local miss -> parent -> root).
+      // Visible on the root host itself, and through the agent scope's
+      // journaled fallback (local miss -> one hop to the root host).
       const viaRoot = await host.invokeCapability({
         path: ["crossScopeProbe", "ping"],
         args: [],
@@ -627,6 +627,9 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   });
   await project.agents.get(agentPath).create();
 
+  // create() is a read-after-create barrier for the collection processor, not
+  // merely the per-agent processors: its reduced database must be coherent as
+  // soon as the call returns.
   expect(await project.agents.list()).toEqual(
     expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
   );
@@ -729,7 +732,11 @@ test("Project worker processEventBatch receives events from every project stream
   const crossPosted = project.streams.get("/cross-posted");
   const copied = crossPosted.waitForEvent({
     eventTypes: ["events.iterate.com/test/cross-posted"],
-    timeoutMs: 30_000,
+    // The first delivery after the commit above blocks on a COLD container
+    // build of the new head (npm install + wrangler bundle in the builder
+    // pool, 30-60s live; queues behind other builds under full-lane load) —
+    // the wait asserts delivery HAPPENS, not that it beats a cold build.
+    timeoutMs: 180_000,
   });
 
   const [sourceEvent] = await project.streams.get(sourcePath).append({

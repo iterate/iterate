@@ -1,11 +1,20 @@
 ---
-state: todo
+state: done
 priority: medium
 size: large
 tags: [os, repos, workspaces, architecture, performance]
 ---
 
 # Per-repo root workspaces (fast HEAD reads for every repo)
+
+> **Done — superseded by the durable head-tree cache inside `RepoDurableObject`
+> itself** (PR #2095): every repo now materializes its default-branch tree into
+> its own DO SQLite (R2 spill), invalidated by the local head cursor, so
+> `readFile`/`listFiles`/`listTaskFiles` at HEAD are clone-free for EVERY repo
+> — no separate cache workspace needed, and the cross-DO re-entrant `getHead`
+> dance this task worried about never exists. The lazy per-object Artifacts
+> read layer remains the longer-term successor for repos too large to
+> materialize at all.
 
 Today only the project's config repo (`/repos/config`) gets fast HEAD reads.
 Every other repo — secondary `/repos/**`, per-example scratch repos, legacy

@@ -18,7 +18,7 @@ import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
-import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
+import { Route as ESplatRouteImport } from './routes/e.$'
 import { Route as CollectSecretProjectSlugRouteImport } from './routes/collect-secret.$projectSlug'
 import { Route as ApiMcpRouteImport } from './routes/api.mcp'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
@@ -101,9 +101,9 @@ const SignInSplatRoute = SignInSplatRouteImport.update({
   path: '/sign-in/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
-  id: '/posthog-proxy/$',
-  path: '/posthog-proxy/$',
+const ESplatRoute = ESplatRouteImport.update({
+  id: '/e/$',
+  path: '/e/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CollectSecretProjectSlugRoute =
@@ -334,7 +334,7 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
-  '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/e/$': typeof ESplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin/': typeof AdminIndexRoute
@@ -378,7 +378,7 @@ export interface FileRoutesByTo {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
-  '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/e/$': typeof ESplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin': typeof AdminIndexRoute
@@ -425,7 +425,7 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
-  '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/e/$': typeof ESplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin/': typeof AdminIndexRoute
@@ -475,7 +475,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/collect-secret/$projectSlug'
-    | '/posthog-proxy/$'
+    | '/e/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/admin/'
@@ -519,7 +519,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/collect-secret/$projectSlug'
-    | '/posthog-proxy/$'
+    | '/e/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/admin'
@@ -565,7 +565,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/collect-secret/$projectSlug'
-    | '/posthog-proxy/$'
+    | '/e/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/admin/'
@@ -608,7 +608,7 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMcpRoute: typeof ApiMcpRoute
   CollectSecretProjectSlugRoute: typeof CollectSecretProjectSlugRoute
-  PosthogProxySplatRoute: typeof PosthogProxySplatRoute
+  ESplatRoute: typeof ESplatRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
 }
@@ -678,11 +678,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignInSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/posthog-proxy/$': {
-      id: '/posthog-proxy/$'
-      path: '/posthog-proxy/$'
-      fullPath: '/posthog-proxy/$'
-      preLoaderRoute: typeof PosthogProxySplatRouteImport
+    '/e/$': {
+      id: '/e/$'
+      path: '/e/$'
+      fullPath: '/e/$'
+      preLoaderRoute: typeof ESplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/collect-secret/$projectSlug': {
@@ -1133,7 +1133,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ApiMcpRoute: ApiMcpRoute,
   CollectSecretProjectSlugRoute: CollectSecretProjectSlugRoute,
-  PosthogProxySplatRoute: PosthogProxySplatRoute,
+  ESplatRoute: ESplatRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
 }
