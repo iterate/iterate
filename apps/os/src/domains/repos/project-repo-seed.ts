@@ -12,23 +12,20 @@ export const TEMPLATE_ITERATE_PACKAGE_SPEC = "https://pkg.pr.new/iterate/iterate
  * dependency optionally re-pointed via config (`iterateSdkPackageSpec`).
  * Preview deploys pass their PR's pkg.pr.new build so projects created there
  * — e2e tests included — install the branch tip's `iterate/sdk`, not
- * whatever main last published. Deliberately a find/replace on package.json:
- * the generated file map stays canonical, and the swap happens exactly where
- * files become a repo.
+ * whatever main last published. Deliberately a find/replace on the manifests
+ * that carry the spec (the repo root's devDependency for typechecking, and
+ * the seeded tanstack app's runtime dependency): the generated file map
+ * stays canonical, and the swap happens exactly where files become a repo.
  */
 export function projectRepoSeedFiles(
   iterateSdkPackageSpec: string | undefined,
 ): Array<{ content: string; path: string }> {
   if (!iterateSdkPackageSpec) return PROJECT_REPO_INITIAL_FILES;
-  return PROJECT_REPO_INITIAL_FILES.map((file) => {
-    if (file.path !== "package.json") return file;
-    if (!file.content.includes(`"${TEMPLATE_ITERATE_PACKAGE_SPEC}"`)) {
-      // Fail loudly: a silently un-substituted spec would make every preview
-      // e2e project quietly test against main's build again.
-      throw new Error(
-        `Template package.json no longer contains "${TEMPLATE_ITERATE_PACKAGE_SPEC}" — update TEMPLATE_ITERATE_PACKAGE_SPEC in project-repo-seed.ts to match.`,
-      );
-    }
+  let substituted = 0;
+  const files = PROJECT_REPO_INITIAL_FILES.map((file) => {
+    if (!file.path.endsWith("package.json")) return file;
+    if (!file.content.includes(`"${TEMPLATE_ITERATE_PACKAGE_SPEC}"`)) return file;
+    substituted += 1;
     return {
       ...file,
       content: file.content.replaceAll(
@@ -37,4 +34,12 @@ export function projectRepoSeedFiles(
       ),
     };
   });
+  if (substituted === 0) {
+    // Fail loudly: a silently un-substituted spec would make every preview
+    // e2e project quietly test against main's build again.
+    throw new Error(
+      `No template package.json contains "${TEMPLATE_ITERATE_PACKAGE_SPEC}" — update TEMPLATE_ITERATE_PACKAGE_SPEC in project-repo-seed.ts to match.`,
+    );
+  }
+  return files;
 }

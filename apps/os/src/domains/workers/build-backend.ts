@@ -2,6 +2,7 @@ import { itxEnv as env } from "../../env.ts";
 import { buildFailureMessageFromError, WorkerBuildFailedError } from "./artifact-store.ts";
 import {
   collectRecipeOutputs,
+  collectViteRecipeOutputs,
   NUB_VERSION,
   workerBuildRecipe,
   WRANGLER_VERSION,
@@ -193,36 +194,47 @@ async function buildOnPoolMember(
       }
     }
 
-    // `ls -1A` instead of the SDK's listFiles: the output directory is flat
-    // by construction (wrangler bundles into it) and a name list is all we
-    // need. The -A is LOAD-BEARING: the entry module is dot-named
-    // (`.iterate-build.entry.js`), and plain `ls -1` hides dotfiles — which
-    // made every real bundling build on the pool report "did not produce the
-    // entry module (got: nothing)" while the bundle sat in the directory
-    // (observed live across five e2e runs; reproduced byte-for-byte in the
-    // stock image).
-    const listing = await session.exec(`ls -1A '${recipe.outputDir}'`, {
+    // Wrangler lane: `ls -1A` on the flat output dir (the -A is LOAD-BEARING:
+    // the entry module is dot-named, and plain `ls -1` hides dotfiles —
+    // observed live failing every real bundled build). Vite lane: the output
+    // is the nested dist/ tree, so list recursively and read paths as-is;
+    // maps and vite manifests are skipped before transfer.
+    const listCommand =
+      recipe.pipeline === "vite"
+        ? `find '${recipe.outputDir}' -type f`
+        : `ls -1A '${recipe.outputDir}'`;
+    const listing = await session.exec(listCommand, {
       cwd: buildDir,
       timeout: 30_000,
     });
     if (!listing.success) {
       throw new Error(`could not list worker build outputs: ${listing.stderr}`);
     }
+    const names = listing.stdout
+      .split("\n")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0)
+      .filter(
+        (name) =>
+          !(recipe.pipeline === "vite" && (name.endsWith(".map") || name.includes("/.vite/"))),
+      );
     const outputs = Object.fromEntries(
       await Promise.all(
-        listing.stdout
-          .split("\n")
-          .map((name) => name.trim())
-          .filter((name) => name.length > 0)
-          .map(async (name) => {
-            const read = await sandbox.readFile(`${buildDir}/${recipe.outputDir}/${name}`);
-            if (!read.success) throw new Error(`could not read worker build output "${name}"`);
-            return [name, read.content] as const;
-          }),
+        names.map(async (name) => {
+          const path =
+            recipe.pipeline === "vite"
+              ? `${buildDir}/${name}`
+              : `${buildDir}/${recipe.outputDir}/${name}`;
+          const read = await sandbox.readFile(path);
+          if (!read.success) throw new Error(`could not read worker build output "${name}"`);
+          return [name, read.content] as const;
+        }),
       ),
     );
     try {
-      return collectRecipeOutputs(recipe, outputs);
+      return recipe.pipeline === "vite"
+        ? collectViteRecipeOutputs(outputs)
+        : collectRecipeOutputs(recipe, outputs);
     } catch (error) {
       // Output-shape rejection (non-text module, missing entry) is
       // deterministic for this source — a genuine build failure.

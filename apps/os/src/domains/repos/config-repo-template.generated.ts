@@ -189,6 +189,555 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "authority crosses the wire.\n",
   },
   {
+    path: "apps/tanstack/package.json",
+    content:
+      "{\n" +
+      "  \"name\": \"project-tanstack\",\n" +
+      "  \"private\": true,\n" +
+      "  \"type\": \"module\",\n" +
+      "  \"description\": \"The project's TanStack Start todo app: pages built by Vite (the platform's vite worker-build pipeline runs `npm run build`), todos stored in this app's own Durable Object SQLite via sqlfu, every open tab converging over Cap'n Web live state.\",\n" +
+      "  \"scripts\": {\n" +
+      "    \"build\": \"vite build\"\n" +
+      "  },\n" +
+      "  \"dependencies\": {\n" +
+      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
+      "    \"@tanstack/react-router\": \"1.170.15\",\n" +
+      "    \"@tanstack/react-start\": \"1.168.18\",\n" +
+      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
+      "    \"react\": \"19.1.1\",\n" +
+      "    \"react-dom\": \"19.1.1\",\n" +
+      "    \"sqlfu\": \"0.1.1\"\n" +
+      "  },\n" +
+      "  \"devDependencies\": {\n" +
+      "    \"@cloudflare/vite-plugin\": \"1.43.0\",\n" +
+      "    \"@types/react\": \"19.2.17\",\n" +
+      "    \"@types/react-dom\": \"19.2.3\",\n" +
+      "    \"@vitejs/plugin-react\": \"6.0.2\",\n" +
+      "    \"typescript\": \"5.9.3\",\n" +
+      "    \"vite\": \"8.0.16\",\n" +
+      "    \"wrangler\": \"4.107.0\"\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/src/lib/state.ts",
+    content:
+      "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
+      "\n" +
+      "/** One todo row, exactly as the Durable Object's SQLite stores it. */\n" +
+      "export type Todo = { id: string; title: string; done: boolean; createdAt: string };\n" +
+      "\n" +
+      "/** The whole list — the live-state value every connected browser mirrors. */\n" +
+      "export type TodoListState = { todos: Todo[] };\n" +
+      "\n" +
+      "/** What the browser holds after authenticating the /api Cap'n Web session. */\n" +
+      "export type TodoSessionApi = {\n" +
+      "  liveState: LiveStateRpc<TodoListState>;\n" +
+      "  add(title: string): Promise<void>;\n" +
+      "  setDone(id: string, done: boolean): Promise<void>;\n" +
+      "  rename(id: string, title: string): Promise<void>;\n" +
+      "  remove(id: string): Promise<void>;\n" +
+      "};\n",
+  },
+  {
+    path: "apps/tanstack/src/lib/use-todos.ts",
+    content:
+      "import { newWebSocketRpcSession } from \"@iterate-com/capnweb\";\n" +
+      "import { createLiveStateStore } from \"iterate/live-state\";\n" +
+      "import { useEffect, useRef, useState, useSyncExternalStore } from \"react\";\n" +
+      "import type { TodoListState, TodoSessionApi } from \"./state.ts\";\n" +
+      "\n" +
+      "/**\n" +
+      " * The whole client: one Cap'n Web WebSocket to /api, authenticated from the\n" +
+      " * app's exact-origin cookie, its live state folded into the platform's\n" +
+      " * `createLiveStateStore` (snapshot + patches) and read with\n" +
+      " * `useSyncExternalStore`. Mutations are plain calls on the session — the\n" +
+      " * Durable Object refreshes its one LiveState and every open tab, this one\n" +
+      " * included, repaints from the pushed patch.\n" +
+      " */\n" +
+      "export function useTodos() {\n" +
+      "  const [api, setApi] = useState<TodoSessionApi | null>(null);\n" +
+      "  const [error, setError] = useState<string | null>(null);\n" +
+      "  const storeRef = useRef(createLiveStateStore<TodoListState>());\n" +
+      "  const store = storeRef.current;\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    store.reset();\n" +
+      "    // Updater form is LOAD-BEARING everywhere a Cap'n Web stub meets React\n" +
+      "    // state: stubs are callable Proxies (that is what makes pipelining\n" +
+      "    // work), so setApi(stub) would make React CALL it as an updater.\n" +
+      "    setApi(() => null);\n" +
+      "    const endpoint = new URL(\"/api\", window.location.href);\n" +
+      "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
+      "    const publicApi = newWebSocketRpcSession<{\n" +
+      "      authenticate(credentials: { type: \"from-server-cookie\" }): Promise<TodoSessionApi>;\n" +
+      "    }>(endpoint.toString());\n" +
+      "\n" +
+      "    let disposed = false;\n" +
+      "    let subscription: { unsubscribe(): void } | undefined;\n" +
+      "    void (async () => {\n" +
+      "      const session = await publicApi.authenticate({ type: \"from-server-cookie\" });\n" +
+      "      const subscribe = async () => {\n" +
+      "        // A revision gap means a missed patch; resubscribing makes the server\n" +
+      "        // lead with a fresh snapshot. Both lanes gate on disposal so a dying\n" +
+      "        // socket's stragglers cannot repopulate the store.\n" +
+      "        subscription?.unsubscribe();\n" +
+      "        subscription = await session.liveState.subscribe((update) => {\n" +
+      "          if (disposed) return;\n" +
+      "          store.apply(update, () => {\n" +
+      "            if (!disposed) void subscribe();\n" +
+      "          });\n" +
+      "        });\n" +
+      "      };\n" +
+      "      await subscribe();\n" +
+      "      if (!disposed) setApi(() => session);\n" +
+      "    })().catch((thrown: unknown) => {\n" +
+      "      if (!disposed) setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
+      "    });\n" +
+      "\n" +
+      "    return () => {\n" +
+      "      disposed = true;\n" +
+      "      subscription?.unsubscribe();\n" +
+      "      publicApi[Symbol.dispose]();\n" +
+      "    };\n" +
+      "  }, [store]);\n" +
+      "\n" +
+      "  const state = useSyncExternalStore(store.subscribe, store.getState, () => undefined);\n" +
+      "  return { todos: state?.todos, api, error };\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/src/routeTree.gen.ts",
+    content:
+      "/* eslint-disable */\n" +
+      "\n" +
+      "// @ts-nocheck\n" +
+      "\n" +
+      "// noinspection JSUnusedGlobalSymbols\n" +
+      "\n" +
+      "// This file was automatically generated by TanStack Router.\n" +
+      "// You should NOT make any changes in this file as it will be overwritten.\n" +
+      "// Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.\n" +
+      "\n" +
+      "import { Route as rootRouteImport } from './routes/__root'\n" +
+      "import { Route as IndexRouteImport } from './routes/index'\n" +
+      "\n" +
+      "const IndexRoute = IndexRouteImport.update({\n" +
+      "  id: '/',\n" +
+      "  path: '/',\n" +
+      "  getParentRoute: () => rootRouteImport,\n" +
+      "} as any)\n" +
+      "\n" +
+      "export interface FileRoutesByFullPath {\n" +
+      "  '/': typeof IndexRoute\n" +
+      "}\n" +
+      "export interface FileRoutesByTo {\n" +
+      "  '/': typeof IndexRoute\n" +
+      "}\n" +
+      "export interface FileRoutesById {\n" +
+      "  __root__: typeof rootRouteImport\n" +
+      "  '/': typeof IndexRoute\n" +
+      "}\n" +
+      "export interface FileRouteTypes {\n" +
+      "  fileRoutesByFullPath: FileRoutesByFullPath\n" +
+      "  fullPaths: '/'\n" +
+      "  fileRoutesByTo: FileRoutesByTo\n" +
+      "  to: '/'\n" +
+      "  id: '__root__' | '/'\n" +
+      "  fileRoutesById: FileRoutesById\n" +
+      "}\n" +
+      "export interface RootRouteChildren {\n" +
+      "  IndexRoute: typeof IndexRoute\n" +
+      "}\n" +
+      "\n" +
+      "declare module '@tanstack/react-router' {\n" +
+      "  interface FileRoutesByPath {\n" +
+      "    '/': {\n" +
+      "      id: '/'\n" +
+      "      path: '/'\n" +
+      "      fullPath: '/'\n" +
+      "      preLoaderRoute: typeof IndexRouteImport\n" +
+      "      parentRoute: typeof rootRouteImport\n" +
+      "    }\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "const rootRouteChildren: RootRouteChildren = {\n" +
+      "  IndexRoute: IndexRoute,\n" +
+      "}\n" +
+      "export const routeTree = rootRouteImport\n" +
+      "  ._addFileChildren(rootRouteChildren)\n" +
+      "  ._addFileTypes<FileRouteTypes>()\n" +
+      "\n" +
+      "import type { getRouter } from './router.tsx'\n" +
+      "import type { createStart } from '@tanstack/react-start'\n" +
+      "declare module '@tanstack/react-start' {\n" +
+      "  interface Register {\n" +
+      "    ssr: true\n" +
+      "    router: Awaited<ReturnType<typeof getRouter>>\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/src/router.tsx",
+    content:
+      "import { createRouter } from \"@tanstack/react-router\";\n" +
+      "import { routeTree } from \"./routeTree.gen.ts\";\n" +
+      "\n" +
+      "export function getRouter() {\n" +
+      "  return createRouter({ routeTree });\n" +
+      "}\n" +
+      "\n" +
+      "declare module \"@tanstack/react-router\" {\n" +
+      "  interface Register {\n" +
+      "    router: ReturnType<typeof getRouter>;\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/src/routes/__root.tsx",
+    content:
+      "import type { ReactNode } from \"react\";\n" +
+      "import { createRootRoute, HeadContent, Outlet, Scripts } from \"@tanstack/react-router\";\n" +
+      "\n" +
+      "export const Route = createRootRoute({\n" +
+      "  head: () => ({\n" +
+      "    meta: [\n" +
+      "      { charSet: \"utf-8\" },\n" +
+      "      { name: \"viewport\", content: \"width=device-width, initial-scale=1\" },\n" +
+      "      { title: \"TanStack todos\" },\n" +
+      "    ],\n" +
+      "  }),\n" +
+      "  component: RootComponent,\n" +
+      "});\n" +
+      "\n" +
+      "function RootComponent() {\n" +
+      "  return (\n" +
+      "    <RootDocument>\n" +
+      "      <Outlet />\n" +
+      "    </RootDocument>\n" +
+      "  );\n" +
+      "}\n" +
+      "\n" +
+      "function RootDocument({ children }: Readonly<{ children: ReactNode }>) {\n" +
+      "  return (\n" +
+      "    <html lang=\"en\">\n" +
+      "      <head>\n" +
+      "        <HeadContent />\n" +
+      "      </head>\n" +
+      "      <body\n" +
+      "        style={{\n" +
+      "          fontFamily: \"system-ui\",\n" +
+      "          maxWidth: \"36rem\",\n" +
+      "          margin: \"2rem auto\",\n" +
+      "          padding: \"0 1rem\",\n" +
+      "        }}\n" +
+      "      >\n" +
+      "        {children}\n" +
+      "        <Scripts />\n" +
+      "      </body>\n" +
+      "    </html>\n" +
+      "  );\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/src/routes/index.tsx",
+    content:
+      "import { createFileRoute } from \"@tanstack/react-router\";\n" +
+      "import { useState } from \"react\";\n" +
+      "import { useTodos } from \"../lib/use-todos.ts\";\n" +
+      "\n" +
+      "export const Route = createFileRoute(\"/\")({ component: Todos });\n" +
+      "\n" +
+      "// The project's shared todo list. Rows live in the app's Durable Object\n" +
+      "// SQLite (src/worker.ts); this page hydrates, authenticates /api from the\n" +
+      "// app cookie, and stays live — every project member's tab converges.\n" +
+      "function Todos() {\n" +
+      "  const { todos, api, error } = useTodos();\n" +
+      "  const [draft, setDraft] = useState(\"\");\n" +
+      "\n" +
+      "  return (\n" +
+      "    <main>\n" +
+      "      <h1>TanStack todos</h1>\n" +
+      "      {error !== null ? <p>{error}</p> : null}\n" +
+      "      {todos === undefined ? (\n" +
+      "        <p>connecting…</p>\n" +
+      "      ) : (\n" +
+      "        <ul style={{ listStyle: \"none\", padding: 0 }}>\n" +
+      "          {todos.map((todo) => (\n" +
+      "            <li key={todo.id} style={{ display: \"flex\", gap: \"0.5rem\", alignItems: \"center\" }}>\n" +
+      "              <input\n" +
+      "                type=\"checkbox\"\n" +
+      "                checked={todo.done}\n" +
+      "                onChange={(event) => void api?.setDone(todo.id, event.target.checked)}\n" +
+      "                aria-label={`done: ${todo.title}`}\n" +
+      "              />\n" +
+      "              <span\n" +
+      "                style={{ flex: 1, textDecoration: todo.done ? \"line-through\" : \"none\" }}\n" +
+      "                title=\"double-click to rename\"\n" +
+      "                onDoubleClick={() => {\n" +
+      "                  const title = window.prompt(\"rename todo\", todo.title);\n" +
+      "                  if (title) void api?.rename(todo.id, title);\n" +
+      "                }}\n" +
+      "              >\n" +
+      "                {todo.title}\n" +
+      "              </span>\n" +
+      "              <button\n" +
+      "                type=\"button\"\n" +
+      "                onClick={() => void api?.remove(todo.id)}\n" +
+      "                aria-label={`delete: ${todo.title}`}\n" +
+      "              >\n" +
+      "                ✕\n" +
+      "              </button>\n" +
+      "            </li>\n" +
+      "          ))}\n" +
+      "        </ul>\n" +
+      "      )}\n" +
+      "      <form\n" +
+      "        onSubmit={(event) => {\n" +
+      "          event.preventDefault();\n" +
+      "          if (api && draft.trim()) {\n" +
+      "            void api.add(draft);\n" +
+      "            setDraft(\"\");\n" +
+      "          }\n" +
+      "        }}\n" +
+      "      >\n" +
+      "        <input\n" +
+      "          value={draft}\n" +
+      "          onChange={(event) => setDraft(event.target.value)}\n" +
+      "          placeholder=\"add a todo\"\n" +
+      "          aria-label=\"add a todo\"\n" +
+      "          disabled={api === null}\n" +
+      "        />\n" +
+      "        <button type=\"submit\" disabled={api === null}>\n" +
+      "          add\n" +
+      "        </button>\n" +
+      "      </form>\n" +
+      "      <form action=\"/_iterate/auth/logout\" method=\"post\">\n" +
+      "        <button>Sign out</button>\n" +
+      "      </form>\n" +
+      "    </main>\n" +
+      "  );\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/src/worker.ts",
+    content:
+      "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
+      "import { IterateDurableObject, type ProjectAuthCredentials } from \"iterate/sdk\";\n" +
+      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
+      "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import { createDurableObjectClient, defineConfig, sql } from \"sqlfu\";\n" +
+      "import type { Todo, TodoListState } from \"./lib/state.ts\";\n" +
+      "\n" +
+      "// The app's worker: the default export serves the Vite-built TanStack pages\n" +
+      "// (and their client assets, via the platform's wrapper), while TanstackTodos\n" +
+      "// is the app's DURABLE OBJECT — hosted statefully by the project worker\n" +
+      "// (worker.ts at the repo root routes /api here), rows in its embedded SQLite\n" +
+      "// through sqlfu, fanned out to every open tab over Cap'n Web live state.\n" +
+      "\n" +
+      "export default createServerEntry({\n" +
+      "  fetch(request) {\n" +
+      "    return handler.fetch(request);\n" +
+      "  },\n" +
+      "});\n" +
+      "\n" +
+      "export class TanstackTodos extends IterateDurableObject {\n" +
+      "  static db = defineConfig({\n" +
+      "    // The desired schema now (`sqlfu draft` diffs new migrations against it).\n" +
+      "    definitions: sql`\n" +
+      "      create table todos (\n" +
+      "        id text primary key,\n" +
+      "        title text not null,\n" +
+      "        done integer not null default 0,\n" +
+      "        created_at text not null\n" +
+      "      );\n" +
+      "    `,\n" +
+      "    migrations: [\n" +
+      "      {\n" +
+      "        name: \"20260718000001_create_todos\",\n" +
+      "        content: sql`\n" +
+      "          create table if not exists todos (\n" +
+      "            id text primary key,\n" +
+      "            title text not null,\n" +
+      "            done integer not null default 0,\n" +
+      "            created_at text not null\n" +
+      "          );\n" +
+      "        `,\n" +
+      "      },\n" +
+      "    ],\n" +
+      "    queries: {\n" +
+      "      list: sql.many<{ result: { id: string; title: string; done: number; created_at: string } }>`\n" +
+      "        select id, title, done, created_at from todos order by created_at asc, id asc\n" +
+      "      `,\n" +
+      "      insert: sql.run<{ parameters: { id: string; title: string; createdAt: string } }>`\n" +
+      "        insert into todos (id, title, done, created_at) values (:id, :title, 0, :createdAt)\n" +
+      "      `,\n" +
+      "      setDone: sql.run<{ parameters: { id: string; done: number } }>`\n" +
+      "        update todos set done = :done where id = :id\n" +
+      "      `,\n" +
+      "      rename: sql.run<{ parameters: { id: string; title: string } }>`\n" +
+      "        update todos set title = :title where id = :id\n" +
+      "      `,\n" +
+      "      remove: sql.run<{ parameters: { id: string } }>`\n" +
+      "        delete from todos where id = :id\n" +
+      "      `,\n" +
+      "    },\n" +
+      "  });\n" +
+      "\n" +
+      "  // {sql} without transactionSync: initialization is await-free and Durable\n" +
+      "  // Object SQLite commits one event-loop task atomically, so the single\n" +
+      "  // migration cannot persist half-applied.\n" +
+      "  readonly #db = TanstackTodos.db(createDurableObjectClient({ sql: this.ctx.storage.sql }));\n" +
+      "  readonly #live: LiveState<TodoListState>;\n" +
+      "\n" +
+      "  constructor(...args: ConstructorParameters<typeof IterateDurableObject>) {\n" +
+      "    super(...args);\n" +
+      "    this.#db.migrate();\n" +
+      "    this.#live = new LiveState<TodoListState>({ todos: this.#load() });\n" +
+      "  }\n" +
+      "\n" +
+      "  #load(): Todo[] {\n" +
+      "    return this.#db.list().map((row) => ({\n" +
+      "      id: row.id,\n" +
+      "      title: row.title,\n" +
+      "      done: row.done !== 0,\n" +
+      "      createdAt: row.created_at,\n" +
+      "    }));\n" +
+      "  }\n" +
+      "\n" +
+      "  #refresh(): void {\n" +
+      "    this.#live.setState({ todos: this.#load() });\n" +
+      "  }\n" +
+      "\n" +
+      "  addTodo(title: string): void {\n" +
+      "    const trimmed = title.trim().slice(0, 500);\n" +
+      "    if (trimmed.length === 0) return;\n" +
+      "    this.#db.insert({\n" +
+      "      id: crypto.randomUUID(),\n" +
+      "      title: trimmed,\n" +
+      "      createdAt: new Date().toISOString(),\n" +
+      "    });\n" +
+      "    this.#refresh();\n" +
+      "  }\n" +
+      "\n" +
+      "  setTodoDone(id: string, done: boolean): void {\n" +
+      "    this.#db.setDone({ id, done: done ? 1 : 0 });\n" +
+      "    this.#refresh();\n" +
+      "  }\n" +
+      "\n" +
+      "  renameTodo(id: string, title: string): void {\n" +
+      "    const trimmed = title.trim().slice(0, 500);\n" +
+      "    if (trimmed.length === 0) return;\n" +
+      "    this.#db.rename({ id, title: trimmed });\n" +
+      "    this.#refresh();\n" +
+      "  }\n" +
+      "\n" +
+      "  removeTodo(id: string): void {\n" +
+      "    this.#db.remove({ id });\n" +
+      "    this.#refresh();\n" +
+      "  }\n" +
+      "\n" +
+      "  liveStateTarget(): LiveStateRpcTarget<TodoListState> {\n" +
+      "    return new LiveStateRpcTarget(this.#live);\n" +
+      "  }\n" +
+      "\n" +
+      "  /** The Cap'n Web door: every /api WebSocket upgrade terminates here. */\n" +
+      "  async fetch(request: Request): Promise<Response> {\n" +
+      "    return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, request));\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "// The unauthenticated Cap'n Web root: exactly the internal app's pattern —\n" +
+      "// the browser exchanges this app's exact-origin cookie in-band and gets an\n" +
+      "// attenuated session capability, never the project itx.\n" +
+      "class PublicTodoApi extends RpcTarget {\n" +
+      "  constructor(\n" +
+      "    private readonly app: TanstackTodos,\n" +
+      "    private readonly request: Request,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
+      "  async authenticate(credentials: ProjectAuthCredentials): Promise<TodoSession> {\n" +
+      "    using itx = await this.app.env.ITX.get();\n" +
+      "    await itx.auth.get({ policy: \"project-member\" }).authenticate(this.request, credentials);\n" +
+      "    return new TodoSession(this.app);\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "// The authority an authenticated browser holds: the live list (read-only by\n" +
+      "// construction) and four verbs. Every mutation refreshes the one LiveState,\n" +
+      "// so every open tab repaints from the pushed patch — that IS the multiplayer.\n" +
+      "class TodoSession extends RpcTarget {\n" +
+      "  constructor(private readonly app: TanstackTodos) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
+      "  get liveState(): LiveStateRpc<TodoListState> {\n" +
+      "    return this.app.liveStateTarget();\n" +
+      "  }\n" +
+      "\n" +
+      "  async add(title: string): Promise<void> {\n" +
+      "    this.app.addTodo(title);\n" +
+      "  }\n" +
+      "\n" +
+      "  async setDone(id: string, done: boolean): Promise<void> {\n" +
+      "    this.app.setTodoDone(id, done);\n" +
+      "  }\n" +
+      "\n" +
+      "  async rename(id: string, title: string): Promise<void> {\n" +
+      "    this.app.renameTodo(id, title);\n" +
+      "  }\n" +
+      "\n" +
+      "  async remove(id: string): Promise<void> {\n" +
+      "    this.app.removeTodo(id);\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/tsconfig.json",
+    content:
+      "{\n" +
+      "  \"compilerOptions\": {\n" +
+      "    \"target\": \"ES2024\",\n" +
+      "    \"module\": \"ESNext\",\n" +
+      "    \"moduleResolution\": \"bundler\",\n" +
+      "    \"strict\": true,\n" +
+      "    \"noEmit\": true,\n" +
+      "    \"skipLibCheck\": true,\n" +
+      "    \"allowImportingTsExtensions\": true,\n" +
+      "    \"jsx\": \"react-jsx\",\n" +
+      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\"]\n" +
+      "  },\n" +
+      "  \"include\": [\"src/**/*.ts\", \"src/**/*.tsx\", \"vite.config.ts\"]\n" +
+      "}\n",
+  },
+  {
+    path: "apps/tanstack/vite.config.ts",
+    content:
+      "import { tanstackStart } from \"@tanstack/react-start/plugin/vite\";\n" +
+      "import viteReact from \"@vitejs/plugin-react\";\n" +
+      "import { cloudflare } from \"@cloudflare/vite-plugin\";\n" +
+      "import { defineConfig } from \"vite\";\n" +
+      "\n" +
+      "export default defineConfig({\n" +
+      "  plugins: [cloudflare({ viteEnvironment: { name: \"ssr\" } }), tanstackStart(), viteReact()],\n" +
+      "});\n",
+  },
+  {
+    path: "apps/tanstack/wrangler.jsonc",
+    content:
+      "// Read only by the Vite build (@cloudflare/vite-plugin): the platform hosts\n" +
+      "// the built worker itself, so no deployment config lives here.\n" +
+      "{\n" +
+      "  \"name\": \"project-tanstack\",\n" +
+      "  \"main\": \"./src/worker.ts\",\n" +
+      "  \"compatibility_date\": \"2026-05-01\",\n" +
+      "  \"compatibility_flags\": [\"nodejs_compat\"],\n" +
+      "}\n",
+  },
+  {
     path: "guestbook.ts",
     content:
       "// A stream-processor-backed domain object in project userspace: the guestbook\n" +
@@ -409,6 +958,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "{\n" +
       "  \"include\": [\"**/*.ts\"],\n" +
+      "  \"exclude\": [\"apps\"],\n" +
       "  \"compilerOptions\": {\n" +
       "    \"target\": \"ES2024\",\n" +
       "    \"module\": \"ESNext\",\n" +
@@ -541,6 +1091,37 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        },\n" +
       "      });\n" +
       "    }\n" +
+      "    if (app === \"tanstack\") {\n" +
+      "      // A real TanStack Start app living at apps/tanstack in this repo: the\n" +
+      "      // platform's \"vite\" pipeline runs ITS OWN `npm run build` and serves\n" +
+      "      // the built pages + client assets; its /api rides into the app's\n" +
+      "      // Durable Object (TanstackTodos — SQLite todos via sqlfu, live state\n" +
+      "      // over Cap'n Web). Pages are gated to project members HERE; /api is\n" +
+      "      // the unauthenticated Cap'n Web root that authenticates in-band from\n" +
+      "      // the app cookie, exactly like the internal app.\n" +
+      "      const tanstackSource = {\n" +
+      "        files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "        options: { pipeline: \"vite\", rootDir: \"apps/tanstack\" },\n" +
+      "      } as const;\n" +
+      "      const url = new URL(req.url);\n" +
+      "      if (url.pathname === \"/api\") {\n" +
+      "        return this.fetchDynamicWorker(req, {\n" +
+      "          type: \"stateful\",\n" +
+      "          path: \"/\",\n" +
+      "          className: \"TanstackTodos\",\n" +
+      "          durableWorkerKey: \"app-tanstack\",\n" +
+      "          source: tanstackSource,\n" +
+      "        });\n" +
+      "      }\n" +
+      "      using itx = await this.env.ITX.get();\n" +
+      "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
+      "      if (authResponse) return authResponse;\n" +
+      "      return this.fetchDynamicWorker(req, {\n" +
+      "        type: \"stateless\",\n" +
+      "        path: \"/\",\n" +
+      "        source: tanstackSource,\n" +
+      "      });\n" +
+      "    }\n" +
       "    if (app === \"counter\") {\n" +
       "      return this.fetchDynamicWorker(req, {\n" +
       "        type: \"stateful\",\n" +
@@ -571,6 +1152,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"tanstack\")}\">tanstack</a> (TanStack Start todos: SQLite Durable Object, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor)</li>\n" +
       "              </ul>\n" +
