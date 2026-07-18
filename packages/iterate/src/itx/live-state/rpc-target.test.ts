@@ -1,8 +1,8 @@
 import { newMessagePortRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LiveStateRpcTarget, type LiveStateRpc } from "../../app.ts";
 import { LiveState } from "./engine.ts";
 import { createLiveStateStore } from "./store.ts";
-import { LiveStateRpcTarget, type LiveStateRpc } from "./rpc-target.ts";
 
 describe("LiveStateRpcTarget", () => {
   afterEach(() => vi.useRealTimers());

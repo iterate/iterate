@@ -81,10 +81,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "That method calls the same bound auth policy with the WebSocket upgrade Request\n" +
       "and returns an app-defined `InternalAppSession` RpcTarget. Give that target only\n" +
       "the authority this UI needs; never return the project-wide `itx` capability to\n" +
-      "the browser. `iterate/app` supplies the server-side Cap'n Web host plus\n" +
-      "`LiveState` and its read-only `LiveStateRpcTarget`, so dynamic apps use the same\n" +
-      "snapshot-and-patch protocol as first-party apps without hiding the capability\n" +
-      "graph behind a framework helper.\n" +
+      "the browser. Import the Cap'n Web host directly from `@iterate-com/capnweb`;\n" +
+      "import `LiveState` from the same `iterate/live-state` module first-party apps\n" +
+      "use. `iterate/app` owns only its concrete read-only `LiveStateRpcTarget`\n" +
+      "adapter, so dynamic apps use the same snapshot-and-patch protocol without\n" +
+      "hiding the capability graph behind a framework helper.\n" +
       "\n" +
       "To give agents a new capability surface, add a getter or method to the\n" +
       "default-export worker class: the platform dispatches dotted\n" +
@@ -182,10 +183,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "It receives only `AppSession`, never the project-wide `itx` capability. Add RPC\n" +
       "methods and getters to `AppSession` to define exactly what the browser may do.\n" +
       "\n" +
-      "`iterate/app` provides `RpcTarget`, `newWorkersWebSocketRpcResponse`,\n" +
-      "`LiveState`, and `LiveStateRpcTarget`. `InternalApp` uses them to push its event\n" +
-      "projection with the same snapshot-and-patch LiveState protocol used by Iterate's\n" +
-      "first-party apps. The explicit classes are intentional: there is no\n" +
+      "`LiveState` comes from the same `iterate/live-state` module first-party apps\n" +
+      "use. `iterate/app` owns only its concrete read-only `LiveStateRpcTarget`\n" +
+      "adapter, while Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`\n" +
+      "come directly from `@iterate-com/capnweb`. `InternalApp` uses them to push its\n" +
+      "event projection with the same snapshot-and-patch protocol. The explicit\n" +
+      "classes are intentional: there is no\n" +
       "`authenticatedApp` wrapper hiding where authentication happens or which\n" +
       "authority crosses the wire.\n",
   },
@@ -437,12 +440,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
-      "import {\n" +
-      "  LiveState,\n" +
-      "  LiveStateRpcTarget,\n" +
-      "  RpcTarget,\n" +
-      "  newWorkersWebSocketRpcResponse,\n" +
-      "} from \"iterate/app\";\n" +
+      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
+      "import { LiveStateRpcTarget } from \"iterate/app\";\n" +
+      "import { LiveState } from \"iterate/live-state\";\n" +
       "import {\n" +
       "  type StreamSubscriberWakeRequest,\n" +
       "  type StreamSubscriberWakeResponse,\n" +

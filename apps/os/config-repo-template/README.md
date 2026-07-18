@@ -41,9 +41,11 @@ The browser calls
 It receives only `AppSession`, never the project-wide `itx` capability. Add RPC
 methods and getters to `AppSession` to define exactly what the browser may do.
 
-`iterate/app` provides `RpcTarget`, `newWorkersWebSocketRpcResponse`,
-`LiveState`, and `LiveStateRpcTarget`. `InternalApp` uses them to push its event
-projection with the same snapshot-and-patch LiveState protocol used by Iterate's
-first-party apps. The explicit classes are intentional: there is no
+`LiveState` comes from the same `iterate/live-state` module first-party apps
+use. `iterate/app` owns only its concrete read-only `LiveStateRpcTarget`
+adapter, while Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`
+come directly from `@iterate-com/capnweb`. `InternalApp` uses them to push its
+event projection with the same snapshot-and-patch protocol. The explicit
+classes are intentional: there is no
 `authenticatedApp` wrapper hiding where authentication happens or which
 authority crosses the wire.

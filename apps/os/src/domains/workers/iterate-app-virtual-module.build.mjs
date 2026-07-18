@@ -1,5 +1,5 @@
-// Bundle the worker-side `iterate/app` primitives (Cap'n Web hosting plus
-// LiveState) into the virtual module injected into every dynamic worker.
+// Bundle the concrete worker-side LiveState Cap'n Web adapter as the
+// `iterate/app` virtual module injected into every dynamic worker.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";

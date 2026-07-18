@@ -9,12 +9,9 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "iterate/sdk";
-import {
-  LiveState,
-  LiveStateRpcTarget,
-  RpcTarget,
-  newWorkersWebSocketRpcResponse,
-} from "iterate/app";
+import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
+import { LiveStateRpcTarget } from "iterate/app";
+import { LiveState } from "iterate/live-state";
 import {
   type StreamSubscriberWakeRequest,
   type StreamSubscriberWakeResponse,
