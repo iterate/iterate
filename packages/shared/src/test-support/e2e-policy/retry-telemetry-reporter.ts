@@ -12,6 +12,15 @@ export interface RetriedTestRecord {
   passedAfterRetry: boolean;
   state: string;
   durationMs: number;
+  /** Errors retained by Vitest from the failed attempt(s), even after a retry passes. */
+  errors: RetriedTestError[];
+}
+
+/** A JSON-safe diagnostic from one failed test attempt. */
+export interface RetriedTestError {
+  message: string;
+  name?: string;
+  stack?: string;
 }
 
 /** Shape of the JSON file written to `$E2E_RETRY_TELEMETRY_FILE`. */
@@ -29,7 +38,7 @@ export interface RetryTelemetryFile {
 interface ReportedTestCase {
   fullName: string;
   diagnostic(): { retryCount: number; flaky: boolean; duration: number } | undefined;
-  result(): { state: string };
+  result(): { state: string; errors?: ReadonlyArray<unknown> };
 }
 
 /** Structural slice of vitest's `TestModule` (see {@link ReportedTestCase}). */
@@ -43,8 +52,10 @@ interface ReportedTestModule {
  * red run detects a 5%-probability race roughly once in 400 runs with one
  * retry; counting retries detects it roughly once in 20. Vitest's built-in
  * JSON reporter drops retry counts entirely (verified in 4.1.5), so this
- * reporter walks the run via the reporter API — where `diagnostic()` does
- * expose them — and:
+ * reporter walks the run via the reporter API. `diagnostic()` exposes the
+ * retry count, while `result().errors` deliberately retains errors from
+ * failed attempts even when the final state is `passed` (verified against
+ * Vitest 4.1.8's `TestCase.result()` implementation). The reporter:
  *
  * - writes {@link RetryTelemetryFile} to `$E2E_RETRY_TELEMETRY_FILE` when
  *   set (the preview lane sets it and folds the result into the PR body —
@@ -65,13 +76,15 @@ export class RetryTelemetryReporter {
           if (!diagnostic || diagnostic.retryCount === 0) {
             continue;
           }
+          const result = test.result();
           retried.push({
             fullName: test.fullName,
             moduleId: testModule.moduleId,
             retryCount: diagnostic.retryCount,
             passedAfterRetry: diagnostic.flaky,
-            state: test.result().state,
+            state: result.state,
             durationMs: Math.round(diagnostic.duration),
+            errors: (result.errors ?? []).map(toRetriedTestError),
           });
         }
       }
@@ -83,10 +96,11 @@ export class RetryTelemetryReporter {
       }
       if (retried.length > 0) {
         const details = retried
-          .map(
-            (record) =>
-              `${record.fullName} (x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})`,
-          )
+          .map((record) => {
+            const firstFailure = record.errors[0]?.message;
+            const cause = firstFailure ? `; first failure: ${oneLine(firstFailure)}` : "";
+            return `${record.fullName} (x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"}${cause})`;
+          })
           .join("; ");
         console.log(`[retry-telemetry] ${retried.length} test(s) needed retries: ${details}`);
       }
@@ -94,4 +108,23 @@ export class RetryTelemetryReporter {
       console.error("[retry-telemetry] failed to record retry telemetry:", error);
     }
   }
+}
+
+function toRetriedTestError(error: unknown): RetriedTestError {
+  if (typeof error !== "object" || error === null) {
+    return { message: String(error) };
+  }
+
+  const candidate = error as { message?: unknown; name?: unknown; stack?: unknown };
+  return {
+    message:
+      typeof candidate.message === "string" ? candidate.message : "Unknown failed-attempt error",
+    ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
+    ...(typeof candidate.stack === "string" ? { stack: candidate.stack } : {}),
+  };
+}
+
+function oneLine(message: string): string {
+  const compact = message.replace(/\s+/g, " ").trim();
+  return compact.length > 400 ? `${compact.slice(0, 397)}...` : compact;
 }

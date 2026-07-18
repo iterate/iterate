@@ -14,6 +14,7 @@ export {
 } from "./budgets.ts";
 export {
   RetryTelemetryReporter,
+  type RetriedTestError,
   type RetriedTestRecord,
   type RetryTelemetryFile,
 } from "./retry-telemetry-reporter.ts";
