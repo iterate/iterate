@@ -6,10 +6,10 @@ import {
 } from "@iterate-com/shared/agent-events";
 import {
   AgentBinding,
-  AgentMetadata,
-  AgentMetadataPatch,
+  AgentSummary,
+  AgentSummaryUpdate,
   AgentPath,
-  applyAgentMetadataPatch,
+  applyAgentSummaryUpdate,
   deriveAgentDisplayState,
   deriveAgentRuntime,
 } from "./agent-presence.ts";
@@ -35,34 +35,46 @@ describe("agent paths", () => {
   });
 });
 
-describe("agent metadata", () => {
-  it("trims values and rejects empty, oversized, unknown, and empty patches", () => {
+describe("agent summary", () => {
+  it("trims values and rejects empty, oversized, unknown, and empty updates", () => {
     expect(
-      AgentMetadataPatch.parse({
+      AgentSummaryUpdate.parse({
         title: "  Cattle research  ",
+        description: "  Comparing farms around Bath.  ",
         activity: "  Comparing farms near Bath  ",
       }),
-    ).toEqual({ title: "Cattle research", activity: "Comparing farms near Bath" });
-    expect(() => AgentMetadataPatch.parse({ title: "   " })).toThrow();
-    expect(() => AgentMetadataPatch.parse({ title: "x".repeat(121) })).toThrow();
-    expect(() => AgentMetadataPatch.parse({ unknown: true })).toThrow();
-    expect(() => AgentMetadataPatch.parse({})).toThrow();
+    ).toEqual({
+      title: "Cattle research",
+      description: "Comparing farms around Bath.",
+      activity: "Comparing farms near Bath",
+    });
+    expect(() => AgentSummaryUpdate.parse({ title: "   " })).toThrow();
+    expect(() => AgentSummaryUpdate.parse({ title: "x".repeat(121) })).toThrow();
+    expect(() => AgentSummaryUpdate.parse({ summary: "legacy field" })).toThrow();
+    expect(() => AgentSummaryUpdate.parse({ unknown: true })).toThrow();
+    expect(() => AgentSummaryUpdate.parse({})).toThrow();
   });
 
   it("distinguishes omitted, null, and false and preserves identity for no-ops", () => {
-    const metadata = AgentMetadata.parse({
+    const summary = AgentSummary.parse({
       title: "Cattle research",
+      description: "Comparing nearby farms.",
       activity: "Comparing farms",
       waitingFor: "user_input",
       pinned: true,
     });
-    expect(applyAgentMetadataPatch(metadata, AgentMetadataPatch.parse({ pinned: true }))).toBe(
-      metadata,
+    expect(applyAgentSummaryUpdate(summary, AgentSummaryUpdate.parse({ pinned: true }))).toBe(
+      summary,
     );
     expect(
-      applyAgentMetadataPatch(
-        metadata,
-        AgentMetadataPatch.parse({ activity: null, waitingFor: null, pinned: false }),
+      applyAgentSummaryUpdate(
+        summary,
+        AgentSummaryUpdate.parse({
+          description: null,
+          activity: null,
+          waitingFor: null,
+          pinned: false,
+        }),
       ),
     ).toEqual({ title: "Cattle research", pinned: false });
   });
