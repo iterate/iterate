@@ -344,6 +344,16 @@ export class StreamSubscribers {
    * teardown turn; the final watermark ack below covers the facts.
    */
   #tearingDown = false;
+  /**
+   * Clean wake connections deliberately severed by idle teardown. Their
+   * disconnect watermarks cover delivery machinery facts produced in that
+   * teardown/recovery cycle, so those internal appends must not immediately
+   * resurrect them. Any independently appended event clears the suppression;
+   * explicit config/cursor/resume operations clear their own key as well.
+   */
+  readonly #idleSuppressedWakeKeys = new Set<string>();
+  /** Re-entrant marker while a delivery-produced fact synchronously appends and wakes the stream. */
+  #deliveryFactAppendDepth = 0;
   readonly #pushDrains = new Set<string>();
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
@@ -366,7 +376,7 @@ export class StreamSubscribers {
     this.#delivery = new DurableDeliveryCoordinator({
       coreState: args.hooks.coreState,
       store: args.hooks.store,
-      appendRequiredFact: args.hooks.appendRequiredFact,
+      appendRequiredFact: (event) => this.#appendDeliveryFact(event, true),
       now: args.hooks.now,
       random: args.hooks.random,
       armAlarm: args.hooks.armAlarm,
@@ -416,13 +426,31 @@ export class StreamSubscribers {
    * storage round trip.
    */
   wake(freshTail?: SizedStreamEvent[]): void {
-    if (freshTail !== undefined && freshTail.length > 0) this.#freshTail = freshTail;
+    if (freshTail !== undefined && freshTail.length > 0) {
+      this.#freshTail = freshTail;
+      if (this.#deliveryFactAppendDepth === 0) this.#idleSuppressedWakeKeys.clear();
+    }
     if (this.#tearingDown) return;
     for (const connection of this.#connections.values()) connection.wake();
     try {
       this.#reconcileDurable();
     } catch (error) {
       console.error("stream durable subscription reconcile failed", error);
+    }
+  }
+
+  /**
+   * Delivery facts append synchronously through the owning stream and re-enter
+   * wake(). Mark that causal scope so idle-suppressed wake keys ignore only
+   * machinery-generated lag; an independent append still wakes them.
+   */
+  #appendDeliveryFact(event: StreamEventInput, required = false): void {
+    this.#deliveryFactAppendDepth += 1;
+    try {
+      if (required) this.#hooks.appendRequiredFact(event);
+      else this.#hooks.appendFact(event);
+    } finally {
+      this.#deliveryFactAppendDepth -= 1;
     }
   }
 
@@ -538,6 +566,7 @@ export class StreamSubscribers {
         if (row.ackedOffset >= state.maxOffset) continue; // caught up; nothing to say
 
         if (config.delivery.mode === "wake") {
+          if (this.#idleSuppressedWakeKeys.has(subscriptionKey)) continue;
           if (this.#connections.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey)) {
             continue;
           }
@@ -858,7 +887,7 @@ export class StreamSubscribers {
             config,
             visible,
           );
-          for (const fact of conditionErrors) this.#hooks.appendFact(fact);
+          for (const fact of conditionErrors) this.#appendDeliveryFact(fact);
 
           if (matched.length === 0) {
             // Skip-not-defer: nothing here for this subscriber, but the
@@ -1200,16 +1229,19 @@ export class StreamSubscribers {
         confirmations: confirmationCount,
         error,
       });
-      this.#hooks.appendRequiredFact({
-        type: "events.iterate.com/stream/error-occurred",
-        idempotencyKey: `push-poison-skipped:${subscriptionKey}:${poison.offset}`,
-        payload: {
-          // The key can replay after this fact commits but the fenced cursor
-          // write fails. Keep its payload independent of a later receiver
-          // diagnostic so the retry is a true idempotency hit.
-          message: `subscription "${subscriptionKey}" skipped poison event at offset ${poison.offset}`,
+      this.#appendDeliveryFact(
+        {
+          type: "events.iterate.com/stream/error-occurred",
+          idempotencyKey: `push-poison-skipped:${subscriptionKey}:${poison.offset}`,
+          payload: {
+            // The key can replay after this fact commits but the fenced cursor
+            // write fails. Keep its payload independent of a later receiver
+            // diagnostic so the retry is a true idempotency hit.
+            message: `subscription "${subscriptionKey}" skipped poison event at offset ${poison.offset}`,
+          },
         },
-      });
+        true,
+      );
       // Step over the confirmed poison event. The durable skip streak survives
       // hibernation and only a later receiver success resets it.
       this.#hooks.store.skipPoison(attempt, poison.offset);
@@ -1228,6 +1260,7 @@ export class StreamSubscribers {
   /** A `subscription-configured` event committed (new or replacing). */
   onSubscriptionConfigured(payload: SubscriptionConfiguredPayload, eventOffset: number): void {
     const key = payload.subscriptionKey;
+    this.#idleSuppressedWakeKeys.delete(key);
     this.#delivery.forgetReconcile(key);
     // A replaced config's live connection belongs to the old config; drop it
     // and let reconcile re-establish against the new one.
@@ -1247,6 +1280,7 @@ export class StreamSubscribers {
 
   /** A `subscription-removed` event committed. Deleting the row is revocation. */
   onSubscriptionRemoved(subscriptionKey: string): void {
+    this.#idleSuppressedWakeKeys.delete(subscriptionKey);
     this.#delivery.forgetReconcile(subscriptionKey);
     this.#hooks.store.delete(subscriptionKey);
     this.#connections.get(subscriptionKey)?.close("subscription-removed");
@@ -1269,6 +1303,7 @@ export class StreamSubscribers {
 
   /** A `subscription-cursor-set` fact committed: the audited seek. */
   onCursorSet(subscriptionKey: string, afterOffset: number): void {
+    this.#idleSuppressedWakeKeys.delete(subscriptionKey);
     // The fact is authoritative even if config's post-commit cursor creation
     // was interrupted. UPDATE alone is intentionally a no-op for a missing
     // row, so establish the row before applying the audited seek.
@@ -1284,6 +1319,7 @@ export class StreamSubscribers {
    * fact; a redrive appends both.
    */
   onResumed(subscriptionKey: string): void {
+    this.#idleSuppressedWakeKeys.delete(subscriptionKey);
     const row = this.#hooks.store.get(subscriptionKey);
     if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
     this.#batchLimits.delete(subscriptionKey);
@@ -1297,67 +1333,107 @@ export class StreamSubscribers {
   // subscriber can paint without a separate getState call.
   // ===========================================================================
 
+  /** Dispose a connection's retained capability group without short-circuiting on one bad stub. */
+  #disposeConnectionCapabilities(args: {
+    subscriptionKey: string;
+    ping?: RetainedSubscriberPing;
+    sink: RetainedProcessEventBatch;
+    getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
+  }): void {
+    const failures: { capability: string; error: unknown }[] = [];
+    for (const [capability, retained] of [
+      ["ping", args.ping],
+      ["sink", args.sink],
+      ["getProcessorRuntimeState", args.getProcessorRuntimeState],
+    ] as const) {
+      if (retained === undefined) continue;
+      try {
+        retained[Symbol.dispose]();
+      } catch (error) {
+        failures.push({ capability, error });
+      }
+    }
+    if (failures.length > 0) {
+      console.error("stream connection capability disposal failed", {
+        subscriptionKey: args.subscriptionKey,
+        failures,
+      });
+    }
+  }
+
   #open(args: OpenConnectionArgs): Connection {
     const { subscriptionKey, subscriptionType, sink } = args;
 
     const deliverEvents = args.events !== false;
-    // This synchronous committed head is the subscription's atomic live
-    // boundary. Ephemeral rows at/below it existed before the subscription
-    // opened and are never replayed; rows above it are genuinely live.
-    const coreState = this.#hooks.coreState();
-    const openedAtOffset = coreState.maxOffset;
-    if (
-      args.replayAfterOffset !== undefined &&
-      (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
-    ) {
-      sink[Symbol.dispose]();
-      throw new Error("replayAfterOffset must be a non-negative safe integer");
-    }
-    if (
-      args.expectedIncarnation !== undefined &&
-      args.expectedIncarnation !== null &&
-      args.expectedIncarnation.trim().length === 0
-    ) {
-      sink[Symbol.dispose]();
-      throw new Error("expectedIncarnation must be null or a non-empty string");
-    }
-    if (
-      args.expectedIncarnation !== undefined &&
-      (coreState.createdAt ?? null) !== args.expectedIncarnation
-    ) {
-      sink[Symbol.dispose]();
-      throw new Error(
-        `stream incarnation changed (${String(args.expectedIncarnation)} -> ${String(coreState.createdAt ?? null)})`,
-      );
-    }
-    if (
-      args.maxReplayOffsetGap !== undefined &&
-      (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
-    ) {
-      sink[Symbol.dispose]();
-      throw new Error("maxReplayOffsetGap must be a non-negative safe integer");
-    }
-    // State-only subscriptions are implicitly live-from-now: replay without
-    // events is meaningless, so replayAfterOffset is ignored in that mode.
-    let cursor = deliverEvents ? (args.replayAfterOffset ?? openedAtOffset) : openedAtOffset;
-    if (cursor > openedAtOffset) {
-      sink[Symbol.dispose]();
-      throw new Error(`replayAfterOffset ${cursor} is ahead of the stream head ${openedAtOffset}`);
-    }
-    if (
-      deliverEvents &&
-      args.maxReplayOffsetGap !== undefined &&
-      openedAtOffset - cursor > args.maxReplayOffsetGap
-    ) {
-      sink[Symbol.dispose]();
-      throw new Error(
-        `replay gap ${openedAtOffset - cursor} exceeds maxReplayOffsetGap ${args.maxReplayOffsetGap}`,
-      );
-    }
+    let openedAtOffset!: number;
+    let cursor!: number;
+    let getProcessorRuntimeState: (GetProcessorRuntimeState & Disposable) | undefined;
+    let ping: RetainedSubscriberPing | undefined;
+    try {
+      // This synchronous committed head is the subscription's atomic live
+      // boundary. Ephemeral rows at/below it existed before the subscription
+      // opened and are never replayed; rows above it are genuinely live.
+      const coreState = this.#hooks.coreState();
+      openedAtOffset = coreState.maxOffset;
+      if (
+        args.replayAfterOffset !== undefined &&
+        (!Number.isSafeInteger(args.replayAfterOffset) || args.replayAfterOffset < 0)
+      ) {
+        throw new Error("replayAfterOffset must be a non-negative safe integer");
+      }
+      if (
+        args.expectedIncarnation !== undefined &&
+        args.expectedIncarnation !== null &&
+        args.expectedIncarnation.trim().length === 0
+      ) {
+        throw new Error("expectedIncarnation must be null or a non-empty string");
+      }
+      if (
+        args.expectedIncarnation !== undefined &&
+        (coreState.createdAt ?? null) !== args.expectedIncarnation
+      ) {
+        throw new Error(
+          `stream incarnation changed (${String(args.expectedIncarnation)} -> ${String(coreState.createdAt ?? null)})`,
+        );
+      }
+      if (
+        args.maxReplayOffsetGap !== undefined &&
+        (!Number.isSafeInteger(args.maxReplayOffsetGap) || args.maxReplayOffsetGap < 0)
+      ) {
+        throw new Error("maxReplayOffsetGap must be a non-negative safe integer");
+      }
+      // State-only subscriptions are implicitly live-from-now: replay without
+      // events is meaningless, so replayAfterOffset is ignored in that mode.
+      cursor = deliverEvents ? (args.replayAfterOffset ?? openedAtOffset) : openedAtOffset;
+      if (cursor > openedAtOffset) {
+        throw new Error(
+          `replayAfterOffset ${cursor} is ahead of the stream head ${openedAtOffset}`,
+        );
+      }
+      if (
+        deliverEvents &&
+        args.maxReplayOffsetGap !== undefined &&
+        openedAtOffset - cursor > args.maxReplayOffsetGap
+      ) {
+        throw new Error(
+          `replay gap ${openedAtOffset - cursor} exceeds maxReplayOffsetGap ${args.maxReplayOffsetGap}`,
+        );
+      }
 
-    // Replacing any existing connection for this key only after the proposed
-    // open is valid; a rejected bounded replay must leave the live one intact.
-    this.#connections.get(subscriptionKey)?.close("replaced");
+      // Replacing any existing connection for this key only after the proposed
+      // open is valid; a rejected bounded replay must leave the live one intact.
+      this.#connections.get(subscriptionKey)?.close("replaced");
+      getProcessorRuntimeState = retainGetProcessorRuntimeState(args.getRuntimeState);
+      ping = retainSubscriberPing(args.ping);
+    } catch (error) {
+      this.#disposeConnectionCapabilities({
+        subscriptionKey,
+        ping,
+        sink,
+        getProcessorRuntimeState,
+      });
+      throw error;
+    }
     let initialBatchPending = true;
     let draining = false;
     let open = true;
@@ -1487,8 +1563,8 @@ export class StreamSubscribers {
     const connectionBase: ConnectionBase = {
       startedAt: new Date(this.#hooks.now()).toISOString(),
       ...(args.presence === undefined ? {} : { subscriber: args.presence }),
-      getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
-      ping: retainSubscriberPing(args.ping),
+      getProcessorRuntimeState,
+      ping,
       get cursor() {
         return cursor;
       },
@@ -1506,12 +1582,17 @@ export class StreamSubscribers {
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
         }
-        // The ping stub proxies through the same chain the sink retains
-        // (wake lane), so it releases before the sink tears that chain down.
-        connection.ping?.[Symbol.dispose]();
-        sink[Symbol.dispose]();
-        connection.getProcessorRuntimeState?.[Symbol.dispose]();
-        this.#hooks.appendFact({
+        // One throwing RPC disposer must not leak its sibling capabilities or
+        // interrupt already-committed config/cursor side effects. The order is
+        // deliberate: the ping stub proxies through the chain the wake sink
+        // retains, so it releases before the sink tears that chain down.
+        this.#disposeConnectionCapabilities({
+          subscriptionKey,
+          ping: connection.ping,
+          sink,
+          getProcessorRuntimeState: connection.getProcessorRuntimeState,
+        });
+        this.#appendDeliveryFact({
           type: "events.iterate.com/stream/subscriber-disconnected",
           payload: { subscriptionKey, reason },
         });
@@ -1535,18 +1616,29 @@ export class StreamSubscribers {
             subscriptionType: "ephemeral",
           } as const);
 
-    this.#connections.set(subscriptionKey, connection);
-    this.#hooks.appendFact({
-      type: "events.iterate.com/stream/subscriber-connected",
-      payload: {
-        subscriptionKey,
-        subscriptionType,
-        ...(args.presence === undefined ? {} : { subscriber: args.presence }),
-      },
-    });
-    sink.onRpcBroken?.(() => connection.close("rpc-broken"));
-    connection.wake();
-    return connection;
+    try {
+      this.#connections.set(subscriptionKey, connection);
+      this.#appendDeliveryFact({
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: {
+          subscriptionKey,
+          subscriptionType,
+          ...(args.presence === undefined ? {} : { subscriber: args.presence }),
+        },
+      });
+      sink.onRpcBroken?.((error) => {
+        if (connection.subscriptionType === "configured") {
+          this.onDurableDeliveryError(subscriptionKey, error);
+        } else {
+          connection.close("rpc-broken");
+        }
+      });
+      connection.wake();
+      return connection;
+    } catch (error) {
+      connection.close("replaced");
+      throw error;
+    }
   }
 
   /**
@@ -1577,26 +1669,28 @@ export class StreamSubscribers {
     // retry obligation already in place.
     const recovery = this.#delivery.fail(attempt, error);
     let fatalRecovery = false;
+    const keptRecovery = recovery
+      .then((disposition) => {
+        if (disposition === "stale") this.wake();
+      })
+      .catch((recoveryError) => {
+        if (recoveryError instanceof StreamDeliveryFatalInvariantError) {
+          fatalRecovery = true;
+          throw recoveryError;
+        }
+        console.error("stream durable sink recovery failed; restarting incarnation", {
+          subscriptionKey,
+          error: recoveryError,
+          deliveryError: error,
+        });
+        this.#hooks.abortIncarnation("stream durable sink recovery failed");
+      })
+      .finally(() => (fatalRecovery ? undefined : this.#delivery.repointAfterAttempt()));
+    // Register the continuation before touching fallible RPC cleanup. A fatal
+    // park/projection invariant must remain owned by waitUntil even when a
+    // retained stub's disposer itself is broken.
+    this.#hooks.keepAlive(keptRecovery);
     connection.close("delivery-failed");
-    this.#hooks.keepAlive(
-      recovery
-        .then((disposition) => {
-          if (disposition === "stale") this.wake();
-        })
-        .catch((recoveryError) => {
-          if (recoveryError instanceof StreamDeliveryFatalInvariantError) {
-            fatalRecovery = true;
-            throw recoveryError;
-          }
-          console.error("stream durable sink recovery failed; restarting incarnation", {
-            subscriptionKey,
-            error: recoveryError,
-            deliveryError: error,
-          });
-          this.#hooks.abortIncarnation("stream durable sink recovery failed");
-        })
-        .finally(() => (fatalRecovery ? undefined : this.#delivery.repointAfterAttempt())),
-    );
   }
 
   // ===========================================================================
@@ -1758,6 +1852,10 @@ export class StreamSubscribers {
     const wedgedKeys = new Set(
       keys.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
     );
+    for (const subscriptionKey of keys) {
+      if (wedgedKeys.has(subscriptionKey)) this.#idleSuppressedWakeKeys.delete(subscriptionKey);
+      else this.#idleSuppressedWakeKeys.add(subscriptionKey);
+    }
     this.#tearingDown = true;
     try {
       for (const subscriptionKey of keys) this.close(subscriptionKey, "idle");
@@ -1775,7 +1873,10 @@ export class StreamSubscribers {
       if (wedgedKeys.has(subscriptionKey)) continue;
       this.#hooks.store.ack(subscriptionKey, maxOffset);
     }
-    if (wedgedKeys.size > 0) queueMicrotask(() => this.wake());
+    // Re-drive every non-connection lane after the teardown facts commit, and
+    // re-poke wedged wake keys. Clean wake keys remain suppressed through the
+    // recovery's own facts until an independent append arrives.
+    queueMicrotask(() => this.wake());
   }
 
   #configuredConnectionKeys(): string[] {

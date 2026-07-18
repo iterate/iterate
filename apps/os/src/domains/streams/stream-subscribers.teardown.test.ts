@@ -9,7 +9,7 @@
 // the log, every fact-append triggers wake(), parked facts fold.
 
 import { describe, expect, it } from "vitest";
-import type { StreamEvent, StreamEventInput } from "iterate/processors";
+import type { StreamEvent, StreamEventBatch, StreamEventInput } from "iterate/processors";
 import {
   CoreProcessorContract,
   type SubscriptionConfiguredPayload,
@@ -39,6 +39,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     }
   > = {};
   const pokes: string[] = [];
+  const pushes: string[] = [];
   const kept: Promise<unknown>[] = [];
   let sinkAlive = true;
 
@@ -238,7 +239,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         entry.parkedReason = payload.reason;
       }
     }
-    subscribers.wake();
+    subscribers.wake([{ event, byteLength: JSON.stringify(event).length }]);
   };
 
   const subscribers = new StreamSubscribers({
@@ -270,7 +271,9 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           sinkAlive = true;
           return { checkpointOffset: log.length, sink };
         },
-        push: async () => undefined,
+        push: async (_expression, batch) => {
+          pushes.push(batch.subscriptionKey);
+        },
         webhook: async () => undefined,
       },
       appendFact: append,
@@ -304,6 +307,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     subscribers,
     log,
     pokes,
+    pushes,
     configured,
     append,
     settle,
@@ -394,6 +398,108 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
     // ...and the teardown itself queued the re-poke (supersede the wedged
     // connection) instead of leaving the stream asleep until the next append.
     expect(pokes).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a wedged reconnect does not resurrect a clean sibling after idle teardown", async () => {
+    const pokeCounts = new Map<string, number>();
+    const h = makeFaithfulHarness(async (request) => {
+      pokeCounts.set(request.subscriptionKey, (pokeCounts.get(request.subscriptionKey) ?? 0) + 1);
+      const sink = Object.assign(() => undefined, {
+        pendingDeliveries: () => (request.subscriptionKey === "wedged" ? 1 : 0),
+        [Symbol.dispose]() {},
+      }) as RetainedProcessEventBatch;
+      return { checkpointOffset: 0, sink };
+    });
+    const configure = (subscriptionKey: string, offset: number) => {
+      const payload: SubscriptionConfiguredPayload = {
+        subscriptionKey,
+        delivery: {
+          mode: "wake",
+          expression: ["agents", ["get", "/t"], "processor", "wakeStreamSubscriber"],
+        },
+      };
+      h.configured[subscriptionKey] = {
+        latestConfiguredEvent: {
+          offset,
+          type: "events.iterate.com/stream/subscription-configured",
+          payload,
+          createdAt: new Date(offset).toISOString(),
+        },
+      };
+      h.append({ type: "events.iterate.com/stream/subscription-configured", payload });
+      h.subscribers.onSubscriptionConfigured(payload, offset);
+    };
+
+    configure("wedged", 1);
+    configure("clean", 2);
+    await h.settle();
+    expect(pokeCounts).toEqual(
+      new Map([
+        ["wedged", 1],
+        ["clean", 1],
+      ]),
+    );
+
+    h.subscribers.runIdleTeardownNow();
+    await h.settle();
+
+    expect(pokeCounts.get("wedged")).toBe(2);
+    expect(pokeCounts.get("clean")).toBe(1);
+    expect(h.subscribers.hasConnection("clean")).toBe(false);
+
+    h.append({ type: "test/genuine-event", payload: {} });
+    await h.settle();
+    expect(pokeCounts.get("clean")).toBe(2);
+  });
+
+  it("clean teardown wakes push and ephemeral lanes past its disconnect facts", async () => {
+    const h = makeFaithfulHarness();
+    const wakePayload: SubscriptionConfiguredPayload = {
+      ...h.wakePayload,
+      subscriptionKey: "wake",
+    };
+    const pushPayload: SubscriptionConfiguredPayload = {
+      subscriptionKey: "push",
+      delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+      deliver: "all",
+    };
+    h.configured.wake = {
+      latestConfiguredEvent: {
+        offset: 1,
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: wakePayload,
+        createdAt: new Date(1).toISOString(),
+      },
+    };
+    h.configured.push = {
+      latestConfiguredEvent: {
+        offset: 2,
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: pushPayload,
+        createdAt: new Date(2).toISOString(),
+      },
+    };
+    h.append({ type: "events.iterate.com/stream/subscription-configured", payload: wakePayload });
+    h.subscribers.onSubscriptionConfigured(wakePayload, 1);
+    h.append({ type: "events.iterate.com/stream/subscription-configured", payload: pushPayload });
+    h.subscribers.onSubscriptionConfigured(pushPayload, 2);
+    const ephemeralBatches: StreamEventBatch[] = [];
+    h.subscribers.openEphemeral({
+      subscriptionKey: "ephemeral",
+      sink: (batch) => ephemeralBatches.push(batch),
+      replayAfterOffset: h.log.length,
+    });
+    await h.settle();
+    const pushCallsBefore = h.pushes.length;
+    const ephemeralBatchesBefore = ephemeralBatches.length;
+
+    h.subscribers.runIdleTeardownNow();
+    await h.settle();
+
+    expect(h.pushes.length).toBeGreaterThan(pushCallsBefore);
+    expect(h.row("push")?.ackedOffset).toBe(h.log.length);
+    expect(ephemeralBatches.length).toBeGreaterThan(ephemeralBatchesBefore);
+    expect(ephemeralBatches.at(-1)?.scannedThroughOffset).toBe(h.log.length);
   });
 
   it("a poke fenced off by a config replacement re-reconciles immediately (liveness)", async () => {

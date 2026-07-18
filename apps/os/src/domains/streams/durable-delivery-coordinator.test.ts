@@ -59,6 +59,7 @@ function makeHarness() {
   const repointFailures: Error[] = [];
   const kept: Promise<unknown>[] = [];
   const parked: string[] = [];
+  let inFlight = false;
   let requiredFactFailure: Error | undefined;
   let armHook: (() => void) | undefined;
   const coordinator = new DurableDeliveryCoordinator({
@@ -94,7 +95,7 @@ function makeHarness() {
       if (failure !== undefined) throw failure;
     },
     keepAlive: (promise) => kept.push(promise),
-    isInFlight: () => false,
+    isInFlight: () => inFlight,
     onParked: (subscriptionKey) => parked.push(subscriptionKey),
   });
   const attempt = { subscriptionKey: "k", configOffset: 1, epoch: store.get("k")!.epoch };
@@ -119,6 +120,9 @@ function makeHarness() {
     },
     setArmHook: (hook: (() => void) | undefined) => {
       armHook = hook;
+    },
+    setInFlight: (value: boolean) => {
+      inFlight = value;
     },
   };
 }
@@ -217,6 +221,34 @@ describe("DurableDeliveryCoordinator", () => {
       watchdogAt: null,
       retryAt: null,
     });
+  });
+
+  it("does not classify a failed stale-alarm clear as orphaned delivery intent", async () => {
+    const h = makeHarness();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.armFailures.push(new Error("one"), new Error("two"), new Error("three"));
+    h.repointFailures.push(new Error("four"), new Error("five"), new Error("six"));
+    let arms = 0;
+    h.setArmHook(() => {
+      arms += 1;
+      if (arms === 3) h.store.setCursor("k", 0);
+    });
+
+    await expect(h.coordinator.begin(h.attempt)).resolves.toBe("stale");
+    expect(h.store.get("k")).toMatchObject({
+      epoch: h.attempt.epoch + 1,
+      nextAttemptAt: null,
+    });
+    expect(h.facts).toEqual([]);
+  });
+
+  it("projects a bounded safety alarm across an in-flight null-deadline window", async () => {
+    const h = makeHarness();
+    h.setInFlight(true);
+
+    await h.coordinator.repointAlarmFromStore();
+
+    expect(h.repointed).toEqual([6_000]);
   });
 
   it("preserves the watchdog and throws fatally when setup can neither park nor project it", async () => {

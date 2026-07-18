@@ -448,7 +448,7 @@ export class DurableDeliveryCoordinator {
     error: unknown;
     park(): Promise<"parked" | "stale">;
     purpose: string;
-  }): Promise<"parked" | "reprojected"> {
+  }): Promise<"no-intent" | "parked" | "reprojected"> {
     const parkFailures: unknown[] = [];
     for (let attempt = 1; attempt <= ALARM_PROJECTION_ATTEMPTS; attempt += 1) {
       try {
@@ -478,6 +478,29 @@ export class DurableDeliveryCoordinator {
       await this.repointAlarmWithRetries(`${args.purpose} recovery projection`);
       return "reprojected";
     } catch (projectionError) {
+      let currentIntentAt: number | null;
+      try {
+        currentIntentAt = this.#nextAlarmAt();
+      } catch (intentInspectionError) {
+        throw new StreamDeliveryFatalInvariantError(args.purpose, [
+          args.error,
+          parkError,
+          projectionError,
+          intentInspectionError,
+        ]);
+      }
+      if (currentIntentAt === null) {
+        // The old fence vanished while its projection was failing. Failing to
+        // DELETE an obsolete platform alarm can cause one harmless extra
+        // activation, but it cannot orphan work because no delivery intent
+        // remains. Keep that cleanup failure observable without lying that a
+        // live obligation has lost both of its durable exits.
+        console.warn("stream stale alarm cleanup failed after delivery intent vanished", {
+          purpose: args.purpose,
+          error: projectionError,
+        });
+        return "no-intent";
+      }
       throw new StreamDeliveryFatalInvariantError(args.purpose, [
         args.error,
         parkError,
@@ -508,19 +531,26 @@ export class DurableDeliveryCoordinator {
 
   /** Exact platform-alarm projection after the platform consumed one alarm. */
   repointAlarmFromStore(): Promise<void> {
+    return this.#hooks.repointAlarm(this.#nextAlarmAt());
+  }
+
+  /** Derive the one exact alarm desire from current durable and in-memory intent. */
+  #nextAlarmAt(): number | null {
     const state = this.#hooks.coreState();
     const now = this.#hooks.now();
     let next: number | null = null;
     for (const row of this.#hooks.store.list()) {
-      // Do not synthesize an alarm merely because the key is in memory. A
-      // real attempt writes its watchdog synchronously before its first await,
-      // and poke/drain remove their in-flight guard before their final exact
-      // projection. Therefore null here means there is no durable obligation.
-      if (row.nextAttemptAt === null) continue;
       const configured = state.configuredSubscribersByKey[row.subscriptionKey];
       if (configured === undefined || configured.parkedReason !== undefined) continue;
+      const inFlight = this.#hooks.isInFlight(row.subscriptionKey);
+      // Most attempt transitions install their durable watchdog before the
+      // first await. Poison bisection/skip intentionally consume that deadline
+      // before continuing the same drain, though, so an exact projection can
+      // observe a short in-flight null window. A bounded safety alarm bridges
+      // every such window; the attempt's final exact projection removes it.
+      if (row.nextAttemptAt === null && !inFlight) continue;
       const candidate =
-        this.#hooks.isInFlight(row.subscriptionKey) && row.nextAttemptAt <= now
+        row.nextAttemptAt === null || (inFlight && row.nextAttemptAt <= now)
           ? now + DELIVERY_WATCHDOG_RECHECK_MS
           : row.nextAttemptAt;
       if (next === null || candidate < next) next = candidate;
@@ -537,7 +567,7 @@ export class DurableDeliveryCoordinator {
       }
       if (next === null || pending.retryAt < next) next = pending.retryAt;
     }
-    return this.#hooks.repointAlarm(next);
+    return next;
   }
 
   /** Bounded exact projection for a path whose current activation has no successor left. */

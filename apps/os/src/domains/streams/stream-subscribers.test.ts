@@ -1732,8 +1732,9 @@ describe("StreamSubscribers", () => {
     // New lag re-pokes.
     const second = makeSink();
     h.dialImpl.poke = async () => ({ checkpointOffset: 3, sink: second.sink });
-    h.append(evt(4, "a"));
-    h.subscribers.wake();
+    const fresh = evt(4, "a");
+    h.append(fresh);
+    h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
     await h.settle();
     expect(h.pokes).toHaveLength(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
@@ -2036,7 +2037,7 @@ describe("StreamSubscribers", () => {
     expect(h.subscribers.hasConnection("k")).toBe(true);
   });
 
-  it("j3. synchronous onRpcBroken registration preserves the watchdog for a quiet retry", async () => {
+  it("j3. synchronous onRpcBroken charges receiver failure and enters bounded backoff", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
     h.append(evt(1, "a"));
@@ -2051,16 +2052,16 @@ describe("StreamSubscribers", () => {
     expect(h.subscribers.hasConnection("k")).toBe(false);
     expect(h.row("k")).toMatchObject({
       ackedOffset: 0,
-      attempt: 0,
-      retryAt: null,
-      watchdogAt: 65_000,
-      lastError: null,
+      attempt: 1,
+      retryAt: 1_000,
+      watchdogAt: null,
+      lastError: "already broken",
     });
-    expect(h.platformAlarm()).toBe(65_000);
+    expect(h.platformAlarm()).toBe(1_000);
 
     const healthy = makeSink();
     h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: healthy.sink });
-    h.advanceTo(65_001);
+    h.advanceTo(1_001);
     await h.subscribers.onAlarm();
     await h.settle();
     expect(h.pokes).toHaveLength(2);
@@ -2171,6 +2172,55 @@ describe("StreamSubscribers", () => {
     });
   });
 
+  it("l2. a throwing RPC disposer cannot interrupt a committed replacement seek", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+    const disposals: string[] = [];
+    const sink = Object.assign(() => undefined, {
+      [Symbol.dispose]: () => disposals.push("sink"),
+    }) as RetainedProcessEventBatch;
+    const getRuntimeState = Object.assign(async () => ({}) as never, {
+      [Symbol.dispose]: () => disposals.push("runtime"),
+    });
+    const ping = Object.assign(
+      (input: { t0: number }) => ({ t0: input.t0, t1: input.t0, t2: input.t0 }),
+      {
+        [Symbol.dispose]: () => {
+          disposals.push("ping");
+          throw new Error("ping disposal failed");
+        },
+      },
+    );
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 3,
+      sink,
+      getRuntimeState,
+      ping,
+    });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    const epochBefore = h.row("k")!.epoch;
+
+    const cleanupLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const replacement = pushPayload({ deliver: "all" });
+      h.configure(replacement, 10);
+
+      expect(() => h.subscribers.onSubscriptionConfigured(replacement, 10)).not.toThrow();
+      expect(h.row("k")).toMatchObject({ ackedOffset: 0 });
+      expect(h.row("k")!.epoch).toBeGreaterThan(epochBefore);
+      await h.settle();
+    } finally {
+      cleanupLog.mockRestore();
+    }
+
+    expect(disposals).toEqual(["ping", "sink", "runtime"]);
+    expect(h.pushes.at(-1)?.events.map((event) => event.offset)).toEqual([1, 2, 3]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
   it("m. removal deletes the cursor row and closes the connection", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
@@ -2266,6 +2316,36 @@ describe("StreamSubscribers", () => {
       { subscriptionKey: "rejecting-watcher", reason: "unsubscribed" },
       { subscriptionKey: "watcher", reason: "unsubscribed" },
     ]);
+  });
+
+  it("n2. a sidecar retention failure releases every pre-install capability", () => {
+    const h = makeHarness();
+    const disposals: string[] = [];
+    const sink = Object.assign(() => undefined, {
+      [Symbol.dispose]: () => disposals.push("sink"),
+    });
+    const getRuntimeState = Object.assign(async () => ({}) as never, {
+      [Symbol.dispose]: () => disposals.push("runtime"),
+    });
+    const ping = Object.assign(
+      (input: { t0: number }) => ({ t0: input.t0, t1: input.t0, t2: input.t0 }),
+      {
+        dup: () => {
+          throw new Error("ping retain failed");
+        },
+      },
+    );
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink,
+        getRuntimeState,
+        ping,
+      }),
+    ).toThrow("ping retain failed");
+    expect(disposals).toEqual(["sink", "runtime"]);
+    expect(h.subscribers.hasConnection("watcher")).toBe(false);
   });
 
   it("o. webhook: one POST per event in order, per-event acking, lean envelope", async () => {
@@ -2434,12 +2514,78 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.attempt).toBe(0);
   });
 
+  it("s1. durable recovery is registered before fallible connection cleanup", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const disposals: string[] = [];
+    const sink = Object.assign(() => undefined, {
+      [Symbol.dispose]: () => disposals.push("sink"),
+    }) as RetainedProcessEventBatch;
+    const getRuntimeState = Object.assign(async () => ({}) as never, {
+      [Symbol.dispose]: () => disposals.push("runtime"),
+    });
+    const ping = Object.assign(
+      (input: { t0: number }) => ({ t0: input.t0, t1: input.t0, t2: input.t0 }),
+      {
+        [Symbol.dispose]: () => {
+          disposals.push("ping");
+          throw new Error("ping disposal failed");
+        },
+      },
+    );
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink,
+      getRuntimeState,
+      ping,
+    });
+    h.subscribers.wake();
+    await h.settle();
+    const keptBefore = h.kept.length;
+
+    const cleanupLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() =>
+        h.subscribers.onDurableDeliveryError("k", new Error("receiver failed")),
+      ).not.toThrow();
+      expect(h.kept.length).toBe(keptBefore + 1);
+      await h.settle();
+    } finally {
+      cleanupLog.mockRestore();
+    }
+
+    expect(disposals).toEqual(["ping", "sink", "runtime"]);
+    expect(h.row("k")).toMatchObject({ attempt: 1, lastError: "receiver failed" });
+  });
+
   it("s2. fatal durable-sink recovery is not followed by a contradictory cleanup projection", async () => {
     const h = makeHarness();
     await h.settle();
     h.configure(wakePayload(), 0);
     h.append(evt(1, "a"));
-    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: makeSink().sink });
+    const disposals: string[] = [];
+    const sink = Object.assign(() => undefined, {
+      [Symbol.dispose]: () => disposals.push("sink"),
+    }) as RetainedProcessEventBatch;
+    const getRuntimeState = Object.assign(async () => ({}) as never, {
+      [Symbol.dispose]: () => disposals.push("runtime"),
+    });
+    const ping = Object.assign(
+      (input: { t0: number }) => ({ t0: input.t0, t1: input.t0, t2: input.t0 }),
+      {
+        [Symbol.dispose]: () => {
+          disposals.push("ping");
+          throw new Error("ping disposal failed during fatal recovery");
+        },
+      },
+    );
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink,
+      getRuntimeState,
+      ping,
+    });
     h.subscribers.wake();
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(true);
@@ -2464,6 +2610,7 @@ describe("StreamSubscribers", () => {
     expect(h.platformAlarm()).toBeNull();
     expect(h.repointedAlarms).toHaveLength(projectionCountBeforeFailure + 3);
     expect(h.abortedIncarnations).toEqual([]);
+    expect(disposals).toEqual(["ping", "sink", "runtime"]);
   });
 
   it("classifies a Durable Object lifecycle reset as availability, not a delivery error", async () => {
