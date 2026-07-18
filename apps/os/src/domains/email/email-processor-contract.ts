@@ -9,6 +9,8 @@ import { defineProcessorContract } from "iterate/processors";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import { NotificationIntentContract } from "../notifications/notification-intent-contract.ts";
+import { NotificationRequest } from "../notifications/types.ts";
 
 const EmailBirthCertificate = z.object({
   config: z.object({}),
@@ -106,6 +108,10 @@ export const EmailProcessorContract = defineProcessorContract({
      * `email/sender-allowed` events.
      */
     allowedSenders: z.array(z.string()).default([]),
+    notificationRecipients: z.array(z.string().email()).default([]),
+    notifications: z
+      .record(z.string(), NotificationRequest.extend({ status: z.enum(["requested", "started"]) }))
+      .default({}),
   }),
   events: {
     "events.iterate.com/email/created": {
@@ -155,6 +161,29 @@ export const EmailProcessorContract = defineProcessorContract({
         reason: z.string().optional(),
       }),
     },
+    "events.iterate.com/email/notification-recipient-configured": {
+      description: "Configures one address that receives project-audience email notifications.",
+      payloadSchema: z.object({
+        email: z.string().email(),
+        reason: z.literal("project-owner"),
+      }),
+    },
+    "events.iterate.com/email/notification-attempt-started": {
+      description: "Durable evidence written before sending one notification email.",
+      payloadSchema: z.object({ requestOffset: z.number().int().positive() }),
+    },
+    "events.iterate.com/email/notification-settled": {
+      description: "Closes one email notification obligation without ambiguous retry.",
+      payloadSchema: z.object({
+        requestOffset: z.number().int().positive(),
+        outcome: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("sent"), messageId: z.string().nullable() }),
+          z.object({ kind: z.literal("expired") }),
+          z.object({ kind: z.literal("recipient-unavailable") }),
+          z.object({ kind: z.literal("uncertain"), reason: z.string().min(1) }),
+        ]),
+      }),
+    },
     "events.iterate.com/email/thread-route-configured": {
       description:
         "Declares that an email thread id maps to a stream path. The email processor reduces this into its routing table on `/integrations/email`; the routed stream receives a copy as thread context.",
@@ -172,8 +201,17 @@ export const EmailProcessorContract = defineProcessorContract({
     "events.iterate.com/email/sender-allowed",
     "events.iterate.com/email/sent",
     "events.iterate.com/email/thread-route-configured",
+    "events.iterate.com/email/notification-recipient-configured",
+    "events.iterate.com/email/notification-attempt-started",
+    "events.iterate.com/email/notification-settled",
+    "events.iterate.com/notification/requested",
   ],
-  processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
+  processorDeps: [
+    AgentProcessorContract,
+    CapabilityHostProcessorContract,
+    CoreProcessorContract,
+    NotificationIntentContract,
+  ],
   emits: [
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/binding-set",
@@ -184,6 +222,9 @@ export const EmailProcessorContract = defineProcessorContract({
     "events.iterate.com/email-agent/created",
     "events.iterate.com/email/thread-route-configured",
     "events.iterate.com/email/received",
+    "events.iterate.com/email/sent",
+    "events.iterate.com/email/notification-attempt-started",
+    "events.iterate.com/email/notification-settled",
     "events.iterate.com/stream/subscription-configured",
   ],
 });

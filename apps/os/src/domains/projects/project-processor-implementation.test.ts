@@ -46,6 +46,7 @@ function projectState(
     humanApprovalKeys: [],
     onboardingActive: false,
     onboardingCompletedAt: null,
+    notificationReady: true,
     repos: [],
     ready: true,
     secrets: [],

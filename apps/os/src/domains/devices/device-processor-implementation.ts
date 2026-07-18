@@ -91,11 +91,18 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       case "events.iterate.com/device/revoked":
         return { ...state, encryptedPushToken: null, revokedAt: event.createdAt };
       case "events.iterate.com/device/notification-requested":
+      case "events.iterate.com/notification/requested":
         return {
           ...state,
           notifications: {
             ...state.notifications,
-            [event.offset]: { ...event.payload, status: "requested" as const },
+            [event.offset]: {
+              body: event.payload.body,
+              destination: event.payload.destination,
+              expiresAt: event.payload.expiresAt,
+              title: event.payload.title,
+              status: "requested" as const,
+            },
           },
         };
       case "events.iterate.com/device/notification-attempt-started": {
@@ -143,10 +150,37 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     const event = args.event;
     if (event?.type === "events.iterate.com/device/created") {
       args.blockProcessorWhile(() =>
+        args.appendTo(
+          "/",
+          {
+            type: "events.iterate.com/device/created",
+            idempotencyKey: this.idempotencyKey("catalog-created", event),
+            payload: event.payload,
+          },
+          notificationIntentCrossPost({
+            idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+            path: this.path,
+          }),
+        ),
+      );
+    }
+    if (event?.type === "events.iterate.com/device/push-token-updated") {
+      args.blockProcessorWhile(() =>
+        args.appendTo(
+          "/",
+          notificationIntentCrossPost({
+            idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+            path: this.path,
+          }),
+        ),
+      );
+    }
+    if (event?.type === "events.iterate.com/device/revoked") {
+      args.blockProcessorWhile(() =>
         args.appendTo("/", {
-          type: "events.iterate.com/device/created",
-          idempotencyKey: this.idempotencyKey("catalog-created", event),
-          payload: event.payload,
+          type: "events.iterate.com/stream/subscription-removed",
+          idempotencyKey: this.idempotencyKey("notification-intent-cross-post-removed", event),
+          payload: { subscriptionKey: `notification-intent:${this.path}` },
         }),
       );
     }
@@ -349,4 +383,21 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       this.#liveAttempts.delete(input.requestOffset);
     }
   }
+}
+
+function notificationIntentCrossPost(input: { idempotencyKey: string; path: string }) {
+  return {
+    type: "events.iterate.com/stream/subscription-configured" as const,
+    idempotencyKey: input.idempotencyKey,
+    payload: {
+      subscriptionKey: `notification-intent:${input.path}`,
+      description: `Copies project notification intents to ${input.path} for device-owned delivery.`,
+      selector: { eventTypes: ["events.iterate.com/notification/requested"] },
+      delivery: {
+        mode: "push" as const,
+        expression: ["streams", ["get", input.path], "acceptCrossPost"],
+      },
+      deliver: "new" as const,
+    },
+  };
 }

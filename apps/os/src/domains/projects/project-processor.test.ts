@@ -90,6 +90,8 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/project/created",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/notification/created",
+      "events.iterate.com/stream/subscription-configured",
     ]);
     expect(network.eventsAt("/scheduler/primary").map((event) => event.type)).toEqual([
       "events.iterate.com/scheduler/created",
@@ -110,6 +112,7 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/email/created",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/email/sender-allowed",
+      "events.iterate.com/email/notification-recipient-configured",
     ]);
     await expect(driver.snapshot()).resolves.toMatchObject({
       state: {
@@ -143,13 +146,13 @@ describe("ProjectProcessor bootstrap", () => {
 
     await processorWaitStarted["capability-host"];
     expect(settled).toBe(false);
-    expect(processorWaits).toEqual([{ offset: 3, processor: "capability-host" }]);
+    expect(processorWaits).toEqual([{ offset: 5, processor: "capability-host" }]);
 
     now += 10_000;
     releases["capability-host"]();
     await processorWaitStarted.scheduler;
     expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
+      { offset: 5, processor: "capability-host" },
       { offset: 2, processor: "scheduler" },
     ]);
 
@@ -157,7 +160,7 @@ describe("ProjectProcessor bootstrap", () => {
     releases.scheduler();
     await processorWaitStarted.repo;
     expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
+      { offset: 5, processor: "capability-host" },
       { offset: 2, processor: "scheduler" },
       { offset: 3, processor: "repo" },
     ]);
@@ -166,10 +169,10 @@ describe("ProjectProcessor bootstrap", () => {
     releases.repo();
     await processorWaitStarted.email;
     expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
+      { offset: 5, processor: "capability-host" },
       { offset: 2, processor: "scheduler" },
       { offset: 3, processor: "repo" },
-      { offset: 3, processor: "email" },
+      { offset: 4, processor: "email" },
     ]);
     expect(processorWaitTimeouts).toEqual([60_000, 50_000, 45_000, 40_000]);
 
@@ -224,65 +227,6 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/project/ready",
     );
     expect(workerFetchCalls()).toBe(2);
-  });
-});
-
-it("cross-appends one deterministic held-approval notification per enrolled device", async () => {
-  const { driver, network, stream } = makeHarness();
-  await stream.append(PROJECT_CREATED);
-  await driver.deliver();
-  await stream.append(
-    {
-      type: "events.iterate.com/device/created",
-      source: {
-        processor: {
-          slug: "device",
-          version: "0.1.0",
-          stream: { projectId: "prj_test", path: "/devices/phone" },
-          whileProcessing: { offset: 1, type: "events.iterate.com/device/created" },
-        },
-      },
-      payload: {
-        config: {
-          appVersion: "1.0.0",
-          encryptedPushToken: {
-            algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1",
-            ciphertext: "encrypted-token",
-            iv: "initial-vector",
-          },
-          label: "Misha's iPhone",
-          notificationsStatus: "granted",
-          ownerId: "usr_misha",
-          platform: "ios",
-        },
-      },
-    },
-    {
-      type: "events.iterate.com/project/human-approval-requested",
-      payload: {
-        method: "POST",
-        url: "https://api.stripe.com/v1/transfers",
-        headers: {},
-        bodySha256: null,
-        bodyPreview: null,
-        secretPaths: ["/secrets/stripe/prod"],
-        ruleKey: "stripe-mutations",
-        expiresAt: "2026-07-18T08:05:00.000Z",
-      },
-    },
-  );
-
-  await driver.deliver();
-
-  expect(network.eventsAt("/devices/phone").at(-1)).toMatchObject({
-    type: "events.iterate.com/device/notification-requested",
-    idempotencyKey: "approval-notification:5:/devices/phone",
-    payload: {
-      title: "Approval needed",
-      body: "POST api.stripe.com is waiting for approval.",
-      destination: { kind: "approvals", approvalRequestEventOffset: 5 },
-      expiresAt: Date.parse("2026-07-18T08:05:00.000Z"),
-    },
   });
 });
 

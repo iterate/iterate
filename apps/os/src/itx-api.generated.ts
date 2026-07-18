@@ -1873,6 +1873,7 @@ export type ProjectProcessorState = {
     addedAt: string;
     revokedAt: string | null;
   }[];
+  notificationReady: boolean;
 };
 
 /**

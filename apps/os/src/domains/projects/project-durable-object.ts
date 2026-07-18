@@ -37,6 +37,12 @@ import { buildTelegramAccessSettingsUrl } from "../integrations/utils.ts";
 import { readProjectById } from "../../project-directory.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import {
+  buildProjectEmailMessage,
+  emailAddressForProject,
+  emailDomainForDeployment,
+} from "../email/utils.ts";
+import { NotificationProcessor } from "../notifications/notification-processor-implementation.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
@@ -133,6 +139,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }),
     }),
   );
+  readonly #notificationProcessor = this.#registry.register(
+    new NotificationProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  );
+  readonly #notificationReads = this.#registry.reads(this.#notificationProcessor);
   // Runner-backed reads: under runner drive the runner owns the cursors and
   // the processor instance's internal checkpoint never advances, so every
   // read this DO serves (snapshots, egress rules, approval keys, live state)
@@ -219,6 +233,30 @@ export class ProjectDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
+      now: Date.now,
+      sendNotification: async ({ notification, to }) => {
+        const project = await readProjectById(this.env.PROJECT_DIRECTORY, this.#name.projectId);
+        if (project === null) {
+          throw new Error(`Project ${this.#name.projectId} has no directory record.`);
+        }
+        const domain = emailDomainForDeployment(parseConfig(this.env).projectHostnameBases);
+        if (domain === null) {
+          throw new Error("Project notification email has no configured sender domain.");
+        }
+        const projectAddress = emailAddressForProject({ slug: project.slug, domain });
+        const result = (await this.env.EMAIL.send(
+          buildProjectEmailMessage({
+            projectAddress,
+            projectName: project.name || project.slug,
+            request: {
+              to,
+              subject: notification.title,
+              text: notification.body,
+            },
+          }),
+        )) as { messageId?: string } | null | undefined;
+        return { from: projectAddress, messageId: result?.messageId || null };
+      },
     }),
   );
   readonly #emailReads = this.#registry.reads(this.#emailProcessor);
@@ -277,6 +315,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // a child stream created moments ago even when the root stream's push
       // delivery is lagging or a wake was dropped.
       catchUpBeforeSnapshot: () => this.#registry.catchUp(ProjectProcessorContract.slug),
+    });
+  }
+
+  get notificationProcessor() {
+    return new StreamProcessorRpcTarget(this.#notificationReads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp("notification"),
     });
   }
 

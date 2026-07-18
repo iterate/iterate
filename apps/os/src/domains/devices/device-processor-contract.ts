@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { defineProcessorContract, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { NotificationDestination } from "../notifications/types.ts";
+import { NotificationIntentContract } from "../notifications/notification-intent-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const EncryptedDevicePushToken = z.strictObject({
@@ -12,14 +14,7 @@ const StoredEncryptedDevicePushToken = EncryptedDevicePushToken.extend({
   offset: z.number().int().positive(),
 });
 
-export const DeviceNotificationDestination = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("project") }),
-  z.strictObject({
-    kind: z.literal("approvals"),
-    approvalRequestEventOffset: z.number().int().positive(),
-  }),
-  z.strictObject({ kind: z.literal("agent-chat"), path: z.string().startsWith("/agents/") }),
-]);
+export const DeviceNotificationDestination = NotificationDestination;
 
 const DeviceBirthCertificate = z.strictObject({
   config: z.strictObject({
@@ -32,7 +27,7 @@ const DeviceBirthCertificate = z.strictObject({
   }),
 });
 
-const NotificationRequest = z.strictObject({
+const DeviceNotificationRequest = z.strictObject({
   body: z.string().trim().min(1).max(4_000),
   destination: DeviceNotificationDestination,
   expiresAt: z.number().int().positive(),
@@ -65,7 +60,7 @@ export const DeviceProcessorContract = defineProcessorContract({
   slug: "device",
   version: "0.1.0",
   description: "One enrolled installation and its durable push-notification obligations.",
-  processorDeps: [CoreProcessorContract],
+  processorDeps: [CoreProcessorContract, NotificationIntentContract],
   stateSchema: z.object({
     birthCertificate: DeviceBirthCertificate.nullable().default(null),
     encryptedPushToken: StoredEncryptedDevicePushToken.nullable().default(null),
@@ -75,7 +70,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     notifications: z
       .record(
         z.string(),
-        NotificationRequest.extend({
+        DeviceNotificationRequest.extend({
           status: z.enum(["requested", "started", "ticketed"]),
           ticketId: z.string().optional(),
           ticketObservedAt: z.number().int().positive().optional(),
@@ -90,7 +85,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/device/notification-requested": {
       description: "Requests one expiring push notification to this device.",
-      payloadSchema: NotificationRequest,
+      payloadSchema: DeviceNotificationRequest,
     },
     "events.iterate.com/device/push-token-updated": {
       description: "Replaces the encrypted push credential and current app metadata.",
@@ -137,6 +132,7 @@ export const DeviceProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/device/created",
     "events.iterate.com/device/notification-requested",
+    "events.iterate.com/notification/requested",
     "events.iterate.com/device/push-token-updated",
     "events.iterate.com/device/revoked",
     "events.iterate.com/device/notification-attempt-started",
@@ -153,6 +149,8 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/notification-ticket-observed",
     "events.iterate.com/device/notification-settled",
     "events.iterate.com/device/revoked",
+    "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-removed",
   ],
 });
 

@@ -4,6 +4,7 @@ import { DeviceProcessor } from "./device-processor-implementation.ts";
 
 const T = {
   created: "events.iterate.com/device/created",
+  intent: "events.iterate.com/notification/requested",
   requested: "events.iterate.com/device/notification-requested",
   started: "events.iterate.com/device/notification-attempt-started",
   settled: "events.iterate.com/device/notification-settled",
@@ -88,6 +89,61 @@ test("a device notification request becomes one journaled Expo push attempt", as
     idempotencyKey: "device/notification-ticket-observed@2",
     payload: { requestOffset: 2, ticketId: "ticket-123" },
   });
+});
+
+test("a project notification intent becomes this device's push obligation", async () => {
+  const network = new MemoryStreamNetwork();
+  const stream = network.get("/devices/phone");
+  const send = vi.fn(async () => ({ status: "ok" as const, ticketId: "ticket-intent" }));
+  const driver = driveProcessor(
+    new DeviceProcessor({
+      stream,
+      path: stream.path,
+      projectId: "prj_test",
+      now: () => Date.parse("2026-07-19T08:00:00Z"),
+      send,
+      ...pendingReceiptDependencies,
+    }),
+    stream,
+  );
+  await stream.append(deviceCreated(), {
+    type: T.intent,
+    payload: {
+      audience: { kind: "project" },
+      body: "POST api.stripe.com is waiting for approval.",
+      destination: { kind: "approvals", approvalRequestEventOffset: 17 },
+      expiresAt: Date.parse("2026-07-19T08:05:00Z"),
+      title: "Approval needed",
+    },
+  });
+
+  await driver.deliver();
+  await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+
+  expect(network.eventsAt("/")).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: expect.objectContaining({
+        subscriptionKey: "notification-intent:/devices/phone",
+        selector: { eventTypes: [T.intent] },
+        delivery: {
+          mode: "push",
+          expression: ["streams", ["get", "/devices/phone"], "acceptCrossPost"],
+        },
+        deliver: "new",
+      }),
+    }),
+  );
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({
+      notification: expect.objectContaining({
+        body: "POST api.stripe.com is waiting for approval.",
+        data: expect.objectContaining({
+          destination: { kind: "approvals", approvalRequestEventOffset: 17 },
+        }),
+      }),
+    }),
+  );
 });
 
 test("retrying the same public append does not duplicate a push attempt", async () => {

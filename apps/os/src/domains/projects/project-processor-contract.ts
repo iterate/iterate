@@ -9,6 +9,7 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
+import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import {
   EgressRule,
   HumanApprovalGrantedPayload,
@@ -93,6 +94,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     egressRules: z.array(EgressRule).default([]),
     /** Enrolled human-approval public keys; once any is active, grants must be signed. */
     humanApprovalKeys: z.array(HumanApprovalKey).default([]),
+    notificationReady: z.boolean().default(false),
   }),
   events: {
     "events.iterate.com/project/created": {
@@ -448,6 +450,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/secret/created",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
+    "events.iterate.com/notification/created",
   ],
   processorDeps: [
     CoreProcessorContract,
@@ -458,13 +461,14 @@ export const ProjectProcessorContract = defineProcessorContract({
     CapabilityHostProcessorContract,
     SchedulerProcessorContract,
     DeviceProcessorContract,
+    NotificationLifecycleContract,
   ],
   emits: [
     // Seeded onto /integrations/email at project birth (the creator's email
     // becomes the sender allowlist's first entry).
     "events.iterate.com/email/sender-allowed",
+    "events.iterate.com/email/notification-recipient-configured",
     "events.iterate.com/email/created",
-    "events.iterate.com/device/notification-requested",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/scheduler/created",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
@@ -473,6 +477,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/ready",
     "events.iterate.com/repo/created",
     "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/notification/created",
   ],
 });
 

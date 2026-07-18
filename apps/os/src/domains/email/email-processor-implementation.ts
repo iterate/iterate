@@ -2,6 +2,7 @@
 // Slack webhook router (slack-processor-implementation.ts). Emitted event
 // types, payloads, and idempotency keys are stable wire formats.
 
+import type { z } from "zod";
 import { StreamProcessor, type EmittedInput } from "iterate/processors";
 import {
   agentCreationForPath,
@@ -9,6 +10,7 @@ import {
   EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
 } from "../agents/agent-defaults.ts";
 import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
+import type { NotificationDestination } from "../notifications/types.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
   EmailProcessorContract,
@@ -67,8 +69,22 @@ function resolveEmailThread(input: {
   return { isNew: true, streamPath: emailAgentPath(threadId), threadId };
 }
 
-export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContract> {
+export class EmailProcessor extends StreamProcessor<
+  typeof EmailProcessorContract,
+  {
+    now: () => number;
+    sendNotification: (input: {
+      notification: {
+        body: string;
+        destination: z.output<typeof NotificationDestination>;
+        title: string;
+      };
+      to: string;
+    }) => Promise<{ from: string; messageId: string | null }>;
+  }
+> {
   readonly contract = EmailProcessorContract;
+  readonly #liveNotificationAttempts = new Set<number>();
 
   protected override reduce({
     event,
@@ -101,6 +117,35 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
         if (pattern.length === 0 || state.allowedSenders.includes(pattern)) return state;
         return { ...state, allowedSenders: [...state.allowedSenders, pattern] };
       }
+      case "events.iterate.com/email/notification-recipient-configured": {
+        const email = event.payload.email.toLowerCase();
+        if (state.notificationRecipients.includes(email)) return state;
+        return { ...state, notificationRecipients: [...state.notificationRecipients, email] };
+      }
+      case "events.iterate.com/notification/requested":
+        return {
+          ...state,
+          notifications: {
+            ...state.notifications,
+            [event.offset]: { ...event.payload, status: "requested" as const },
+          },
+        };
+      case "events.iterate.com/email/notification-attempt-started": {
+        const notification = state.notifications[event.payload.requestOffset];
+        if (notification === undefined) return state;
+        return {
+          ...state,
+          notifications: {
+            ...state.notifications,
+            [event.payload.requestOffset]: { ...notification, status: "started" as const },
+          },
+        };
+      }
+      case "events.iterate.com/email/notification-settled": {
+        const notifications = { ...state.notifications };
+        delete notifications[event.payload.requestOffset];
+        return { ...state, notifications };
+      }
       case "events.iterate.com/email/sent": {
         // Outbound mail sent inside a thread: index its messageId so replies
         // to the agent's own messages route back without the +t tag.
@@ -122,18 +167,13 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     }
   }
 
-  protected override processEvent({
-    append,
-    appendTo,
-    blockProcessorWhile,
-    event,
-    previousState,
-    state,
-  }: Parameters<StreamProcessor<typeof EmailProcessorContract>["processEvent"]>[0]): undefined {
-    // Event-less at-head pass: this processor has no at-head work.
-    if (event === null) return;
-    if (event.type === "events.iterate.com/email/created") return;
+  protected override processEvent(
+    args: Parameters<StreamProcessor<typeof EmailProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    const { append, appendTo, blockProcessorWhile, event, previousState, state } = args;
     if (state.birthCertificate === null) return;
+    if (args.delivery.caughtUp) this.#reconcileNotifications(args);
+    if (event === null || event.type === "events.iterate.com/email/created") return;
     if (event.type !== "events.iterate.com/email/received") return;
 
     // Resolve against the state BEFORE this event — the same input reduce()
@@ -196,6 +236,134 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     blockProcessorWhile(async () => {
       await appendTo(resolution.streamPath, forwardedEvent);
     });
+  }
+
+  #reconcileNotifications(
+    args: Parameters<StreamProcessor<typeof EmailProcessorContract>["processEvent"]>[0],
+  ) {
+    const recipient = args.state.notificationRecipients[0];
+    const settlements: {
+      requestOffset: number;
+      outcome:
+        | { kind: "expired" }
+        | { kind: "recipient-unavailable" }
+        | { kind: "uncertain"; reason: string };
+    }[] = [];
+    for (const [offset, notification] of Object.entries(args.state.notifications)) {
+      const requestOffset = Number(offset);
+      if (notification.status === "requested" && notification.expiresAt <= this.deps.now()) {
+        settlements.push({ requestOffset, outcome: { kind: "expired" } });
+      } else if (notification.status === "requested" && recipient === undefined) {
+        settlements.push({ requestOffset, outcome: { kind: "recipient-unavailable" } });
+      } else if (
+        notification.status === "started" &&
+        !this.#liveNotificationAttempts.has(requestOffset)
+      ) {
+        settlements.push({
+          requestOffset,
+          outcome: {
+            kind: "uncertain",
+            reason:
+              "The processor incarnation disappeared after recording the email attempt; delivery may have succeeded, so it was not retried.",
+          },
+        });
+      }
+    }
+    if (settlements.length > 0) {
+      args.blockProcessorWhileCaughtUp(() =>
+        this.append(
+          ...settlements.map(({ requestOffset, outcome }) => ({
+            type: "events.iterate.com/email/notification-settled" as const,
+            idempotencyKey: this.idempotencyKey(`notification-settled@${requestOffset}`),
+            payload: { requestOffset, outcome },
+          })),
+        ),
+      );
+    }
+    if (recipient === undefined) return;
+    for (const [offset, notification] of Object.entries(args.state.notifications)) {
+      const requestOffset = Number(offset);
+      if (
+        notification.status !== "requested" ||
+        notification.expiresAt <= this.deps.now() ||
+        this.#liveNotificationAttempts.has(requestOffset)
+      ) {
+        continue;
+      }
+      this.#liveNotificationAttempts.add(requestOffset);
+      args.runInBackground(() =>
+        this.#sendNotification({ notification, recipient, requestOffset }),
+      );
+    }
+  }
+
+  async #sendNotification(input: {
+    notification: EmailProcessorState["notifications"][string];
+    recipient: string;
+    requestOffset: number;
+  }) {
+    const projectId = this.projectId;
+    if (projectId === null) {
+      this.#liveNotificationAttempts.delete(input.requestOffset);
+      throw new Error("Email notification delivery requires a project id.");
+    }
+    try {
+      await this.append({
+        type: "events.iterate.com/email/notification-attempt-started",
+        idempotencyKey: this.idempotencyKey(`notification-attempt-started@${input.requestOffset}`),
+        payload: { requestOffset: input.requestOffset },
+      });
+    } catch (error) {
+      // No vendor call happened, so clearing the in-memory guard allows an
+      // ordinary later delivery to retry the journal append safely.
+      this.#liveNotificationAttempts.delete(input.requestOffset);
+      throw error;
+    }
+    try {
+      const result = await this.deps.sendNotification({
+        notification: {
+          body: input.notification.body,
+          destination: input.notification.destination,
+          title: input.notification.title,
+        },
+        to: input.recipient,
+      });
+      await this.append(
+        {
+          type: "events.iterate.com/email/sent",
+          idempotencyKey: this.idempotencyKey(`notification-sent@${input.requestOffset}`),
+          payload: {
+            from: result.from,
+            messageId: result.messageId,
+            projectId,
+            subject: input.notification.title,
+            to: input.recipient,
+          },
+        },
+        {
+          type: "events.iterate.com/email/notification-settled",
+          idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
+          payload: {
+            requestOffset: input.requestOffset,
+            outcome: { kind: "sent", messageId: result.messageId },
+          },
+        },
+      );
+    } catch (error) {
+      await this.append({
+        type: "events.iterate.com/email/notification-settled",
+        idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
+        payload: {
+          requestOffset: input.requestOffset,
+          outcome: {
+            kind: "uncertain",
+            reason: error instanceof Error ? error.message : String(error),
+          },
+        },
+      });
+    } finally {
+      this.#liveNotificationAttempts.delete(input.requestOffset);
+    }
   }
 }
 

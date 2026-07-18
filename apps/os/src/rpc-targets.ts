@@ -93,6 +93,7 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
+import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
@@ -5066,6 +5067,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
             },
           },
         },
+        NotificationProcessorContract.buildEvent({
+          type: "events.iterate.com/notification/created",
+          idempotencyKey: `notification-created:${registered.projectId}`,
+          payload: { config: {} },
+        }),
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName: streamDurableObjectName({
             projectId: registered.projectId,
@@ -5073,6 +5079,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
           }),
           processor: ["processor"],
           processorSlug: ProjectProcessorContract.slug,
+        }),
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: "/",
+          }),
+          processor: ["notificationProcessor"],
+          processorSlug: NotificationProcessorContract.slug,
         }),
       );
     const [created, subscription] = await timedStep(

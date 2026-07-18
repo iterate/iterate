@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
 import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
@@ -34,13 +34,17 @@ function receivedPayload(input: {
   };
 }
 
-function newEmailRouter(input: ConstructorParameters<typeof EmailProcessor>[0]): EmailProcessor {
+function newEmailRouter(input: any): EmailProcessor {
   void input.stream.append({
     type: "events.iterate.com/email/created",
     idempotencyKey: "test:email-router-created",
     payload: { config: {} },
   });
-  return new EmailProcessor(input);
+  return new EmailProcessor({
+    now: () => Date.parse("2026-07-19T08:00:00Z"),
+    sendNotification: vi.fn(async () => ({ from: "test@iterate.test", messageId: null })),
+    ...input,
+  });
 }
 
 function newEmailAgent(
@@ -53,6 +57,106 @@ function newEmailAgent(
   });
   return new EmailAgentProcessor(input);
 }
+
+test("a project notification intent becomes one owner-email delivery obligation", async () => {
+  const stream = new MemoryStreamNetwork().get("/integrations/email");
+  const sendNotification = vi.fn(async () => ({
+    from: "demo@iterate.test",
+    messageId: "message-123",
+  }));
+  const processor = new EmailProcessor({
+    stream,
+    path: stream.path,
+    projectId: "prj_1",
+    now: () => Date.parse("2026-07-19T08:00:00Z"),
+    sendNotification,
+  });
+  const driver = driveProcessor(processor, stream);
+  await stream.append(
+    { type: "events.iterate.com/email/created", payload: { config: {} } },
+    {
+      type: "events.iterate.com/email/notification-recipient-configured",
+      payload: { email: "owner@example.com", reason: "project-owner" },
+    },
+    {
+      type: "events.iterate.com/notification/requested",
+      payload: {
+        audience: { kind: "project" },
+        body: "POST api.stripe.com is waiting for approval.",
+        destination: { kind: "approvals", approvalRequestEventOffset: 17 },
+        expiresAt: Date.parse("2026-07-19T08:05:00Z"),
+        title: "Approval needed",
+      },
+    },
+  );
+
+  await driver.deliver();
+  await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledOnce());
+
+  expect(sendNotification).toHaveBeenCalledWith({
+    notification: {
+      body: "POST api.stripe.com is waiting for approval.",
+      destination: { kind: "approvals", approvalRequestEventOffset: 17 },
+      title: "Approval needed",
+    },
+    to: "owner@example.com",
+  });
+  expect(stream.events.map((event) => event.type)).toEqual([
+    "events.iterate.com/email/created",
+    "events.iterate.com/email/notification-recipient-configured",
+    "events.iterate.com/notification/requested",
+    "events.iterate.com/email/notification-attempt-started",
+    "events.iterate.com/email/sent",
+    "events.iterate.com/email/notification-settled",
+  ]);
+});
+
+test("an interrupted email notification attempt settles uncertain without resending", async () => {
+  const stream = new MemoryStreamNetwork().get("/integrations/email");
+  const sendNotification = vi.fn();
+  const driver = driveProcessor(
+    new EmailProcessor({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      now: () => Date.parse("2026-07-19T08:00:00Z"),
+      sendNotification,
+    }),
+    stream,
+  );
+  await stream.append(
+    { type: "events.iterate.com/email/created", payload: { config: {} } },
+    {
+      type: "events.iterate.com/email/notification-recipient-configured",
+      payload: { email: "owner@example.com", reason: "project-owner" },
+    },
+    {
+      type: "events.iterate.com/notification/requested",
+      payload: {
+        audience: { kind: "project" },
+        body: "Approval is waiting.",
+        destination: { kind: "approvals", approvalRequestEventOffset: 17 },
+        expiresAt: Date.parse("2026-07-19T08:05:00Z"),
+        title: "Approval needed",
+      },
+    },
+    {
+      type: "events.iterate.com/email/notification-attempt-started",
+      payload: { requestOffset: 3 },
+    },
+  );
+
+  await driver.deliver();
+
+  expect(sendNotification).not.toHaveBeenCalled();
+  expect(stream.events.at(-1)).toMatchObject({
+    type: "events.iterate.com/email/notification-settled",
+    payload: {
+      requestOffset: 3,
+      outcome: { kind: "uncertain" },
+    },
+  });
+});
 
 describe("EmailProcessor (thread router)", () => {
   it("throws when a second email-router birth certificate is reduced", async () => {
