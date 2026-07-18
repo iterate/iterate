@@ -15,7 +15,7 @@ export type ProjectAuthCredentials = { type: "from-server-cookie" };
 export type ProjectAuthActor = ValidatedProjectAppSession;
 
 /** A project-app RPC caller supplied no live session for this app origin. */
-export class ProjectAuthenticationError extends Error {
+class ProjectAuthenticationError extends Error {
   constructor() {
     super("missing or invalid project app authentication");
     this.name = "ProjectAuthenticationError";
