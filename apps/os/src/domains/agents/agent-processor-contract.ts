@@ -80,11 +80,11 @@ export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
 
 export const AGENT_SUMMARY_INSTRUCTION = [
-  "AGENT SUMMARY — keep the agent list useful by appending events.iterate.com/agent/summary-updated events through itx.agent.append(...). The event is the only update API; do not look for a setter.",
-  'FIRST TURN — TITLE IS MANDATORY: your first script must include await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { title: "A short specific title" } }). Choose the best title supported by the initial request even if the task is still unclear; do not postpone it and do not keep rewriting a good title later.',
-  'SECOND TURN — ACTIVITY IS MANDATORY: your second script must include await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { activity: "What you are doing now" } }). Keep activity current on later working turns whenever the phase changes.',
-  'LAST TURN BEFORE USER INPUT — WAITING IS MANDATORY: whenever this is your last script before control returns to the user (a completed answer, question, choice, or blocker), append { type: "events.iterate.com/agent/summary-updated", payload: { waitingFor: "user_input" } } before sending the reply and ending the script. If this is also the first or second turn, combine waitingFor with the required title or activity in that turn\'s payload. Use "external_event" or "timer" instead only when that is genuinely what must happen next. A qualifying new input clears the old wait automatically.',
-  "The free-text summary is one or two durable sentences; update it only when the purpose or conclusions materially change. Never set pinned unless a human explicitly asks.",
+  "AGENT SUMMARY (mandatory):",
+  'FIRST SCRIPT: await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { title: "Short specific title" } }); Choose the title immediately from the initial request; do not keep rewriting it.',
+  'SECOND SCRIPT: append the same event with payload { activity: "What you are doing now" }; refresh it when the phase changes.',
+  'LAST SCRIPT BEFORE USER INPUT (answer, question, choice, or blocker): before replying, append it with payload { waitingFor: "user_input" }, then end. Combine fields when this is also the first or second script. Use "external_event" or "timer" only when genuinely next; qualifying input clears it.',
+  "Set description to 1–2 durable sentences only when purpose or conclusions change. Never set pinned unless asked.",
 ].join("\n");
 
 /**
@@ -120,9 +120,9 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn. A response with no code block at all also ends your turn.",
   "- Each script runs fresh — no variable survives between scripts. Carry state by returning it, messaging it, or writing a file.",
   "",
-  AGENT_SUMMARY_INSTRUCTION,
-  "",
   "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Context for this agent\" carries your project id, agent path, and pointers for this scope.",
+  "",
+  AGENT_SUMMARY_INSTRUCTION,
   "",
   'THE CONFIG REPO — the code that governs this project, at "/repos/config":',
   "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. Configure one with agent.append(...) after creation. AGENTS.md is durable notes: read it early and write stable project knowledge back. package.json dependencies install at build time; multi-file TypeScript works.",
@@ -144,9 +144,8 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // SEARCH THE PROJECT'S PAST (conversations/webhooks/files indexed):",
   '  const memory = await itx.search.query({ q: "what did we decide about deploys" });',
   "",
-  "  // TALK — on a later working turn, update activity through the summary event:",
-  "  const [, , page] = await Promise.all([",
-  '    itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { activity: "Reading docs", summary: "Researching Workers; preparing a digest." } }),',
+  "  // TALK:",
+  "  const [, page] = await Promise.all([",
   '    itx.chat.sendMessage("Reading the docs now..."),',
   '    itx.browser.quickAction("markdown", { url: "https://developers.cloudflare.com/workers/" }),',
   "  ]);",
@@ -224,11 +223,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '  const resp = await fetch("https://example.com/chart.png");',
   '  await itx.chat.sendMessage("Here!", { files: [{ filename: "chart.png", contentType: "image/png", data: await resp.blob() }] });',
   "",
-  "  // On a working turn, `return hits` instead: returned values arrive as your next input.",
-  "  // LAST TURN BEFORE USER INPUT — set waiting, send the reply, then return no value:",
-  '  await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { waitingFor: "user_input" } });',
-  '  await itx.chat.sendMessage("Which option?");',
-  "  return;",
+  "  return hits; // returned values arrive as your next input",
   "}",
   "```",
   "",
@@ -887,7 +882,7 @@ export const AgentProcessorContract = defineProcessorContract({
           payload: {
             title: "Lisbon trip planning",
             activity: "Comparing flight prices",
-            summary: "Helping Jane plan a three-day Lisbon trip in September.",
+            description: "Helping Jane plan a three-day Lisbon trip in September.",
           },
         },
         {

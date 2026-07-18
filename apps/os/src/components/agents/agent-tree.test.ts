@@ -9,7 +9,7 @@ import {
   AGENT_BINDING_LABEL_MAX_LENGTH,
   AGENT_BINDING_URL_MAX_LENGTH,
   AGENT_PATH_MAX_LENGTH,
-  AGENT_SUMMARY_MAX_LENGTH,
+  AGENT_DESCRIPTION_MAX_LENGTH,
   AGENT_TITLE_MAX_LENGTH,
   AgentRecord,
 } from "~/domains/agents/agent-presence.ts";
@@ -131,7 +131,7 @@ describe("agent forest", () => {
               pinned: index < 5,
               title: "t".repeat(AGENT_TITLE_MAX_LENGTH),
               activity: "a".repeat(AGENT_ACTIVITY_MAX_LENGTH),
-              summary: "s".repeat(AGENT_SUMMARY_MAX_LENGTH),
+              description: "s".repeat(AGENT_DESCRIPTION_MAX_LENGTH),
             },
             binding: {
               type: "slack_thread",

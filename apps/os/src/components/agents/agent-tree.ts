@@ -119,7 +119,13 @@ function agentBindingTitle(binding: AgentRecord["binding"]): string | undefined 
 
 function agentSearchText(agent: AgentRecord): string {
   const binding = agent.binding === undefined ? [] : Object.values(agent.binding);
-  return [agentTitle(agent), agent.summary.activity, agent.summary.summary, agent.path, ...binding]
+  return [
+    agentTitle(agent),
+    agent.summary.activity,
+    agent.summary.description,
+    agent.path,
+    ...binding,
+  ]
     .filter(
       (value): value is string | number => typeof value === "string" || typeof value === "number",
     )

@@ -795,7 +795,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      payload: {\n" +
       "        title: `PR #${number}`,\n" +
       "        activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,\n" +
-      "        summary: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,\n" +
+      "        description: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,\n" +
       "      },\n" +
       "    },\n" +
       "  );\n" +

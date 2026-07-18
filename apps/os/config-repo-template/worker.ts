@@ -368,7 +368,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
       payload: {
         title: `PR #${number}`,
         activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,
-        summary: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,
+        description: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,
       },
     },
   );

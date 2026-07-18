@@ -115,7 +115,7 @@ test("Agent scripts update their summary through the typed append door", async (
           type: "events.iterate.com/agent/summary-updated",
           payload: {
             title: "Lisbon trip",
-            summary: "Planning a three-day Lisbon trip and comparing the practical options.",
+            description: "Planning a three-day Lisbon trip and comparing the practical options.",
             activity: "Comparing flights",
           },
         });
@@ -127,7 +127,7 @@ test("Agent scripts update their summary through the typed append door", async (
     type: "events.iterate.com/agent/summary-updated",
     payload: {
       title: "Lisbon trip",
-      summary: "Planning a three-day Lisbon trip and comparing the practical options.",
+      description: "Planning a three-day Lisbon trip and comparing the practical options.",
       activity: "Comparing flights",
     },
   });

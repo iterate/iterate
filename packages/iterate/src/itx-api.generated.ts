@@ -2474,7 +2474,7 @@ export type AgentProcessorState = {
     | undefined;
   summary: {
     title?: string | undefined;
-    summary?: string | undefined;
+    description?: string | undefined;
     activity?: string | undefined;
     waitingFor?: "external_event" | "timer" | "user_input" | undefined;
     pinned: boolean;
@@ -2549,7 +2549,7 @@ export type AgentEventInput =
       "events.iterate.com/agent/summary-updated",
       | {
           title?: string | null | undefined;
-          summary?: string | null | undefined;
+          description?: string | null | undefined;
           activity?: string | null | undefined;
           waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
           pinned?: boolean | undefined;
@@ -2824,7 +2824,7 @@ export type AgentCollectionProcessorState = {
       path: string;
       summary: {
         title?: string | undefined;
-        summary?: string | undefined;
+        description?: string | undefined;
         activity?: string | undefined;
         waitingFor?: "external_event" | "timer" | "user_input" | undefined;
         pinned: boolean;

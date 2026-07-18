@@ -33,27 +33,10 @@ const CHARS_PER_TOKEN = 4;
 // should be argued in a PR, not absorbed.
 // 3500 → 3600 (2026-07-14): the original presentation teach was an explicit
 // product ask and did not fit the previous ceiling's ~15-token headroom.
-// 3600 → 4100 (2026-07-18): summary became an event-first lifecycle with
-// mandatory first-turn title, second-turn activity, and final-turn waiting;
-// the explicit block is the behavior, not incidental prompt accretion.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_100;
-
-const CHANNEL_PROMPTS: Record<string, string> = {
-  default: DEFAULT_AGENT_SYSTEM_PROMPT,
-  // The inbound MCP instructions and tool description are prompts in all but
-  // name — they ride MCP client conversations, so they obey the same budget
-  // and name-resolution rules.
-  execTypescriptTool: EXEC_TYPESCRIPT_DESCRIPTION,
-  mcpServer: inboundMcpServerInstructions({ withAgent: false }),
-  mcpServerWithAgent: inboundMcpServerInstructions({ withAgent: true }),
-  email: EMAIL_AGENT_SYSTEM_PROMPT,
-  slack: slackAgentSystemPrompt("main-slack"),
-  telegram: telegramAgentSystemPrompt({
-    agentPath: "/agents/telegram/main/chat-42",
-    chatId: "42",
-    connection: "main",
-  }),
-};
+// 3600 → 3800 (2026-07-18): summary became an event-first lifecycle with
+// mandatory first-script title, second-script activity, and final-script
+// waiting. One canonical append example keeps the teach compact.
+const DEFAULT_PROMPT_TOKEN_CEILING = 3_800;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -66,6 +49,16 @@ const AGENT_PROMPTS: Record<string, string> = {
   }),
 };
 
+const CHANNEL_PROMPTS: Record<string, string> = {
+  ...AGENT_PROMPTS,
+  // The inbound MCP instructions and tool description are prompts in all but
+  // name — they ride MCP client conversations, so they obey the same budget
+  // and name-resolution rules.
+  execTypescriptTool: EXEC_TYPESCRIPT_DESCRIPTION,
+  mcpServer: inboundMcpServerInstructions({ withAgent: false }),
+  mcpServerWithAgent: inboundMcpServerInstructions({ withAgent: true }),
+};
+
 test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(
     DEFAULT_PROMPT_TOKEN_CEILING * CHARS_PER_TOKEN,
@@ -73,9 +66,10 @@ test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, ()
 });
 
 test("every agent prompt teaches the summary turn lifecycle and append event", () => {
-  expect(AGENT_SUMMARY_INSTRUCTION).toContain("FIRST TURN — TITLE IS MANDATORY");
-  expect(AGENT_SUMMARY_INSTRUCTION).toContain("SECOND TURN — ACTIVITY IS MANDATORY");
-  expect(AGENT_SUMMARY_INSTRUCTION).toContain("LAST TURN BEFORE USER INPUT — WAITING IS MANDATORY");
+  expect(AGENT_SUMMARY_INSTRUCTION.length).toBeLessThanOrEqual(850);
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("FIRST SCRIPT:");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("SECOND SCRIPT:");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("LAST SCRIPT BEFORE USER INPUT");
   expect(AGENT_SUMMARY_INSTRUCTION).toContain("events.iterate.com/agent/summary-updated");
 
   for (const [channel, prompt] of Object.entries(AGENT_PROMPTS)) {
@@ -83,23 +77,6 @@ test("every agent prompt teaches the summary turn lifecycle and append event", (
       AGENT_SUMMARY_INSTRUCTION,
     );
   }
-});
-
-test("the default tour sets waiting only after its last work example", () => {
-  const lastWorkIndex = DEFAULT_AGENT_SYSTEM_PROMPT.indexOf("// SHARE A FILE");
-  const waitingIndex = DEFAULT_AGENT_SYSTEM_PROMPT.lastIndexOf(
-    'payload: { waitingFor: "user_input" }',
-  );
-  const replyIndex = DEFAULT_AGENT_SYSTEM_PROMPT.indexOf(
-    'await itx.chat.sendMessage("Which option?");',
-    waitingIndex,
-  );
-  const finishIndex = DEFAULT_AGENT_SYSTEM_PROMPT.indexOf("  return;", replyIndex);
-
-  expect(lastWorkIndex).toBeGreaterThanOrEqual(0);
-  expect(waitingIndex).toBeGreaterThan(lastWorkIndex);
-  expect(replyIndex).toBeGreaterThan(waitingIndex);
-  expect(finishIndex).toBeGreaterThan(replyIndex);
 });
 
 test("no platform prompt embeds the type surface", () => {

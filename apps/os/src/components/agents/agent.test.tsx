@@ -70,7 +70,7 @@ describe("Agent presentation family", () => {
         pinned: true,
         title: "Customer inbox",
         activity: "Triaging customer mail",
-        summary: "A long summary that must never render in the sidebar.",
+        description: "A long description that must never render in the sidebar.",
       },
     });
     const [node] = buildAgentForest({ [agent.path]: agent });
@@ -128,8 +128,8 @@ describe("Agent presentation family", () => {
       summary: {
         pinned: false,
         activity: "A complete current-condition sentence that may wrap across several lines.",
-        summary:
-          "A full two-sentence summary belongs in the roomy detail header. It must remain readable even when the viewport makes it wrap beyond two visual lines.",
+        description:
+          "A full two-sentence description belongs in the roomy detail header. It must remain readable even when the viewport makes it wrap beyond two visual lines.",
         waitingFor: "user_input",
       },
       timestamps: {
@@ -151,7 +151,7 @@ describe("Agent presentation family", () => {
     expect(markup).toContain(agent.path);
     expect(markup).toContain("Needs input");
     expect(markup).toContain("current-condition sentence");
-    expect(markup).toContain("two-sentence summary");
+    expect(markup).toContain("two-sentence description");
     expect(markup).toContain("Created");
     expect(markup).toContain("Last work");
     expect(markup).toContain("Summary updated");

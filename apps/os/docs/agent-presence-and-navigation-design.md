@@ -113,7 +113,7 @@ type AgentCatalogRecord = {
   path: AgentPath;
   summary: {
     title?: string;
-    summary?: string;
+    description?: string;
     activity?: string;
     waitingFor?: "user_input" | "external_event" | "timer";
     pinned: boolean;

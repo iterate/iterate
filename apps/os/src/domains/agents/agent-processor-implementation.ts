@@ -41,7 +41,7 @@ import {
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
-import { applyAgentSummaryUpdate, deriveAgentRuntime } from "./agent-presence.ts";
+import { deriveAgentRuntime, foldAgentSummaryUpdated } from "./agent-presence.ts";
 import {
   extractChunkText,
   jsonCompatible,
@@ -1277,25 +1277,13 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
           }
         : state;
     case AGENT_SUMMARY_UPDATED_EVENT_TYPE: {
-      if (
-        "clearWaitingForThroughOffset" in event.payload &&
-        (state.summary.waitingFor === undefined ||
-          state.waitingForSinceOffset === undefined ||
-          state.waitingForSinceOffset > event.payload.clearWaitingForThroughOffset)
-      ) {
-        return state;
-      }
-      const summary = applyAgentSummaryUpdate(state.summary, event.payload);
-      const waitingForSinceOffset =
-        event.payload.waitingFor === undefined
-          ? state.waitingForSinceOffset
-          : event.payload.waitingFor === null
-            ? undefined
-            : event.offset;
-      if (summary === state.summary && waitingForSinceOffset === state.waitingForSinceOffset) {
-        return state;
-      }
-      return { ...state, summary, waitingForSinceOffset };
+      const projection = foldAgentSummaryUpdated({
+        summary: state.summary,
+        waitingForSinceOffset: state.waitingForSinceOffset,
+        update: event.payload,
+        atOffset: event.offset,
+      });
+      return projection === undefined ? state : { ...state, ...projection };
     }
     default:
       return state;

@@ -189,7 +189,8 @@ describe("userspace GitHub pull-request routing", () => {
           idempotencyKey: "github-pr/summary",
           payload: {
             activity: "Reviewing acme/widgets#7",
-            summary: "Reviewing pull request #7 in acme/widgets and reporting findings on GitHub.",
+            description:
+              "Reviewing pull request #7 in acme/widgets and reporting findings on GitHub.",
             title: "PR #7",
           },
           type: "events.iterate.com/agent/summary-updated",
@@ -354,7 +355,7 @@ describe("userspace GitHub pull-request routing", () => {
       payload: {
         title: "PR #7",
         activity: "Reviewing renamed/widgets-next#7",
-        summary:
+        description:
           "Reviewing pull request #7 in renamed/widgets-next and reporting findings on GitHub.",
       },
     });

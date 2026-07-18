@@ -90,7 +90,7 @@ export function AgentListRow({
   const agent = node.agent;
   const displayState = agentNodeDisplayState(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const description = agent.summary.activity ?? agent.summary.summary;
+  const description = agent.summary.activity ?? agent.summary.description;
   const descendantCount = node.aggregateAgentCount - 1;
   const expandable = node.children.length > 0 && onToggleChildren !== undefined;
   return (
@@ -172,7 +172,7 @@ export function AgentListRow({
 }
 
 /**
- * The detail header is the one roomy surface: full activity and summary,
+ * The detail header is the one roomy surface: full activity and description,
  * runtime counts, the durable path, and exact timestamps — all as quiet text.
  */
 export function AgentDetailCard({
@@ -291,8 +291,8 @@ export function AgentDetailCard({
       {agent.summary.activity === undefined ? null : (
         <p className="max-w-3xl text-sm">{agent.summary.activity}</p>
       )}
-      {agent.summary.summary === undefined ? null : (
-        <p className="max-w-3xl text-sm text-muted-foreground">{agent.summary.summary}</p>
+      {agent.summary.description === undefined ? null : (
+        <p className="max-w-3xl text-sm text-muted-foreground">{agent.summary.description}</p>
       )}
       <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1">

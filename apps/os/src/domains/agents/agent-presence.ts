@@ -7,7 +7,7 @@ import {
 
 export const AGENT_TITLE_MAX_LENGTH = 120;
 export const AGENT_ACTIVITY_MAX_LENGTH = 240;
-export const AGENT_SUMMARY_MAX_LENGTH = 600;
+export const AGENT_DESCRIPTION_MAX_LENGTH = 600;
 export const AGENT_PATH_MAX_LENGTH = 240;
 export const AGENT_BINDING_CONNECTION_MAX_LENGTH = 64;
 export const AGENT_BINDING_ID_MAX_LENGTH = 128;
@@ -36,7 +36,7 @@ type AgentWaitingFor = z.infer<typeof AgentWaitingFor>;
 
 export const AgentSummary = z.strictObject({
   title: boundedText(AGENT_TITLE_MAX_LENGTH).optional(),
-  summary: boundedText(AGENT_SUMMARY_MAX_LENGTH).optional(),
+  description: boundedText(AGENT_DESCRIPTION_MAX_LENGTH).optional(),
   activity: boundedText(AGENT_ACTIVITY_MAX_LENGTH).optional(),
   waitingFor: AgentWaitingFor.optional(),
   pinned: z.boolean().default(false),
@@ -46,7 +46,7 @@ export type AgentSummary = z.infer<typeof AgentSummary>;
 export const AgentSummaryUpdate = z
   .strictObject({
     title: boundedText(AGENT_TITLE_MAX_LENGTH).nullable().optional(),
-    summary: boundedText(AGENT_SUMMARY_MAX_LENGTH).nullable().optional(),
+    description: boundedText(AGENT_DESCRIPTION_MAX_LENGTH).nullable().optional(),
     activity: boundedText(AGENT_ACTIVITY_MAX_LENGTH).nullable().optional(),
     waitingFor: AgentWaitingFor.nullable().optional(),
     pinned: z.boolean().optional(),
@@ -183,7 +183,7 @@ export function applyAgentSummaryUpdate(
   const next = { ...summary };
   let changed = false;
 
-  for (const key of ["title", "summary", "activity", "waitingFor"] as const) {
+  for (const key of ["title", "description", "activity", "waitingFor"] as const) {
     const value = update[key];
     if (value === undefined) continue;
     if (value === null) {
@@ -205,6 +205,40 @@ export function applyAgentSummaryUpdate(
   }
 
   return changed ? next : summary;
+}
+
+/** Apply one summary event and its race-safe waiting offset as one projection. */
+export function foldAgentSummaryUpdated({
+  summary,
+  waitingForSinceOffset,
+  update,
+  atOffset,
+}: {
+  summary: AgentSummary;
+  waitingForSinceOffset?: number;
+  update: AgentSummaryUpdated;
+  atOffset: number;
+}): { summary: AgentSummary; waitingForSinceOffset: number | undefined } | undefined {
+  if (
+    "clearWaitingForThroughOffset" in update &&
+    (summary.waitingFor === undefined ||
+      waitingForSinceOffset === undefined ||
+      waitingForSinceOffset > update.clearWaitingForThroughOffset)
+  ) {
+    return undefined;
+  }
+
+  const nextSummary = applyAgentSummaryUpdate(summary, update);
+  const nextWaitingForSinceOffset =
+    update.waitingFor === undefined
+      ? waitingForSinceOffset
+      : update.waitingFor === null
+        ? undefined
+        : atOffset;
+  if (nextSummary === summary && nextWaitingForSinceOffset === waitingForSinceOffset) {
+    return undefined;
+  }
+  return { summary: nextSummary, waitingForSinceOffset: nextWaitingForSinceOffset };
 }
 
 type AgentRuntimeSource = {

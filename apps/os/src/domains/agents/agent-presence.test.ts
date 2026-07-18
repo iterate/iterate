@@ -40,11 +40,17 @@ describe("agent summary", () => {
     expect(
       AgentSummaryUpdate.parse({
         title: "  Cattle research  ",
+        description: "  Comparing farms around Bath.  ",
         activity: "  Comparing farms near Bath  ",
       }),
-    ).toEqual({ title: "Cattle research", activity: "Comparing farms near Bath" });
+    ).toEqual({
+      title: "Cattle research",
+      description: "Comparing farms around Bath.",
+      activity: "Comparing farms near Bath",
+    });
     expect(() => AgentSummaryUpdate.parse({ title: "   " })).toThrow();
     expect(() => AgentSummaryUpdate.parse({ title: "x".repeat(121) })).toThrow();
+    expect(() => AgentSummaryUpdate.parse({ summary: "legacy field" })).toThrow();
     expect(() => AgentSummaryUpdate.parse({ unknown: true })).toThrow();
     expect(() => AgentSummaryUpdate.parse({})).toThrow();
   });
@@ -52,6 +58,7 @@ describe("agent summary", () => {
   it("distinguishes omitted, null, and false and preserves identity for no-ops", () => {
     const summary = AgentSummary.parse({
       title: "Cattle research",
+      description: "Comparing nearby farms.",
       activity: "Comparing farms",
       waitingFor: "user_input",
       pinned: true,
@@ -62,7 +69,12 @@ describe("agent summary", () => {
     expect(
       applyAgentSummaryUpdate(
         summary,
-        AgentSummaryUpdate.parse({ activity: null, waitingFor: null, pinned: false }),
+        AgentSummaryUpdate.parse({
+          description: null,
+          activity: null,
+          waitingFor: null,
+          pinned: false,
+        }),
       ),
     ).toEqual({ title: "Cattle research", pinned: false });
   });

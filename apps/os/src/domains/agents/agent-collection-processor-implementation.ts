@@ -1,5 +1,5 @@
 import { StreamProcessor } from "iterate/processors";
-import { AgentPath, applyAgentSummaryUpdate } from "./agent-presence.ts";
+import { AgentPath, foldAgentSummaryUpdated } from "./agent-presence.ts";
 import {
   AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AgentCollectionProcessorContract,
@@ -46,29 +46,18 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
     if (previous === undefined) {
       throw new Error(`agent collection received ${event.type} for ${path} before agent/created`);
     }
-    const waitingForSinceOffset = state.waitingForSinceOffsets[path];
-    if (
-      "clearWaitingForThroughOffset" in event.payload &&
-      (previous.summary.waitingFor === undefined ||
-        waitingForSinceOffset === undefined ||
-        waitingForSinceOffset > event.payload.clearWaitingForThroughOffset)
-    ) {
-      return state;
-    }
-    const summary = applyAgentSummaryUpdate(previous.summary, event.payload);
-    const nextWaitingForSinceOffset =
-      event.payload.waitingFor === undefined
-        ? waitingForSinceOffset
-        : event.payload.waitingFor === null
-          ? undefined
-          : source.offset;
-    if (summary === previous.summary && nextWaitingForSinceOffset === waitingForSinceOffset) {
-      return state;
-    }
+    const projection = foldAgentSummaryUpdated({
+      summary: previous.summary,
+      waitingForSinceOffset: state.waitingForSinceOffsets[path],
+      update: event.payload,
+      atOffset: source.offset,
+    });
+    if (projection === undefined) return state;
+    const { summary, waitingForSinceOffset } = projection;
     const activityChanged = summary.activity !== previous.summary.activity;
     const waitingForSinceOffsets = { ...state.waitingForSinceOffsets };
-    if (nextWaitingForSinceOffset === undefined) delete waitingForSinceOffsets[path];
-    else waitingForSinceOffsets[path] = nextWaitingForSinceOffset;
+    if (waitingForSinceOffset === undefined) delete waitingForSinceOffsets[path];
+    else waitingForSinceOffsets[path] = waitingForSinceOffset;
     return {
       ...state,
       waitingForSinceOffsets,
