@@ -39,6 +39,7 @@ function projectState(
 ): CustomDomainReduceInput["state"] {
   return {
     agents: [],
+    devices: [],
     birthCertificate: { config: { slug: project.slug } },
     customDomains,
     egressRules: [],

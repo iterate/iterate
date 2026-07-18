@@ -6,7 +6,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { BUILD_TIMESTAMP } from "../lib/build-info.ts";
 import { queryClient } from "../lib/query.ts";
-import { routeInitialLocationReminderNotification } from "../lib/location-reminder-runtime.ts";
+import { routeInitialNotification } from "../lib/push-device.ts";
 import { colors } from "../lib/theme.ts";
 
 export default function RootLayout() {
@@ -21,9 +21,9 @@ export default function RootLayout() {
 
 function RootStack() {
   useQuery({
-    queryKey: ["initial-location-reminder-notification"],
+    queryKey: ["initial-notification"],
     queryFn: async () => {
-      await routeInitialLocationReminderNotification();
+      await routeInitialNotification();
       return true;
     },
     retry: false,

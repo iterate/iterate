@@ -54,13 +54,6 @@ if (Platform.OS !== "web") {
     }),
   });
 
-  Notifications.addNotificationResponseReceivedListener((response) => {
-    const route = locationReminderRouteFromNotificationData(
-      response.notification.request.content.data,
-    );
-    if (route) router.push(route);
-  });
-
   if (!TaskManager.isTaskDefined(LOCATION_REMINDER_GEOFENCE_TASK)) {
     TaskManager.defineTask<{
       eventType: Location.GeofencingEventType;

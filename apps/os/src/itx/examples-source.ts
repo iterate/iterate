@@ -232,6 +232,36 @@ return await itx.projects.get(pid).__describe();
     },
   }),
   projectExample({
+    id: "notify-mobile-device",
+    e2eProven: false,
+    title: "Discover and notify an enrolled phone",
+    description:
+      "Every phone enrolled for this project is a durable itx.devices member. List safe metadata, choose a device, then append the ordinary notification-requested event. The server-side device processor calls Expo/APNs while the app is suspended and journals ticket, receipt, expiry, rejection, or uncertain outcomes on /devices/<deviceId>.",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    fn: async (
+      itx,
+      vars: { body?: string; deviceId?: string; operationId?: string; title?: string },
+    ) => {
+      const devices = await itx.devices.list();
+      const deviceId = vars.deviceId || devices[0]?.deviceId;
+      if (!deviceId) {
+        throw new Error("Open this project in the Iterate development build to enroll a phone.");
+      }
+      const operationId = vars.operationId || crypto.randomUUID();
+      const [requested] = await itx.devices.get(deviceId).append({
+        type: "events.iterate.com/device/notification-requested",
+        idempotencyKey: `device-notification-requested:${operationId}`,
+        payload: {
+          title: vars.title || "Reminder from Iterate",
+          body: vars.body || "This notification was sent by an itx script.",
+          destination: { kind: "project" },
+          expiresAt: Date.now() + 5 * 60_000,
+        },
+      });
+      return { deviceId, requestOffset: requested.offset };
+    },
+  }),
+  projectExample({
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:

@@ -38,7 +38,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. The composable partner of\n   * `projects.create({ waitUntilReady: false })`.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. For project CONTENT and history, see itx.search. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. The composable partner of\n   * `projects.create({ waitUntilReady: false })`.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. For project CONTENT and history, see itx.search. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** Enrolled phone installations and their durable notification journals. */\n  devices: DeviceCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
@@ -77,6 +77,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       openapi: "Ad-hoc OpenAPI clients: connect(spec).",
       parallel: "Parallel API, preconfigured with Iterate's platform API key.",
       repos: "Repo catalog by path.",
+      devices: "Enrolled phone installations and their durable notification journals.",
       sandboxes:
         "The project's sandboxes — explicitly created, sized Linux containers (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}.",
       search:
@@ -123,6 +124,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "OpenApiCollection",
       "OpenApiRpc",
       "ProjectRepoCollection",
+      "DeviceCollection",
       "SandboxCollection",
       "Search",
       "Scheduler",
@@ -520,6 +522,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["RepoCollection", "StreamListItem"],
   },
   {
+    name: "DeviceCollection",
+    kind: "interface",
+    sourceText:
+      "/** Enrolled mobile installations within one project. */\nexport interface DeviceCollection {\n  __describe(): Promise<Description>;\n  get(deviceId: string): Device;\n  list(): Promise<DeviceDescription[]>;\n}",
+    summary: "Enrolled mobile installations within one project.",
+    memberSummaries: {},
+    referencedTypeNames: ["Description", "Device", "DeviceDescription"],
+  },
+  {
     name: "SandboxCollection",
     kind: "interface",
     sourceText:
@@ -831,6 +842,23 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     ],
   },
   {
+    name: "Device",
+    kind: "interface",
+    sourceText:
+      '/** One enrolled installation. Push credentials enter only through enroll(). */\nexport interface Device {\n  __describe(): Promise<Description & DeviceDescription>;\n  enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;\n  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;\n  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent>;\n  kill(): Promise<void>;\n  processor: WakeableStreamProcessorRpc<DeviceDescription>;\n  liveState: LiveStateRpc<DeviceDescription>;\n}',
+    summary: "One enrolled installation.",
+    memberSummaries: {},
+    referencedTypeNames: [
+      "Description",
+      "DeviceDescription",
+      "DeviceEnrollInput",
+      "DeviceAppendInput",
+      "StreamEvent",
+      "WakeableStreamProcessorRpc",
+      "LiveStateRpc",
+    ],
+  },
+  {
     name: "Secret",
     kind: "interface",
     sourceText:
@@ -1016,7 +1044,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `ready` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  birthCertificate: {\n    config: {\n      slug: string;\n      onboardingActive?: boolean | undefined;\n      creatorEmail?: string | undefined;\n    };\n  } | null;\n  ready: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  agents: { createdAt: string; path: string }[];\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n    createdAt: string;\n    updatedAt: string;\n  }[];\n  egressRules: {\n    ruleKey: string;\n    description: string;\n    match: {\n      hosts?: string[] | undefined;\n      methods?: string[] | undefined;\n      pathPrefix?: string | undefined;\n      secretPaths?: string[] | undefined;\n    };\n    verdict: "deny" | "hold";\n    approvalTimeoutMs: number;\n  }[];\n  humanApprovalKeys: {\n    keyId: string;\n    publicKey: string;\n    label: string;\n    addedAt: string;\n    revokedAt: string | null;\n  }[];\n};',
+      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `ready` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  birthCertificate: {\n    config: {\n      slug: string;\n      onboardingActive?: boolean | undefined;\n      creatorEmail?: string | undefined;\n    };\n  } | null;\n  ready: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  agents: { createdAt: string; path: string }[];\n  devices: { createdAt: string; path: string }[];\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n    createdAt: string;\n    updatedAt: string;\n  }[];\n  egressRules: {\n    ruleKey: string;\n    description: string;\n    match: {\n      hosts?: string[] | undefined;\n      methods?: string[] | undefined;\n      pathPrefix?: string | undefined;\n      secretPaths?: string[] | undefined;\n    };\n    verdict: "deny" | "hold";\n    approvalTimeoutMs: number;\n  }[];\n  humanApprovalKeys: {\n    keyId: string;\n    publicKey: string;\n    label: string;\n    addedAt: string;\n    revokedAt: string | null;\n  }[];\n};',
     summary:
       "The project processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -1509,6 +1537,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "DeviceDescription",
+    kind: "typeAlias",
+    sourceText:
+      '/** Safe, discoverable metadata for one project-enrolled mobile installation. */\nexport type DeviceDescription = {\n  appVersion: string | null;\n  created: boolean;\n  deviceId: string;\n  label: string | null;\n  lastNotificationOpenedAt: string | null;\n  notificationsStatus: "granted" | "revoked" | null;\n  ownerId: string | null;\n  platform: "ios" | "android" | null;\n  revokedAt: string | null;\n};',
+    summary: "Safe, discoverable metadata for one project-enrolled mobile installation.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "SandboxProcessorState",
     kind: "typeAlias",
     sourceText:
@@ -1921,6 +1958,25 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "Public connection-family names.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "DeviceEnrollInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Authenticated mobile enrollment metadata plus the write-only Expo push credential. */\nexport type DeviceEnrollInput = {\n  appVersion: string;\n  expoPushToken: string;\n  label: string;\n  notificationsStatus: "granted";\n  platform: "ios" | "android";\n};',
+    summary: "Authenticated mobile enrollment metadata plus the write-only Expo push credential.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "DeviceAppendInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Public journal vocabulary, mechanically retaining payloads from the processor contract. */\nexport type DeviceAppendInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-opened",\n      { openedAt: string; requestOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-requested",\n      {\n        body: string;\n        destination:\n          | { kind: "project" }\n          | { kind: "approvals" }\n          | { kind: "agent-chat"; path: string };\n        expiresAt: number;\n        title: string;\n      }\n    >;',
+    summary:
+      "Public journal vocabulary, mechanically retaining payloads from the processor contract.",
+    memberSummaries: {},
+    referencedTypeNames: ["TypedConsumedEventInput"],
   },
   {
     name: "SearchResultChunk",

@@ -62,6 +62,8 @@ export class ProjectProcessor extends StreamProcessor<
         return recordPhysicalStream(state, event.payload.childPath, event.createdAt);
       case "events.iterate.com/agent/created":
         return recordDomainObject(state, "agents", event);
+      case "events.iterate.com/device/created":
+        return recordDomainObject(state, "devices", event);
       case "events.iterate.com/repo/created":
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
@@ -115,6 +117,25 @@ export class ProjectProcessor extends StreamProcessor<
     }
 
     switch (event.type) {
+      case "events.iterate.com/project/human-approval-requested": {
+        blockProcessorWhile(() =>
+          Promise.all(
+            state.devices.map((device) =>
+              appendTo(device.path, {
+                type: "events.iterate.com/device/notification-requested",
+                idempotencyKey: `approval-notification:${event.offset}:${device.path}`,
+                payload: {
+                  title: "Approval needed",
+                  body: `${event.payload.method} ${new URL(event.payload.url).host} is waiting for approval.`,
+                  destination: { kind: "approvals" },
+                  expiresAt: Date.parse(event.payload.expiresAt),
+                },
+              }),
+            ),
+          ),
+        );
+        return;
+      }
       case "events.iterate.com/project/created": {
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
@@ -395,10 +416,11 @@ function recordPhysicalStream<
 function recordDomainObject<
   State extends {
     agents: StreamListItem[];
+    devices: StreamListItem[];
     repos: StreamListItem[];
     secrets: StreamListItem[];
   },
-  Key extends "agents" | "repos" | "secrets",
+  Key extends "agents" | "devices" | "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
   const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
   if (path === undefined) return state;

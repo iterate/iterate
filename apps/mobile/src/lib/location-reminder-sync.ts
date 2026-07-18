@@ -1,6 +1,5 @@
-import * as Crypto from "expo-crypto";
-import * as SecureStore from "expo-secure-store";
 import type { Stream, StreamEventBatch } from "../../../os/src/itx-api.generated.ts";
+import { getMobileDeviceId } from "./device-identity.ts";
 import {
   armLocationReminders,
   clearPendingLocationReminderDeliveries,
@@ -20,7 +19,6 @@ import {
 import { getItxSession, resetItxSession } from "./itx.ts";
 import { queryClient } from "./query.ts";
 
-const DEVICE_ID_KEY = "iterate.locationReminderDeviceId.v1";
 const STREAM_PAGE_SIZE = 500;
 const WATCHDOG_INTERVAL_MS = 15_000;
 const REMINDER_EVENT_TYPES = Object.values(LOCATION_REMINDER_EVENT);
@@ -37,7 +35,6 @@ const subscriptions = new Map<string, Promise<ReminderSubscription>>();
 const reconciliationKeys = new Map<string, string>();
 const reconciliationQueues = new Map<string, Promise<void>>();
 const manualReconciliationKeys = new Set<string>();
-let deviceIdPromise: Promise<string> | null = null;
 
 export function locationRemindersQueryKey(projectId: string) {
   return ["location-reminders", projectId] as const;
@@ -184,25 +181,9 @@ async function getLocationReminderIdentity(baseUrl: string): Promise<LocationRem
   const session = await getItxSession(baseUrl);
   const [{ principal: userId }, deviceId] = await Promise.all([
     session.__describe(),
-    getLocationReminderDeviceId(),
+    getMobileDeviceId(),
   ]);
   return { deviceId, userId };
-}
-
-async function getLocationReminderDeviceId(): Promise<string> {
-  if (deviceIdPromise) return deviceIdPromise;
-  const loading = (async () => {
-    const existing = await SecureStore.getItemAsync(DEVICE_ID_KEY);
-    if (existing) return existing;
-    const created = Crypto.randomUUID();
-    await SecureStore.setItemAsync(DEVICE_ID_KEY, created);
-    return created;
-  })().catch((error) => {
-    if (deviceIdPromise === loading) deviceIdPromise = null;
-    throw error;
-  });
-  deviceIdPromise = loading;
-  return loading;
 }
 
 async function loadLocationReminderEvents(

@@ -15,6 +15,7 @@ const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState
   agents: [],
   birthCertificate: { config: { slug: "test" } },
   customDomains: [],
+  devices: [],
   egressRules: [],
   humanApprovalKeys: [],
   onboardingActive: false,

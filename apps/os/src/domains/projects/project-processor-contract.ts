@@ -8,6 +8,7 @@ import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
+import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import {
   EgressRule,
   HumanApprovalGrantedPayload,
@@ -83,6 +84,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     onboardingActive: z.boolean().default(false),
     onboardingCompletedAt: z.string().nullable().default(null),
     agents: z.array(StreamListItem).default([]),
+    devices: z.array(StreamListItem).default([]),
     repos: z.array(StreamListItem).default([]),
     secrets: z.array(StreamListItem).default([]),
     streams: z.array(StreamListItem).default([]),
@@ -429,6 +431,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/egress-rules-configured",
     "events.iterate.com/project/human-approval-key-added",
     "events.iterate.com/project/human-approval-key-revoked",
+    "events.iterate.com/project/human-approval-requested",
     "events.iterate.com/project/custom-domain-add-requested",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
     "events.iterate.com/project/custom-domain-provision-failed",
@@ -439,6 +442,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/ready",
     "events.iterate.com/agent/created",
+    "events.iterate.com/device/created",
     "events.iterate.com/repo/created",
     "events.iterate.com/repo/ready",
     "events.iterate.com/secret/created",
@@ -453,12 +457,14 @@ export const ProjectProcessorContract = defineProcessorContract({
     SecretProcessorContract,
     CapabilityHostProcessorContract,
     SchedulerProcessorContract,
+    DeviceProcessorContract,
   ],
   emits: [
     // Seeded onto /integrations/email at project birth (the creator's email
     // becomes the sender allowlist's first entry).
     "events.iterate.com/email/sender-allowed",
     "events.iterate.com/email/created",
+    "events.iterate.com/device/notification-requested",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/scheduler/created",
     "events.iterate.com/project/custom-domain-cloudflare-observed",

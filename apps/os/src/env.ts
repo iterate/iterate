@@ -77,6 +77,9 @@ export interface Env {
   CAPABILITY_HOST: DurableObjectNamespace<
     import("./domains/capability-host/capability-host-durable-object.ts").CapabilityHostDurableObject
   >;
+  DEVICE: DurableObjectNamespace<
+    import("./domains/devices/device-durable-object.ts").DeviceDurableObject
+  >;
   PROJECT: DurableObjectNamespace<
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;

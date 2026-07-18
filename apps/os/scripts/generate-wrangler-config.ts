@@ -172,6 +172,7 @@ const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
   CAPABILITY_HOST: "CapabilityHostDurableObject",
+  DEVICE: "DeviceDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SCHEDULER: "SchedulerDurableObject",

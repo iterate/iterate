@@ -12,6 +12,7 @@ import { newMobileAgentPath } from "../../../lib/chat.ts";
 import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
+import { enrollPushDevice } from "../../../lib/push-device.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatListScreen() {
@@ -31,6 +32,15 @@ export default function ChatListScreen() {
         throw error;
       }
     },
+  });
+  const pushDevice = useQuery({
+    queryKey: ["push-device", projectId],
+    queryFn: async () => {
+      const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+      return await enrollPushDevice(baseUrl, projectId);
+    },
+    retry: false,
+    staleTime: 60 * 60_000,
   });
 
   const openChat = (agentPath: string) =>
@@ -77,6 +87,13 @@ export default function ChatListScreen() {
       <Pressable style={styles.newChat} onPress={() => openChat(newMobileAgentPath(new Date()))}>
         <Text style={styles.newChatText}>New chat</Text>
       </Pressable>
+      {pushDevice.isError ? (
+        <Text style={styles.pushStatus}>
+          Phone notifications unavailable: {pushDevice.error.message}
+        </Text>
+      ) : pushDevice.data ? (
+        <Text style={styles.pushStatus}>This phone is available to project scripts.</Text>
+      ) : null}
 
       {agents.isPending ? (
         <View style={styles.center}>
@@ -140,6 +157,12 @@ const styles = StyleSheet.create({
   path: { color: colors.text, fontSize: 14, fontFamily: "Menlo" },
   date: { color: colors.textMuted, fontSize: 12 },
   empty: { color: colors.textMuted, fontSize: 14 },
+  pushStatus: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },
   retry: {
     borderColor: colors.border,

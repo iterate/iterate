@@ -19,6 +19,7 @@ import {
   stopAllLocationReminderSubscriptions,
 } from "../lib/location-reminder-sync.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
+import { revokeEnrolledPushDevices } from "../lib/push-device.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl, setLastProject } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
@@ -72,6 +73,7 @@ export default function ProjectsScreen() {
             <Pressable
               onPress={async () => {
                 const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+                await revokeEnrolledPushDevices(baseUrl);
                 await signOut(baseUrl);
                 stopAllThreads();
                 stopAllLocationReminderSubscriptions();

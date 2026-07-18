@@ -166,6 +166,8 @@ export interface Project {
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
+  /** Enrolled phone installations and their durable notification journals. */
+  devices: DeviceCollection;
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
@@ -890,6 +892,13 @@ export interface ProjectRepoCollection extends RepoCollection {
   list(): Promise<StreamListItem[]>;
 }
 
+/** Enrolled mobile installations within one project. */
+export interface DeviceCollection {
+  __describe(): Promise<Description>;
+  get(deviceId: string): Device;
+  list(): Promise<DeviceDescription[]>;
+}
+
 /**
  * The `itx.sandboxes` built-in. Sandboxes are PETS:
  * `create({ name, instanceType })` is the only way one comes to exist
@@ -1527,6 +1536,17 @@ export interface CloudflareIntegrations {
   videos: CfVideosCapability;
 }
 
+/** One enrolled installation. Push credentials enter only through enroll(). */
+export interface Device {
+  __describe(): Promise<Description & DeviceDescription>;
+  enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;
+  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;
+  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent>;
+  kill(): Promise<void>;
+  processor: WakeableStreamProcessorRpc<DeviceDescription>;
+  liveState: LiveStateRpc<DeviceDescription>;
+}
+
 /** Path-addressed secret capability. Secret material has no public read API:
  * material never leaves the Secret Durable Object except substituted into a
  * request bound for one of the secret's pinned egress hosts. */
@@ -1819,6 +1839,7 @@ export type ProjectProcessorState = {
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   agents: { createdAt: string; path: string }[];
+  devices: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
@@ -3147,6 +3168,19 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
+/** Safe, discoverable metadata for one project-enrolled mobile installation. */
+export type DeviceDescription = {
+  appVersion: string | null;
+  created: boolean;
+  deviceId: string;
+  label: string | null;
+  lastNotificationOpenedAt: string | null;
+  notificationsStatus: "granted" | "revoked" | null;
+  ownerId: string | null;
+  platform: "ios" | "android" | null;
+  revokedAt: string | null;
+};
+
 /** The sandbox processor's reduced lifecycle projection. */
 export type SandboxProcessorState = {
   birthCertificate: {
@@ -3774,6 +3808,34 @@ export type GmailRequestInput = {
  * capability it actually supplies, while management APIs retain the provider
  * slug `google`. */
 export type PublicBuiltinIntegrationSlug = "github" | "gmail" | "slack" | "telegram" | "waitrose";
+
+/** Authenticated mobile enrollment metadata plus the write-only Expo push credential. */
+export type DeviceEnrollInput = {
+  appVersion: string;
+  expoPushToken: string;
+  label: string;
+  notificationsStatus: "granted";
+  platform: "ios" | "android";
+};
+
+/** Public journal vocabulary, mechanically retaining payloads from the processor contract. */
+export type DeviceAppendInput =
+  | TypedConsumedEventInput<
+      "events.iterate.com/device/notification-opened",
+      { openedAt: string; requestOffset: number }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/device/notification-requested",
+      {
+        body: string;
+        destination:
+          | { kind: "project" }
+          | { kind: "approvals" }
+          | { kind: "agent-chat"; path: string };
+        expiresAt: number;
+        title: string;
+      }
+    >;
 
 /** One retrieved chunk: the matched index document plus its scored text and provenance. */
 export type SearchResultChunk = {

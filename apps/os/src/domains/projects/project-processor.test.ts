@@ -227,6 +227,65 @@ describe("ProjectProcessor bootstrap", () => {
   });
 });
 
+it("cross-appends one deterministic held-approval notification per enrolled device", async () => {
+  const { driver, network, stream } = makeHarness();
+  await stream.append(PROJECT_CREATED);
+  await driver.deliver();
+  await stream.append(
+    {
+      type: "events.iterate.com/device/created",
+      source: {
+        processor: {
+          slug: "device",
+          version: "0.1.0",
+          stream: { projectId: "prj_test", path: "/devices/phone" },
+          whileProcessing: { offset: 1, type: "events.iterate.com/device/created" },
+        },
+      },
+      payload: {
+        config: {
+          appVersion: "1.0.0",
+          encryptedPushToken: {
+            algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1",
+            ciphertext: "encrypted-token",
+            iv: "initial-vector",
+          },
+          label: "Misha's iPhone",
+          notificationsStatus: "granted",
+          ownerId: "usr_misha",
+          platform: "ios",
+        },
+      },
+    },
+    {
+      type: "events.iterate.com/project/human-approval-requested",
+      payload: {
+        method: "POST",
+        url: "https://api.stripe.com/v1/transfers",
+        headers: {},
+        bodySha256: null,
+        bodyPreview: null,
+        secretPaths: ["/secrets/stripe/prod"],
+        ruleKey: "stripe-mutations",
+        expiresAt: "2026-07-18T08:05:00.000Z",
+      },
+    },
+  );
+
+  await driver.deliver();
+
+  expect(network.eventsAt("/devices/phone").at(-1)).toMatchObject({
+    type: "events.iterate.com/device/notification-requested",
+    idempotencyKey: "approval-notification:5:/devices/phone",
+    payload: {
+      title: "Approval needed",
+      body: "POST api.stripe.com is waiting for approval.",
+      destination: { kind: "approvals" },
+      expiresAt: Date.parse("2026-07-18T08:05:00.000Z"),
+    },
+  });
+});
+
 describe("ProjectProcessor catalogs", () => {
   it("keeps physical paths separate from explicitly created domain objects", async () => {
     const { driver, network, stream } = makeHarness();
