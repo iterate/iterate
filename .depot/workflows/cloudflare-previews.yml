@@ -95,11 +95,12 @@ jobs:
     # watchdogs and per-test caps all fail loudly before this fires).
     # 2026-07-09 saw 31m and ~90m attempts (unerasable-slot loops, an
     # unbounded playwright tail); nothing can stack past this anymore.
-    # 15 (was 10): the sandbox-build pipeline moved the os deploy to ~3m
-    # (container image reconcile + template-artifact seeding) and a healthy
-    # full run to ~9.5m — the old ceiling was killing green runs mid-upload,
-    # which also lost their failure artifacts.
-    timeout-minutes: 15
+    # 20 (was 15, was 10): the sandbox-build pipeline moved the os deploy to
+    # ~3m (container image reconcile + template-artifact seeding) and a
+    # healthy full run to ~9.5m — but the ceiling must also fit one retry of
+    # the slowest spec (a container-heavy spec retry runs ~3m); 15 killed a
+    # 55/56-green run mid-retry, which also lost its failure artifacts.
+    timeout-minutes: 20
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false

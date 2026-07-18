@@ -92,14 +92,14 @@ export async function getOrCreateBuilderSandbox(
         projectId,
         // Aggressive on purpose, and load-bearing: builder containers are
         // one-per-project, and container instance slots are a small per-class
-        // cap shared by EVERY sandbox in the deployment (preview: 10 basics).
-        // Fixture-heavy flows (e2e) birth builders across many projects at
-        // once — observed live squatting 8/10 slots and starving every other
-        // sandbox's placement. A build burst keeps the container awake; a
-        // minute idle frees the slot (there is nothing to snapshot — /build
-        // is outside /workspace), and the next build pays a ~5s stock-image
-        // boot.
-        sleepAfter: "60s",
+        // cap shared by EVERY sandbox in the deployment. Fixture-heavy flows
+        // (e2e) birth builders across many projects at once — observed live
+        // saturating the whole basic fleet and starving every other sandbox's
+        // placement. A build burst keeps the container awake; a short idle
+        // frees the slot (there is nothing to snapshot — /build is outside
+        // /workspace), and the next build pays a ~5s stock-image boot plus
+        // the in-container toolchain install.
+        sleepAfter: "20s",
       });
     } catch (error) {
       if (isDestroyedSandboxError(error)) continue;

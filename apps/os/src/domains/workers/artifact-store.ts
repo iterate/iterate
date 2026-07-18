@@ -62,13 +62,20 @@ function inFlightKey(buildKey: string) {
 }
 
 /**
- * How long a recorded build failure short-circuits budgeted callers into the
- * last-good fallback without re-running the failed build. Deliberately short:
- * a deterministic failure only costs a redundant rebuild attempt every couple
- * of minutes, while a transient one (npm weather) heals on its own. Any source
- * change makes a new build key, so a fix is never gated on this TTL.
+ * How long a recorded build failure short-circuits every caller without
+ * re-running the failed build. A build key is content-addressed, so a genuine
+ * compile/install failure is deterministic for that key and a fix always
+ * commits a NEW key — the TTL exists only so a transient failure mislabelled
+ * as genuine (npm weather during install) heals on its own. It must be LONG:
+ * abandoned projects with broken heads retry delivery forever, and each TTL
+ * expiry costs a real builder-container rebuild whose exec resets the
+ * container's idle timer. At 120s that loop kept one warm container per
+ * broken-head project indefinitely — an e2e run leaves several, which pinned
+ * the basic instance fleet at its cap and starved every other placement
+ * (observed live on preview, 2026-07-18). At 15 minutes the same loop is a
+ * ~3% duty cycle and the fleet drains.
  */
-const BUILD_FAILURE_TTL_SECONDS = 120;
+const BUILD_FAILURE_TTL_SECONDS = 15 * 60;
 
 function buildFailureKey(buildKey: string) {
   return `${KV_PREFIX}/${buildKey}/failed`;
