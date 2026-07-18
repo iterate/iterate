@@ -494,6 +494,18 @@ describe("preview test commands", () => {
     expect(script).toContain('PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?');
     expect(script).not.toContain("cat /tmp/os-preview-pw-install.log; exit 1");
   });
+
+  test("budgets the parallel OS preview lane from its measured green floor", () => {
+    expect(cloudflarePreviewApps.os).toMatchObject({
+      previewDeployBudgetMs: 90_000,
+      previewTestBudgetMs: 100_000,
+    });
+
+    const workflow = parseYaml(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ) as { jobs: { preview: { "timeout-minutes": number } } };
+    expect(workflow.jobs.preview["timeout-minutes"]).toBe(10);
+  });
 });
 
 describe("preview readiness URLs", () => {

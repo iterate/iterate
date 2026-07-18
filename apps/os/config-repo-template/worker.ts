@@ -632,20 +632,21 @@ export class CounterApp extends IterateDurableObject {
             <main>
               <p>count: <span id="n">${await this.current()}</span></p>
               <button id="b" disabled>increment</button>
-              <p id="s" data-spinner="true">connecting…</p>
+              <p id="s" data-spinner="true" aria-live="polite">connecting…</p>
             </main>
             <script>
               const button = document.getElementById("b");
               const count = document.getElementById("n");
               const status = document.getElementById("s");
               let incrementPending = false;
-              const incrementFailed = () => {
+              const incrementFailed = (error) => {
                 if (!incrementPending) return;
                 incrementPending = false;
                 button.disabled = false;
                 status.removeAttribute("data-spinner");
                 status.dataset.type = "error";
-                status.textContent = "Increment failed.";
+                status.textContent = "increment failed";
+                if (error !== undefined) console.error(error);
               };
               button.onclick = async () => {
                 incrementPending = true;
@@ -656,8 +657,10 @@ export class CounterApp extends IterateDurableObject {
                 status.textContent = "incrementing…";
                 try {
                   const response = await fetch("${prefix}/increment", { method: "POST" });
-                  if (!response.ok) incrementFailed();
-                } catch { incrementFailed(); }
+                  if (!response.ok) throw new Error("increment failed (" + response.status + ")");
+                } catch (error) {
+                  incrementFailed(error);
+                }
               };
               const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
               ws.onopen = () => { button.disabled = false; status.hidden = true; };

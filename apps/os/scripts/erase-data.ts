@@ -23,8 +23,10 @@
  *     handover leaves the previous branch's classes behind. Killing the
  *     instances also stops orphaned scheduler DOs whose alarms kept running
  *     itx scripts (= real LLM spend) against erased projects. Exception:
- *     container-bearing classes (the sandboxes) survive as unreachable
- *     orphans — recreating them is broken upstream (do-reset.ts explains).
+ *     container-bearing classes still declared by this branch (the
+ *     sandboxes) survive as unreachable orphans — recreating them is broken
+ *     upstream. Container applications/classes left by another branch are
+ *     retired instead (do-reset.ts explains).
  *   - normally, the auth D1 database (identities, orgs, projects — the source
  *     of every project id) and project-directory KV. `--preserve-auth` keeps
  *     both for a planned production recreation: selected OS projects can then
@@ -52,6 +54,10 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import {
+  SANDBOX_INSTANCE_TYPE_BINDINGS,
+  SANDBOX_INSTANCE_TYPES,
+} from "../src/domains/sandboxes/instance-types.ts";
 import { COMPATIBILITY_DATE, RETIRED_WORKER_SECRETS } from "./generate-wrangler-config.ts";
 
 /** Erase ALL user data in a deployed environment; infrastructure stays (see file header). */
@@ -94,6 +100,9 @@ export default async function eraseData(options: {
       CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,
     },
     compatibilityDate: COMPATIBILITY_DATE,
+    containerClassNames: SANDBOX_INSTANCE_TYPES.map(
+      (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+    ),
   });
 
   if (options.preserveAuth) {

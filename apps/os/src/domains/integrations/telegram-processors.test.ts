@@ -97,7 +97,7 @@ describe("TelegramProcessor (webhook router)", () => {
       allRouted.filter(
         (event) => event.type === "events.iterate.com/stream/subscription-configured",
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       allRouted.find(
         (event) =>

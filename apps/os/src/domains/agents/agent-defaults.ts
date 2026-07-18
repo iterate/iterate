@@ -3,9 +3,11 @@
 // system-context policy explicitly; the path never decides what kind of
 // processor exists on a stream.
 
+import { AGENT_METADATA_CHANGED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import {
   CapabilityHostProcessorContract,
@@ -23,7 +25,7 @@ const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
 
 const AGENT_METADATA_INSTRUCTION =
-  'Keep Iterate\'s agent UI current with itx.agent.setMetadata(...): set title once when the topic is clear and do not rewrite a good title; update activity on almost every working turn; keep summary to one or two sentences and change it only when durable purpose or conclusions change. When settled on a dependency, set waitingFor to "user_input", "external_event", or "timer"; runtime counts are normally emitted automatically and a qualifying wake clears the old wait. Never set pinned unless a human explicitly asks.';
+  'Keep Iterate\'s agent UI current with itx.agent.setMetadata(...): set title once when the topic is clear and do not rewrite a good title; update activity on almost every working turn; keep summary to one or two sentences and change it only when durable purpose or conclusions change. When settled on a dependency, set waitingFor to "user_input", "external_event", or "timer"; runtime counts are exposed automatically and a qualifying wake clears the old wait. Never set pinned unless a human explicitly asks.';
 
 /**
  * These revisions identify exact, retryable setup occurrences. Change the
@@ -313,6 +315,20 @@ export function agentCreationForPath<
     processor: ["capabilityHosts", ["get", agentPath], "processor"],
     processorSlug: CapabilityHostProcessorContract.slug,
   });
+  const collectionSubscription = CoreProcessorContract.buildEvent({
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream/subscription-configured:${durableObjectName}#agent-collection`,
+    payload: {
+      subscriptionKey: "agent-collection",
+      description: "Project agent collection projection",
+      selector: {
+        eventTypes: ["events.iterate.com/agent/created", AGENT_METADATA_CHANGED_EVENT_TYPE],
+      },
+      delivery: { mode: "push", expression: ["agents", "processEvent"] },
+      // The subscription is configured in the same birth batch as created.
+      deliver: "all",
+    },
+  });
   const siblingBirthCertificates: SiblingBirthCertificate[] =
     input.sibling === undefined ? [] : [input.sibling.birthCertificate];
   const siblingSubscriptions =
@@ -342,6 +358,7 @@ export function agentCreationForPath<
       bootContext,
       agentSubscription,
       capabilityHostSubscription,
+      collectionSubscription,
       ...siblingSubscriptions,
     ],
   };

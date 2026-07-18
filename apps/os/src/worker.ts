@@ -55,6 +55,7 @@ const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
+export { AgentCollectionDurableObject } from "./domains/agents/agent-collection-durable-object.ts";
 export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
 export {

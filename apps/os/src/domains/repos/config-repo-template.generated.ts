@@ -1059,20 +1059,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            <main>\n" +
       "              <p>count: <span id=\"n\">${await this.current()}</span></p>\n" +
       "              <button id=\"b\" disabled>increment</button>\n" +
-      "              <p id=\"s\" data-spinner=\"true\">connecting…</p>\n" +
+      "              <p id=\"s\" data-spinner=\"true\" aria-live=\"polite\">connecting…</p>\n" +
       "            </main>\n" +
       "            <script>\n" +
       "              const button = document.getElementById(\"b\");\n" +
       "              const count = document.getElementById(\"n\");\n" +
       "              const status = document.getElementById(\"s\");\n" +
       "              let incrementPending = false;\n" +
-      "              const incrementFailed = () => {\n" +
+      "              const incrementFailed = (error) => {\n" +
       "                if (!incrementPending) return;\n" +
       "                incrementPending = false;\n" +
       "                button.disabled = false;\n" +
       "                status.removeAttribute(\"data-spinner\");\n" +
       "                status.dataset.type = \"error\";\n" +
-      "                status.textContent = \"Increment failed.\";\n" +
+      "                status.textContent = \"increment failed\";\n" +
+      "                if (error !== undefined) console.error(error);\n" +
       "              };\n" +
       "              button.onclick = async () => {\n" +
       "                incrementPending = true;\n" +
@@ -1083,8 +1084,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                status.textContent = \"incrementing…\";\n" +
       "                try {\n" +
       "                  const response = await fetch(\"${prefix}/increment\", { method: \"POST\" });\n" +
-      "                  if (!response.ok) incrementFailed();\n" +
-      "                } catch { incrementFailed(); }\n" +
+      "                  if (!response.ok) throw new Error(\"increment failed (\" + response.status + \")\");\n" +
+      "                } catch (error) {\n" +
+      "                  incrementFailed(error);\n" +
+      "                }\n" +
       "              };\n" +
       "              const ws = new WebSocket((location.protocol === \"https:\" ? \"wss://\" : \"ws://\") + location.host + \"${prefix}/ws\");\n" +
       "              ws.onopen = () => { button.disabled = false; status.hidden = true; };\n" +

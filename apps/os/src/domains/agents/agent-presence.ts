@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AgentRuntime,
+  ZERO_AGENT_RUNTIME,
   type AgentRuntime as AgentRuntimeRecord,
 } from "@iterate-com/shared/agent-events";
 
@@ -55,6 +56,17 @@ export const AgentMetadataPatch = z
   });
 /** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
 export type AgentMetadataPatch = z.infer<typeof AgentMetadataPatch>;
+
+/** Processor-authored metadata clear guarded by the source input which woke
+ * the agent. Keeping this on metadata-changed lets every metadata projection
+ * apply the same race rule without subscribing to another event type. */
+const AgentConditionalWaitingClear = z.strictObject({
+  waitingFor: z.null(),
+  clearWaitingForThroughOffset: z.number().int().positive(),
+});
+
+export const AgentMetadataChanged = z.union([AgentMetadataPatch, AgentConditionalWaitingClear]);
+export type AgentMetadataChanged = z.infer<typeof AgentMetadataChanged>;
 
 const BindingConnection = boundedText(AGENT_BINDING_CONNECTION_MAX_LENGTH);
 const BindingId = boundedText(AGENT_BINDING_ID_MAX_LENGTH);
@@ -112,23 +124,37 @@ export const AgentBinding = z.discriminatedUnion("type", [
 ]);
 export type AgentBinding = z.infer<typeof AgentBinding>;
 
-const AgentTimestamps = z.strictObject({
+const AgentCatalogTimestamps = z.strictObject({
   createdAt: z.iso.datetime(),
   lastWorkAt: z.iso.datetime(),
   metadataUpdatedAt: z.iso.datetime().optional(),
   activityUpdatedAt: z.iso.datetime().optional(),
-  runtimeUpdatedAt: z.iso.datetime().optional(),
 });
-type AgentTimestamps = z.infer<typeof AgentTimestamps>;
+type AgentCatalogTimestamps = z.infer<typeof AgentCatalogTimestamps>;
 
-export const AgentRecord = z.strictObject({
+/** One entry in the collection processor's durable agent database. Every
+ * field is reducible from the collection's deliberately narrow created +
+ * metadata event subscription. */
+export const AgentCatalogRecord = z.strictObject({
   path: AgentPath,
   metadata: AgentMetadata,
-  runtime: AgentRuntime,
-  binding: AgentBinding.optional(),
-  timestamps: AgentTimestamps,
+  timestamps: AgentCatalogTimestamps,
 });
-/** The project catalog's complete current projection for one explicitly created agent. */
+export type AgentCatalogRecord = z.infer<typeof AgentCatalogRecord>;
+
+const AgentPresentationTimestamps = AgentCatalogTimestamps.extend({
+  runtimeUpdatedAt: z.iso.datetime().optional(),
+});
+
+/** Optional presentation overlays accepted by the shared agent UI. The
+ * collection itself returns AgentCatalogRecord; consumers may enrich those
+ * records from other live-state surfaces without widening the database
+ * schema. */
+export const AgentRecord = AgentCatalogRecord.extend({
+  runtime: AgentRuntime.optional(),
+  binding: AgentBinding.optional(),
+  timestamps: AgentPresentationTimestamps,
+});
 export type AgentRecord = z.infer<typeof AgentRecord>;
 
 /** Normalize optional untrusted display text before emitting a bounded
@@ -216,14 +242,15 @@ export function deriveAgentRuntime(
 }
 
 export function deriveAgentDisplayState(
-  runtime: AgentRuntimeRecord,
+  runtime: AgentRuntimeRecord | undefined,
   waitingFor?: AgentWaitingFor,
 ): AgentDisplayState {
-  if (runtime.runningScripts > 0) return "running_code";
-  if (runtime.llmRequests.requested > 0 || runtime.llmRequests.started > 0) {
+  const current = runtime ?? ZERO_AGENT_RUNTIME;
+  if (current.runningScripts > 0) return "running_code";
+  if (current.llmRequests.requested > 0 || current.llmRequests.started > 0) {
     return "waiting_for_model";
   }
-  if (runtime.llmRequests.scheduled > 0 || runtime.triggers.runnable > 0) return "queued";
+  if (current.llmRequests.scheduled > 0 || current.triggers.runnable > 0) return "queued";
   if (waitingFor === "user_input") return "waiting_for_user_input";
   if (waitingFor === "external_event") return "waiting_for_external_event";
   if (waitingFor === "timer") return "waiting_for_timer";

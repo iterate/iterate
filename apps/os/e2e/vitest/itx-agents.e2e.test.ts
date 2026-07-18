@@ -659,6 +659,9 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   });
   await project.agents.get(agentPath).create();
 
+  // create() is a read-after-create barrier for the collection processor, not
+  // merely the per-agent processors: its reduced database must be coherent as
+  // soon as the call returns.
   expect(await project.agents.list()).toEqual(
     expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
   );

@@ -1,6 +1,6 @@
 # Preview CI performance
 
-The **Cloudflare Previews** check (deploy every app to a leased preview slot,
+The **Cloudflare Previews** check (deploy every selected app to a leased preview slot,
 then run the full e2e suite against it) is the slowest thing that runs on every
 PR push, so it gets a dedicated performance budget. The target is **under
 3m30s** end-to-end. A retry-clean full-fleet run on 2026-07-18 landed in
@@ -23,7 +23,9 @@ and cost.
 | Full check | 210s      | 188s     | check start through successful check completion |
 
 The OS deploy and the OS e2e lane are the long poles; the other apps finish in
-seconds and run alongside OS.
+seconds and run alongside OS. The 10-minute workflow watchdog is an outer
+backstop, not the expected duration: every remote lane retains its own bounded
+watchdog.
 
 ## The optimizations (and why each one is load-bearing)
 
