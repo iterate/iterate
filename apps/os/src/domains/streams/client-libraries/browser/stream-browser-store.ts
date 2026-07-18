@@ -50,6 +50,7 @@ import {
 import type { BrowserProjectionWriteBuffer } from "./projection-write-buffer.ts";
 import {
   acquireWriterRole,
+  findSupersedingMirrorWriterLock,
   mirrorLockVersionVector,
   streamMirrorWriterLockName,
   type WriterRole,
@@ -378,10 +379,15 @@ function createStreamRuntime(
   let stream: BrowserStreamClient | undefined;
   let subscriptionHandle: { unsubscribe(): void } | undefined;
   let writerRole: WriterRole | undefined;
+  // Set when this tab found a newer-deploy tab's writer lock held and resigned
+  // (see watchSupersedingWriter): a queued request on that NEWER lock, whose
+  // grant is exactly the newer writer's death — the wake-up to re-elect.
+  let supersededWatch: WriterRole | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let databaseInfoTimer: ReturnType<typeof setTimeout> | undefined;
   let databaseChangeTimer: ReturnType<typeof setTimeout> | undefined;
+  let supersededRecheckTimer: ReturnType<typeof setTimeout> | undefined;
   let disposeTimer: ReturnType<typeof setTimeout> | undefined;
   let livenessTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
@@ -1283,6 +1289,41 @@ function createStreamRuntime(
       .then(async () => {
         clearTimeout(followerTimeout);
         if (!ownsRuntime()) return undefined;
+        // Winning OUR lock is not enough: the lock name is version-vectored, so
+        // a tab from a different deploy holds a DIFFERENT lock over the same
+        // shared OPFS file. If a strictly newer vector's lock is held, a
+        // fresh-deploy tab owns this mirror right now — proceeding would
+        // rebuild its tables down to our older schema and rewind its cursors,
+        // and the two writers would fence each other's commits forever (each
+        // ingest self-heal deleting the other's projection: the deploy-boundary
+        // livelock). Resign BEFORE touching the database and stand by as a
+        // follower on the mirror the newer tab maintains.
+        const supersedingLock = await findSupersedingMirrorWriterLock({
+          projectId: args.projectId,
+          streamPath: args.streamPath,
+          versionVector: mirrorVersionVector,
+        });
+        if (!ownsRuntime()) return undefined;
+        if (supersedingLock !== undefined) {
+          // Resign: give up writership (keeping the connection — a follower
+          // still appends and reads runtimeState) and let the newer tab own
+          // the shared mirror; its writes reach this tab's reactive queries
+          // through the database change channel like any follower's. Reloading
+          // this tab is the real upgrade; until then the watch below waits for
+          // the newer writer to be truly gone (closed, or rolled back) —
+          // which is when re-electing can win cleanly.
+          console.warn(
+            `[stream ${args.streamPath} ${slug}] a newer app version's tab owns this stream mirror; standing by as a follower (reload this tab to take over)`,
+            { supersedingLock },
+          );
+          writerRole?.release();
+          writerRole = undefined;
+          snapshot = { ...snapshot, subscriptionStatus: "follower" };
+          emitSnapshot();
+          liveAgentStateChannel.request();
+          watchSupersedingWriter(supersedingLock);
+          return undefined;
+        }
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
         // Build every canonical member over the shared connection + db: the
@@ -1622,12 +1663,70 @@ function createStreamRuntime(
     }
   }
 
+  // A grant only proves the newer writer is gone RIGHT NOW — a healthy newer
+  // tab also releases its lock on every routine reconnect and only re-holds
+  // after its backoff, redial, and re-election complete. That gap can
+  // legitimately reach scheduleReconnect's 30s backoff ceiling (ingest
+  // self-heal, connect failures) plus the 15s dial deadline, so the takeover
+  // re-check must wait it out: only a writer that STAYED gone triggers
+  // re-election; a cycling one re-holds its lock and this tab just re-arms the
+  // watch. The asymmetry is deliberate — a false takeover deletes the newer
+  // tab's projection (the flicker this exists to prevent), while a slow
+  // takeover only delays live updates in a tab that is stale anyway (reads
+  // keep serving the last-written mirror, and reloading is always the fast
+  // path).
+  const SUPERSEDED_RECHECK_DELAY_MS = 60_000;
+
+  // The zero-polling death watch on the newer tab's own writer lock: a
+  // queued request granted only when that tab is gone (closed, navigated
+  // away, or rolled back).
+  function watchSupersedingWriter(newerLockName: string) {
+    supersededWatch?.release();
+    // SHARED mode: granted only once the exclusive holder is gone, and other
+    // resigned tabs' watches neither queue behind this one nor read as live
+    // writers (findSupersedingMirrorWriterLock ignores shared holders).
+    const watch = acquireWriterRole({ lockName: newerLockName, mode: "shared" });
+    supersededWatch = watch;
+    void watch.whenWriter.then(() => {
+      // Never HOLD the newer generation's lock — a fresh tab of that version
+      // must stay able to elect. The grant was only the death notification.
+      watch.release();
+      // whenWriter also settles on release() (teardown, or a later resign
+      // replacing the watch); only the still-current watch proceeds. The
+      // released watch stays in `supersededWatch` as the "still resigned"
+      // marker until the recheck below decides.
+      if (disposed || supersededWatch !== watch) return;
+      supersededRecheckTimer = setTimeout(() => {
+        supersededRecheckTimer = undefined;
+        void findSupersedingMirrorWriterLock({
+          projectId: args.projectId,
+          streamPath: args.streamPath,
+          versionVector: mirrorVersionVector,
+        }).then((stillSuperseding) => {
+          if (disposed || supersededWatch !== watch) return;
+          supersededWatch = undefined;
+          if (stillSuperseding !== undefined) {
+            watchSupersedingWriter(stillSuperseding);
+            return;
+          }
+          scheduleReconnect("superseding mirror writer gone; re-electing", 0);
+        });
+      }, SUPERSEDED_RECHECK_DELAY_MS);
+    });
+  }
+
   function stopSubscriptionElection() {
     fireAndForgetUnsubscribe(subscriptionHandle);
     subscriptionHandle = undefined;
     liveAgentStateChannel.release();
     writerRole?.release();
     writerRole = undefined;
+    supersededWatch?.release();
+    supersededWatch = undefined;
+    if (supersededRecheckTimer !== undefined) {
+      clearTimeout(supersededRecheckTimer);
+      supersededRecheckTimer = undefined;
+    }
     // Dispose the election's member runners so queued frames (and their
     // trailing self-pulls) reject at their turn instead of racing the next
     // election's drive over the shared mirror. A frame already PAST the
