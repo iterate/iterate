@@ -147,6 +147,7 @@ export class TelegramProcessor extends StreamProcessor<
     const connection = state.birthCertificate?.config.connection;
     if (connection === undefined) return;
     if (event.type === "events.iterate.com/telegram/access-configured") {
+      if (!webhookAckIsFresh(event, this.deps.now())) return;
       const previouslyAllowed = new Set(previousState.allowedUserIds);
       for (const userId of state.allowedUserIds) {
         if (previouslyAllowed.has(userId)) continue;

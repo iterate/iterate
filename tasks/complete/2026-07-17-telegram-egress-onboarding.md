@@ -33,7 +33,7 @@ and full repository verification are green; no production state was changed.
       Telegram send failures. _Processor tests cover the access-event reaction
       and prove failed notifications do not block later allowed traffic._
 - [x] Run the focused OS test lanes and update this task with the verification
-      evidence. _47 focused tests and the 1,825-test OS lane pass; the full
+      evidence. _48 focused tests and the 1,826-test OS lane pass; the full
       repository command is green._
 
 ## Assumptions
@@ -82,6 +82,8 @@ was a prompt/product defect, not an absent platform capability.
 - 2026-07-18: Review moved the welcome reaction onto the durable
   `telegram/access-configured` event in the Telegram router; the RPC now only
   appends the policy and waits for its access boundary.
-- 2026-07-18: Verification after review: focused Vitest 47/47; repository-wide
-  format, zero-warning lint, typecheck, and tests; OS result 1,825 passed and 1
+- 2026-07-18: Verification after review: focused Vitest 48/48; repository-wide
+  format, zero-warning lint, typecheck, and tests; OS result 1,826 passed and 1
   skipped.
+- 2026-07-18: Review follow-up made welcomes refold-safe: only fresh access
+  events notify users; stale policy replay does not.

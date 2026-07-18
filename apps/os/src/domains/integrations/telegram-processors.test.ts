@@ -149,25 +149,25 @@ describe("TelegramProcessor (webhook router)", () => {
         `https://os.iterate.com/projects/acme/integrations?telegramAccess=${CONNECTION}`,
     });
     const driver = driveProcessor(processor, stream);
-    await stream.append(
-      {
-        type: "events.iterate.com/telegram/created",
-        payload: { config: { connection: CONNECTION } },
-      },
-      {
-        type: "events.iterate.com/telegram/access-configured",
-        payload: { allowedUserIds: ["555"] },
-      },
-      {
-        type: "events.iterate.com/telegram/access-configured",
-        payload: { allowedUserIds: ["555", "777"] },
-      },
-      {
-        type: "events.iterate.com/telegram/access-configured",
-        payload: { allowedUserIds: ["777"] },
-      },
-    );
-
+    await stream.append({
+      type: "events.iterate.com/telegram/created",
+      payload: { config: { connection: CONNECTION } },
+    });
+    await driver.deliver();
+    await stream.append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds: ["555"] },
+    });
+    await driver.deliver();
+    await stream.append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds: ["555", "777"] },
+    });
+    await driver.deliver();
+    await stream.append({
+      type: "events.iterate.com/telegram/access-configured",
+      payload: { allowedUserIds: ["777"] },
+    });
     await driver.deliver();
 
     expect(telegramCalls).toEqual([
@@ -180,6 +180,38 @@ describe("TelegramProcessor (webhook router)", () => {
         body: { chat_id: 777, text: TELEGRAM_ACCESS_WELCOME_TEXT },
       },
     ]);
+  });
+
+  it("does not resend welcomes while replaying stale access events", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const telegramCalls: unknown[] = [];
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      now: () => 20 * 60_000,
+      sendTelegramMessage: async (input) => {
+        telegramCalls.push(input);
+      },
+      telegramAccessSettingsUrl: async () =>
+        `https://os.iterate.com/projects/acme/integrations?telegramAccess=${CONNECTION}`,
+    });
+    const driver = driveProcessor(processor, stream);
+    await stream.append(
+      {
+        type: "events.iterate.com/telegram/created",
+        payload: { config: { connection: CONNECTION } },
+      },
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: ["555"] },
+      },
+    );
+
+    await driver.deliver();
+
+    expect(telegramCalls).toEqual([]);
   });
 
   it("preserves allowed legacy /new history when the first access policy is configured", async () => {
