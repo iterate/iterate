@@ -228,10 +228,9 @@ async function resolveThroughBuilder(input: {
     // stream delivering to it, so one commit can fan out into DOZENS of
     // concurrent cold resolves of ONE key (observed live: 100 pool builds
     // for 27 distinct keys in one e2e run, top key built 24×, drowning the
-    // builder pool). When a build for this key is already running — this
-    // isolate (presence set) or any other (KV marker) — wait for ITS
-    // artifact instead of piling on. Never worse than building: the wait is
-    // bounded and falls back to a duplicate build.
+    // builder pool). When THIS ISOLATE is already building the key, wait for
+    // its artifact instead of piling on. Never worse than building: the wait
+    // is bounded and falls back to a duplicate build.
     const built = await waitForBuildElsewhere(store, buildKey);
     if (built !== null) {
       input.waitUntil(noteLastGoodBuild(store, context, buildKey));
@@ -265,43 +264,45 @@ async function resolveThroughBuilder(input: {
 // (waitForBuildElsewhere).
 const buildsInFlight = new Set<string>();
 
-/** How long a blocking caller waits on someone else's in-flight build of the
- * same key before falling back to its own duplicate build. Bounded well under
- * the in-flight marker TTL so a crashed builder delays waiters, never wedges
- * them. */
+/** How long a blocking caller waits on this isolate's in-flight build of the
+ * same key before falling back to its own duplicate build. */
 const BUILD_WAIT_CAP_MS = 120_000;
-const BUILD_WAIT_POLL_MS = 2_000;
+const BUILD_WAIT_POLL_MS = 1_000;
 
 /**
- * Wait for another resolve's in-flight build of `buildKey` to land, polling
- * the artifact cache. Returns the artifact, throws the other build's recorded
- * GENUINE failure (deterministic for this key — replaying it is the same
- * contract as the failure-record short-circuit above), or returns null when
- * no fresh build is running / the other attempt died / the wait cap passes —
- * every null falls back to building here, so this never fails a resolve that
+ * Wait for THIS ISOLATE's in-flight build of `buildKey` to land. The wait
+ * loop does no I/O at all — it sleeps on the presence set, then reads the
+ * outcome once: the artifact from the per-isolate memo (the leader memoizes
+ * on success, so this read never depends on KV propagation), or the leader's
+ * recorded GENUINE failure (deterministic for this key — replaying it is the
+ * same contract as the failure-record short-circuit above). Returns null when
+ * no build is running here, the leader died unrecorded, or the cap passes —
+ * every null falls back to building, so this never fails a resolve that
  * would previously have succeeded.
+ *
+ * Deliberately IN-ISOLATE ONLY. The first cut of this guard also waited on
+ * OTHER isolates' builds via the KV in-flight marker, polling the artifact
+ * key — but KV negative-caches a missing key per colo (~60s), so waiters
+ * could not see the leader's write promptly and every cross-isolate cold
+ * resolve stalled toward the cap (observed live: an entire e2e lane ran
+ * ~90-160s per spec with first-attempt failures across the board, while the
+ * pool sat nearly idle at 30 builds). Cross-isolate duplicates are the
+ * cheaper poison: bounded by isolate count, idempotent, and the builder pool
+ * absorbs them.
  */
 async function waitForBuildElsewhere(
   store: KvWorkerBuildArtifactStore,
   buildKey: string,
 ): Promise<ResolvedWorkerSource | null> {
-  if (!buildsInFlight.has(buildKey)) {
-    const markedAt = await store.buildInFlightAt(buildKey);
-    if (markedAt === null || Date.now() - markedAt.getTime() > BUILD_WAIT_CAP_MS) return null;
-  }
+  if (!buildsInFlight.has(buildKey)) return null;
   const deadline = Date.now() + BUILD_WAIT_CAP_MS;
-  while (Date.now() < deadline) {
+  while (buildsInFlight.has(buildKey) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, BUILD_WAIT_POLL_MS));
-    const artifact = await resolveCachedArtifact(buildKey);
-    if (artifact !== null) return artifact;
-    const failure = await store.getBuildFailure(buildKey);
-    if (failure !== null) throw new WorkerBuildFailedError(failure.message);
-    if (!buildsInFlight.has(buildKey) && !(await store.isBuildInFlight(buildKey))) {
-      // The other attempt died without an artifact or a recorded failure
-      // (transport weather, isolate eviction) — build here.
-      return null;
-    }
   }
+  const artifact = await resolveCachedArtifact(buildKey);
+  if (artifact !== null) return artifact;
+  const failure = await store.getBuildFailure(buildKey);
+  if (failure !== null) throw new WorkerBuildFailedError(failure.message);
   return null;
 }
 

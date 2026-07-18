@@ -149,26 +149,19 @@ export class KvWorkerBuildArtifactStore {
   ) {}
 
   /**
-   * Best-effort duplicate-build suppression: budgeted callers answer "still
-   * building" from the marker without work; blocking callers WAIT on a fresh
-   * marker (worker-loader's stampede guard) and only fall back to their own
-   * idempotent duplicate build when the marker is stale or gone. Best-effort
-   * because KV propagation is eventually consistent — a missed marker just
-   * means a duplicate build.
+   * Best-effort duplicate-build suppression for BUDGETED callers only: the
+   * building-page refresh loop would otherwise dispatch a fresh full build
+   * every ~18s per open tab while a slow cold build runs. Budgeted callers
+   * can answer "still building" from the marker without work; blocking
+   * callers ignore it (they need a result and idempotent duplicate builds
+   * are their fallback — waiting on ANOTHER isolate's build via this marker
+   * was tried and reverted: KV negative-caches the missing artifact key per
+   * colo, so waiters stall instead of converging; worker-loader's stampede
+   * guard is in-isolate only). Best-effort because KV propagation is
+   * eventually consistent — a missed marker just means a duplicate build.
    */
   async isBuildInFlight(buildKey: string): Promise<boolean> {
     return (await this.kv.get(inFlightKey(buildKey), "text")) !== null;
-  }
-
-  /** When the in-flight marker was set, for callers that only trust a FRESH
-   * marker (the blocking lane's stampede wait). An unparseable value still
-   * counts as freshly marked — the marker's existence is the signal, its TTL
-   * the backstop. */
-  async buildInFlightAt(buildKey: string): Promise<Date | null> {
-    const raw = await this.kv.get(inFlightKey(buildKey), "text");
-    if (raw === null) return null;
-    const at = new Date(raw);
-    return Number.isNaN(at.getTime()) ? new Date() : at;
   }
 
   async markBuildInFlight(buildKey: string): Promise<void> {
