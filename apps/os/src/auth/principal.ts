@@ -1,8 +1,4 @@
-import {
-  identityFromAccessToken,
-  type AccessTokenClaims,
-  type AuthenticatedIdentity,
-} from "@iterate-com/auth/server";
+import type { AuthenticatedIdentity } from "@iterate-com/auth/server";
 import {
   type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthProjectClaim,
@@ -52,10 +48,6 @@ export function createUserPrincipal(input: {
     organizations: input.organizations,
     projects: input.projects,
   };
-}
-
-export function principalFromAccessToken(accessToken: AccessTokenClaims): UserPrincipal {
-  return principalFromIdentity(identityFromAccessToken(accessToken));
 }
 
 /** Adapt auth's credential-independent identity to OS capability authority. */

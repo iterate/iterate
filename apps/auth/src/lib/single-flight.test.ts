@@ -69,6 +69,14 @@ describe("createSingleFlight", () => {
     await assert.rejects(second, /refresh failed/);
     assert.equal(failures, 1);
 
-    assert.equal(await singleFlight("token-1", async () => "ok"), "ok");
+    let retries = 0;
+    assert.equal(
+      await singleFlight("token-1", async () => {
+        retries += 1;
+        return "ok";
+      }),
+      "ok",
+    );
+    assert.equal(retries, 1);
   });
 });

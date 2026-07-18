@@ -63,15 +63,14 @@ surface most consumers see, and it must stay on the public hostname —
 browsers, the CLI, and third-party OAuth/MCP clients cannot hold service
 bindings.
 
-Relying parties consume it through **`@iterate-com/auth/server`**
-(`src/lib/server.ts`), a small OIDC relying-party library this package exports.
+Relying parties consume it through **`@iterate-com/auth/server`**, the narrow
+public surface declared in `src/lib/server-public.ts`.
 It runs _inside the relying party's worker_ (apps/os, apps/auth-example), does
 the authorization-code + PKCE dance, verifies JWTs, refreshes tokens
-(single-flighted so a rotated refresh token is never presented twice), and
-manages the session cookie. Its partial-fetch, authentication-result, TanStack,
-Cap'n Web, and project-worker composition patterns are documented in
-[`docs/relying-party-auth.md`](docs/relying-party-auth.md). See "How it fits
-with apps/os" and "The auth example app" below.
+(single-flighted per worker isolate to collapse concurrent use of one refresh token), and
+manages the session cookie. See the concise
+[`relying-party auth guide`](docs/relying-party-auth.md) and the working example
+app below.
 
 ### 2. UI — everything else
 
@@ -332,9 +331,9 @@ OS revision.
 `apps/auth-example` is a small reference relying party (`src/worker.ts`): a
 Hono worker that composes `@iterate-com/auth/server` through the same
 `auth.fetch(request)` partial-fetch method used by first-party request
-middleware, then protects `/api/protected` with the discriminated result from
-`.authenticate()`. It applies `authentication.responseHeaders` to the final
-response so refresh-token rotation is atomic from the browser's perspective.
+middleware, then protects `/api/protected` with `.authenticateSession()`. It
+applies the returned response headers so refresh-token rotation is atomic from
+the browser's perspective.
 It exercises the exact same OIDC surface OS uses, so it's the cheapest end-to-end
 check that a change to the auth worker didn't break relying parties. It talks
 _only_ to surface 1 (the public OIDC provider) — nothing in it depends on the

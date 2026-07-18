@@ -12,7 +12,7 @@
 // transport receivers unreachable from project code without changing project
 // authorization or trusting a caller-controlled principal string.
 //
-// Credential lanes (see auth/request-auth.ts):
+// Credential lanes (see resolveItxAuth):
 //   from-server-cookie — the browser lane: a short-lived, signed operator
 //     cookie, else the `iterate_session` cookie verified against the auth
 //     worker's JWKS. Ambient cookies require an exact same-origin request.
@@ -30,8 +30,22 @@
 // auth worker's directory as the source of truth — one cached membership
 // lookup widens the live context instead of forcing a token refresh.
 
+import { identityFromAccessToken, identityFromSession } from "@iterate-com/auth/server";
+import { authenticateAdminBearer } from "./auth/admin.ts";
+import {
+  authenticateOperatorSession,
+  authenticateOperatorToken,
+  isSameOriginBrowserRequest,
+} from "./auth/operator-session.ts";
+import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import { itxEnv } from "./env.ts";
-import { principalIsAdmin, type Principal, type UserPrincipal } from "./auth/principal.ts";
+import {
+  principalFromIdentity,
+  principalIsAdmin,
+  type Principal,
+  type UserPrincipal,
+} from "./auth/principal.ts";
+import type { AppConfig } from "./config.ts";
 
 /**
  * Credentials accepted by `UnauthenticatedOs.authenticate`.
@@ -217,6 +231,74 @@ export function resolveOrganizationSlugForCreate(
   );
 }
 
+/** Exchange explicit Cap'n Web credentials for capability authority, or reject. */
+export async function resolveItxAuth(input: {
+  config: AppConfig;
+  credentials: ItxAuthCredentials;
+  headers: Headers;
+  requestUrl: string;
+}): Promise<ItxAuthContext> {
+  const { config, credentials } = input;
+
+  if (credentials.type === "admin-secret") {
+    assertAdminSecret(config, credentials.secret);
+    return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+  }
+
+  if (credentials.type === "operator-session") {
+    const session = await authenticateOperatorToken({
+      config,
+      requestUrl: input.requestUrl,
+      token: credentials.token,
+    });
+    if (!session) throw new ItxAuthenticationError();
+    return itxAuthFromPrincipal(session.principal, { allowDirectoryFallback: false });
+  }
+
+  if (credentials.type === "impersonate") {
+    assertAdminSecret(config, credentials.secret);
+    return contextFromImpersonatedToken(credentials.token);
+  }
+
+  if (credentials.type === "bearer") {
+    const auth = createOsIterateAuth(config, input.requestUrl);
+    if (!auth) throw new Error("iterate auth is not configured");
+    const accessToken = await auth.authenticateBearer({
+      headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
+    });
+    if (!accessToken) throw new ItxAuthenticationError();
+    return itxAuthFromPrincipal(principalFromIdentity(identityFromAccessToken(accessToken)));
+  }
+
+  // Ambient cookies are authority only on an exact-origin browser request.
+  const cookieRequest = new Request(input.requestUrl, { headers: input.headers });
+  if (!isSameOriginBrowserRequest(cookieRequest)) throw new ItxAuthenticationError();
+
+  const operatorSession = await authenticateOperatorSession({ config, request: cookieRequest });
+  if (operatorSession) {
+    return itxAuthFromPrincipal(operatorSession.principal, { allowDirectoryFallback: false });
+  }
+
+  const auth = createOsIterateAuth(config, input.requestUrl);
+  if (!auth) throw new Error("iterate auth is not configured");
+  // An in-band RPC call cannot carry a rotated Set-Cookie back to the browser.
+  const { session } = await auth.authenticateSession({
+    headers: input.headers,
+    includeUserInfo: false,
+    refresh: "never",
+  });
+  if (!session) throw new ItxAuthenticationError();
+  return itxAuthFromPrincipal(principalFromIdentity(identityFromSession(session)));
+}
+
+function assertAdminSecret(config: AppConfig, secret: string): void {
+  const admin = authenticateAdminBearer({
+    authorizationHeader: `Bearer ${secret}`,
+    config,
+  });
+  if (!admin) throw new ItxAuthenticationError();
+}
+
 /**
  * The itx auth context for an already-authenticated principal — the in-process
  * lane. Server-side code that already holds the request middleware's principal
@@ -241,7 +323,7 @@ export function itxAuthFromPrincipal(
   });
 }
 
-export function itxAuthFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
+function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
   if (token.type === "admin") {
     return new ItxAuthContext({ isAdmin: true, principal: token.principal ?? "admin" });
   }

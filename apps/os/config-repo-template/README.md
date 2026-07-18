@@ -56,13 +56,3 @@ with the same snapshot-and-patch implementation. The explicit classes are
 intentional: there is no
 `authenticatedApp` wrapper hiding where authentication happens or which
 authority crosses the wire.
-
-This project gate and first-party relying-party auth deliberately share the
-same partial-fetch shape—`const response = await auth.fetch(request); if
-(response) return response`—but not identical null semantics. Here, null means
-the selected project policy passed. For a general OAuth relying party, null
-only means the request is not a login/callback/logout route; the app then calls
-`auth.authenticate({ headers: request.headers })` once to receive the proven
-identity and any refresh response headers. See the Iterate monorepo's
-[relying-party auth guide](https://github.com/iterate/iterate/blob/main/apps/auth/docs/relying-party-auth.md)
-for complete Worker, TanStack Start, Cap'n Web, and project app examples.

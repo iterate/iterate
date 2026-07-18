@@ -72,7 +72,6 @@ describe("relying-party credential resolution", () => {
       sessionId: undefined,
       email: undefined,
       isAdmin: false,
-      role: null,
       organizations: [],
       projects: [],
     });

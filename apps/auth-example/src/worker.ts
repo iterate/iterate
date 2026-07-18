@@ -15,16 +15,15 @@ function authFromEnv(env: Cloudflare.Env) {
 const app = new Hono<{ Bindings: Cloudflare.Env }>();
 
 app.get("/api/protected", async (c) => {
-  const authentication = await authFromEnv(c.env).authenticate({
-    accept: "session",
+  const { session, responseHeaders } = await authFromEnv(c.env).authenticateSession({
     headers: c.req.raw.headers,
   });
-  if (authentication.credential !== "session") {
+  if (!session) {
     return c.text("Unauthorized", 401);
   }
   return withAuthenticationResponseHeaders(
-    new Response(`Protected route accessed by ${authentication.session.user.email}`),
-    authentication.responseHeaders,
+    new Response(`Protected route accessed by ${session.user.email}`),
+    responseHeaders,
   );
 });
 

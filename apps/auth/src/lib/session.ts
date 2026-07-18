@@ -105,7 +105,6 @@ export type AuthenticatedIdentity = {
   sessionId?: string;
   email?: string;
   isAdmin: boolean;
-  role: string | null;
   organizations: IterateAuthAccessTokenOrganizationClaim[];
   projects: IterateAuthProjectClaimType[];
 };
@@ -116,20 +115,18 @@ export function identityFromSession(session: AuthenticatedSession): Authenticate
     sessionId: session.session.sessionId,
     email: session.user.email,
     isAdmin: session.user.isAdmin === true || session.user.role === "admin",
-    role: session.user.role ?? null,
     organizations: session.session.organizations,
     projects: session.session.projects,
   };
 }
 
 export function identityFromAccessToken(accessToken: AccessTokenClaims): AuthenticatedIdentity {
-  const role = accessToken[ITERATE_ROLE_CLAIM] ?? null;
   return {
     userId: accessToken.sub,
     sessionId: accessToken.sid,
     email: accessToken.email,
-    isAdmin: accessToken[ITERATE_IS_ADMIN_CLAIM] === true || role === "admin",
-    role,
+    isAdmin:
+      accessToken[ITERATE_IS_ADMIN_CLAIM] === true || accessToken[ITERATE_ROLE_CLAIM] === "admin",
     organizations: accessToken[ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM] ?? [],
     projects: accessToken[ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM] ?? [],
   };

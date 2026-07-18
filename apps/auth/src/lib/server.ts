@@ -25,22 +25,8 @@ import {
 } from "./session.ts";
 import { createSingleFlight } from "./single-flight.ts";
 
-export { withAuthenticationResponseHeaders } from "./response-headers.ts";
-export { identityFromAccessToken, identityFromSession } from "./session.ts";
-export type {
-  AccessTokenClaims,
-  AuthenticatedIdentity,
-  AuthenticatedSession,
-  AuthSession,
-  AuthUser,
-  IdTokenClaims,
-  SessionResponse,
-  TokenSet,
-  UserInfoClaims,
-} from "./session.ts";
-
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
-export const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
+const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
 const SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 const REFRESH_SKEW_MS = 30_000;
 
@@ -68,7 +54,8 @@ type OAuthState = z.infer<typeof OAuthState>;
 /** Key resolver handed to jose's jwtVerify (local baked set, remote set, or the stale-bake fallback chain built in createIterateAuth). */
 type JWKS = JWTVerifyGetKey;
 
-type OAuthInfra = {
+/** Internal dependency boundary used by the owning package's tests. */
+export type OAuthInfra = {
   issuerURL: URL;
   jwks: JWKS;
   oauthClient: oauth.Client;
@@ -266,7 +253,7 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
   };
 }
 
-export type AuthenticateErrorReason =
+type AuthenticateErrorReason =
   | "session_cookie_parse_failed"
   | "session_refresh_failed"
   | "access_token_verify_failed"
@@ -278,7 +265,7 @@ export type AuthenticateErrorEvent = {
   error: unknown;
 };
 
-export type SessionAuthenticationOptions = {
+type SessionAuthenticationOptions = {
   /**
    * Fetch fresh userinfo claims from the issuer while authenticating a cookie
    * session. Route and API auth should usually leave this disabled so JWT
@@ -297,7 +284,7 @@ export type SessionAuthenticationOptions = {
 };
 
 /** The credential, if any, proven by one relying-party request. */
-export type Authentication =
+type Authentication =
   | {
       credential: "session";
       identity: AuthenticatedIdentity;
@@ -314,12 +301,6 @@ export type Authentication =
       credential: null;
       responseHeaders: Headers;
     };
-
-export type AuthenticationOptions = SessionAuthenticationOptions & {
-  headers: Headers;
-  /** Restrict which ambient credential lanes this authentication accepts. */
-  accept?: "session-or-bearer" | "session" | "bearer";
-};
 
 type SessionAuthentication = {
   session: AuthenticatedSession | null;
@@ -817,14 +798,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
   }
 
-  return {
-    handler(request: Request): Response | Promise<Response> {
-      return app.fetch(request);
-    },
-  };
+  return (request: Request): Response | Promise<Response> => app.fetch(request);
 }
 
-export function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigins: string[]) {
+function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigins: string[]) {
   const fallbackOrigin = allowedOrigins[0];
   if (!fallbackOrigin) {
     throw new Error("resolveAllowedReturnTo requires at least one allowed origin");
@@ -838,19 +815,21 @@ export function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigin
   }
 }
 
-/**
- * The ordinary fetch composition contract: return a response when this
- * component owns the request, or `null` without consuming the request so the
- * next component can handle it.
- */
-export interface PartialFetch {
-  fetch(request: Request): Promise<Response | null>;
-}
-
-/** A relying-party auth component that composes into an ordinary Worker fetch pipeline. */
-export interface IterateAuth extends PartialFetch {
+/** Iterate auth composed as an ordinary partial fetch plus explicit credential checks. */
+interface IterateAuth {
   readonly authHandlerBasePath: string;
-  authenticate(options: AuthenticationOptions): Promise<Authentication>;
+  /** Return a response for an auth-owned route, or `null` without consuming the request. */
+  fetch(request: Request): Promise<Response | null>;
+  /** Authenticate a browser session first, then a bearer token. */
+  authenticate(
+    options: { headers: Headers } & SessionAuthenticationOptions,
+  ): Promise<Authentication>;
+  /** Authenticate only the session cookie. */
+  authenticateSession(
+    options: { headers: Headers } & SessionAuthenticationOptions,
+  ): Promise<SessionAuthentication>;
+  /** Authenticate only an OAuth bearer token. */
+  authenticateBearer(options: { headers: Headers }): Promise<AccessTokenClaims | null>;
 }
 
 export function createIterateAuth(config: IterateAuthConfig): IterateAuth {
@@ -883,7 +862,7 @@ export function createIterateAuth(config: IterateAuthConfig): IterateAuth {
   })();
   const infra = createOAuthInfra(config, jwks);
 
-  const routes = createAuthHandler(config, infra);
+  const fetchAuthRoute = createAuthHandler(config, infra);
   const middleware = createAuthMiddleware(config, infra);
   const authHandlerBasePath = normalizeAuthHandlerBasePath(config.authHandlerBasePath);
 
@@ -893,40 +872,53 @@ export function createIterateAuth(config: IterateAuthConfig): IterateAuth {
       if (!isAuthHandlerRequest(request, authHandlerBasePath)) {
         return null;
       }
-      return routes.handler(request);
+      return fetchAuthRoute(request);
     },
-    async authenticate(options: AuthenticationOptions): Promise<Authentication> {
-      const { accept = "session-or-bearer", ...sessionOptions } = options;
-      let responseHeaders = new Headers();
-
-      if (accept !== "bearer") {
-        const session = await middleware.authenticate(sessionOptions);
-        responseHeaders = session.responseHeaders;
-        if (session.session) {
-          return {
-            credential: "session",
-            identity: identityFromSession(session.session),
-            session: session.session,
-            responseHeaders,
-          };
-        }
+    async authenticate(options): Promise<Authentication> {
+      const session = await middleware.authenticate(options);
+      if (session.session) {
+        return {
+          credential: "session",
+          identity: identityFromSession(session.session),
+          session: session.session,
+          responseHeaders: session.responseHeaders,
+        };
       }
 
-      if (accept !== "session") {
-        const accessToken = await middleware.authenticateBearer({ headers: options.headers });
-        if (accessToken) {
-          return {
-            accessToken,
-            credential: "bearer",
-            identity: identityFromAccessToken(accessToken),
-            responseHeaders,
-          };
-        }
+      const accessToken = await middleware.authenticateBearer({ headers: options.headers });
+      if (accessToken) {
+        return {
+          accessToken,
+          credential: "bearer",
+          identity: identityFromAccessToken(accessToken),
+          responseHeaders: session.responseHeaders,
+        };
       }
 
-      return { credential: null, responseHeaders };
+      return { credential: null, responseHeaders: session.responseHeaders };
     },
+    authenticateSession: middleware.authenticate,
+    authenticateBearer: middleware.authenticateBearer,
   };
+}
+
+/** Preserve headers emitted while authenticating when returning the app response. */
+export function withAuthenticationResponseHeaders(
+  response: Response,
+  authenticationHeaders: Headers,
+): Response {
+  if ([...authenticationHeaders].length === 0) return response;
+
+  // A 101/WebSocket response cannot be reconstructed. Authentication never
+  // refreshes on an upgrade, so that path emits no headers and returns above.
+  const merged = new Response(response.body, response);
+  for (const [name, value] of authenticationHeaders) {
+    if (name.toLowerCase() !== "set-cookie") merged.headers.append(name, value);
+  }
+  for (const cookie of authenticationHeaders.getSetCookie()) {
+    merged.headers.append("set-cookie", cookie);
+  }
+  return merged;
 }
 
 export function isAuthHandlerRequest(

@@ -1,4 +1,8 @@
-import { createIterateAuth, type AccessTokenClaims } from "@iterate-com/auth/server";
+import {
+  createIterateAuth,
+  identityFromAccessToken,
+  type AccessTokenClaims,
+} from "@iterate-com/auth/server";
 import {
   ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
   ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
@@ -22,7 +26,7 @@ import {
 } from "./exec-typescript-description.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
-import { principalFromAccessToken } from "~/auth/principal.ts";
+import { principalFromIdentity } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
 import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
@@ -280,7 +284,7 @@ async function resolveMcpAuth(input: {
   }
 
   const scopes = readAccessTokenScopes(accessToken);
-  const principal = principalFromAccessToken(accessToken);
+  const principal = principalFromIdentity(identityFromAccessToken(accessToken));
   const grantedProjectIds = new Set(listProjectScopeIds(scopes));
   const projects = principal.projects.flatMap((project) => {
     if (!principal.isAdmin && !grantedProjectIds.has(project.id)) return [];
@@ -326,13 +330,8 @@ async function resolveOAuthAccessToken(input: {
   | { status: "invalid" }
   | { status: "unavailable" }
 > {
-  const authentication = await input.auth.authenticate({
-    accept: "bearer",
-    headers: input.request.headers,
-  });
-  if (authentication.credential === "bearer") {
-    return { status: "authenticated", accessToken: authentication.accessToken };
-  }
+  const accessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
+  if (accessToken) return { status: "authenticated", accessToken };
 
   const bearerToken = readBearerToken(input.request.headers.get("authorization"));
   if (!bearerToken) return { status: "invalid" };

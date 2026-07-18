@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "exports": {
-    "./server": "./src/lib/server.ts",
+    "./server": "./src/lib/server-public.ts",
     "./client": "./src/lib/client.ts"
   },
   "scripts": {

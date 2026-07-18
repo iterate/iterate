@@ -186,17 +186,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "with the same snapshot-and-patch implementation. The explicit classes are\n" +
       "intentional: there is no\n" +
       "`authenticatedApp` wrapper hiding where authentication happens or which\n" +
-      "authority crosses the wire.\n" +
-      "\n" +
-      "This project gate and first-party relying-party auth deliberately share the\n" +
-      "same partial-fetch shape—`const response = await auth.fetch(request); if\n" +
-      "(response) return response`—but not identical null semantics. Here, null means\n" +
-      "the selected project policy passed. For a general OAuth relying party, null\n" +
-      "only means the request is not a login/callback/logout route; the app then calls\n" +
-      "`auth.authenticate({ headers: request.headers })` once to receive the proven\n" +
-      "identity and any refresh response headers. See the Iterate monorepo's\n" +
-      "[relying-party auth guide](https://github.com/iterate/iterate/blob/main/apps/auth/docs/relying-party-auth.md)\n" +
-      "for complete Worker, TanStack Start, Cap'n Web, and project app examples.\n",
+      "authority crosses the wire.\n",
   },
   {
     path: "guestbook.ts",
