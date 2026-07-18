@@ -1,4 +1,5 @@
 import {
+  BotIcon,
   CircleStopIcon,
   FilterIcon,
   HistoryIcon,
@@ -91,6 +92,7 @@ export function StreamViewHeader({
     focusedProcessorKey,
     focusProcessor,
     openProcessorsOverview,
+    openAgentDetails,
     eventsSheetOpen,
     openEventsSheet,
     closeEventsSheet,
@@ -221,6 +223,7 @@ export function StreamViewHeader({
             latencyLabel={latencyLabel}
             metrics={metrics}
             onFocusPresence={focusProcessor}
+            onOpenAgentDetails={agentPause == null ? undefined : openAgentDetails}
             onOpenStreamState={openProcessorsOverview}
             pause={agentPause}
           />
@@ -294,6 +297,7 @@ function StreamOverflowMenu({
   latencyLabel,
   metrics,
   onFocusPresence,
+  onOpenAgentDetails,
   onOpenStreamState,
   pause,
 }: {
@@ -308,6 +312,8 @@ function StreamOverflowMenu({
   latencyLabel: string;
   metrics: BrowserStreamMetricsView;
   onFocusPresence: (subscriptionKey: string) => void;
+  /** Present only on agent streams — opens the agent details sheet. */
+  onOpenAgentDetails?: () => void;
   onOpenStreamState: () => void;
   pause?: {
     paused: boolean;
@@ -386,6 +392,12 @@ function StreamOverflowMenu({
             {isMobile ? <DropdownMenuSeparator /> : null}
             <DropdownMenuGroup>
               <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
+              {onOpenAgentDetails == null ? null : (
+                <DropdownMenuItem closeOnClick onClick={onOpenAgentDetails}>
+                  <BotIcon />
+                  Agent details
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 closeOnClick
                 disabled={pause.pending}
