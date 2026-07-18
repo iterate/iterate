@@ -154,6 +154,32 @@ describe("waitForContainerRollouts", () => {
     expect(calls).toContain("/containers/applications/app-a");
   });
 
+  it("treats running containers as ready when they move out of the healthy bucket", async () => {
+    const active = {
+      errors: [],
+      instances: {
+        active: 4,
+        assigned: 0,
+        failed: 0,
+        healthy: 0,
+        scheduling: 0,
+        starting: 0,
+        stopped: 0,
+      },
+    };
+    const cf = vi.fn(async (path: string) => {
+      if (path === "/containers/applications?per_page=1000") {
+        return [{ health: active, id: "app-a", instances: 4, name: "builder-pool" }];
+      }
+      if (path === "/containers/applications/app-a/rollouts?limit=1") return [];
+      throw new Error(`Unexpected path ${path}`);
+    });
+
+    await expect(
+      waitForContainerRollouts({ applicationNames: ["builder-pool"], cf }),
+    ).resolves.toEqual({ applications: 1, pendingApplications: 0 });
+  });
+
   it("fails with the last observed progress when a rollout does not settle", async () => {
     vi.useFakeTimers();
     const cf = vi.fn(async (path: string) =>

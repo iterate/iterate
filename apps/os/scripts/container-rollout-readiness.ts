@@ -3,10 +3,13 @@ type CloudflareAccountFetch = (path: string, init?: RequestInit) => Promise<unkn
 type ContainerHealth = {
   errors?: unknown[];
   instances?: {
+    active?: number;
+    assigned?: number;
     failed?: number;
     healthy?: number;
     scheduling?: number;
     starting?: number;
+    stopped?: number;
   };
 };
 
@@ -58,7 +61,7 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function healthProblems(health: ContainerHealth | undefined, expectedHealthy?: number): string[] {
+function healthProblems(health: ContainerHealth | undefined, expectedInstances?: number): string[] {
   if (!health) return ["health is absent"];
   const problems: string[] = [];
   if ((health.errors?.length ?? 0) > 0) {
@@ -69,8 +72,18 @@ function healthProblems(health: ContainerHealth | undefined, expectedHealthy?: n
   if ((instances.failed ?? 0) > 0) problems.push(`failed=${instances.failed}`);
   if ((instances.scheduling ?? 0) > 0) problems.push(`scheduling=${instances.scheduling}`);
   if ((instances.starting ?? 0) > 0) problems.push(`starting=${instances.starting}`);
-  if (expectedHealthy !== undefined && (instances.healthy ?? 0) < expectedHealthy) {
-    problems.push(`healthy=${instances.healthy ?? 0}/${expectedHealthy}`);
+  // Cloudflare partitions settled placements by lifecycle: an idle slot is
+  // `healthy`, while a running container moves to `active` (and therefore no
+  // longer contributes to `healthy`). `assigned` and `stopped` are also
+  // non-provisioning states. Requiring `healthy === instances` made a fully
+  // active builder pool look permanently unready.
+  const readyInstances =
+    (instances.active ?? 0) +
+    (instances.assigned ?? 0) +
+    (instances.healthy ?? 0) +
+    (instances.stopped ?? 0);
+  if (expectedInstances !== undefined && readyInstances < expectedInstances) {
+    problems.push(`ready=${readyInstances}/${expectedInstances}`);
   }
   return problems;
 }
