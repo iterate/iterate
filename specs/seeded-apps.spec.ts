@@ -132,6 +132,24 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   }, echoBody);
   expect(echo).toEqual({ body: echoBody, status: 200 });
 
+  // The tanstack app is a second member-gated origin on the same project: a
+  // server-rendered TanStack Router + React page. Its own origin has no app
+  // cookie yet, so the auth partial gates it exactly like the internal app
+  // did — and the same OS session carries the "Continue with Iterate" hop.
+  // Same worker.ts artifact as the apps above, so no cold build; the 120s
+  // budget covers a cold stateless-facet start.
+  await page.goto(appUrl("tanstack", slug, baseURL!));
+  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 120_000 });
+  await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
+  await page.getByRole("heading", { name: "TanStack on Iterate" }).waitFor({ timeout: 30_000 });
+  await page.getByText(/^Signed in as/).waitFor();
+
+  // Server-side routing proof: the about link is a plain anchor — no client
+  // bundle exists, so this navigation is a full request the worker's router
+  // matches and renders.
+  await page.getByRole("link", { name: "about" }).click();
+  await page.getByText("Server-side routing proof").waitFor();
+
   // Logout is owned by the same partial. It clears the app-host cookie and
   // the redirected request is gated back to the login form.
   await page.getByRole("button", { name: "Sign out" }).click();
