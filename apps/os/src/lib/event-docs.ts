@@ -12,6 +12,7 @@ import { SecretProcessorContract } from "~/domains/secrets/secret-processor-cont
 import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/contract.ts";
 import { BrowserRawEventsContract } from "~/domains/streams/client-libraries/processors/browser-raw-events/contract.ts";
 import { CoreProcessorContract } from "~/domains/streams/core-processor-contract.ts";
+import { WorkspaceProcessorContract } from "~/domains/workspaces/workspace-processor-contract.ts";
 
 const EVENT_TYPE_PREFIX = "events.iterate.com/";
 const EVENT_TYPE_URL_PREFIX = "https://events.iterate.com/";
@@ -41,6 +42,7 @@ const processorContracts = [
   CapabilityHostProcessorContract,
   SecretProcessorContract,
   SandboxProcessorContract,
+  WorkspaceProcessorContract,
   SlackProcessorContract,
   SlackAgentProcessorContract,
   TelegramProcessorContract,

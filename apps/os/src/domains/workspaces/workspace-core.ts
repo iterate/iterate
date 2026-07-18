@@ -1,66 +1,47 @@
+import { minimatch } from "minimatch";
 import { Workspace } from "@cloudflare/shell";
-import { createGit } from "@cloudflare/shell/git";
+import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
+import type { RepoFileChange } from "../repos/types.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
-import type { RepoFileChange } from "../repos/types.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
   WorkspaceChange,
-  WorkspaceFileInfo,
+  WorkspaceCommitInput,
+  WorkspaceCommitResult,
   WorkspaceGitLogEntry,
-  WorkspacePublishResult,
+  WorkspaceGitLogInput,
+  WorkspaceStatus,
 } from "./types.ts";
+import type { WorkspaceMount } from "./workspace-processor-contract.ts";
+import { encodeRepoContent } from "./utils.ts";
+import { resolveAbsolutePath } from "./paths.ts";
 import { filterPublishablePaths } from "./overlay-ignore.ts";
 
-// The root workspace's materialized head: the commit oid of main currently
-// checked out in this workspace's filesystem. Presence doubles as the "cloned
-// once" sentinel; every root read compares it against the repo's durable head
-// cache and re-materializes only when main actually moved.
-const ROOT_HEAD_KEY = "root-head:v1";
-
-// Overlay whiteouts: parent paths hidden by a local delete, kept as ONE kv
+// Overlay whiteouts: mount paths hidden by a local delete, kept as ONE kv
 // record (a path -> true map) so status can enumerate deletions without a kv
 // scan. Writes are serialized on the write chain, so read-modify-write of the
 // single record cannot lose updates.
 const WHITEOUTS_KEY = "whiteouts:v1";
-
-// The pre-overlay model's clone sentinel. A workspace that carries it holds a
-// FULL stale checkout from the clone-on-first-touch era — the first overlay
-// touch wipes it (the disposability contract: committed state lives on main,
-// everything else is disposable).
-const LEGACY_CLONE_SENTINEL_KEY = "workspace-cloned:v1";
 
 const DEFAULT_COMMIT_AUTHOR = {
   email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
   name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
 };
 
-// The Artifacts git endpoint intermittently returns 503 on a cold repo
-// (observed in preview e2e; the sandbox clone path carries the same loop).
-const CLONE_ATTEMPTS = 3;
-
-// shell's Workspace.readDir defaults to a silent 1000-entry limit. That
-// default also feeds directory walks (the root materialization's wipe, the
-// overlay's local-layer enumeration), where truncation silently loses files —
-// so raise it far past any plausible checkout directory.
-const READ_DIR_LIMIT = 100_000;
-
-/** {@link Workspace} with the silent readDir truncation lifted (see {@link READ_DIR_LIMIT}). */
-export class UnboundedWorkspace extends Workspace {
-  override readDir(dir?: string, opts?: { limit?: number; offset?: number }) {
-    return super.readDir(dir, { limit: READ_DIR_LIMIT, ...opts });
-  }
-}
-
 /**
- * The repo surface the core needs: the durable head cursor, clone/push
- * coordinates, and branch history. Satisfied by the project Repo Durable
- * Object's stub.
+ * The repo surface one mount falls through to — satisfied by the Repo Durable
+ * Object's stub. HEAD reads are the repo's own read lanes (clone-backed with
+ * an in-object snapshot cache today; lazy per-object reads against the
+ * Artifacts REST API are the planned successor).
  */
-interface RepoAccess {
-  getHead(): Promise<{ commitOid: string }>;
-  gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }>;
+export interface MountRepoAccess {
+  readFile(input: {
+    path: string;
+    encoding?: "utf8" | "base64";
+  }): Promise<{ commitOid: string; content: string; path: string } | null>;
+  listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   commitFiles(input: {
     author?: { email: string; name: string };
     changes: RepoFileChange[];
@@ -76,21 +57,6 @@ interface RepoAccess {
   }>;
 }
 
-/**
- * The read surface an overlay falls through to on a local miss. Satisfied by
- * the root workspace's Durable Object stub (whose methods are themselves
- * backed by a root-mode {@link WorkspaceCore}).
- */
-interface ParentReads {
-  readFile(path: string): Promise<string | null>;
-  readFileBytes(path: string): Promise<Uint8Array | null>;
-  stat(path: string): Promise<WorkspaceFileInfo | null>;
-  exists(path: string): Promise<boolean>;
-  readDir(dir?: string): Promise<WorkspaceFileInfo[]>;
-  glob(pattern: string): Promise<WorkspaceFileInfo[]>;
-  listAllFiles(): Promise<string[]>;
-}
-
 /** The slice of a Durable Object's synchronous kv the core keeps its bookkeeping in. */
 interface WorkspaceKv {
   get<T = unknown>(key: string): T | undefined;
@@ -99,170 +65,68 @@ interface WorkspaceKv {
 }
 
 type WorkspaceCoreOptions = {
-  /** git bound to `workspace`'s filesystem — the root materialization's clone lane. */
-  git: ReturnType<typeof createGit>;
-  /** Durable synchronous kv for the head cursor / whiteouts / legacy sentinel. */
+  /** Durable synchronous kv for the whiteout map. */
   kv: WorkspaceKv;
-  mode: "overlay" | "root";
   /**
-   * The parent the overlay falls through to. A thunk, not a stored stub —
-   * stubs must be re-derived per call, never held across them.
+   * The mount table (mount path → mount), from the workspace's folded
+   * processor state. A thunk evaluated per operation, so a `configured` event
+   * is visible to the very next read without any cache invalidation here.
    */
-  parent: () => ParentReads;
+  mounts: () => Promise<Record<string, WorkspaceMount>>;
   /**
-   * The config repo — a thunk for the same reason as `parent`. Clone
-   * coordinates come from its `gitAccess()` (the documented internal DO-to-DO
-   * surface, same as the sandbox domain), so repo tokens never appear on any
-   * public surface.
+   * Repo access per mount — a thunk because Durable Object stubs must be
+   * re-derived per call, never held across them.
    */
-  repo: () => RepoAccess;
+  repo: (repoPath: string) => MountRepoAccess;
   /** The local layer: this workspace's own private virtual filesystem. */
   workspace: Workspace;
 };
 
+/** One mount resolved against a concrete path: mount point, mount, repo-relative path. */
+type ResolvedMount = { mount: WorkspaceMount; mountPath: string; repoRelativePath: string };
+
 /**
- * The workspace semantics as a host-agnostic library object, constructed
- * inside a Durable Object host (cloudflare/workspace's shape: the Workspace
- * is a library object, the DO a thin host) — so the same core can later be
- * hosted by other DOs and the storage engine stays swappable. One of two
- * modes:
+ * The workspace semantics as a host-agnostic library object: ONE private
+ * copy-on-write local layer over a TABLE OF REPO MOUNTS.
  *
- * ROOT: the project's always-fresh, READ-ONLY materialization of the project
- * repo's main branch. Every read checks the repo's durable head cache (one
- * cheap RPC — the repo's read-your-write boundary, so a commit is visible
- * here the moment `commitFiles` returns) and re-clones only when main
- * actually moved.
- *
- * OVERLAY: a copy-on-write layer over the parent (the root workspace). Writes
- * land in the local filesystem; reads try the local layer first and fall
- * through to the parent on a miss; deletes of parent files leave whiteouts so
- * the parent copy stays hidden. There is NO clone — a fresh overlay workspace
- * is usable instantly and always sees latest main through the fall-through,
- * until a local write pins a path.
- *
- * Truth lives in the filesystem; git is the COMMIT mechanism, not the
- * storage: `gitCommit` turns the overlay's changes (local layer minus
- * whiteouts and .gitignored paths) into one ordinary commit on the config
- * repo's MAIN branch via the repo's own `commitFiles` lane, then drops the
- * overlay — committed state lives on main, uncommitted state is disposable.
+ * Reads try the local layer first and fall through, per subtree, to the
+ * longest-prefix-matching mount's repo at HEAD; deletes of mount files leave
+ * whiteouts; paths under no mount are pure local scratch. Commits route per
+ * mount — `gitCommit({ scope })` turns the local changes under ONE mount into
+ * one ordinary commit on that repo's main branch via its own `commitFiles`
+ * lane, honoring the mount's write policy, then clears just that subtree (the
+ * rest of the workspace's uncommitted work survives).
  */
 export class WorkspaceCore {
-  readonly #git: ReturnType<typeof createGit>;
-  readonly #isRoot: boolean;
   readonly #kv: WorkspaceKv;
-  readonly #parent: () => ParentReads;
-  readonly #repo: () => RepoAccess;
+  readonly #mounts: () => Promise<Record<string, WorkspaceMount>>;
+  readonly #repo: (repoPath: string) => MountRepoAccess;
   readonly #workspace: Workspace;
 
   constructor(options: WorkspaceCoreOptions) {
-    this.#git = options.git;
-    this.#isRoot = options.mode === "root";
     this.#kv = options.kv;
-    this.#parent = options.parent;
+    this.#mounts = options.mounts;
     this.#repo = options.repo;
     this.#workspace = options.workspace;
   }
 
-  // -- ROOT mode: materialize latest main, re-materialize when it moves -----
+  // -- mount routing ----------------------------------------------------------
 
-  // In-flight materialization, shared by every concurrent read that finds the
-  // head stale. Reset on completion or failure so the next read retries (the
-  // common transient: the config repo is still seeding).
-  #rootRefresh: Promise<void> | undefined;
-
-  async #ensureFreshRoot(): Promise<void> {
-    // Never read mid-materialization — the wipe would show as an empty tree.
-    if (this.#rootRefresh !== undefined) await this.#rootRefresh;
-    const head = await this.#repo()
-      .getHead()
-      .catch((error: unknown) => {
-        // A cold root with SOME checkout is better than an error while the
-        // repo DO hiccups; a root that never materialized has nothing to give.
-        if (this.#kv.get(ROOT_HEAD_KEY) === undefined) {
-          throw new Error(
-            `Root workspace source is not available (the config repo may still be seeding; retry shortly): ${String(error)}`,
-          );
-        }
-        return null;
-      });
-    if (head === null || this.#kv.get(ROOT_HEAD_KEY) === head.commitOid) return;
-    this.#rootRefresh ??= this.#materializeRoot(head.commitOid).finally(() => {
-      this.#rootRefresh = undefined;
-    });
-    await this.#rootRefresh;
+  /** {@link routeMount} over the current table — single-lookup callers only.
+   * Multi-path work (status/commit classification) routes over ONE snapshot
+   * instead, so a config re-read mid-operation cannot split its view. */
+  async #mountFor(path: string): Promise<ResolvedMount | null> {
+    return routeMount(await this.#mounts(), path);
   }
 
-  /**
-   * Wipe and re-clone main, retrying until the clone observes AT LEAST
-   * `expectedHead`. The Artifacts remote is eventually consistent — a clone
-   * right after a push can serve the previous HEAD (the same trap the Repo
-   * DO's own clone lanes guard with `repo-pushed-head`), and the head cursor
-   * that triggered this refresh comes from the commit's read-your-write
-   * boundary, so serving anything older would hand a post-commit reader
-   * pre-commit content. A clone that is merely DIFFERENT after the retries
-   * (main moved again mid-refresh) is recorded as-is — the next read's
-   * cursor comparison repairs the lag.
-   */
-  async #materializeRoot(expectedHead: string): Promise<void> {
-    const repo = await this.#repo().gitAccess();
-    // The head key comes off BEFORE the wipe: if every attempt below fails,
-    // the workspace must read as "never materialized" (reads error and retry)
-    // — a lingering key over a wiped filesystem would serve an empty tree as
-    // if it were main.
-    this.#kv.delete(ROOT_HEAD_KEY);
-    for (let attempt = 1, staleAttempt = 1; ; ) {
-      // A previous attempt may have died mid-checkout; start from empty so
-      // isomorphic-git never sees a half-written .git.
-      await this.#wipeFilesystem();
-      try {
-        await this.#git.clone({
-          branch: repo.defaultBranch,
-          depth: 1,
-          singleBranch: true,
-          url: repo.remote,
-          username: "x",
-          password: repo.token,
-        });
-      } catch (error) {
-        if (attempt >= CLONE_ATTEMPTS) throw error;
-        console.warn(`root workspace clone attempt ${attempt} failed, retrying: ${String(error)}`);
-        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-        attempt++;
-        continue;
-      }
-      const [head] = await this.#git.log({ depth: 1 });
-      if (!head) throw new Error("Root workspace clone has no commits.");
-      if (head.oid !== expectedHead && staleAttempt <= 5) {
-        console.warn(
-          `root workspace clone is behind the head cursor (saw ${head.oid}, expected ${expectedHead}); retry ${staleAttempt}`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 500 * staleAttempt));
-        staleAttempt++;
-        continue;
-      }
-      this.#kv.put(ROOT_HEAD_KEY, head.oid);
-      return;
-    }
+  /** A mount's file paths at HEAD, spelled as absolute workspace paths. */
+  async #mountFilePaths(mountPath: string, mount: WorkspaceMount): Promise<string[]> {
+    const { paths } = await this.#repo(mount.repoPath).listFiles();
+    const prefix = mountPath === "/" ? "" : mountPath;
+    return paths.map((path) => `${prefix}/${path}`);
   }
 
-  // -- OVERLAY mode: local layer + fall-through ------------------------------
-
-  // One-time migration off the clone-on-first-touch model: a legacy full
-  // checkout would shadow the ENTIRE parent with a stale copy, so wipe it.
-  #overlayReady: Promise<void> | undefined;
-
-  #ensureOverlay(): Promise<void> {
-    this.#overlayReady ??= (async () => {
-      if (this.#kv.get(LEGACY_CLONE_SENTINEL_KEY) !== undefined) {
-        await this.#wipeFilesystem();
-        this.#kv.delete(LEGACY_CLONE_SENTINEL_KEY);
-      }
-    })().catch((error: unknown) => {
-      this.#overlayReady = undefined;
-      throw error;
-    });
-    return this.#overlayReady;
-  }
+  // -- whiteouts ---------------------------------------------------------------
 
   #whiteouts(): Record<string, true> {
     return this.#kv.get<Record<string, true>>(WHITEOUTS_KEY) ?? {};
@@ -283,113 +147,22 @@ export class WorkspaceCore {
   }
 
   /**
-   * Whether a path is hidden from the parent view: whiteouted (itself or via
-   * an ancestor), or the parent's `.git` — platform plumbing of the root's
-   * checkout, meaningless (and confusing) inside an overlay.
+   * Whether a path is hidden from its mount. EXACT-MATCH ONLY: the delete API
+   * tombstones individual FILES, so treating a tombstone as recursive would
+   * let a file deletion in one repo mask (and mass-delete) a repo later
+   * mounted beneath that path — cross-repository data loss. A directory
+   * tombstone type can exist only if a directory-delete API ever does.
    */
-  #isMaskedFromParent(path: string): boolean {
-    const resolved = resolveAbsolutePath(path);
-    if (resolved === "/.git" || resolved.startsWith("/.git/")) return true;
-    const whiteouts = this.#whiteouts();
-    let current = resolved;
-    while (true) {
-      if (whiteouts[current]) return true;
-      if (current === "/") return false;
-      current = current.slice(0, current.lastIndexOf("/")) || "/";
-    }
+  #isMaskedFromMount(path: string): boolean {
+    return this.#whiteouts()[resolveAbsolutePath(path)] === true;
   }
 
-  async #parentExists(path: string): Promise<boolean> {
-    if (this.#isMaskedFromParent(path)) return false;
-    return this.#parent().exists(path);
-  }
-
-  /** All file paths of the local layer (absolute, no directories). */
-  async #localFilePaths(dir = "/"): Promise<string[]> {
-    const paths: string[] = [];
-    for (const entry of await this.#workspace.readDir(dir)) {
-      if (entry.type === "directory") paths.push(...(await this.#localFilePaths(entry.path)));
-      else if (entry.type === "file") paths.push(entry.path);
-    }
-    return paths;
-  }
-
-  // -- lifecycle --------------------------------------------------------------
-
-  async #wipeFilesystem(): Promise<void> {
-    for (const entry of await this.#workspace.readDir("/")) {
-      await this.#workspace.rm(entry.path, { force: true, recursive: true });
-    }
-  }
-
-  /**
-   * Wipe this workspace back to pristine. Root: the next read re-materializes
-   * main (the escape hatch for a wedged checkout). Overlay: the local layer
-   * and every whiteout vanish, so the workspace shows exactly the parent
-   * again — uncommitted work is lost (committed state lives on main).
-   */
-  async reset(): Promise<void> {
-    // The wipe OCCUPIES the single-flight materialization slot for its whole
-    // duration: #ensureFreshRoot always awaits the slot before deciding to
-    // materialize, so no clone can interleave with the rm sweep or observe
-    // the cleared head key mid-wipe. It chains BEHIND any in-flight
-    // materialization (even a failing one — that is exactly when reset is
-    // needed, hence catch-and-ignore) and runs on the write chain, so
-    // concurrent overlay writes queue behind it rather than landing on a
-    // half-wiped tree.
-    const wipe = () =>
-      this.#serializeWrite(async () => {
-        this.#overlayReady = undefined;
-        this.#kv.delete(ROOT_HEAD_KEY);
-        this.#kv.delete(WHITEOUTS_KEY);
-        this.#kv.delete(LEGACY_CLONE_SENTINEL_KEY);
-        await this.#wipeFilesystem();
-      });
-    const run = (this.#rootRefresh ?? Promise.resolve()).catch(() => {}).then(wipe);
-    // Only vacate the slot if a newer occupant hasn't replaced this one.
-    const occupant: Promise<void> = run.finally(() => {
-      if (this.#rootRefresh === occupant) this.#rootRefresh = undefined;
-    });
-    this.#rootRefresh = occupant;
-    await occupant;
-  }
-
-  /**
-   * Un-pin one path: drop the local copy (file or subtree) and clear the
-   * whiteouts at or below it, so the path resumes following latest main
-   * through the fall-through. The surgical sibling of `reset()` — reverting
-   * "/worker.ts" after an edit brings back main's version, reverting a
-   * deleted path un-deletes it. Scoped strictly at-or-below: an ancestor
-   * whiteout (a deleted parent directory) still masks the path until that
-   * ancestor is reverted too.
-   */
-  async revert(path: string): Promise<void> {
-    this.#assertWritablePath(path);
-    await this.#ensureOverlay();
-    return this.#serializeWrite(async () => {
-      if (await this.#workspace.exists(path)) {
-        await this.#workspace.rm(path, { force: true, recursive: true });
-      }
-      const resolved = resolveAbsolutePath(path);
-      const whiteouts = this.#whiteouts();
-      let changed = false;
-      for (const key of Object.keys(whiteouts)) {
-        if (key === resolved || key.startsWith(`${resolved}/`)) {
-          delete whiteouts[key];
-          changed = true;
-        }
-      }
-      if (changed) this.#kv.put(WHITEOUTS_KEY, whiteouts);
-    });
-  }
-
-  // -- write discipline -----------------------------------------------------
+  // -- write discipline ---------------------------------------------------------
 
   // ALL mutations serialize on this chain: whiteout read-modify-writes and
-  // multi-step operations (append's read-then-write, publish's clone) yield
-  // the host DO's input gate at awaits, so unserialized writes could
-  // interleave and lose updates. Reads stay unserialized — they are local
-  // SQLite lookups plus idempotent parent RPCs.
+  // multi-step operations yield the host DO's input gate at awaits, so
+  // unserialized writes could interleave and lose updates. Reads stay
+  // unserialized — they are local SQLite lookups plus idempotent repo RPCs.
   #writeChain: Promise<unknown> = Promise.resolve();
 
   #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
@@ -398,135 +171,77 @@ export class WorkspaceCore {
     return result;
   }
 
-  #assertWritable(): void {
-    if (this.#isRoot) {
-      throw new Error(
-        'The root workspace ("/") is read-only — it always mirrors the config repo\'s main ' +
-          "branch. Write in your own workspace (itx.workspace, or itx.workspaces.get" +
-          '("/workspaces/<name>")), or commit to main via itx.repo.',
-      );
-    }
+  /**
+   * Run work serialized with every overlay mutation and commit — the door the
+   * hosting Durable Object uses to make CONFIGURATION changes atomic with
+   * respect to in-flight filesystem work: an unmount or repo swap must never
+   * interleave a commit that already classified against the old table.
+   */
+  runExclusive<T>(work: () => Promise<T>): Promise<T> {
+    return this.#serializeWrite(work);
   }
 
-  // The `.git` name is reserved: the root's checkout is platform-managed, and
-  // an overlay writing `.git/**` would shadow the parent's with attacker-
-  // chosen content (e.g. a rewritten remote URL for some future git consumer).
+  // `.git` is reserved anywhere in the tree: mounts are repo checkouts in
+  // spirit, and a local `.git` segment could shadow platform-managed plumbing
+  // for some future git consumer.
   #assertWritablePath(path: string): void {
-    this.#assertWritable();
     const resolved = resolveAbsolutePath(path);
-    if (resolved === "/" || resolved === "/.git" || resolved.startsWith("/.git/")) {
+    if (resolved === "/" || resolved.split("/").includes(".git")) {
       throw new Error(
-        `Workspace path is not writable: "${path}" (the .git directory and the root are platform-managed).`,
+        `Workspace path is not writable: "${path}" (the root and .git segments are platform-managed).`,
       );
     }
   }
 
-  // -- filesystem (mirrors @cloudflare/shell's Workspace surface, merged) ----
+  // -- filesystem ----------------------------------------------------------------
 
   async readFile(path: string): Promise<string | null> {
-    if (this.#isRoot) {
-      await this.#ensureFreshRoot();
-      return this.#workspace.readFile(path);
-    }
-    await this.#ensureOverlay();
     const local = await this.#workspace.readFile(path);
     if (local !== null) return local;
-    if (this.#isMaskedFromParent(path)) return null;
-    return this.#parent().readFile(path);
+    if (this.#isMaskedFromMount(path)) return null;
+    const resolved = await this.#mountFor(path);
+    if (resolved === null || resolved.repoRelativePath === "") return null;
+    const file = await this.#repo(resolved.mount.repoPath).readFile({
+      path: resolved.repoRelativePath,
+    });
+    return file === null ? null : file.content;
   }
 
   async readFileBytes(path: string): Promise<Uint8Array | null> {
-    if (this.#isRoot) {
-      await this.#ensureFreshRoot();
-      return this.#workspace.readFileBytes(path);
-    }
-    await this.#ensureOverlay();
     const local = await this.#workspace.readFileBytes(path);
     if (local !== null) return local;
-    if (this.#isMaskedFromParent(path)) return null;
-    return this.#parent().readFileBytes(path);
-  }
-
-  async stat(path: string): Promise<WorkspaceFileInfo | null> {
-    if (this.#isRoot) {
-      await this.#ensureFreshRoot();
-      return this.#workspace.stat(path);
-    }
-    await this.#ensureOverlay();
-    const local = await this.#workspace.stat(path);
-    if (local !== null) return local;
-    if (this.#isMaskedFromParent(path)) return null;
-    return this.#parent().stat(path);
+    if (this.#isMaskedFromMount(path)) return null;
+    const resolved = await this.#mountFor(path);
+    if (resolved === null || resolved.repoRelativePath === "") return null;
+    const file = await this.#repo(resolved.mount.repoPath).readFile({
+      encoding: "base64",
+      path: resolved.repoRelativePath,
+    });
+    return file === null ? null : Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0));
   }
 
   async exists(path: string): Promise<boolean> {
-    if (this.#isRoot) {
-      await this.#ensureFreshRoot();
-      return this.#workspace.exists(path);
-    }
-    await this.#ensureOverlay();
     if (await this.#workspace.exists(path)) return true;
-    return this.#parentExists(path);
-  }
-
-  async readDir(dir?: string): Promise<WorkspaceFileInfo[]> {
-    if (this.#isRoot) {
-      await this.#ensureFreshRoot();
-      return this.#workspace.readDir(dir);
-    }
-    await this.#ensureOverlay();
-    // No defensive catches: a missing directory is an empty listing on both
-    // sides (plain SQL, never a throw), so any error here is REAL — a parent
-    // RPC failure must fail the merged read, not masquerade as an empty or
-    // local-only tree.
-    const local = await this.#workspace.readDir(dir);
-    const target = dir ?? "/";
-    const parent = this.#isMaskedFromParent(target) ? [] : await this.#parent().readDir(dir);
-    return mergeEntries({
-      local,
-      parent: parent.filter((entry) => !this.#isMaskedFromParent(entry.path)),
-    });
-  }
-
-  async glob(pattern: string): Promise<WorkspaceFileInfo[]> {
-    if (this.#isRoot) {
-      await this.#ensureFreshRoot();
-      return this.#workspace.glob(pattern);
-    }
-    await this.#ensureOverlay();
-    // Same rule as readDir: no-match is [], so an error is real and surfaces.
-    const local = await this.#workspace.glob(pattern);
-    const parent = await this.#parent().glob(pattern);
-    return mergeEntries({
-      local,
-      parent: parent.filter((entry) => !this.#isMaskedFromParent(entry.path)),
-    });
-  }
-
-  /**
-   * Every file path in the merged view (absolute, sorted, no directories).
-   * The one-RPC bulk listing overlays use to classify their local layer
-   * against the parent — and the cheap way for anything else to see a
-   * workspace's full extent without a readDir walk.
-   */
-  async listAllFiles(): Promise<string[]> {
-    if (this.#isRoot) {
-      await this.#ensureFreshRoot();
-      const paths = await this.#localFilePaths();
-      return paths.filter((path) => path !== "/.git" && !path.startsWith("/.git/")).sort();
-    }
-    await this.#ensureOverlay();
-    const merged = new Set(await this.#localFilePaths());
-    for (const path of await this.#parent().listAllFiles()) {
-      if (!this.#isMaskedFromParent(path)) merged.add(path);
-    }
-    return [...merged].sort();
+    const resolved = await this.#mountFor(path);
+    // Mount points are virtual directories that EXIST regardless of any old
+    // file tombstone at the same path — a tombstone only ever masks a file.
+    if (resolved !== null && resolved.repoRelativePath === "") return true;
+    if (this.#isMaskedFromMount(path)) return false;
+    if (resolved === null) return false;
+    const target = resolveAbsolutePath(path);
+    const mountFiles = await this.#mountFilePaths(resolved.mountPath, resolved.mount);
+    return mountFiles.some(
+      (file) =>
+        (file === target || file.startsWith(`${target}/`)) && !this.#isMaskedFromMount(file),
+    );
   }
 
   async writeFile(path: string, content: string): Promise<void> {
     this.#assertWritablePath(path);
-    await this.#ensureOverlay();
     return this.#serializeWrite(async () => {
+      // Inside the chain: a queued configure cannot slip a mount point under
+      // this write between guard and mutation.
+      await this.#assertNotMountPoint(path);
       await this.#workspace.writeFile(path, content);
       this.#clearWhiteout(path);
     });
@@ -534,42 +249,27 @@ export class WorkspaceCore {
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
     this.#assertWritablePath(path);
-    await this.#ensureOverlay();
     return this.#serializeWrite(async () => {
+      await this.#assertNotMountPoint(path);
       await this.#workspace.writeFileBytes(path, data);
       this.#clearWhiteout(path);
     });
   }
 
-  async appendFile(path: string, content: string): Promise<void> {
-    this.#assertWritablePath(path);
-    await this.#ensureOverlay();
-    return this.#serializeWrite(async () => {
-      // Copy-up: appending to a parent-only file materializes it locally.
-      const local = await this.#workspace.readFile(path);
-      const base =
-        local ??
-        (this.#isMaskedFromParent(path) ? null : await this.#parent().readFile(path)) ??
-        "";
-      await this.#workspace.writeFile(path, base + content);
-      this.#clearWhiteout(path);
-    });
-  }
-
-  async deleteFile(path: string): Promise<boolean> {
-    this.#assertWritablePath(path);
-    await this.#ensureOverlay();
-    return this.#serializeWrite(async () => {
-      // Whiteout FIRST (synchronous), so an unserialized read arriving after
-      // the local delete below can never fall through and resurrect the
-      // parent copy mid-delete. Retracted at the end if nothing was hidden.
-      const wasMasked = this.#isMaskedFromParent(path);
-      this.#addWhiteout(path);
-      const localDeleted = await this.#workspace.deleteFile(path);
-      const parentHas = !wasMasked && (await this.#parent().exists(path));
-      if (!parentHas) this.#clearWhiteout(path);
-      return localDeleted || parentHas;
-    });
+  /** Mount points — and every virtual ancestor directory leading to one —
+   * are DIRECTORIES: a local file there would collide with the mounted
+   * subtree (and a mount-point file would commit as an empty repo path). */
+  async #assertNotMountPoint(path: string): Promise<void> {
+    const resolved = resolveAbsolutePath(path);
+    if (resolved === "/") return;
+    for (const key of Object.keys(await this.#mounts())) {
+      const mountPath = resolveAbsolutePath(key);
+      if (mountPath === resolved || mountPath.startsWith(`${resolved}/`)) {
+        throw new Error(
+          `Workspace path is not writable: "${path}" is a mount point or a directory containing one.`,
+        );
+      }
+    }
   }
 
   async edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
@@ -577,12 +277,9 @@ export class WorkspaceCore {
     if (typeof input.oldString !== "string" || input.oldString === "") {
       throw new Error("edit oldString must be a non-empty string.");
     }
-    await this.#ensureOverlay();
     return this.#serializeWrite(async () => {
-      // Copy-up: editing a parent file materializes the edited copy locally.
-      const content =
-        (await this.#workspace.readFile(input.path)) ??
-        (this.#isMaskedFromParent(input.path) ? null : await this.#parent().readFile(input.path));
+      // Copy-up: editing a mount file materializes the edited copy locally.
+      const content = await this.readFile(input.path);
       if (content === null) {
         throw new Error(`Workspace file does not exist: "${input.path}".`);
       }
@@ -606,197 +303,446 @@ export class WorkspaceCore {
     });
   }
 
-  async mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
+  async deleteFile(path: string): Promise<boolean> {
     this.#assertWritablePath(path);
-    await this.#ensureOverlay();
     return this.#serializeWrite(async () => {
-      await this.#workspace.mkdir(path, opts);
-      this.#clearWhiteout(path);
-    });
-  }
-
-  async rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void> {
-    this.#assertWritablePath(path);
-    await this.#ensureOverlay();
-    return this.#serializeWrite(async () => {
-      // Same whiteout-first ordering as deleteFile (no mid-delete resurrect).
-      const wasMasked = this.#isMaskedFromParent(path);
-      this.#addWhiteout(path);
-      const localExists = await this.#workspace.exists(path);
-      if (localExists) await this.#workspace.rm(path, opts);
-      const parentHas = !wasMasked && (await this.#parent().exists(path));
-      if (!parentHas) this.#clearWhiteout(path);
-      if (!localExists && !parentHas && !opts?.force) {
-        throw new Error(`Workspace path does not exist: "${path}".`);
+      // An already-masked path has nothing mount-side left to hide: deleting
+      // it again must NOT touch the existing whiteout (retracting it would
+      // resurrect the mount file). Only a local copy — visible above an
+      // ancestor whiteout because the local layer wins — can remain to delete.
+      if (this.#isMaskedFromMount(path)) {
+        return this.#workspace.deleteFile(path);
       }
-    });
-  }
-
-  async cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    this.#assertWritablePath(dest);
-    await this.#ensureOverlay();
-    return this.#serializeWrite(() => this.#copyMerged(src, dest, opts));
-  }
-
-  async mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    this.#assertWritablePath(src);
-    this.#assertWritablePath(dest);
-    await this.#ensureOverlay();
-    return this.#serializeWrite(async () => {
-      await this.#copyMerged(src, dest, { recursive: true, ...opts });
-      if (await this.#workspace.exists(src)) {
-        await this.#workspace.rm(src, { force: true, recursive: true });
+      // ALL fallible inspection happens BEFORE any mutation: a failed repo
+      // probe must not have consumed the local shadow (its bytes are the
+      // caller's uncommitted work) or left a whiteout behind.
+      const resolved = await this.#mountFor(path);
+      const mountHas =
+        resolved !== null &&
+        resolved.repoRelativePath !== "" &&
+        (await this.#repo(resolved.mount.repoPath).readFile({
+          path: resolved.repoRelativePath,
+        })) !== null;
+      // Whiteout before the local delete, so an unserialized read arriving
+      // between them can never fall through and resurrect the mount copy
+      // mid-delete. The local delete CAN fail (R2 + SQL); retract the
+      // whiteout this call installed so a failed RPC hides nothing.
+      if (mountHas) this.#addWhiteout(path);
+      try {
+        const localDeleted = await this.#workspace.deleteFile(path);
+        return localDeleted || mountHas;
+      } catch (error) {
+        if (mountHas) this.#clearWhiteout(path);
+        throw error;
       }
-      if (await this.#parentExists(src)) this.#addWhiteout(src);
     });
   }
 
   /**
-   * Copy within the MERGED view: the source may live locally, in the parent,
-   * or (a directory whose files straddle both) in each — the destination is
-   * always local. Runs inside the write chain.
+   * Every file path in the merged view (absolute, sorted, no directories):
+   * the local layer plus each mount's HEAD tree, minus whiteouts. Paths under
+   * no mount are the workspace's private scratch and appear too.
    */
-  async #copyMerged(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    const srcStat =
-      (await this.#workspace.stat(src)) ??
-      (this.#isMaskedFromParent(src) ? null : await this.#parent().stat(src));
-    if (srcStat === null) throw new Error(`Workspace path does not exist: "${src}".`);
-    if (srcStat.type === "directory") {
-      if (!opts?.recursive) {
-        throw new Error(`"${src}" is a directory (pass { recursive: true } to copy it).`);
+  async listAllFiles(): Promise<string[]> {
+    const mounts = await this.#mounts();
+    const merged = new Set(await this.#localFilePaths());
+    for (const [mountPath, mount] of Object.entries(mounts)) {
+      for (const path of await this.#mountFilePaths(resolveAbsolutePath(mountPath), mount)) {
+        if (this.#isMaskedFromMount(path)) continue;
+        // A deeper mount shadows this one's files under its point.
+        if (routeMount(mounts, path)?.mount !== mount) continue;
+        merged.add(path);
       }
-      const from = resolveAbsolutePath(src);
-      const to = resolveAbsolutePath(dest);
-      const files = (await this.listAllFiles()).filter(
-        (path) => path === from || path.startsWith(`${from}/`),
-      );
-      for (const path of files) {
-        await this.#copyMergedFile(path, `${to}${path.slice(from.length)}`);
-      }
-      return;
     }
-    await this.#copyMergedFile(resolveAbsolutePath(src), resolveAbsolutePath(dest));
+    return [...merged].sort();
   }
 
-  async #copyMergedFile(src: string, dest: string): Promise<void> {
-    const bytes =
-      (await this.#workspace.readFileBytes(src)) ??
-      (this.#isMaskedFromParent(src) ? null : await this.#parent().readFileBytes(src));
-    if (bytes === null) throw new Error(`Workspace path does not exist: "${src}".`);
-    await this.#workspace.writeFileBytes(dest, bytes);
-    this.#clearWhiteout(dest);
+  /** Files in the merged view matching a glob pattern (paths only). */
+  async glob(pattern: string): Promise<string[]> {
+    const all = await this.listAllFiles();
+    return all.filter((path) => minimatch(path, pattern, { dot: true }));
   }
 
-  // -- publish (git) ----------------------------------------------------------
+  /** All file paths of the local layer (absolute, no directories), fully paged. */
+  #localFilePaths(): Promise<string[]> {
+    return walkWorkspaceFiles(this.#workspace);
+  }
+
+  // -- lifecycle ----------------------------------------------------------------
 
   /**
-   * The overlay's changes relative to the parent: local files that shadow a
-   * parent file ("modified" — shadowed, not content-diffed), local files the
-   * parent lacks ("added"), and whiteouted parent files ("deleted").
-   * `.gitignore`d local files (e.g. spilled script results) are omitted, same
-   * as `gitCommit` will omit them.
+   * Wipe the local layer and every whiteout — the workspace shows exactly its
+   * mounts at HEAD again. Uncommitted work is lost (committed state lives on
+   * the mounted repos' mains).
    */
-  async gitStatus(): Promise<WorkspaceChange[]> {
-    if (this.#isRoot) {
+  async reset(): Promise<void> {
+    return this.#serializeWrite(async () => {
+      this.#kv.delete(WHITEOUTS_KEY);
+      await this.#wipeFilesystem();
+    });
+  }
+
+  /** Un-pin one path: drop the local copy/deletions so it follows its mount again. */
+  async revert(path: string): Promise<void> {
+    this.#assertWritablePath(path);
+    return this.#serializeWrite(async () => {
+      if (await this.#workspace.exists(path)) {
+        await this.#workspace.rm(path, { force: true, recursive: true });
+      }
+      const resolved = resolveAbsolutePath(path);
+      const whiteouts = this.#whiteouts();
+      let changed = false;
+      for (const key of Object.keys(whiteouts)) {
+        if (key === resolved || key.startsWith(`${resolved}/`)) {
+          delete whiteouts[key];
+          changed = true;
+        }
+      }
+      if (changed) this.#kv.put(WHITEOUTS_KEY, whiteouts);
+    });
+  }
+
+  #wipeFilesystem(): Promise<void> {
+    return wipeWorkspace(this.#workspace);
+  }
+
+  /**
+   * Guard a mount-table transition against SILENT overlay adoption and
+   * namespace collisions, from inside the configuration lock:
+   *
+   * - Dirty overlay state (local files, whiteouts) is path-bound; a
+   *   transition that changes which repo owns a dirty path would carry those
+   *   edits/deletions into a DIFFERENT repository's next commit. Rejected —
+   *   commit, revert, or reset the affected paths first.
+   * - A new mount point (or a virtual ancestor of one) colliding with an
+   *   existing local FILE would create a file/directory contradiction.
+   *
+   * Pure bookkeeping: routes local paths and tombstones under both tables,
+   * no repo listings.
+   */
+  async assertMountTransitionSafe(
+    current: Record<string, WorkspaceMount>,
+    next: Record<string, WorkspaceMount>,
+  ): Promise<void> {
+    const localFiles = await this.#localFilePaths();
+    const dirty = [...localFiles, ...Object.keys(this.#whiteouts())];
+    const moved = dirty.filter((path) => {
+      const before = routeMount(current, path);
+      const after = routeMount(next, path);
+      return (
+        before?.mountPath !== after?.mountPath || before?.mount.repoPath !== after?.mount.repoPath
+      );
+    });
+    if (moved.length > 0) {
       throw new Error(
-        'The root workspace ("/") mirrors main and has no changes of its own — inspect main via itx.repo.',
+        `mount change would silently move uncommitted work to a different repo (or orphan it): ` +
+          `${moved
+            .slice(0, 5)
+            .map((path) => `"${path}"`)
+            .join(", ")}${moved.length > 5 ? ` and ${moved.length - 5} more` : ""} — ` +
+          "commit, revert, or reset these paths first.",
       );
     }
-    await this.#ensureOverlay();
-    const localPaths = await filterPublishablePaths({
-      paths: await this.#localFilePaths(),
-      readFile: (path) => this.#workspace.readFile(path),
+    const localSet = new Set(localFiles);
+    for (const key of Object.keys(next)) {
+      const mountPath = resolveAbsolutePath(key);
+      if (mountPath === "/") continue;
+      // A local file at the mount point or any ancestor segment of it makes
+      // the mount path unreachable as a directory.
+      const segments = mountPath.slice(1).split("/");
+      for (let i = 1; i <= segments.length; i++) {
+        const prefix = `/${segments.slice(0, i).join("/")}`;
+        if (localSet.has(prefix)) {
+          throw new Error(
+            `mount at "${mountPath}" collides with the local FILE at "${prefix}" — delete or move it first.`,
+          );
+        }
+      }
+    }
+  }
+
+  // -- git ------------------------------------------------------------------------
+
+  /** The mount table as one normalized-key snapshot: routing, grouping, and
+   * scope resolution within an operation all speak the same spelling, taken
+   * ONCE — a config re-read mid-operation cannot split its view. */
+  async #mountSnapshot(): Promise<MountSnapshot> {
+    const mounts = Object.fromEntries(
+      Object.entries(await this.#mounts()).map(([key, value]) => [resolveAbsolutePath(key), value]),
+    );
+    return { mountPaths: Object.keys(mounts).sort(), mounts };
+  }
+
+  /**
+   * Route every local file and whiteout key to its owning mount — pure
+   * bookkeeping with NO repo listings, so dirty-mount inference and scope
+   * errors stay cheap even when an unrelated mount is a big repository.
+   */
+  #groupLocalAndWhiteouts(snapshot: MountSnapshot, localFiles: string[]): GroupedOverlay {
+    const localByMount = new Map<string, string[]>();
+    const whiteoutsByMount = new Map<string, string[]>();
+    for (const mountPath of snapshot.mountPaths) {
+      localByMount.set(mountPath, []);
+      whiteoutsByMount.set(mountPath, []);
+    }
+    const unmounted: WorkspaceChange[] = [];
+    for (const path of localFiles) {
+      const resolved = routeMount(snapshot.mounts, path);
+      if (resolved === null) unmounted.push({ change: "added", path });
+      else localByMount.get(resolved.mountPath)!.push(path);
+    }
+    for (const key of Object.keys(this.#whiteouts())) {
+      const resolved = routeMount(snapshot.mounts, key);
+      if (resolved !== null) whiteoutsByMount.get(resolved.mountPath)!.push(key);
+    }
+    unmounted.sort((a, b) => a.path.localeCompare(b.path));
+    return { localByMount, unmounted, whiteoutsByMount };
+  }
+
+  /**
+   * One mount's changes, from one repo listing: publishable local files
+   * (evaluated against that mount's OWN `.gitignore`s on repo-relative paths
+   * — ignore rules never cross a mount boundary), whiteout deletions (only
+   * for paths this mount actually owns — a deeper mount's files are
+   * unreachable here and are never its deletions), plus STALE whiteouts that
+   * mask nothing at HEAD (residue of a commit interrupted between the repo
+   * write and cleanup) for the serialized commit path to heal.
+   */
+  async #classifyMount(
+    snapshot: MountSnapshot,
+    grouped: GroupedOverlay,
+    mountPath: string,
+  ): Promise<{ changes: WorkspaceChange[]; localPaths: string[]; staleWhiteouts: string[] }> {
+    const fromRel = (rel: string) => (mountPath === "/" ? rel : `${mountPath}${rel}`);
+    const owned = grouped.localByMount.get(mountPath)!;
+    const ownedSet = new Set(owned);
+    const publishableRel = await filterPublishablePaths({
+      paths: owned.map((path) => (mountPath === "/" ? path : path.slice(mountPath.length))),
+      readFile: (rel) => this.#workspace.readFile(fromRel(rel)),
     });
-    const parentPaths = await this.#parent().listAllFiles();
-    const parentSet = new Set(parentPaths);
+    const localPaths = publishableRel.map(fromRel);
+    const mountFiles = await this.#mountFilePaths(mountPath, snapshot.mounts[mountPath]!);
+    const mountSet = new Set(mountFiles);
+
     const changes: WorkspaceChange[] = localPaths.map((path) => ({
-      change: parentSet.has(path) && !this.#isMaskedFromParent(path) ? "modified" : "added",
+      change: mountSet.has(path) && !this.#isMaskedFromMount(path) ? "modified" : "added",
       path,
     }));
-    const localSet = new Set(localPaths);
-    for (const path of parentPaths) {
-      if (this.#isMaskedFromParent(path) && !localSet.has(path)) {
-        changes.push({ change: "deleted", path });
-      }
+    for (const path of mountFiles) {
+      if (!this.#isMaskedFromMount(path) || ownedSet.has(path)) continue;
+      if (routeMount(snapshot.mounts, path)?.mountPath !== mountPath) continue;
+      changes.push({ change: "deleted", path });
     }
-    return changes.sort((a, b) => a.path.localeCompare(b.path));
+    changes.sort((a, b) => a.path.localeCompare(b.path));
+
+    const staleWhiteouts = grouped.whiteoutsByMount
+      .get(mountPath)!
+      // Exact-match semantics: a tombstone is live only when it masks a mount
+      // FILE at exactly its path. One AT the mount point (a virtual
+      // directory) can never mask anything and is always crash residue.
+      .filter((key) => !mountSet.has(key));
+    return { changes, localPaths, staleWhiteouts };
   }
 
   /**
-   * Commit the workspace's changes to the config repo's MAIN branch, through
-   * the repo's own `commitFiles` authority lane — the same lane
-   * `itx.repo.commitFiles` uses, so the durable head cache, worker rebuilds
-   * (the project website), and any GitHub mirror all fire exactly as if the
-   * changes had been committed directly. There is no workspace branch and no
-   * separate "publish" step: commit = your changes are live on main.
-   *
-   * On success the local layer and whiteouts are cleared — the changes ARE
-   * main now, so the workspace goes back to mirroring latest main through the
-   * fall-through (read-your-write holds: `commitFiles` returning is the
-   * repo's head-cursor boundary, and the root re-materializes against it).
+   * Changes per mount (local files shadowing/adding over that mount's HEAD,
+   * whiteouted mount files as deletions), plus the unmounted local scratch
+   * (never committable). "modified" means shadowed, not content-diffed.
+   * Mounts classify concurrently — each needs only its own repo's listing.
    */
-  async gitCommit(input: {
-    author?: { email: string; name: string };
-    message: string;
-  }): Promise<WorkspacePublishResult> {
-    if (this.#isRoot) {
-      throw new Error(
-        'The root workspace ("/") is read-only — commit to main via itx.repo.commitFiles/edit.',
-      );
-    }
+  async gitStatus(): Promise<WorkspaceStatus> {
+    const snapshot = await this.#mountSnapshot();
+    const grouped = this.#groupLocalAndWhiteouts(snapshot, await this.#localFilePaths());
+    const classified = await Promise.all(
+      snapshot.mountPaths.map(async (mountPath) => {
+        const { changes, staleWhiteouts } = await this.#classifyMount(snapshot, grouped, mountPath);
+        return {
+          entry: {
+            changes,
+            path: mountPath,
+            policy: snapshot.mounts[mountPath]!.policy,
+            repoPath: snapshot.mounts[mountPath]!.repoPath,
+          },
+          staleWhiteouts,
+        };
+      }),
+    );
+    // Heal crash residue on the READ path too — a commit that died between
+    // the repo write and cleanup must not need another commit attempt to
+    // stop masking a future re-add of the file.
+    const stale = classified.flatMap((mount) => mount.staleWhiteouts);
+    if (stale.length > 0) await this.#healStaleWhiteouts(stale);
+    return { mounts: classified.map((mount) => mount.entry), unmounted: grouped.unmounted };
+  }
+
+  /** Serialized whiteout removal with an in-lock re-probe against a FRESH
+   * mount snapshot: only keys that STILL mask nothing at HEAD (one point read
+   * each; rare path) are dropped — a remount between classification and this
+   * lock re-routes rather than probing the old repo. */
+  #healStaleWhiteouts(candidates: string[]): Promise<void> {
+    return this.#serializeWrite(async () => {
+      const snapshot = await this.#mountSnapshot();
+      const whiteouts = this.#whiteouts();
+      let changed = false;
+      for (const key of candidates) {
+        if (whiteouts[key] === undefined) continue;
+        const resolved = routeMount(snapshot.mounts, key);
+        if (resolved === null) continue;
+        const masksFile =
+          resolved.repoRelativePath !== "" &&
+          (await this.#repo(resolved.mount.repoPath).readFile({
+            path: resolved.repoRelativePath,
+          })) !== null;
+        if (masksFile) continue;
+        delete whiteouts[key];
+        changed = true;
+      }
+      if (changed) this.#kv.put(WHITEOUTS_KEY, whiteouts);
+    });
+  }
+
+  /**
+   * Commit the local changes under ONE mount to that repo's MAIN branch via
+   * its own `commitFiles` lane — the same lane as that repo's direct
+   * `commitFiles`, so head cursors, worker rebuilds, and GitHub mirrors fire
+   * exactly as for a direct commit. `scope` names the mount; it may be omitted
+   * when exactly one mount is dirty. Commits never span mounts, never list an
+   * unrelated mount's repository, and on success clear ONLY the committed
+   * mount's local copies and whiteouts — every other mount's uncommitted work
+   * (including pending deletions under a deeper mount's subtree) survives.
+   */
+  async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
     if (typeof input.message !== "string" || input.message.trim() === "") {
       throw new Error("commit message must be a non-empty string.");
     }
-    await this.#ensureOverlay();
     return this.#serializeWrite(async () => {
-      const localPaths = await filterPublishablePaths({
-        paths: await this.#localFilePaths(),
-        readFile: (path) => this.#workspace.readFile(path),
-      });
-      // Deletions the same way status() derives them: parent files masked by
-      // a whiteout (directly or via a deleted ancestor directory) and not
-      // shadowed by a local copy. Enumerating the parent expands directory
-      // whiteouts to concrete file paths, which is what commitFiles deletes.
-      const localSet = new Set(localPaths);
-      const deletions = (await this.#parent().listAllFiles()).filter(
-        (path) => this.#isMaskedFromParent(path) && !localSet.has(path),
-      );
-      if (localPaths.length === 0 && deletions.length === 0) {
-        throw new Error("Nothing to commit — the workspace has no changes over main.");
+      const snapshot = await this.#mountSnapshot();
+      const grouped = this.#groupLocalAndWhiteouts(snapshot, await this.#localFilePaths());
+
+      let mountPath: string;
+      if (input.scope === undefined) {
+        // Inferred WITHOUT repo listings: any mount holding a local file or a
+        // whiteout may have changes. (A stale whiteout can nominate a mount
+        // that classification then proves clean — that fails loudly below
+        // instead of silently guessing another mount.)
+        const dirty = snapshot.mountPaths.filter(
+          (path) =>
+            grouped.localByMount.get(path)!.length > 0 ||
+            grouped.whiteoutsByMount.get(path)!.length > 0,
+        );
+        if (dirty.length === 0) {
+          throw new Error("Nothing to commit — no mount has changes.");
+        }
+        if (dirty.length > 1) {
+          throw new Error(
+            `Changes span ${dirty.length} mounts (${dirty.map((path) => `"${path}"`).join(", ")}); ` +
+              "commits never span mounts — pass { scope } to pick one.",
+          );
+        }
+        mountPath = dirty[0]!;
+      } else {
+        const scope = resolveAbsolutePath(input.scope);
+        if (!(scope in snapshot.mounts)) {
+          throw new Error(
+            `No mount at "${scope}" (mounts: ${snapshot.mountPaths.map((path) => `"${path}"`).join(", ")}).`,
+          );
+        }
+        mountPath = scope;
+      }
+      const mount = snapshot.mounts[mountPath]!;
+      if (mount.policy === "read-only") {
+        throw new Error(
+          `The mount at "${mountPath}" (${mount.repoPath}) is read-only — its changes cannot be committed.`,
+        );
       }
 
-      const changes: RepoFileChange[] = [];
+      const { changes, localPaths, staleWhiteouts } = await this.#classifyMount(
+        snapshot,
+        grouped,
+        mountPath,
+      );
+      // Heal crash residue FIRST: a whiteout masking nothing at HEAD (a prior
+      // commit died between the repo write and cleanup) would otherwise mark
+      // this mount dirty forever and hide a future re-add of the file.
+      if (staleWhiteouts.length > 0) {
+        const whiteouts = this.#whiteouts();
+        for (const key of staleWhiteouts) delete whiteouts[key];
+        this.#kv.put(WHITEOUTS_KEY, whiteouts);
+      }
+      if (changes.length === 0) {
+        throw new Error(`Nothing to commit — no changes under the mount at "${mountPath}".`);
+      }
+
+      const toRepoPath = (path: string) =>
+        mountPath === "/" ? path.slice(1) : path.slice(mountPath.length + 1);
+      const repoChanges: RepoFileChange[] = [];
       for (const path of localPaths) {
         const bytes = await this.#workspace.readFileBytes(path);
         if (bytes === null) continue;
-        changes.push({ path, ...encodeRepoContent(bytes) });
+        repoChanges.push({ path: toRepoPath(path), ...encodeRepoContent(bytes) });
       }
-      for (const path of deletions) changes.push({ path, delete: true });
+      for (const change of changes) {
+        if (change.change === "deleted") {
+          repoChanges.push({ delete: true, path: toRepoPath(change.path) });
+        }
+      }
 
-      const result = await this.#repo().commitFiles({
+      const result = await this.#repo(mount.repoPath).commitFiles({
         author: input.author ?? DEFAULT_COMMIT_AUTHOR,
-        changes,
+        changes: repoChanges,
         message: input.message,
       });
 
-      // The changes are on main; drop the overlay so the workspace mirrors
-      // the new main instead of shadowing it with now-stale private copies.
-      this.#kv.delete(WHITEOUTS_KEY);
-      await this.#wipeFilesystem();
+      // The changes are on that repo's main; clear ONLY what this mount owns.
+      // Ownership is ROUTED against the snapshot, never subtree containment:
+      // a "/" commit must not consume a deeper mount's pending deletions.
+      const whiteouts = this.#whiteouts();
+      let whiteoutsChanged = false;
+      for (const key of Object.keys(whiteouts)) {
+        if (routeMount(snapshot.mounts, key)?.mountPath !== mountPath) continue;
+        delete whiteouts[key];
+        whiteoutsChanged = true;
+      }
+      if (whiteoutsChanged) this.#kv.put(WHITEOUTS_KEY, whiteouts);
+      for (const path of localPaths) {
+        await this.#workspace.rm(path, { force: true, recursive: true });
+      }
 
       return {
         branch: result.branch,
         changedPaths: result.changedPaths
-          .map((path) => (path.startsWith("/") ? path : `/${path}`))
+          .map((path) => `${mountPath === "/" ? "" : mountPath}/${path.replace(/^\//, "")}`)
           .sort(),
         commitOid: result.commitOid,
+        mount: mountPath,
+        repoPath: mount.repoPath,
       };
     });
   }
 
-  /** The config repo's main-branch history, newest first (workspace commits land there). */
-  async gitLog(input: { limit?: number } = {}): Promise<WorkspaceGitLogEntry[]> {
-    const result = await this.#repo().log({ limit: input.limit });
+  /** One mounted repo's main-branch history, newest first. */
+  async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
+    const snapshot = await this.#mountSnapshot();
+    let mountPath: string;
+    if (input.scope === undefined) {
+      if (snapshot.mountPaths.length !== 1) {
+        throw new Error(
+          `log needs { scope } when the workspace has ${snapshot.mountPaths.length} mounts ` +
+            `(${snapshot.mountPaths.map((path) => `"${path}"`).join(", ")}).`,
+        );
+      }
+      mountPath = snapshot.mountPaths[0]!;
+    } else {
+      mountPath = resolveAbsolutePath(input.scope);
+      if (!(mountPath in snapshot.mounts)) {
+        throw new Error(
+          `No mount at "${mountPath}" (mounts: ${snapshot.mountPaths.map((path) => `"${path}"`).join(", ")}).`,
+        );
+      }
+    }
+    const result = await this.#repo(snapshot.mounts[mountPath]!.repoPath).log({
+      limit: input.limit,
+    });
     return result.commits.map((commit) => ({
       author: commit.author,
       message: commit.message,
@@ -806,50 +752,38 @@ export class WorkspaceCore {
   }
 }
 
-/**
- * The repo write lane wants text as text (reviewable diffs on GitHub mirrors)
- * and bytes as base64; a workspace file is just bytes. Valid UTF-8 rides as
- * a string, anything else (images, PDFs) as base64 — the same convention as
- * `files.put`.
- */
-function encodeRepoContent(bytes: Uint8Array): { content: string } | { contentBase64: string } {
-  try {
-    return { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
-  } catch {
-    let binary = "";
-    // Chunked: String.fromCharCode(...bytes) overflows the arg limit on big files.
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    }
-    return { contentBase64: btoa(binary) };
-  }
-}
+/** One consistent view of the mount table for one operation. */
+type MountSnapshot = { mountPaths: string[]; mounts: Record<string, WorkspaceMount> };
+
+/** Local files and whiteout keys, routed to their owning mounts (no repo calls). */
+type GroupedOverlay = {
+  localByMount: Map<string, string[]>;
+  unmounted: WorkspaceChange[];
+  whiteoutsByMount: Map<string, string[]>;
+};
 
 /**
- * Merge a local and a parent directory listing: union by path, the local
- * entry wins (its metadata describes the copy reads will actually see).
+ * The mount owning a path: longest prefix wins, `"/"` mounts everything not
+ * claimed by a deeper mount. `null` for unmounted paths (pure local scratch)
+ * and for the mount point itself (a directory, never a repo file). Pure over
+ * the given table, so multi-path classification routes every path against one
+ * consistent snapshot.
  */
-function mergeEntries(input: {
-  local: WorkspaceFileInfo[];
-  parent: WorkspaceFileInfo[];
-}): WorkspaceFileInfo[] {
-  const byPath = new Map<string, WorkspaceFileInfo>();
-  for (const entry of input.parent) byPath.set(entry.path, entry);
-  for (const entry of input.local) byPath.set(entry.path, entry);
-  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
-}
-
-/**
- * Resolve `.`/`..` segments the way the shell's own path normalization does
- * (pop-based, cannot escape the root), so the `.git` write guard and whiteout
- * keys cannot be dodged with `/foo/../.git/config`.
- */
-function resolveAbsolutePath(path: string): string {
-  const resolved: string[] = [];
-  for (const segment of path.split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") resolved.pop();
-    else resolved.push(segment);
+function routeMount(mounts: Record<string, WorkspaceMount>, path: string): ResolvedMount | null {
+  const resolved = resolveAbsolutePath(path);
+  let best: { mount: WorkspaceMount; mountPath: string } | null = null;
+  for (const [key, mount] of Object.entries(mounts)) {
+    const mountPath = resolveAbsolutePath(key);
+    const owns =
+      mountPath === "/" || resolved === mountPath || resolved.startsWith(`${mountPath}/`);
+    if (!owns) continue;
+    if (best === null || mountPath.length > best.mountPath.length) best = { mount, mountPath };
   }
-  return `/${resolved.join("/")}`;
+  if (best === null) return null;
+  if (resolved === best.mountPath) {
+    return { mount: best.mount, mountPath: best.mountPath, repoRelativePath: "" };
+  }
+  const repoRelativePath =
+    best.mountPath === "/" ? resolved.slice(1) : resolved.slice(best.mountPath.length + 1);
+  return { mount: best.mount, mountPath: best.mountPath, repoRelativePath };
 }

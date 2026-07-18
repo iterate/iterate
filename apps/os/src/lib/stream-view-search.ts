@@ -56,6 +56,8 @@ export const StreamViewSearch = z.object({
   events: z.boolean().optional().catch(undefined),
   /** Subscription key of the processor focused in the sheet. */
   processor: z.string().optional().catch(undefined),
+  /** Whether the agent details sheet is open (agent streams only). */
+  agent: z.boolean().optional().catch(undefined),
 });
 
 export type StreamViewSearch = z.infer<typeof StreamViewSearch>;
@@ -206,6 +208,7 @@ const RELEASE_PANEL_EDGE = {
   scriptExecution: undefined,
   panel: undefined,
   processor: undefined,
+  agent: undefined,
 } satisfies Partial<StreamViewSearch>;
 
 /**
@@ -223,6 +226,7 @@ export function useStreamViewPanels(): {
   inspectedScriptExecutionId: string | null;
   focusedProcessorKey: string | null;
   processorsPanelOpen: boolean;
+  agentDetailsOpen: boolean;
   eventsSheetOpen: boolean;
   inspectEvent: (offset: number) => void;
   closeInspector: () => void;
@@ -231,6 +235,8 @@ export function useStreamViewPanels(): {
   focusProcessor: (subscriptionKey: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
+  openAgentDetails: () => void;
+  closeAgentDetails: () => void;
   openEventsSheet: () => void;
   closeEventsSheet: () => void;
 } {
@@ -249,6 +255,12 @@ export function useStreamViewPanels(): {
     inspectedScriptExecutionId != null;
   const processorsPanelOpen =
     !inspectorOpen && (search.panel === true || focusedProcessorKey != null);
+  // The agent details sheet exists only on agent chat pages and the Events
+  // sheet only on full-panel layouts, so the two can never render together;
+  // `agent` therefore must not suppress `events` (a stray ?agent=true on a
+  // catalog URL would otherwise dead-lock the Events sheet). The openers keep
+  // the params mutually exclusive for shareable URLs.
+  const agentDetailsOpen = !inspectorOpen && !processorsPanelOpen && search.agent === true;
   // Full-panel layouts render inspectors inside the Events sheet. A direct
   // `?llmRequest=` / `?scriptExecution=` link therefore opens that containing
   // sheet even when `events=true` was not part of the shared URL.
@@ -293,8 +305,13 @@ export function useStreamViewPanels(): {
     () => setSearch({ panel: undefined, processor: undefined }),
     [setSearch],
   );
+  const openAgentDetails = useCallback(
+    () => setSearch({ ...RELEASE_PANEL_EDGE, events: undefined, agent: true }),
+    [setSearch],
+  );
+  const closeAgentDetails = useCallback(() => setSearch({ agent: undefined }), [setSearch]);
   const openEventsSheet = useCallback(
-    () => setSearch({ events: true, panel: undefined, processor: undefined }),
+    () => setSearch({ events: true, panel: undefined, processor: undefined, agent: undefined }),
     [setSearch],
   );
   const closeEventsSheet = useCallback(
@@ -313,6 +330,7 @@ export function useStreamViewPanels(): {
     inspectedScriptExecutionId,
     focusedProcessorKey,
     processorsPanelOpen,
+    agentDetailsOpen,
     eventsSheetOpen,
     inspectEvent,
     closeInspector,
@@ -321,6 +339,8 @@ export function useStreamViewPanels(): {
     focusProcessor,
     openProcessorsOverview,
     closeProcessorsPanel,
+    openAgentDetails,
+    closeAgentDetails,
     openEventsSheet,
     closeEventsSheet,
   };

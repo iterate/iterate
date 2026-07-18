@@ -389,7 +389,7 @@ export function AgentCommandPresentation({
   );
 }
 
-export function StateDot({
+function StateDot({
   state,
   className,
 }: {
