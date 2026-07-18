@@ -78,6 +78,24 @@ describe("classifyRepoAccessError", () => {
     expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
   });
 
+  test.each(["IMPORT_IN_PROGRESS", "FORK_IN_PROGRESS"])(
+    "wraps an Artifacts repo that exists but is not readable yet (%s)",
+    (code) => {
+      // artifacts.get() documents both codes while create/import/fork is
+      // materializing the repo. This is still the ordinary project-bootstrap
+      // window, not a failed dynamic worker build.
+      const raw = Object.assign(new Error("repo is currently being created; retry later"), {
+        code,
+        name: "ArtifactsError",
+      });
+      const classified = classifyRepoAccessError(raw);
+
+      expect(classified).toBeInstanceOf(RepoNotSeededError);
+      expect(isRepoNotSeededError(classified)).toBe(true);
+      expect((classified as Error).cause).toBe(raw);
+    },
+  );
+
   test("wraps an explicitly requested branch missing from an empty Artifacts repo", () => {
     const raw = Object.assign(new Error("Could not find main."), {
       code: "NotFoundError",
