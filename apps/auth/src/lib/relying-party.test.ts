@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { sessionCookie, signedTokenSet } from "./relying-party-test-support.ts";
 import { createIterateAuth, withAuthenticationResponseHeaders } from "./server.ts";
 
 const auth = createIterateAuth({
@@ -76,6 +77,81 @@ describe("relying-party credential resolution", () => {
       projects: [],
     });
     assert.deepEqual(errors, []);
+  });
+
+  it("sends an access token to userinfo only when userinfo is its audience", async (t) => {
+    const issuer = "https://auth.example.test/api/auth";
+    const resource = "https://app.example.test";
+    const userInfoEndpoint = `${issuer}/oauth2/userinfo`;
+    const baseConfig = {
+      clientId: "relying-party-session-test",
+      clientSecret: "secret",
+      issuer,
+      redirectURI: `${resource}/api/iterate-auth/callback`,
+    };
+    const discoveryUrl = `${issuer}/.well-known/openid-configuration`;
+    const fetchedUrls: string[] = [];
+
+    t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      fetchedUrls.push(url);
+      if (url === discoveryUrl) {
+        return Response.json({
+          issuer,
+          authorization_endpoint: `${issuer}/oauth2/authorize`,
+          token_endpoint: `${issuer}/oauth2/token`,
+          jwks_uri: `${issuer}/jwks`,
+          userinfo_endpoint: userInfoEndpoint,
+        });
+      }
+      assert.equal(url, userInfoEndpoint);
+      return Response.json({
+        sub: "usr_session",
+        "https://iterate.com/claims/active_organization_id": "org_iterate",
+        "https://iterate.com/claims/organizations": [
+          { id: "org_iterate", name: "Iterate", role: "owner", slug: "iterate" },
+        ],
+      });
+    });
+
+    async function fetchSession(audience: string | string[]) {
+      const config = { ...baseConfig, resource: audience };
+      const signed = await signedTokenSet(config);
+      const publicJwk = await exportJWK(signed.jwks as CryptoKey);
+      const sessionAuth = createIterateAuth({
+        ...config,
+        jwks: { keys: [publicJwk] },
+      });
+      return sessionAuth.fetch(
+        new Request(`${resource}/api/iterate-auth/session`, {
+          headers: { cookie: sessionCookie(signed.tokenSet) },
+        }),
+      );
+    }
+
+    const response = await fetchSession(resource);
+
+    assert.ok(response);
+    assert.equal(response.status, 200);
+    assert.partialDeepStrictEqual(await response.json(), {
+      authenticated: true,
+      user: { id: "usr_session" },
+    });
+    assert.deepEqual(fetchedUrls, [discoveryUrl]);
+
+    fetchedUrls.length = 0;
+    const responseWithUserInfo = await fetchSession([resource, userInfoEndpoint]);
+
+    assert.ok(responseWithUserInfo);
+    assert.equal(responseWithUserInfo.status, 200);
+    assert.partialDeepStrictEqual(await responseWithUserInfo.json(), {
+      authenticated: true,
+      session: {
+        activeOrganizationId: "org_iterate",
+        organizations: [{ id: "org_iterate", name: "Iterate", role: "owner", slug: "iterate" }],
+      },
+    });
+    assert.deepEqual(fetchedUrls, [discoveryUrl, userInfoEndpoint]);
   });
 });
 
