@@ -487,6 +487,7 @@ function DetailTimestamps({
 /** Self-only in-flight work, phrased as short "count noun" fragments. */
 function runtimeCountSummaries(agent: AgentRecord): string[] {
   const runtime = agent.runtime;
+  if (runtime === undefined) return [];
   const unreadyTriggers = Math.max(0, runtime.triggers.pending - runtime.triggers.runnable);
   const modelRequests = runtime.llmRequests.started + runtime.llmRequests.requested;
   const queued = runtime.llmRequests.scheduled + runtime.triggers.runnable;

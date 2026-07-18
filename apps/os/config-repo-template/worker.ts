@@ -632,14 +632,31 @@ export class CounterApp extends IterateDurableObject {
             <main>
               <p>count: <span id="n">${await this.current()}</span></p>
               <button id="b" disabled>increment</button>
-              <p id="s">connecting…</p>
+              <p id="s" aria-live="polite">connecting…</p>
             </main>
             <script>
               const button = document.getElementById("b");
-              button.onclick = () => fetch("${prefix}/increment", { method: "POST" });
+              const status = document.getElementById("s");
+              button.onclick = async () => {
+                button.disabled = true;
+                status.hidden = false;
+                status.textContent = "incrementing…";
+                try {
+                  const response = await fetch("${prefix}/increment", { method: "POST" });
+                  if (!response.ok) throw new Error("increment failed (" + response.status + ")");
+                } catch (error) {
+                  status.textContent = "increment failed";
+                  button.disabled = false;
+                  console.error(error);
+                }
+              };
               const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
-              ws.onopen = () => { button.disabled = false; document.getElementById("s").remove(); };
-              ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
+              ws.onopen = () => { button.disabled = false; status.hidden = true; };
+              ws.onmessage = (event) => {
+                document.getElementById("n").textContent = event.data;
+                button.disabled = false;
+                status.hidden = true;
+              };
             </script>
           </body>
         </html>`,

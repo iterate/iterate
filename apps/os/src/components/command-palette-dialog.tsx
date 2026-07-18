@@ -81,7 +81,7 @@ export function CommandPaletteDialog({
     { slug: scope, enabled },
   );
   const agentsState = useLiveState(
-    (itx) => itx.liveState,
+    (itx) => itx.agents.liveState,
     (state) => state.agents,
     [scope],
     { slug: scope, enabled },

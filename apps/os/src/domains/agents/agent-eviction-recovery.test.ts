@@ -82,35 +82,8 @@ function createdAgentStream(): MemoryStream {
 const SLUG = AgentProcessorContract.slug;
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 
-/** The runner-backed fold read the REQUIRED `reads` dep serves (the idle
- * debounce timer's fire-time staleness check). */
-type AgentSnapshotReads = { snapshot(): Promise<{ offset: number; state: AgentState }> };
-
-/** The read surface driving each processor (`registry.reads(...)` in the
- * harness, the runner itself under `agentRunner`), recorded post-registration
- * so `makeAgentProcessor`'s lazily-wired `reads` dep answers from it — the
- * mirror of the DO wiring `registry.reads(processor)`. */
-const runnerReadsByProcessor = new WeakMap<AgentProcessor, AgentSnapshotReads>();
-
-/** Identical to `new AgentProcessor(...)` except the REQUIRED runner-backed
- * `reads` dep is wired lazily to whatever read surface ends up driving this
- * processor (see runnerReadsByProcessor). */
-function makeAgentProcessor(
-  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads">,
-): AgentProcessor {
-  const processor: AgentProcessor = new AgentProcessor({
-    ...deps,
-    reads: {
-      snapshot: () => {
-        const reads = runnerReadsByProcessor.get(processor);
-        if (reads === undefined) {
-          throw new Error("nothing drives this processor yet — register/agentRunner wires reads");
-        }
-        return reads.snapshot();
-      },
-    },
-  });
-  return processor;
+function makeAgentProcessor(deps: ConstructorParameters<typeof AgentProcessor>[0]): AgentProcessor {
+  return new AgentProcessor(deps);
 }
 
 function makeHarness() {
@@ -189,8 +162,6 @@ function makeHarness() {
       },
     });
     registry.register(processor, { recovery: true });
-    // The DO's `#reads = registry.reads(processor)` wiring, per incarnation.
-    runnerReadsByProcessor.set(processor, registry.reads(processor));
   };
   boot();
 
@@ -401,12 +372,8 @@ function agentRunner(
   stream: MemoryStream,
   opts: { seeded?: { offset: number; state: AgentState } } = {},
 ) {
-  const track = <Runner extends AgentSnapshotReads>(runner: Runner): Runner => {
-    runnerReadsByProcessor.set(processor, runner);
-    return runner;
-  };
   const seeded = opts.seeded;
-  if (seeded === undefined) return track(new StreamProcessorRunner({ processor, stream }));
+  if (seeded === undefined) return new StreamProcessorRunner({ processor, stream });
   let record: ProcessorProgress<AgentState> = {
     reduction: {
       reducerVersion: AgentProcessorContract.version,
@@ -415,20 +382,18 @@ function agentRunner(
     },
     processing: { acknowledgedThroughOffset: seeded.offset, cursorRevision: 0 },
   };
-  return track(
-    new StreamProcessorRunner({
-      processor,
-      stream,
-      durability: {
-        progress: {
-          read: () => record,
-          commit: (progress) => {
-            record = progress;
-          },
+  return new StreamProcessorRunner({
+    processor,
+    stream,
+    durability: {
+      progress: {
+        read: () => record,
+        commit: (progress) => {
+          record = progress;
         },
       },
-    }),
-  );
+    },
+  });
 }
 
 describe("attempt bookkeeping under stream failures", () => {

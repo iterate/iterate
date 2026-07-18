@@ -30,7 +30,7 @@ function ProjectAgentsIndexContent() {
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
   const agents = useLiveState(
-    (projectItx) => projectItx.liveState,
+    (projectItx) => projectItx.agents.liveState,
     (state) => state.agents,
     [],
   ).value;

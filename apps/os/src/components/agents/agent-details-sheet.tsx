@@ -16,7 +16,8 @@ import {
   walkAgentForest,
   type AgentTreeNode,
 } from "./agent-tree.ts";
-import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
+import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
+import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { toggledSet } from "~/lib/tree-rows.ts";
 import { useStreamViewPanels } from "~/lib/stream-view-search.ts";
@@ -36,17 +37,34 @@ export function AgentDetailsSheet({
   path,
   projectId,
   projectSlug,
+  runtimeTransition,
 }: {
   agents: Record<string, AgentRecord>;
   path: string;
   projectId: string;
   projectSlug: string;
+  runtimeTransition?: AgentRuntimeTransition;
 }) {
   const { agentDetailsOpen, closeAgentDetails } = useStreamViewPanels();
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const nowMs = useTickingNowMs(CLOCK_TICK_MS, agentDetailsOpen);
   const navigate = useNavigate();
-  const forest = useMemo(() => buildAgentForest(agents), [agents]);
+  const presentedAgents = useMemo(() => {
+    const selected = agents[path];
+    if (selected === undefined || runtimeTransition === undefined) return agents;
+    return {
+      ...agents,
+      [path]: {
+        ...selected,
+        runtime: runtimeTransition.runtime,
+        timestamps: {
+          ...selected.timestamps,
+          runtimeUpdatedAt: runtimeTransition.since,
+        },
+      },
+    };
+  }, [agents, path, runtimeTransition]);
+  const forest = useMemo(() => buildAgentForest(presentedAgents), [presentedAgents]);
   const node = useMemo(() => findAgentNode(forest, path), [forest, path]);
   const childRows = useMemo(
     () => (node === undefined ? [] : flattenVisibleAgentRows(node.children, expandedPaths)),
@@ -54,9 +72,6 @@ export function AgentDetailsSheet({
   );
   const visibleChildRows = childRows.slice(0, VISIBLE_CHILD_LIMIT);
   const descendantCount = node === undefined ? 0 : node.aggregateAgentCount - 1;
-  const selfActive = node !== undefined && deriveAgentDisplayState(node.agent.runtime) !== "idle";
-  const activeDescendants =
-    node === undefined ? 0 : Math.max(0, node.aggregateActiveCount - (selfActive ? 1 : 0));
 
   return (
     <Sheet open={agentDetailsOpen} onOpenChange={(open) => (open ? null : closeAgentDetails())}>
@@ -82,7 +97,6 @@ export function AgentDetailsSheet({
               <div className="flex flex-col gap-1" aria-label="Subagents">
                 <p className="text-xs font-medium text-muted-foreground">
                   {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
-                  {activeDescendants > 0 ? ` · ${activeDescendants} active` : ""}
                 </p>
                 <div className="flex flex-col">
                   {visibleChildRows.map(({ node: child, depth, expanded }) => (
