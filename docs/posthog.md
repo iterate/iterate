@@ -1,7 +1,8 @@
-# PostHog browser setup
+# PostHog
 
 OS and Semaphore initialize PostHog through the shared UI package. The
-marketing site has a separate provider.
+marketing site has a separate provider. OS also exports its non-ephemeral
+production durable-event feed for operational analysis.
 
 ## Identity Boundary
 
@@ -18,7 +19,20 @@ integrity-protected design.
 | `packages/ui/src/apps/providers.tsx`                       | Initializes PostHog in shared app shells  |
 | `apps/iterate-com/backend/components/posthog-provider.tsx` | PostHog init for marketing site           |
 | `apps/os/src/routes/posthog-proxy.$.ts`                    | Worker proxy route for PostHog ingest     |
+| `apps/os/src/domains/integrations/posthog.ts`              | Production durable stream event exporter  |
 | `packages/shared/src/posthog/`                             | Shared PostHog ingest proxy helper        |
+
+## Durable stream feed
+
+Only `os-prd` exports durable stream events. Preview and local workers produce
+synthetic projects at CI scale and must acknowledge the durable PostHog
+subscription without sending it to PostHog. Ephemeral events are excluded in
+both the subscription and capture paths.
+
+See the
+[2026-07-18 stream cost investigation](./posthog-stream-cost-investigation-2026-07-18.md)
+for the environment attribution, payload analysis, loop checks, emergency
+control, cost model, and monitoring recommendations.
 
 ## Verification
 
