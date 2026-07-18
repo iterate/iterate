@@ -18,6 +18,8 @@ import type {
   DynamicWorkerRef,
   ItxBinding,
   Project,
+  ProjectAuthActor,
+  ProjectAuthCredentials,
   ProjectAuthPolicy,
   StatefulDynamicWorkerRef,
   StreamEvent,
@@ -54,6 +56,10 @@ type ProjectAuthMetadata = {
 };
 
 type RemoteProjectAuth = {
+  authenticate(
+    request: ProjectAuthMetadata,
+    credentials: ProjectAuthCredentials,
+  ): Promise<ProjectAuthActor>;
   get(policy: ProjectAuthPolicy): RemoteProjectAuth;
   fetch(request: ProjectAuthMetadata | Request): Promise<Response | null>;
 };
@@ -70,6 +76,9 @@ function requestMetadata(request: Request): ProjectAuthMetadata {
 
 function wrapProjectAuth(remote: RemoteProjectAuth): Project["auth"] {
   return {
+    async authenticate(request, credentials) {
+      return await remote.authenticate(requestMetadata(request), credentials);
+    },
     get(policy) {
       return wrapProjectAuth(remote.get(policy));
     },

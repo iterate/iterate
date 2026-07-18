@@ -82,6 +82,19 @@ export class StreamEventLog {
     );
   }
 
+  /** The highest DURABLE offset — the tail a default (ephemeral-excluding)
+   * catch-up read can actually reach, and so the only head a fold barrier
+   * may wait for. Robust against a future ephemeral-row eviction sweep. */
+  highestDurableOffset(): number {
+    return (
+      this.sql
+        .exec<{
+          offset: number | null;
+        }>("select max(offset) as offset from events where ephemeral = 0")
+        .toArray()[0]?.offset ?? 0
+    );
+  }
+
   /**
    * The highest offset ever INSERTED, even if its row was since deleted —
    * AUTOINCREMENT's sqlite_sequence row is updated by every insert (explicit

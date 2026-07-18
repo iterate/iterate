@@ -6,6 +6,7 @@
 // cell, crash-as-eviction) live inline in the suites that need them
 // (stream-processor-registry.test.ts, the per-domain *-recovery tests).
 
+import { sameIdempotentEvent } from "./idempotency.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { StreamEventReadInput } from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
@@ -65,31 +66,50 @@ export class MemoryStream implements ProcessorStream {
   async kill(): Promise<void> {}
 
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    const appended = inputs.map((input) => {
+    // TWO-PHASE like the Stream DO: validate the whole batch against existing
+    // AND same-batch state first, then publish — a failing input must not
+    // leave earlier inputs committed (production batches are atomic).
+    const staged: StreamEvent[] = [];
+    const results: StreamEvent[] = [];
+    // Next offset comes from the last event, not the array length — seeded
+    // histories (e.g. stream-repros fixtures with bulk event types dropped)
+    // have offset gaps.
+    let nextOffset = (this.events.at(-1)?.offset ?? 0) + 1;
+    for (const input of inputs) {
       if (input.type === this.failAppendsOfType) {
         throw new Error(`injected append failure for ${input.type}`);
       }
       const existing =
         input.idempotencyKey === undefined
           ? undefined
-          : this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-      if (existing !== undefined) return existing;
-      // Next offset comes from the last event, not the array length — seeded
-      // histories (e.g. stream-repros fixtures with bulk event types dropped)
-      // have offset gaps.
-      const offset = (this.events.at(-1)?.offset ?? 0) + 1;
+          : [...this.events, ...staged].find(
+              (event) => event.idempotencyKey === input.idempotencyKey,
+            );
+      if (existing !== undefined) {
+        // The Stream DO's predicate, SHARED: a same-key append with a
+        // DIFFERENT body is REJECTED, not deduplicated. Key-only dedup here
+        // once masked exactly that production rejection from a test.
+        if (!sameIdempotentEvent(existing, input)) {
+          throw new Error(
+            `idempotency key "${input.idempotencyKey}" already names a different event at offset ${existing.offset}`,
+          );
+        }
+        results.push(existing);
+        continue;
+      }
       const event: StreamEvent = {
         ...input,
         // Wall-clock like production, not offset-derived: expiry policy reads
         // createdAt, and epoch-1970 stamps would expire everything on arrival.
         createdAt: new Date(this.now()).toISOString(),
-        offset,
+        offset: nextOffset++,
         path: this.path,
       };
-      this.events.push(event);
-      return event;
-    });
-    return appended;
+      staged.push(event);
+      results.push(event);
+    }
+    this.events.push(...staged);
+    return results;
   }
 
   at(path?: string): MemoryStream {

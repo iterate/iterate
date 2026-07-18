@@ -327,15 +327,21 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
         edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
       });
       const typed = result as {
-        changes: { path: string }[];
         commitOid: string;
+        committedMount: string;
         committedTo: string;
+        status: { mounts: { changes: { path: string }[]; path: string }[] };
       };
-      // #1831: commits land straight on the config repo's default branch —
-      // there is no per-workspace branch anymore.
+      // #1831: commits land straight on the mounted repo's default branch —
+      // there is no per-workspace branch. #2095: status groups changes by
+      // owning mount, and the commit names the mount it was scoped to.
       expect(typed.committedTo).toMatch(/^\S+$/);
       expect(typed.commitOid).toMatch(/^[0-9a-f]{40}$/);
-      expect(typed.changes.map((change) => change.path)).toContain("/notes/workspace-example.md");
+      expect(typed.committedMount).toBe("/");
+      const rootMount = typed.status.mounts.find((mount) => mount.path === "/");
+      expect(rootMount?.changes.map((change) => change.path)).toContain(
+        "/notes/workspace-example.md",
+      );
     },
   },
   "workspace-files-transfer": {

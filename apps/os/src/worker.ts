@@ -21,9 +21,11 @@ import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
 import {
+  WORKER_BUILDING_HEADER,
   WORKER_FETCH_DISPATCH_HEADER,
-  workerBuildStatusResponse,
+  workerBuildStatus,
 } from "./domains/workers/worker-fetch-dispatch.ts";
+import { WORKER_BUILD_FAILED_HEADER } from "./domains/workers/worker-serve-info.ts";
 import { applyProjectWorkerOverlay } from "./domains/workers/worker-serve-overlay.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
@@ -66,7 +68,7 @@ export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-ob
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
-export { WorkspaceDurableObject } from "./domains/workspaces/workspace-durable-object.ts";
+export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";
@@ -217,6 +219,11 @@ async function apiFetch(
         request: new Request(route.fetch.url, init),
         traceRole: "project_config",
       });
+      if (response.headers.has(WORKER_BUILDING_HEADER)) {
+        wideLogger.setOutcome("worker_building");
+      } else if (response.headers.has(WORKER_BUILD_FAILED_HEADER)) {
+        wideLogger.setOutcome("worker_build_failed");
+      }
       // HTML documents get the @iterate overlay (build status in the corner)
       // injected from the serve header the runner just stamped.
       return applyProjectWorkerOverlay(request, response);
@@ -226,8 +233,11 @@ async function apiFetch(
       // a failed first-ever build shows the builder's error. Both self-heal —
       // once a good build exists, the runner serves it stale instead of
       // landing here.
-      const buildStatus = workerBuildStatusResponse(error);
-      if (buildStatus !== null) return buildStatus;
+      const buildStatus = workerBuildStatus(error);
+      if (buildStatus !== null) {
+        wideLogger.setOutcome(buildStatus.outcome);
+        return buildStatus.response;
+      }
       throw error;
     }
   }

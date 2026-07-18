@@ -147,6 +147,13 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
   readonly currentState: State;
   /** Whether `currentState` is a real fold — gate live publishing on it. */
   readonly isLoaded: boolean;
+  /**
+   * STRICT catch-up: fold through the durable stream tail or THROW — unlike
+   * the registry's swallowing `catchUp(name)`, which serves the last
+   * committed state on failure. Use this where stale configuration must fail
+   * an operation rather than silently misroute it.
+   */
+  catchUp(): Promise<void>;
 };
 
 type RegistryEntry = {
@@ -486,6 +493,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         // branches are the same passthrough.
         waitUntilEvent: (input) =>
           "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
+        catchUp: () => runner.catchUp(),
         get currentState() {
           return runner.currentState;
         },

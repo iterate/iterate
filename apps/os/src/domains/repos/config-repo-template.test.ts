@@ -27,11 +27,13 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;
   };
-  // zod is the one seeded runtime dependency: the guestbook contract's
-  // schemas are authored with it, and the platform-injected
-  // iterate/processors virtual module keeps zod EXTERNAL so both share the
-  // worker build's single installed copy.
-  expect(templatePackageJson.dependencies).toEqual({ zod: expect.any(String) });
+  // The platform-injected modules deliberately leave their real shared
+  // runtimes external: the guestbook and iterate/processors share one zod,
+  // while iterate/live-state and the user's RpcTargets share one Cap'n Web runtime.
+  expect(templatePackageJson.dependencies).toEqual({
+    "@iterate-com/capnweb": expect.any(String),
+    zod: expect.any(String),
+  });
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
