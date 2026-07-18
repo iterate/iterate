@@ -10,6 +10,26 @@ const DELIVERY_WATCHDOG_RECHECK_MS = 5_000;
 const INFRASTRUCTURE_RETRY_MS = 5_000;
 const ALARM_PROJECTION_ATTEMPTS = 3;
 
+/**
+ * The one irreducible delivery-liveness boundary.
+ *
+ * Cursor/config intent is still durable, but the current activation exhausted
+ * both ways of handing that intent onward: projecting a platform alarm and
+ * committing the operator-owned parked transition. This error must remain
+ * uncaught at the request/waitUntil boundary so telemetry describes a fatal
+ * invariant, never a successful recovery. A later external activation can
+ * reconstruct the preserved intent.
+ */
+export class StreamDeliveryFatalInvariantError extends AggregateError {
+  constructor(purpose: string, errors: readonly unknown[]) {
+    super(
+      errors,
+      `${purpose}: durable delivery intent has neither an alarm projection nor a parked transition`,
+    );
+    this.name = "StreamDeliveryFatalInvariantError";
+  }
+}
+
 /** One config-and-cursor incarnation allowed to mutate delivery state. */
 export type DeliveryAttempt = SubscriptionCursorFence & {
   configOffset: number;
@@ -165,22 +185,23 @@ export class DurableDeliveryCoordinator {
         return;
       }
 
-      await this.#parkConfigurationWithoutCursor({
-        subscriptionKey: args.subscriptionKey,
-        configOffset: args.configOffset,
-        error: new AggregateError(
-          [args.error, acquisitionError, projectionError],
-          "subscription reconciliation and alarm projection failed",
-        ),
+      const terminalError = new AggregateError(
+        [args.error, acquisitionError, projectionError],
+        "subscription reconciliation and alarm projection failed",
+      );
+      const recovery = await this.#parkOrReproject({
+        error: terminalError,
+        park: () =>
+          this.#parkConfigurationWithoutCursor({
+            subscriptionKey: args.subscriptionKey,
+            configOffset: args.configOffset,
+            attempts: ALARM_PROJECTION_ATTEMPTS,
+            error: terminalError,
+          }),
+        purpose: `subscription reconciliation ${args.subscriptionKey}`,
       });
-      releaseRetry();
-    })().catch((error) => {
-      console.error("stream cursor acquisition terminal recovery failed", {
-        subscriptionKey: args.subscriptionKey,
-        error,
-      });
-      this.#hooks.abortIncarnation("stream cursor acquisition recovery failed");
-    });
+      if (recovery === "parked") releaseRetry();
+    })();
     this.#hooks.keepAlive(work);
   }
 
@@ -194,13 +215,13 @@ export class DurableDeliveryCoordinator {
     if (!this.#hooks.store.beginAttempt(attempt, watchdogAt)) return "stale";
     const projectionError = await this.#armWithRetries(watchdogAt, "delivery watchdog");
     if (projectionError !== undefined) {
-      await this.#park(
-        attempt,
-        ALARM_PROJECTION_ATTEMPTS,
-        projectionError,
-        "infrastructure-failure",
-      );
-      return "parked";
+      const recovery = await this.#parkOrReproject({
+        error: projectionError,
+        park: () =>
+          this.#park(attempt, ALARM_PROJECTION_ATTEMPTS, projectionError, "infrastructure-failure"),
+        purpose: "delivery watchdog projection",
+      });
+      if (recovery === "parked") return "parked";
     }
     return this.isCurrent(attempt) ? "ready" : "stale";
   }
@@ -269,13 +290,13 @@ export class DurableDeliveryCoordinator {
     }
     const projectionError = await this.#armWithRetries(retryAt, "infrastructure retry");
     if (projectionError !== undefined) {
-      await this.#park(
-        attempt,
-        ALARM_PROJECTION_ATTEMPTS,
-        projectionError,
-        "infrastructure-failure",
-      );
-      return "parked";
+      const recovery = await this.#parkOrReproject({
+        error: projectionError,
+        park: () =>
+          this.#park(attempt, ALARM_PROJECTION_ATTEMPTS, projectionError, "infrastructure-failure"),
+        purpose: "infrastructure retry projection",
+      });
+      return recovery === "parked" ? "parked" : "scheduled";
     }
     return "scheduled";
   }
@@ -349,12 +370,12 @@ export class DurableDeliveryCoordinator {
     });
     const projectionError = await this.#armWithRetries(retryAt, "receiver retry");
     if (projectionError !== undefined) {
-      await this.#park(
-        attempt,
-        ALARM_PROJECTION_ATTEMPTS,
-        projectionError,
-        "infrastructure-failure",
-      );
+      await this.#parkOrReproject({
+        error: projectionError,
+        park: () =>
+          this.#park(attempt, ALARM_PROJECTION_ATTEMPTS, projectionError, "infrastructure-failure"),
+        purpose: "receiver retry projection",
+      });
     }
   }
 
@@ -378,12 +399,56 @@ export class DurableDeliveryCoordinator {
     });
     const projectionError = await this.#armWithRetries(retryAt, "poison confirmation retry");
     if (projectionError !== undefined) {
-      await this.#park(
-        attempt,
-        ALARM_PROJECTION_ATTEMPTS,
+      await this.#parkOrReproject({
+        error: projectionError,
+        park: () =>
+          this.#park(attempt, ALARM_PROJECTION_ATTEMPTS, projectionError, "infrastructure-failure"),
+        purpose: "poison confirmation retry projection",
+      });
+    }
+  }
+
+  /**
+   * Finish one failed alarm projection through one of its two durable exits.
+   * Parking is retried first because it is the bounded terminal policy;
+   * otherwise an exact alarm projection retains automatic ownership. Only a
+   * compound failure of both routes is fatal, and neither route's failure is
+   * mistaken for an incarnation restart.
+   */
+  async #parkOrReproject(args: {
+    error: unknown;
+    park(): Promise<void>;
+    purpose: string;
+  }): Promise<"parked" | "reprojected"> {
+    const parkFailures: unknown[] = [];
+    for (let attempt = 1; attempt <= ALARM_PROJECTION_ATTEMPTS; attempt += 1) {
+      try {
+        await args.park();
+        return "parked";
+      } catch (error) {
+        parkFailures.push(error);
+        console.warn("stream terminal park transition attempt failed", {
+          purpose: args.purpose,
+          attempt,
+          attempts: ALARM_PROJECTION_ATTEMPTS,
+          error,
+        });
+      }
+    }
+
+    const parkError = new AggregateError(
+      parkFailures,
+      `${args.purpose} park transition failed after bounded retries`,
+    );
+    try {
+      await this.repointAlarmWithRetries(`${args.purpose} recovery projection`);
+      return "reprojected";
+    } catch (projectionError) {
+      throw new StreamDeliveryFatalInvariantError(args.purpose, [
+        args.error,
+        parkError,
         projectionError,
-        "infrastructure-failure",
-      );
+      ]);
     }
   }
 
@@ -488,6 +553,35 @@ export class DurableDeliveryCoordinator {
         "infrastructure-failure",
       );
     }
+    for (const [subscriptionKey, pending] of [...this.#reconcileRetryByKey]) {
+      const configured = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+      if (
+        configured === undefined ||
+        configured.parkedReason !== undefined ||
+        configured.latestConfiguredEvent.offset !== pending.configOffset
+      ) {
+        this.#reconcileRetryByKey.delete(subscriptionKey);
+        continue;
+      }
+      await this.#parkConfigurationWithoutCursor({
+        subscriptionKey,
+        configOffset: pending.configOffset,
+        attempts,
+        error,
+      });
+      if (!this.#isConfigurationCurrent({ subscriptionKey, configOffset: pending.configOffset })) {
+        this.#reconcileRetryByKey.delete(subscriptionKey);
+      }
+    }
+  }
+
+  /** Final native-alarm/boot recovery, owned here rather than by callers. */
+  recoverExhaustedAlarm(error: unknown, attempts: number, purpose: string): Promise<void> {
+    return this.#parkOrReproject({
+      error,
+      park: () => this.parkOutstandingInfrastructure(error, attempts),
+      purpose,
+    }).then(() => undefined);
   }
 
   /** Every fresh incarnation reprojects row intent before relying on alarms. */
@@ -509,21 +603,21 @@ export class DurableDeliveryCoordinator {
       }
 
       // There is no independent activator after constructor/background work.
-      // Convert every orphanable deadline into explicit operator-owned parked
-      // state instead of aborting into a quiet, permanently stuck stream.
-      await this.parkOutstandingInfrastructure(lastError, ALARM_PROJECTION_ATTEMPTS);
-    })().catch((error) => {
-      console.error("stream alarm recovery terminal transition failed; restarting incarnation", {
-        error,
-      });
-      this.#hooks.abortIncarnation("stream alarm recovery terminal transition failed");
-    });
+      // Either make the outstanding intent operator-owned or durably re-arm
+      // it; a compound failure remains a fatal waitUntil rejection.
+      await this.recoverExhaustedAlarm(
+        lastError,
+        ALARM_PROJECTION_ATTEMPTS,
+        "stream boot alarm recovery",
+      );
+    })();
     this.#hooks.keepAlive(work);
   }
 
   async #parkConfigurationWithoutCursor(args: {
     subscriptionKey: string;
     configOffset: number;
+    attempts: number;
     error: unknown;
   }): Promise<void> {
     const configured = this.#hooks.coreState().configuredSubscribersByKey[args.subscriptionKey];
@@ -551,7 +645,7 @@ export class DurableDeliveryCoordinator {
           configOffset: args.configOffset,
           epoch: row.epoch,
         },
-        ALARM_PROJECTION_ATTEMPTS,
+        args.attempts,
         args.error,
         "infrastructure-failure",
       );
@@ -562,7 +656,7 @@ export class DurableDeliveryCoordinator {
       type: "events.iterate.com/stream/subscription-parked",
       payload: {
         subscriptionKey: args.subscriptionKey,
-        attempts: ALARM_PROJECTION_ATTEMPTS,
+        attempts: args.attempts,
         reason: "infrastructure-failure",
         error: errorMessage(args.error),
       },

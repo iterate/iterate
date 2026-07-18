@@ -2,7 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import { CoreProcessorContract, type CoreProcessorState } from "./core-processor-contract.ts";
-import { DELIVERY_TIMEOUT_MS, DurableDeliveryCoordinator } from "./durable-delivery-coordinator.ts";
+import {
+  DELIVERY_TIMEOUT_MS,
+  DurableDeliveryCoordinator,
+  StreamDeliveryFatalInvariantError,
+} from "./durable-delivery-coordinator.ts";
 import { SqliteSubscriptionCursorStore } from "./stream-storage.ts";
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {
@@ -56,10 +60,12 @@ function makeHarness() {
   const kept: Promise<unknown>[] = [];
   const aborted: string[] = [];
   const parked: string[] = [];
+  let requiredFactFailure: Error | undefined;
   const coordinator = new DurableDeliveryCoordinator({
     coreState: () => state,
     store,
     appendRequiredFact: (event) => {
+      if (requiredFactFailure !== undefined) throw requiredFactFailure;
       facts.push(event);
       if (event.type === "events.iterate.com/stream/subscription-parked") {
         const payload = event.payload as {
@@ -103,6 +109,9 @@ function makeHarness() {
     parked,
     setNow: (value: number) => {
       now = value;
+    },
+    failRequiredFactsWith: (error: Error | undefined) => {
+      requiredFactFailure = error;
     },
   };
 }
@@ -185,6 +194,28 @@ describe("DurableDeliveryCoordinator", () => {
     expect(h.aborted).toEqual([]);
   });
 
+  it("preserves the watchdog and throws fatally when setup can neither park nor project it", async () => {
+    const h = makeHarness();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    h.failRequiredFactsWith(new Error("park append unavailable"));
+    h.armFailures.push(new Error("one"), new Error("two"), new Error("three"));
+    h.repointFailures.push(new Error("four"), new Error("five"), new Error("six"));
+
+    await expect(h.coordinator.begin(h.attempt)).rejects.toBeInstanceOf(
+      StreamDeliveryFatalInvariantError,
+    );
+
+    expect(h.store.get("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      watchdogAt: 1_000 + DELIVERY_TIMEOUT_MS + 5_000,
+      retryAt: null,
+    });
+    expect(h.facts).toEqual([]);
+    expect(h.aborted).toEqual([]);
+  });
+
   it("parks orphanable boot obligations when bounded exact projection fails", async () => {
     const h = makeHarness();
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -203,6 +234,33 @@ describe("DurableDeliveryCoordinator", () => {
       type: "events.iterate.com/stream/subscription-parked",
       payload: { reason: "infrastructure-failure", attempts: 3, error: "three" },
     });
+    expect(h.aborted).toEqual([]);
+  });
+
+  it("makes compound boot projection and park failure an explicit fatal invariant", async () => {
+    const h = makeHarness();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    h.store.nack(h.attempt, {
+      attempt: 1,
+      nextAttemptAt: 4_000,
+      error: "receiver unavailable",
+    });
+    h.failRequiredFactsWith(new Error("park append unavailable"));
+    h.repointFailures.push(
+      new Error("one"),
+      new Error("two"),
+      new Error("three"),
+      new Error("four"),
+      new Error("five"),
+      new Error("six"),
+    );
+
+    h.coordinator.recoverAlarmAfterBoot();
+
+    await expect(Promise.all(h.kept)).rejects.toBeInstanceOf(StreamDeliveryFatalInvariantError);
+    expect(h.store.get("k")?.nextAttemptAt).toBe(4_000);
+    expect(h.facts).toEqual([]);
     expect(h.aborted).toEqual([]);
   });
 

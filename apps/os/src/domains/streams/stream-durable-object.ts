@@ -21,6 +21,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { compileEventSelector } from "./event-selector.ts";
+import { StreamDeliveryFatalInvariantError } from "./durable-delivery-coordinator.ts";
 import { StreamAlarm } from "./stream-alarm.ts";
 import {
   reconcileSubscriptionCursorRows,
@@ -49,15 +50,20 @@ const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
 
 /**
- * Observe fire-and-forget stream-core work without handing a rejected promise
- * to `waitUntil`. A deployment replaces the current Durable Object
+ * Observe fire-and-forget stream-core work without handing ordinary rejected
+ * promises to `waitUntil`. A deployment replaces the current Durable Object
  * incarnation and rejects its in-flight stub calls; that is a lifecycle
- * interruption, while an application rejection remains an error.
+ * interruption, while an application rejection remains an error. The one
+ * fatal delivery-liveness invariant deliberately remains a rejected boundary.
  */
 export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown>): Promise<void> {
   try {
     await work();
   } catch (error) {
+    // The coordinator uses this only after both durable successor routes have
+    // failed. Let waitUntil reject so platform telemetry cannot mistake that
+    // irreducible boundary for successfully settled background work.
+    if (error instanceof StreamDeliveryFatalInvariantError) throw error;
     if (isDurableObjectLifecycleError(error)) {
       console.info("stream core background work interrupted by durable object lifecycle", {
         message: error instanceof Error ? error.message : String(error),

@@ -4,6 +4,7 @@ import {
   assertSubscriptionCursorSetAllowed,
   settleStreamCoreBackgroundWork,
 } from "./stream-durable-object.ts";
+import { StreamDeliveryFatalInvariantError } from "./durable-delivery-coordinator.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -52,6 +53,15 @@ describe("settleStreamCoreBackgroundWork", () => {
 
     expect(error).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith("stream core background work failed", failure);
+  });
+
+  it("does not settle an explicit delivery fatal invariant as successful background work", async () => {
+    const fatal = new StreamDeliveryFatalInvariantError("test recovery", [
+      new Error("alarm failed"),
+      new Error("park failed"),
+    ]);
+
+    await expect(settleStreamCoreBackgroundWork(() => Promise.reject(fatal))).rejects.toBe(fatal);
   });
 });
 

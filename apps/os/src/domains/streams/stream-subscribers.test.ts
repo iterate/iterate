@@ -20,7 +20,10 @@ import type {
   SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
-import { DELIVERY_TIMEOUT_MS } from "./durable-delivery-coordinator.ts";
+import {
+  DELIVERY_TIMEOUT_MS,
+  StreamDeliveryFatalInvariantError,
+} from "./durable-delivery-coordinator.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import type {
   SubscriptionCursorFence,
@@ -442,6 +445,7 @@ function makeHarness() {
     repointedAlarms,
     platformAlarm: () => platformAlarmAtMs,
     abortedIncarnations,
+    kept,
     egress,
     pokes,
     pushes,
@@ -875,6 +879,36 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 0, nextAttemptAt: null });
   });
 
+  it("a3f2. the final native alarm parks config-owned retry intent as well as cursor deadlines", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const get = h.store.get.bind(h.store);
+    h.store.get = () => {
+      throw new Error("cursor storage unavailable");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.platformAlarm()).not.toBeNull();
+
+    h.failNextAlarmRepointWith(new Error("final native projection failed"));
+    await h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 });
+
+    const parked = h.factsOfType(PARKED);
+    expect(parked).toHaveLength(1);
+    expect(parked[0]!.payload).toMatchObject({
+      subscriptionKey: "k",
+      attempts: 7,
+      reason: "infrastructure-failure",
+    });
+    expect(parked[0]!.payload).not.toHaveProperty("atOffset");
+
+    h.store.get = get;
+    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 0, nextAttemptAt: null });
+  });
+
   it("a3g. removing a config retires its pre-cursor alarm ownership", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 1);
@@ -955,6 +989,33 @@ describe("StreamSubscribers", () => {
     expect(h.configured["k"].parkedReason).toBe("infrastructure-failure");
   });
 
+  it("a5b. fatal watchdog recovery is not followed by a contradictory cleanup projection", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+    h.failRequiredFactsWith(new Error("park fact append failed"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmArmWith(new Error("watchdog projection failed"));
+      h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
+    }
+
+    const projectionCountBeforeWake = h.repointedAlarms.length;
+    const keptCountBeforeWake = h.kept.length;
+    h.subscribers.wake();
+    await expect(Promise.all(h.kept.slice(keptCountBeforeWake))).rejects.toBeInstanceOf(
+      StreamDeliveryFatalInvariantError,
+    );
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")!.watchdogAt).not.toBeNull();
+    expect(h.platformAlarm()).toBeNull();
+    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeWake + 3);
+    expect(h.abortedIncarnations).toEqual([]);
+  });
+
   it("a6. exhausted watchdog projection parks explicitly before a wake poke", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
@@ -979,6 +1040,33 @@ describe("StreamSubscribers", () => {
       reason: "infrastructure-failure",
     });
     expect(h.abortedIncarnations).toHaveLength(0);
+  });
+
+  it("a6b. fatal wake setup is not followed by a contradictory cleanup projection", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    h.failRequiredFactsWith(new Error("park fact append failed"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmArmWith(new Error("watchdog projection failed"));
+      h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
+    }
+
+    const projectionCountBeforeWake = h.repointedAlarms.length;
+    const keptCountBeforeWake = h.kept.length;
+    h.subscribers.wake();
+    await expect(Promise.all(h.kept.slice(keptCountBeforeWake))).rejects.toBeInstanceOf(
+      StreamDeliveryFatalInvariantError,
+    );
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(0);
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")!.watchdogAt).not.toBeNull();
+    expect(h.platformAlarm()).toBeNull();
+    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeWake + 3);
+    expect(h.abortedIncarnations).toEqual([]);
   });
 
   it("a7. native alarm projection failure escapes and succeeds on Cloudflare retry", async () => {
@@ -1028,7 +1116,7 @@ describe("StreamSubscribers", () => {
     expect(h.configured["k"].parkedAtOffset).toBe(0);
   });
 
-  it("a8b. a failed final-retry park fact reprojects the row before restarting", async () => {
+  it("a8b. a failed final-retry park fact reprojects the row without pretending an abort is a wake", async () => {
     const h = makeHarness();
     await h.settle();
     h.configure(pushPayload(), 0);
@@ -1050,10 +1138,38 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(PARKED)).toHaveLength(0);
     expect(h.row("k")!.nextAttemptAt).toBe(10_000);
     expect(h.platformAlarm()).toBe(10_000);
-    expect(h.abortedIncarnations).toEqual(["stream final alarm parking failed"]);
+    expect(h.abortedIncarnations).toEqual([]);
   });
 
-  it("a8c. an infrastructure park closes a live configured connection", async () => {
+  it("a8c. a final alarm that can neither park nor reproject fails as an explicit fatal invariant", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(pushPayload(), 0);
+    h.store.ensure("k", 0);
+    h.store.nack(h.row("k")!, {
+      attempt: 0,
+      nextAttemptAt: 10_000,
+      error: "infrastructure retry owed",
+    });
+    h.failRequiredFactsWith(new Error("park fact append failed"));
+    h.failNextAlarmRepointWith(new Error("final native projection failed"));
+    h.failNextAlarmRepointWith(new Error("recovery projection failed once"));
+    h.failNextAlarmRepointWith(new Error("recovery projection failed twice"));
+    h.failNextAlarmRepointWith(new Error("recovery projection failed three times"));
+
+    await expect(
+      h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 }),
+    ).rejects.toBeInstanceOf(StreamDeliveryFatalInvariantError);
+
+    // The fatal condition is loud, but it never destroys or falsely consumes
+    // the durable intent: an external activation can still reconstruct it.
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")!.nextAttemptAt).toBe(10_000);
+    expect(h.platformAlarm()).toBeNull();
+    expect(h.abortedIncarnations).toEqual([]);
+  });
+
+  it("a8d. an infrastructure park closes a live configured connection", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
     h.append(evt(1, "a"));
@@ -2203,6 +2319,38 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(h.row("k")?.attempt).toBe(0);
+  });
+
+  it("s2. fatal durable-sink recovery is not followed by a contradictory cleanup projection", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: makeSink().sink });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    h.failRequiredFactsWith(new Error("park fact append failed"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmArmWith(new Error("receiver retry projection failed"));
+      h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
+    }
+    const projectionCountBeforeFailure = h.repointedAlarms.length;
+    const keptCountBeforeFailure = h.kept.length;
+
+    h.subscribers.onDurableDeliveryError("k", new Error("receiver failed"));
+    await expect(Promise.all(h.kept.slice(keptCountBeforeFailure))).rejects.toBeInstanceOf(
+      StreamDeliveryFatalInvariantError,
+    );
+    await h.settle();
+
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")!.nextAttemptAt).not.toBeNull();
+    expect(h.platformAlarm()).toBeNull();
+    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeFailure + 3);
+    expect(h.abortedIncarnations).toEqual([]);
   });
 
   it("classifies a Durable Object lifecycle reset as availability, not a delivery error", async () => {

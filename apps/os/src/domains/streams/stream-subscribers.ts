@@ -57,6 +57,7 @@ import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import {
   DELIVERY_TIMEOUT_MS,
   DurableDeliveryCoordinator,
+  StreamDeliveryFatalInvariantError,
   type DeliveryAttempt,
 } from "./durable-delivery-coordinator.ts";
 import type {
@@ -434,20 +435,15 @@ export class StreamSubscribers {
       // explicit operator-owned state; swallowing an earlier error would
       // consume the only wake and strand the rows.
       if ((alarmInfo?.retryCount ?? 0) < MAX_NATIVE_ALARM_RETRY_COUNT) throw error;
-      try {
-        await this.#delivery.parkOutstandingInfrastructure(error, MAX_NATIVE_ALARM_RETRY_COUNT + 1);
-      } catch (parkError) {
-        // The last native retry has no platform-owned successor. Preserve one
-        // ourselves before restarting: failed required-fact appends leave the
-        // cursor deadlines intact, so an exact projection makes them runnable
-        // by the replacement incarnation instead of abandoning a quiet row.
-        console.error("stream final alarm parking failed; reprojecting before restart", {
-          error: parkError,
-          alarmError: error,
-        });
-        await this.#delivery.repointAlarmWithRetries("final native alarm recovery projection");
-        this.#hooks.abortIncarnation("stream final alarm parking failed");
-      }
+      // On the final native retry the coordinator must establish one of the
+      // two durable exits before this handler resolves: an operator-owned park
+      // or an exact successor alarm. If both fail it throws the explicit fatal
+      // invariant; ctx.abort() is deliberately not treated as an activator.
+      await this.#delivery.recoverExhaustedAlarm(
+        error,
+        MAX_NATIVE_ALARM_RETRY_COUNT + 1,
+        "final native stream alarm",
+      );
     }
   }
 
@@ -588,6 +584,7 @@ export class StreamSubscribers {
 
     this.#pokesInFlight.add(subscriptionKey);
     let reconcileAfterPoke = false;
+    let fatalRecovery = false;
     const work = (async () => {
       try {
         let start: Awaited<ReturnType<DurableDeliveryCoordinator["begin"]>>;
@@ -736,14 +733,18 @@ export class StreamSubscribers {
           this.#closeConnectionQuietly(subscriptionKey, owned);
           await this.#recoverInfrastructure(attempt, error, "wake response processing");
         }
+      } catch (error) {
+        fatalRecovery = error instanceof StreamDeliveryFatalInvariantError;
+        throw error;
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
-        await this.#delivery.repointAfterAttempt();
-        if (reconcileAfterPoke) this.wake();
+        if (!fatalRecovery) await this.#delivery.repointAfterAttempt();
+        if (!fatalRecovery && reconcileAfterPoke) this.wake();
       }
     })();
     this.#hooks.keepAlive(
       work.catch((error) => {
+        if (error instanceof StreamDeliveryFatalInvariantError) throw error;
         console.error("stream wake poke failed outside its recovery boundary", {
           subscriptionKey,
           error,
@@ -772,6 +773,7 @@ export class StreamSubscribers {
    */
   #drainPush(subscriptionKey: string, initial: PushActivation): void {
     this.#pushDrains.add(subscriptionKey);
+    let fatalRecovery = false;
     const work = (async () => {
       let recoveryAttempt = initial.attempt;
       try {
@@ -924,14 +926,20 @@ export class StreamSubscribers {
           this.#batchLimits.delete(subscriptionKey);
         }
       } catch (error) {
-        await this.#recoverInfrastructure(recoveryAttempt, error, "push drain local processing");
+        try {
+          await this.#recoverInfrastructure(recoveryAttempt, error, "push drain local processing");
+        } catch (recoveryError) {
+          fatalRecovery = recoveryError instanceof StreamDeliveryFatalInvariantError;
+          throw recoveryError;
+        }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
-        await this.#delivery.repointAfterAttempt();
+        if (!fatalRecovery) await this.#delivery.repointAfterAttempt();
       }
     })();
     this.#hooks.keepAlive(
       work.catch((error: unknown) => {
+        if (error instanceof StreamDeliveryFatalInvariantError) throw error;
         console.error("stream push drain failed outside its recovery boundary", {
           subscriptionKey,
           error,
@@ -972,6 +980,7 @@ export class StreamSubscribers {
     operation: string,
     onRecovered?: () => void,
   ): Promise<void> {
+    if (error instanceof StreamDeliveryFatalInvariantError) throw error;
     console.error("stream delivery infrastructure failed", {
       subscriptionKey: attempt.subscriptionKey,
       operation,
@@ -986,6 +995,7 @@ export class StreamSubscribers {
         queueMicrotask(() => this.wake());
       }
     } catch (recoveryError) {
+      if (recoveryError instanceof StreamDeliveryFatalInvariantError) throw recoveryError;
       console.error("stream infrastructure recovery failed; restarting incarnation", {
         subscriptionKey: attempt.subscriptionKey,
         operation,
@@ -1512,10 +1522,15 @@ export class StreamSubscribers {
     // Preserve that ordering: close() wakes reconcile, which must see the
     // retry obligation already in place.
     const recovery = this.#delivery.fail(attempt, error);
+    let fatalRecovery = false;
     connection.close("delivery-failed");
     this.#hooks.keepAlive(
       recovery
         .catch((recoveryError) => {
+          if (recoveryError instanceof StreamDeliveryFatalInvariantError) {
+            fatalRecovery = true;
+            throw recoveryError;
+          }
           console.error("stream durable sink recovery failed; restarting incarnation", {
             subscriptionKey,
             error: recoveryError,
@@ -1523,7 +1538,7 @@ export class StreamSubscribers {
           });
           this.#hooks.abortIncarnation("stream durable sink recovery failed");
         })
-        .finally(() => this.#delivery.repointAfterAttempt()),
+        .finally(() => (fatalRecovery ? undefined : this.#delivery.repointAfterAttempt())),
     );
   }
 
