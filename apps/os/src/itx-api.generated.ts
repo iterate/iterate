@@ -4308,45 +4308,20 @@ export type WorkerFileSource =
 /**
  * Build options for a dynamic worker.
  *
- * This mirrors Cloudflare's `CreateWorkerOptions` from
- * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
- * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language (drift fails typecheck via the assignability pin
- * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the
- * invariant is one OS materialization pipeline, not one bundled output file.
- * When the file map has a `package.json` with dependencies, the bundler
- * installs them from the npm registry at build time.
+ * Deliberately small: exactly what the build recipe (build-recipe.ts — real
+ * `npm install` plus wrangler's canonical bundling pipeline) expresses.
+ * When the file map has a `package.json`, dependencies are installed from
+ * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
  */
 export type WorkerBuildOptions = {
-  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  /** Entry point file path relative to the source root. Default: "worker.ts". */
   entryPoint?: string;
-  /** Bundle all dependencies into a single output file. Default: true. */
+  /** Bundle to loader-ready output (default: true). `bundle: false` is the
+   * run-script fast path: inline JavaScript that is ALREADY loader-ready
+   * skips the build pipeline entirely. */
   bundle?: boolean;
-  /** Modules kept external ("cloudflare:*" always is). */
-  externals?: string[];
-  /** Target environment. Default: "es2022". */
-  target?: string;
   minify?: boolean;
-  sourcemap?: boolean;
-  /** npm registry URL for dependency installs. */
-  registry?: string;
-  jsx?: "transform" | "preserve" | "automatic";
-  jsxImportSource?: string;
-  define?: Record<string, string>;
-  loader?: Record<string, WorkerBundlerLoader>;
-  conditions?: string[];
+  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
+   * runtime rides in this way). A source's own entry wins over the platform's. */
   virtualModules?: Record<string, string>;
 };
-
-/** Loader names accepted by Cloudflare's worker bundler `loader` option. */
-export type WorkerBundlerLoader =
-  | "js"
-  | "jsx"
-  | "ts"
-  | "tsx"
-  | "json"
-  | "css"
-  | "text"
-  | "binary"
-  | "base64"
-  | "dataurl";

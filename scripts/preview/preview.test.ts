@@ -485,7 +485,11 @@ describe("preview test commands", () => {
     const workflow = parseYaml(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ) as { jobs: { preview: { "timeout-minutes": number } } };
-    expect(workflow.jobs.preview["timeout-minutes"]).toBe(15);
+    // 20, not the serialized lanes' measured 15: the sandbox-build pipeline
+    // adds real builder-pool container builds across the worker specs, and
+    // the ceiling must fit one retry of the slowest container-heavy spec
+    // (15 killed a 55/56-green run mid-retry and lost its artifacts).
+    expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
   });
 });
 

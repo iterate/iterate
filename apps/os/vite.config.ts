@@ -9,6 +9,7 @@ import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
 import { canonicalizeOutputWranglerConfig } from "./scripts/canonicalize-output-wrangler-config.ts";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
+import { workerBuildDevEndpoint } from "./scripts/worker-build-dev-endpoint.ts";
 
 // wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
 // the cloudflare plugin reads it, so dev and build can never see stale config.
@@ -92,24 +93,21 @@ export default defineConfig({
     // why `doppler run -- vite dev` needs no .dev.vars file.
     cloudflare({
       viteEnvironment: { name: "ssr" },
-      // The builder and typechecker sidecars run in the same local workerd so
-      // the BUILDER/TYPECHECKER service bindings resolve in dev exactly like
-      // deployed. Deploy builds (CLOUDFLARE_ENV set) exclude them: sidecars
-      // deploy from source via `wrangler deploy --config <sidecar>.jsonc`
-      // (deploy.ts), and a second dist wrangler.json would break
-      // findBuiltWranglerConfig.
+      // The typechecker sidecar runs in the same local workerd so the
+      // TYPECHECKER service binding resolves in dev exactly like deployed.
+      // Deploy builds (CLOUDFLARE_ENV set) exclude it: sidecars deploy from
+      // source via `wrangler deploy --config <sidecar>.jsonc` (deploy.ts),
+      // and a second dist wrangler.json would break findBuiltWranglerConfig.
       auxiliaryWorkers: process.env.CLOUDFLARE_ENV
         ? undefined
-        : [
-            { configPath: "./wrangler.builder.jsonc" },
-            { configPath: "./wrangler.typechecker.jsonc" },
-          ],
+        : [{ configPath: "./wrangler.typechecker.jsonc" }],
     }),
     tanstackStart(),
     viteReact(),
     tailwindcss(),
     canonicalizeOutputWranglerConfig(),
     devServerDiscoveryFile(),
+    workerBuildDevEndpoint(),
     ...(captunName
       ? [
           captunVite({

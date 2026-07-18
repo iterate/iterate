@@ -103,6 +103,7 @@ import {
 } from "./domains/sandboxes/instance-types.ts";
 import {
   assertSandboxPath,
+  sandboxCreateClaimKey,
   assertValidSleepAfter,
   sandboxPathFor,
 } from "./domains/sandboxes/utils.ts";
@@ -1617,16 +1618,12 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     );
   }
 
-  static #claimKey(path: string) {
-    return `sandbox-create-requested:${path}`;
-  }
-
   /** The name claim journaled for a path (the catalogue's `create-requested`
    * event), or undefined if no create was ever requested there. Its instance
    * type is what routes the path to the right container namespace. */
   async #claim(path: string): Promise<{ instanceType: SandboxInstanceType } | undefined> {
     const event = await this.#catalogue.getEvent({
-      idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
+      idempotencyKey: sandboxCreateClaimKey(path),
     });
     if (event === undefined) return undefined;
     return {
@@ -1693,7 +1690,7 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     const [claim] = await this.#catalogue.append(
       SandboxProcessorContract.buildEvent({
         type: "events.iterate.com/sandbox/create-requested",
-        idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
+        idempotencyKey: sandboxCreateClaimKey(path),
         payload: {
           path,
           instanceType,

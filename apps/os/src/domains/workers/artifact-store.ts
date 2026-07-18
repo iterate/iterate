@@ -8,7 +8,10 @@
  * key), and `expirationTtl` gives cache expiry without a cleanup worker.
  */
 
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 1;
+// v2: the sandbox/host wrangler pipeline replaced the esbuild-wasm builder —
+// every v1 artifact is from the old toolchain and must be unreachable (the
+// version prefix below does that; KV TTLs clean the orphans up).
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 2;
 
 /** Cache lifetime for build artifacts. Expiry only costs a rebuild on next
  * use. ("Reproducible" is approximate: npm ranges re-resolve at build time,
@@ -46,24 +49,33 @@ function moduleKey(buildKey: string, moduleName: string) {
   return `${KV_PREFIX}/${buildKey}/modules/${encodeURIComponent(moduleName)}`;
 }
 
-/** How long an in-flight marker suppresses duplicate budgeted builds. Long
- * enough to cover a cold npm-install build; short enough that a crashed
- * builder only delays budgeted callers, never blocks them forever (the
- * artifact write always wins over the marker). */
-const BUILD_IN_FLIGHT_TTL_SECONDS = 180;
+/** How long an in-flight marker suppresses duplicate budgeted builds. Must
+ * cover the recipe's whole per-build ceiling (install + bundle timeouts plus
+ * container-boot slack — see build-recipe.ts), or duplicate builds pile on
+ * exactly when a build is slowest; short enough that a crashed builder only
+ * delays budgeted callers, never blocks them forever (the artifact write
+ * always wins over the marker). */
+const BUILD_IN_FLIGHT_TTL_SECONDS = 360;
 
 function inFlightKey(buildKey: string) {
   return `${KV_PREFIX}/${buildKey}/building`;
 }
 
 /**
- * How long a recorded build failure short-circuits budgeted callers into the
- * last-good fallback without re-running the failed build. Deliberately short:
- * a deterministic failure only costs a redundant rebuild attempt every couple
- * of minutes, while a transient one (npm weather) heals on its own. Any source
- * change makes a new build key, so a fix is never gated on this TTL.
+ * How long a recorded build failure short-circuits every caller without
+ * re-running the failed build. A build key is content-addressed, so a genuine
+ * compile/install failure is deterministic for that key and a fix always
+ * commits a NEW key — the TTL exists only so a transient failure mislabelled
+ * as genuine (npm weather during install) heals on its own. It must be LONG:
+ * abandoned projects with broken heads retry delivery forever, and each TTL
+ * expiry costs a real builder-container rebuild whose exec resets the
+ * container's idle timer. At 120s that loop kept one warm container per
+ * broken-head project indefinitely — an e2e run leaves several, which pinned
+ * the basic instance fleet at its cap and starved every other placement
+ * (observed live on preview, 2026-07-18). At 15 minutes the same loop is a
+ * ~3% duty cycle and the fleet drains.
  */
-const BUILD_FAILURE_TTL_SECONDS = 120;
+const BUILD_FAILURE_TTL_SECONDS = 15 * 60;
 
 function buildFailureKey(buildKey: string) {
   return `${KV_PREFIX}/${buildKey}/failed`;
@@ -142,9 +154,11 @@ export class KvWorkerBuildArtifactStore {
    * every ~18s per open tab while a slow cold build runs. Budgeted callers
    * can answer "still building" from the marker without work; blocking
    * callers ignore it (they need a result and idempotent duplicate builds
-   * are their fallback). Best-effort because KV propagation is eventually
-   * consistent — a missed marker just means today's duplicate-build
-   * behavior.
+   * are their fallback — waiting on ANOTHER isolate's build via this marker
+   * was tried and reverted: KV negative-caches the missing artifact key per
+   * colo, so waiters stall instead of converging; worker-loader's stampede
+   * guard is in-isolate only). Best-effort because KV propagation is
+   * eventually consistent — a missed marker just means a duplicate build.
    */
   async isBuildInFlight(buildKey: string): Promise<boolean> {
     return (await this.kv.get(inFlightKey(buildKey), "text")) !== null;
