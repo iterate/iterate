@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { detachExternalDurableObjectBindings } from "./do-reset.ts";
+import { detachExternalDurableObjectBindings, resetWorkerDurableObjects } from "./do-reset.ts";
 
 type Settings = {
   annotations?: Record<string, unknown>;
@@ -135,5 +135,87 @@ describe("detachExternalDurableObjectBindings", () => {
         workerNames: ["os-preview-4", "sidecar"],
       }),
     ).rejects.toThrow("settings readback did not preserve");
+  });
+});
+
+describe("resetWorkerDurableObjects", () => {
+  test("deletes a retired container application before tombstoning its class", async () => {
+    const applications = [
+      {
+        id: "sandbox-app",
+        name: "os-preview-4-SandboxBasicDurableObject",
+        durable_objects: { namespace_id: "sandbox-namespace" },
+      },
+      {
+        id: "retired-builder-app",
+        name: "os-preview-4-WorkerBuilderDurableObject",
+        durable_objects: { namespace_id: "retired-builder-namespace" },
+      },
+    ];
+    let deployedMetadata: Record<string, unknown> | undefined;
+    const cf = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === "/workers/scripts") return [{ id: "os-preview-4" }];
+      if (path.startsWith("/workers/durable_objects/namespaces?")) {
+        return [
+          {
+            id: "sandbox-namespace",
+            script: "os-preview-4",
+            class: "SandboxBasicDurableObject",
+          },
+          {
+            id: "retired-builder-namespace",
+            script: "os-preview-4",
+            class: "WorkerBuilderDurableObject",
+          },
+        ];
+      }
+      if (path === "/containers/applications") return structuredClone(applications);
+      if (path === "/containers/applications/retired-builder-app") {
+        expect(init?.method).toBe("DELETE");
+        applications.splice(
+          applications.findIndex((application) => application.id === "retired-builder-app"),
+          1,
+        );
+        return undefined;
+      }
+      if (path === "/workers/scripts/os-preview-4") {
+        expect(init?.method).toBe("PUT");
+        const body = init?.body;
+        expect(body).toBeInstanceOf(FormData);
+        if (!(body instanceof FormData)) throw new Error("expected a FormData worker upload");
+        const metadata = body.get("metadata");
+        expect(typeof metadata).toBe("string");
+        deployedMetadata = JSON.parse(metadata as string) as Record<string, unknown>;
+        return undefined;
+      }
+      throw new Error(`unexpected Cloudflare request: ${path}`);
+    });
+
+    await expect(
+      resetWorkerDurableObjects({
+        ctx: { cf } as never,
+        workerName: "os-preview-4",
+        cwd: "/tmp/os",
+        credentials: {},
+        compatibilityDate: "2026-07-01",
+        containerClassNames: ["SandboxBasicDurableObject"],
+      }),
+    ).resolves.toEqual({
+      action: "reset",
+      deletedClasses: ["WorkerBuilderDurableObject"],
+      keptContainerClasses: ["SandboxBasicDurableObject"],
+    });
+
+    expect(deployedMetadata).toMatchObject({
+      containers: [{ class_name: "SandboxBasicDurableObject" }],
+      migrations: { steps: [{ deleted_classes: ["WorkerBuilderDurableObject"] }] },
+    });
+    expect(applications).toEqual([
+      {
+        id: "sandbox-app",
+        name: "os-preview-4-SandboxBasicDurableObject",
+        durable_objects: { namespace_id: "sandbox-namespace" },
+      },
+    ]);
   });
 });

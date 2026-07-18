@@ -6,10 +6,12 @@
  * that retires their classes, so the reset deploys the checked-in parked
  * worker (parked-worker/worker.js — 503 + queue ack) with a `state:
  * "deleted"` tombstone for every class that exists on the worker — except
- * container-bearing classes, which are kept alive (see the inline comment
- * for the upstream Cloudflare gap that forces this). Plain `wrangler
- * deploy`; the tombstone map is the only generated content, and it is a
- * readback of live reality — no checked-in file can know what a previous
+ * container-bearing classes still declared by the incoming branch, which
+ * are kept alive (see the inline comment for the upstream Cloudflare gap
+ * that forces this). Retired container applications are deleted first so
+ * their classes can be tombstoned too. Plain `wrangler deploy`; the tombstone
+ * map is generated from live reality plus the incoming branch's current
+ * container classes — no checked-in tombstone can know what a previous
  * branch left on a shared slot.
  *
  * The worker script and its routes stay (deleting a script cascades its
@@ -223,6 +225,8 @@ export async function resetWorkerDurableObjects(input: {
   credentials: Record<string, string>;
   /** The worker's compatibility date — reuse the app's own so the parked module never trails it. */
   compatibilityDate: string;
+  /** Container-bearing classes declared by the branch that will deploy next. */
+  containerClassNames: readonly string[];
 }): Promise<
   | { action: "skipped"; reason: string }
   | { action: "reset"; deletedClasses: string[]; keptContainerClasses: string[] }
@@ -246,8 +250,8 @@ export async function resetWorkerDurableObjects(input: {
     return { action: "skipped", reason: "no Durable Object classes" };
   }
 
-  // Container-bearing classes are KEPT, not destroyed. Cloudflare's exports
-  // reconciliation cannot container-enable a namespace it creates (upstream
+  // CURRENT container-bearing classes are KEPT, not destroyed. Cloudflare's
+  // exports reconciliation cannot container-enable a namespace it creates (upstream
   // gap, verified live 2026-07-08: recreating a container class under
   // `exports` fails its container application with
   // DURABLE_OBJECT_NOT_CONTAINER_ENABLED, and exports is one-way — error
@@ -256,10 +260,52 @@ export async function resetWorkerDurableObjects(input: {
   // unreachable orphans like every pre-teardown DO did (D1/KV are wiped;
   // running containers are reaped by the sandbox destroy-on-idle sweeper),
   // and their container applications stay attached to the live namespaces.
-  const applications =
+  let applications =
     await input.ctx.cf<{ id: string; name: string; durable_objects?: { namespace_id?: string } }[]>(
       `/containers/applications`,
     );
+  const namespaceById = new Map(
+    namespaces.map((namespace) => [namespace.namespaceId, namespace] as const),
+  );
+  const currentContainerClasses = new Set(input.containerClassNames);
+  const retiredApplications = applications.filter((application) => {
+    const namespaceId = application.durable_objects?.namespace_id;
+    const namespace = namespaceId ? namespaceById.get(namespaceId) : undefined;
+    return namespace !== undefined && !currentContainerClasses.has(namespace.className);
+  });
+  for (const application of retiredApplications) {
+    const namespaceId = application.durable_objects?.namespace_id;
+    const namespace = namespaceId ? namespaceById.get(namespaceId) : undefined;
+    await input.ctx.cf(`/containers/applications/${encodeURIComponent(application.id)}`, {
+      method: "DELETE",
+    });
+    console.log(
+      `DO reset: deleted retired container application ${application.name} ` +
+        `(class ${namespace?.className ?? "unknown"})`,
+    );
+  }
+  if (retiredApplications.length > 0) {
+    applications =
+      await input.ctx.cf<
+        { id: string; name: string; durable_objects?: { namespace_id?: string } }[]
+      >(`/containers/applications`);
+    const retiredNamespaceIds = new Set(
+      retiredApplications.flatMap((application) => {
+        const namespaceId = application.durable_objects?.namespace_id;
+        return namespaceId ? [namespaceId] : [];
+      }),
+    );
+    const lingering = applications.filter((application) => {
+      const namespaceId = application.durable_objects?.namespace_id;
+      return namespaceId !== undefined && retiredNamespaceIds.has(namespaceId);
+    });
+    if (lingering.length > 0) {
+      throw new Error(
+        `DO reset: Cloudflare kept retired container applications ` +
+          `${lingering.map((application) => application.name).join(", ")}; refusing to park ${input.workerName}`,
+      );
+    }
+  }
   const containerNamespaceIds = new Set(
     applications
       .map((application) => application.durable_objects?.namespace_id)
