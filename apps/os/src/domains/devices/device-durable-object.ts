@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { LiveStateRpcTarget } from "iterate/live-state";
 import {
   isStreamOffsetConflictError,
   type ProcessorState,
@@ -9,11 +10,7 @@ import {
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import {
-  LiveStateRpcTarget,
-  StreamProcessorRpcTarget,
-  StreamRpcTarget,
-} from "../../rpc-targets.ts";
+import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { decryptDevicePushToken, encryptDevicePushToken } from "./device-crypto.ts";
