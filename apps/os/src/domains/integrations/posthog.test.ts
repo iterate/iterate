@@ -140,6 +140,8 @@ describe("first-party PostHog stream integration", () => {
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
     });
+    expect(requests[0]!.batch[0]!.properties).not.toHaveProperty("$process_person_profile");
+    expect(requests[0]!.batch[0]!.properties).not.toHaveProperty("organization_id");
   });
 
   it("does not export stream events from dev or preview deployments", async () => {
@@ -216,7 +218,7 @@ describe("first-party PostHog stream integration", () => {
     });
   });
 
-  it("models one project group by immutable id and its creation slug without filtering payload", async () => {
+  it("identifies the project group from the authentic project birth", async () => {
     const created = streamEvent({
       type: "events.iterate.com/project/created",
       path: "/",
@@ -238,19 +240,37 @@ describe("first-party PostHog stream integration", () => {
 
     await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(requests) });
 
+    expect(requests[0]!.batch).toHaveLength(2);
     expect(requests[0]!.batch[0]).toMatchObject({
       event: "$groupidentify",
       properties: {
         $group_key: "prj_123",
-        $group_set: { id: "prj_123", name: "gold-path", slug: "gold-path" },
+        $group_set: {
+          id: "prj_123",
+          name: "gold-path",
+          slug: "gold-path",
+        },
         $group_type: "project",
         distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
       },
     });
-    expect(requests[0]!.batch[1]).toMatchObject({
+    const capturedBirth = requests[0]!.batch[1]!;
+    expect(capturedBirth).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
-      properties: { stream_event: JSON.parse(JSON.stringify(created)) },
+      properties: {
+        $groups: { project: "prj_123" },
+        project_id: "prj_123",
+      },
     });
+    expect(JSON.stringify((capturedBirth.properties as Record<string, unknown>).stream_event)).toBe(
+      JSON.stringify(created),
+    );
+
+    const ephemeralFetch = acceptingFetch();
+    const ephemeralArgs = captureArgs([{ ...created, ephemeral: true }]);
+    ephemeralArgs.batch.path = "/";
+    await capturePosthogStreamEventBatch(ephemeralArgs, { fetch: ephemeralFetch });
+    expect(ephemeralFetch).not.toHaveBeenCalled();
   });
 
   it("does not overwrite project group metadata from ordinary stream births", async () => {
@@ -269,10 +289,13 @@ describe("first-party PostHog stream integration", () => {
     });
 
     expect(requests[0]!.batch).toHaveLength(1);
-    expect(requests[0]!.batch[0]).toMatchObject({
+    const capturedBirth = requests[0]!.batch[0]!;
+    expect(capturedBirth).toMatchObject({
       event: POSTHOG_STREAM_EVENT,
-      properties: { stream_event: JSON.parse(JSON.stringify(created)) },
     });
+    expect(JSON.stringify((capturedBirth.properties as Record<string, unknown>).stream_event)).toBe(
+      JSON.stringify(created),
+    );
   });
 
   it("keeps source identity stable on retry", async () => {
@@ -287,6 +310,11 @@ describe("first-party PostHog stream integration", () => {
 
     expect(first[0]!.batch[0]!.uuid).toBe(retry[0]!.batch[0]!.uuid);
     expect(first[0]!.batch[0]!.timestamp).toBe(retry[0]!.batch[0]!.timestamp);
+    const retryProperties = retry[0]!.batch[0]!.properties as Record<string, unknown>;
+    expect(first[0]!.batch[0]!.properties).toMatchObject({
+      $groups: { project: "prj_123" },
+      distinct_id: retryProperties.distinct_id,
+    });
   });
 
   it("rejects malformed source timestamps and non-2xx capture responses", async () => {

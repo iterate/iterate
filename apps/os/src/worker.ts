@@ -44,6 +44,7 @@ import {
 import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
+import { withPosthogExceptionCapture } from "./observability/posthog.ts";
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
@@ -88,33 +89,47 @@ export default {
     // set by our own routing below. Strip whatever the outside world sent so
     // downstream code can rely on them.
     const request = stripInternalHeaders(inbound);
-    return await runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx));
+    const config = parseConfig(env);
+    return await withPosthogExceptionCapture(
+      { config, operation: ctx, request, waitUntil: (promise) => ctx.waitUntil(promise) },
+      () => runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx, config)),
+    );
   },
 
-  async queue(batch: MessageBatch, env: Env) {
-    if (isWorkerEventsQueue(batch.queue, env)) {
-      await handleEventQueueBatch(batch, env);
-      return;
-    }
+  async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext) {
+    const config = parseConfig(env);
+    await withPosthogExceptionCapture(
+      { config, operation: ctx, waitUntil: (promise) => ctx.waitUntil(promise) },
+      async () => {
+        if (isWorkerEventsQueue(batch.queue, env)) {
+          await handleEventQueueBatch(batch, env);
+          return;
+        }
 
-    console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
+        console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
+      },
+    );
   },
 
   // Inbound project email: Cloudflare Email Routing's catch-all rule for each
   // project hostname base (e.g. `*@iterate.app`) delivers here. setReject is
   // the permanent-failure channel; a thrown error is a temporary failure the
   // sending MTA retries — so infra errors deliberately propagate.
-  async email(message: ForwardableEmailMessage) {
-    await handleInboundEmail(message);
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
+    const config = parseConfig(env);
+    await withPosthogExceptionCapture(
+      { config, operation: ctx, waitUntil: (promise) => ctx.waitUntil(promise) },
+      () => handleInboundEmail(message),
+    );
   },
 };
 
-async function fetchWithoutWideLog(request: Request, env: Env, ctx: ExecutionContext) {
-  // Parse config per request, not at module scope: workerd may reuse an
-  // isolate across binding-only deploys, so a module-scope copy can serve
-  // stale secrets after a rotation. Parsing is pure and cheap.
-  const config = parseConfig(env);
-
+async function fetchWithoutWideLog(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  config: AppConfig,
+) {
   const mcpRequest = rewriteMcpHostRequest({ config, request });
   if (mcpRequest) {
     wideLogger.set({ ingress: { lane: "mcp" } });

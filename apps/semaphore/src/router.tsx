@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createRouter as createTanStackRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
+import { capturePosthogException } from "@iterate-com/ui/components/posthog";
 import { routeTree } from "./routeTree.gen.ts";
 import { makeQueryClient } from "~/orpc/client.ts";
 
@@ -17,6 +18,7 @@ export function getRouter() {
       queryClient,
     } satisfies RouterContext,
     defaultPreload: "intent",
+    defaultOnCatch: capturePosthogException,
     trailingSlash: "always",
   });
 
