@@ -89,9 +89,10 @@ thousands of users.
 
 The synthetic project IDs therefore remain intentional identified profiles.
 Every production stream event uses the same stable synthetic identity for its
-project and carries PostHog's `$groups` mapping for `project` and, when known,
-`organization`. This is the cost required for the raw durable facts to
-participate in group funnels, cohorts, breakdowns, flags, and experiments.
+project and carries only PostHog's `project` `$groups` mapping. The exporter
+does not read the project directory to derive an organization for machine
+traffic. This is the cost required for the raw durable facts to participate in
+project-level funnels, cohorts, breakdowns, flags, and experiments.
 
 Signed-in web UI events are different. They should have a real person profile
 so funnels, cohorts, person properties, flags, and cross-session behavior can
