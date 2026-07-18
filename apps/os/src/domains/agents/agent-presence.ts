@@ -183,7 +183,9 @@ export function applyAgentSummaryUpdate(
   const next = { ...summary };
   let changed = false;
 
-  for (const key of ["title", "description", "activity", "waitingFor"] as const) {
+  for (const key of ["title", "description", "activity", "waitingFor"] satisfies ReadonlyArray<
+    keyof AgentSummaryUpdate
+  >) {
     const value = update[key];
     if (value === undefined) continue;
     if (value === null) {

@@ -75,6 +75,8 @@ test("every agent prompt teaches the summary turn lifecycle and append event", (
     'payload: { title: "Short specific title", activity: "Starting work" }',
   );
   expect(AGENT_SUMMARY_INSTRUCTION).toContain("events.iterate.com/agent/summary-updated");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("send your reply through this channel's reply API");
+  expect(AGENT_SUMMARY_INSTRUCTION).not.toContain("itx.chat.sendMessage");
 
   for (const [channel, prompt] of Object.entries(AGENT_PROMPTS)) {
     expect(prompt, `${channel} lacks the summary lifecycle block`).toContain(

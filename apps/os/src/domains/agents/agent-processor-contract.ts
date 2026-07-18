@@ -106,7 +106,7 @@ export const AGENT_SUMMARY_INSTRUCTION = [
   '    type: "events.iterate.com/agent/summary-updated",',
   '    payload: { waitingFor: "user_input" },',
   "  }),",
-  '  itx.chat.sendMessage("Your reply"),',
+  "  // send your reply through this channel's reply API",
   "]);",
   "return;",
   "```",
