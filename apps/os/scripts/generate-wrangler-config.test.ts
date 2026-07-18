@@ -215,6 +215,9 @@ it("keeps deployed sandbox capacity within account quota", () => {
     ).toEqual(["lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4"]);
     for (const entry of containers) {
       expect(entry.max_instances, `${envName} ${entry.instance_type}`).toBeGreaterThan(0);
+      expect(entry.rollout_step_percentage, `${envName} ${entry.instance_type}`).toBe(
+        envName.startsWith("preview_") ? 100 : undefined,
+      );
     }
   }
 

@@ -376,6 +376,12 @@ function workerBindings(input: {
       image: "./sandbox/Dockerfile",
       instance_type: instanceType,
       max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
+      // Preview deploys are a test-environment replacement, not a production
+      // canary. A gradual 10%→100% rollout continued for ~90s after Wrangler
+      // returned and killed a test sandbox mid-command. Replace every warm
+      // preview instance in one step; deploy.ts still waits on the rollout's
+      // authoritative completion before tests become eligible.
+      ...(input.sandboxCaps === "preview" ? { rollout_step_percentage: 100 } : {}),
       // Interactive shell into any running sandbox via `wrangler containers
       // ssh <instance-id>` (find ids with `wrangler containers instances`).
       // Account-authenticated + gated on the keys below; opens no public

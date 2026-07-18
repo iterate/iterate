@@ -45,6 +45,7 @@ import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SANDBOX_INSTANCE_TYPES,
 } from "../src/domains/sandboxes/instance-types.ts";
+import { cloudflareContainerApplicationName } from "../src/lib/cloudflare-containers-dashboard-url.ts";
 import {
   COMPATIBILITY_DATE,
   envShapedVars,
@@ -54,6 +55,7 @@ import {
   RETIRED_WORKER_SECRETS,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
+import { waitForContainerRollouts } from "./container-rollout-readiness.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 
@@ -115,6 +117,20 @@ async function smokeAuthRpc(env: DeployedEnv, label: string) {
   const slug = `auth-rpc-smoke-${crypto.randomUUID().replaceAll("-", "")}`;
   const url = `https://${slug}.${projectHostnameBase}/`;
   await smokeResponse(url, isExactOsProjectMiss, label);
+}
+
+function previewContainerApplicationNames(env: DeployedEnv): string[] {
+  return SANDBOX_INSTANCE_TYPES.map((instanceType) => {
+    const className = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className;
+    const applicationName = cloudflareContainerApplicationName({
+      className,
+      workerName: env.osWorkerName,
+    });
+    if (!applicationName) {
+      throw new Error(`Cannot derive a Container application name for ${env.osWorkerName}.`);
+    }
+    return applicationName;
+  });
 }
 
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
@@ -249,7 +265,17 @@ export default async function deploy(
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {
-      await smokeAuthRpc(ctx.env, "auth Workers RPC");
+      await Promise.all([
+        smokeAuthRpc(ctx.env, "auth Workers RPC"),
+        ...(ctx.name.startsWith("preview_")
+          ? [
+              waitForContainerRollouts({
+                applicationNames: previewContainerApplicationNames(ctx.env),
+                cf: ctx.cf,
+              }),
+            ]
+          : []),
+      ]);
     },
   });
 }
