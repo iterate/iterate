@@ -277,16 +277,24 @@ export function deriveAgentRuntime(
   };
 }
 
-export function deriveAgentDisplayState(
-  runtime: AgentRuntimeRecord | undefined,
-  waitingFor?: AgentWaitingFor,
-): AgentDisplayState {
+/** Deterministic work state only. Agent-authored waiting requirements are a
+ * separate attention signal and must never replace this runtime truth in UI. */
+export function deriveAgentRuntimeDisplayState(runtime: AgentRuntimeRecord | undefined) {
   const current = runtime ?? ZERO_AGENT_RUNTIME;
   if (current.runningScripts > 0) return "running_code";
   if (current.llmRequests.requested > 0 || current.llmRequests.started > 0) {
     return "waiting_for_model";
   }
   if (current.llmRequests.scheduled > 0 || current.triggers.runnable > 0) return "queued";
+  return "idle";
+}
+
+export function deriveAgentDisplayState(
+  runtime: AgentRuntimeRecord | undefined,
+  waitingFor?: AgentWaitingFor,
+): AgentDisplayState {
+  const runtimeState = deriveAgentRuntimeDisplayState(runtime);
+  if (runtimeState !== "idle") return runtimeState;
   if (waitingFor === "user_input") return "waiting_for_user_input";
   if (waitingFor === "external_event") return "waiting_for_external_event";
   if (waitingFor === "timer") return "waiting_for_timer";
