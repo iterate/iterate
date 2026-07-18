@@ -338,6 +338,99 @@ describe("StreamRpcTarget", () => {
     expect(acquisitions).toBe(1);
   });
 
+  it("re-acquires after a non-explicit Durable Object lifecycle reset", async () => {
+    const lifecycleReset = Object.assign(
+      new Error("Durable Object reset because its code was updated."),
+      { durableObjectReset: true },
+    );
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/after-reset",
+    } satisfies StreamEvent;
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          waitForEvent: () =>
+            acquisitions === 1 ? Promise.reject(lifecycleReset) : Promise.resolve(event),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.waitForEvent({ afterOffset: 8, eventTypes: [event.type], timeoutMs: 30_000 }),
+    ).resolves.toEqual(event);
+    expect(acquisitions).toBe(2);
+  });
+
+  it("re-acquires a cursor-pinning head read after a lifecycle reset", async () => {
+    const lifecycleReset = Object.assign(
+      new Error("Durable Object reset because its code was updated."),
+      { durableObjectReset: true },
+    );
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 9,
+      path: "/events",
+      type: "events.iterate.com/test/after-head-reset",
+    } satisfies StreamEvent;
+    let headReads = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return {
+          getMaxOffset: () => {
+            headReads += 1;
+            if (headReads === 1) throw lifecycleReset;
+            return 8;
+          },
+          waitForEvent: () => Promise.resolve(event),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.waitForEvent({ eventTypes: [event.type], timeoutMs: 30_000 }),
+    ).resolves.toEqual(event);
+    expect(headReads).toBe(2);
+  });
+
+  it("bounds consecutive lifecycle-reset re-acquisitions", async () => {
+    const lifecycleReset = Object.assign(
+      new Error("Durable Object reset because its code was updated."),
+      { durableObjectReset: true },
+    );
+    let acquisitions = 0;
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { waitForEvent: () => Promise.reject(lifecycleReset) } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.waitForEvent({ afterOffset: 0, timeoutMs: 30_000 })).rejects.toThrow(
+      "stream-unavailable: Durable Object reset because its code was updated.",
+    );
+    expect(acquisitions).toBe(3);
+  });
+
   it("tags an explicit stream lifecycle rejection without hiding it behind recovery", async () => {
     const lifecycleError = Object.assign(new Error("kill requested"), {
       durableObjectReset: true,

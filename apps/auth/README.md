@@ -115,9 +115,9 @@ they are easy to confuse, so they're documented there:
 ### 4. Workers RPC — the `AUTH` service binding
 
 OS's runtime-only privileged operations are RPC methods on auth's default
-`AuthWorker`: project creation, slug lookup, user-project membership,
-project-id minting, project-app session issuance/validation, and opaque OAuth
-token introspection. Its shared base class
+`AuthWorker`: durable project registration, id/slug/list lookup,
+user-project membership, project-app session issuance/validation, and opaque
+OAuth token introspection. Its shared base class
 is the `/worker` export of `@iterate-com/auth-contract`; implementation lives in
 `src/server/project-directory.ts` and `src/server/oauth-token-introspection.ts`.
 
@@ -161,13 +161,25 @@ key (for `pnpm auth:mint`) is merged into the baked JWKS.
 
 **(c) Runtime authority — Workers RPC behind a KV cache.** OS ingress resolves
 every project host (`<slug>.iterate.app`) to a project id. The
-`AUTH.getProjectBySlug()` binding method is the source of truth;
+`AUTH.getProjectBySlug()` / `getProjectById()` / `listProjects()` binding
+methods are the source of truth;
 `apps/os/src/project-directory.ts` puts a `PROJECT_DIRECTORY` KV cache in front
-so the hot path rarely pays the round-trip. Project creation and the stale-
-claims membership check use the same binding, while MCP uses it to introspect
-opaque access tokens. OS decides _which_ organization may own a new project
-from the caller's verified claims before calling auth. These RPC methods trust
-the OS binding and intentionally perform no second user authorization step.
+so the hot path rarely pays the round-trip; every positive cache entry expires
+after 60 seconds, so auth updates and deletes converge. `AUTH.registerProject()`
+uses one uniqueness-enforced insert to choose the durable id/slug winner, then
+adopts that row before OS attempts a best-effort cache fill. The row also keeps
+the first creator email, so concurrent organization members replay the same
+project birth body. If OS birth fails, the auth-only row is the explicit
+`deploymentStatus: "missing"` container state: retrying create adopts the same
+id and canonical birth data, then replays deterministic birth events. The
+projects page already detects and resumes that state. Project creation and the
+stale-claims membership check use the same binding, while MCP uses it to
+introspect opaque access tokens. OS decides _which_ organization may own a new
+project from the caller's verified claims before calling auth. Principal-less
+admin fixtures are registered as explicit rows with no organization. Project
+slug, metadata, and deletion changes become authoritative immediately and age
+out of OS's cache within 60 seconds. These RPC methods trust the OS binding and
+intentionally perform no second user authorization step.
 
 ## Trust model
 
@@ -194,10 +206,11 @@ the OS binding and intentionally perform no second user authorization step.
   to false in `envs.ts`. The full model is documented in
   `src/server/platform-admin.ts`.
 - **Organizations & projects** live in auth's D1 and are the durable source of
-  truth. OS keeps per-environment rows and re-adopts from auth after a reset;
-  `src/server/project-directory.ts` implements the adoption/conflict rules (same
-  slug + same org = adopt; same slug + other org = conflict; slugs never get
-  random suffixes so OS can recreate the exact slug).
+  truth. A project is either organization-owned or an explicitly unowned admin
+  fixture. `src/server/project-directory.ts` inserts first with unique id/slug
+  constraints, then reads and adopts the canonical winner (same slug + same
+  owner = adopt; same slug + other owner = conflict; slugs never get random
+  suffixes so OS can recreate the exact slug).
 - **Tokens** carry Iterate's custom claims (orgs, projects, admin flag),
   declared in `@iterate-com/shared/auth-claims` and minted in
   `src/server/auth-plugins.ts`. Access tokens are authorized against by

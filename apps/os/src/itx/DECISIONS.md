@@ -338,7 +338,7 @@ been circling:
   scheduler, config repo, and email router; `project/ready` records
   completion. The default call waits through birth and readiness. Pass
   `waitUntilReady: false` to return as soon as the project exists (identity
-  registered, directory primed, birth events appended); create still drives
+  registered, cache prime attempted, birth events appended); create still drives
   processor birth via a post-response nudge so the saga never depends on the
   caller. `itx.waitUntilReady()` is the composable wait, and `itx.identity()`
   pipelines the canonical slug through the create round trip — the dashboard
@@ -391,9 +391,16 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   platform's trust posture (Law 4 ITERATE scoping, Law 5 egress outbound)
   is wired into loaded isolates; the registry's source caps and the project
   worker both use it.
-- **Auth is the ONLY project-id minter.** Even operator/recovery creates call
-  `AUTH.mintProjectId()` on auth's private Workers RPC entrypoint;
-  `mintProjectId` is deleted from OS.
+- **Auth is the ONLY project registry.** Every human, operator, recovery, and
+  fixture create calls `AUTH.registerProject()` on auth's private Workers RPC
+  entrypoint. A uniqueness-enforced insert chooses either an organization-owned
+  row or an explicitly unowned fixture row, and retries adopt that same durable
+  identity and first-creator email, keeping the project birth event identical
+  even when another organization member retries. An auth-only row is the deliberately modelled
+  `deploymentStatus: "missing"` container state; the projects page resumes its
+  idempotent birth append. OS's KV directory is a 60-second disposable cache,
+  never project authority, so renamed and deleted auth rows converge without a
+  second identity source.
 - **Legacy afterAppend/runner shapes are gone** from the agent, slack-agent,
   slack-integration, and repo DOs (delivery has been on the host model for a
   while; those were catch-up/observability vestiges). Agent runtime state is

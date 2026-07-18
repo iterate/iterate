@@ -221,19 +221,24 @@ export interface ProjectCollection {
    * The itx at the project root, addressable by `prj_…` id OR by URL slug — the
    * browser passes `params.projectSlug` straight through, no client-side
    * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution
-   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},
-   * which passes `prj_` ids through untouched and resolves slugs); slugs are
-   * immutable, so a slug handle can't silently repoint. Confinement stays keyed
-   * on the resolved id — the access check runs on the id, never the raw input.
+   * rides the bounded KV-cached project directory ({@link resolveProjectIdBySlug},
+   * which passes `prj_` ids through untouched and resolves slugs). Confinement
+   * stays keyed on the resolved id — the access check runs on the id, never the
+   * raw input — while expiring cache entries bound stale aliases after a rename.
    */
   get(idOrSlug: string): Promise<Project>;
   /**
-   * Register and bootstrap a project. By default this resolves once the
+   * Register and bootstrap a project. Auth registration is the durable resume
+   * point: if a later birth append fails, retrying the same slug or caller ID
+   * adopts that exact auth row and replays the idempotent birth append. An
+   * auth-only row is the explicit `deploymentStatus: "missing"` state already
+   * surfaced and resumed by the projects page, not a second project identity.
+   * By default this resolves once the
    * bootstrap saga has committed `project/ready` — the right shape for
    * scripts and pipelined chains that use the project immediately.
    *
    * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
-   * registered, directory primed, birth events appended. The saga keeps
+   * registered, cache prime attempted, birth events appended. The saga keeps
    * running behind the returned handle — create still drives processor birth
    * via a post-response nudge, so no caller has to. Progress is ordinary
    * live state (`state.reduced.ready` flips when bootstrap lands), and
@@ -255,7 +260,7 @@ export interface ProjectCollection {
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
-   * "deployment" (every directory-known project) requires an admin principal
+   * "deployment" (every auth-registered project) requires an admin principal
    * and is the default for non-user admin principals, which have no claims.
    */
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;

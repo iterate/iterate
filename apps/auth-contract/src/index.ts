@@ -61,15 +61,26 @@ export const OrganizationInviteRecord = z.object({
 });
 export type OrganizationInviteRecord = z.infer<typeof OrganizationInviteRecord>;
 
-export const ProjectRecord = z.object({
+const ProjectRecordBase = z.object({
   id: z.string(),
-  organizationId: z.string(),
   name: z.string(),
   slug: z.string(),
   metadata: z.record(z.string(), z.unknown()),
   archivedAt: z.string().nullable(),
 });
+
+/** A project exposed through the organization-scoped public auth API. */
+export const ProjectRecord = ProjectRecordBase.extend({
+  organizationId: z.string(),
+});
 export type ProjectRecord = z.infer<typeof ProjectRecord>;
+
+/** Auth's private durable directory, including explicitly unowned admin fixtures. */
+export const ProjectDirectoryRecord = ProjectRecordBase.extend({
+  organizationId: z.string().nullable(),
+  creatorEmail: z.string().email().nullable(),
+});
+export type ProjectDirectoryRecord = z.infer<typeof ProjectDirectoryRecord>;
 
 const CallerManagedProjectId = z
   .string()
@@ -117,16 +128,29 @@ export type InternalCreateOrganizationForUserInput = z.infer<
   typeof InternalCreateOrganizationForUserInput
 >;
 
-export const InternalCreateProjectForOrganizationInput = z.object({
+export const InternalRegisterProjectInput = z.object({
   id: CallerManagedProjectId.optional(),
-  organizationSlug: z.string().min(1),
+  organizationSlug: z
+    .string()
+    .min(1)
+    .nullable()
+    .describe("Owning organization slug, or null for an explicitly unowned admin fixture."),
   name: z.string().min(1).max(100),
   slug: z.string().min(1).max(50).optional(),
+  creatorEmail: z.string().email().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
-export type InternalCreateProjectForOrganizationInput = z.infer<
-  typeof InternalCreateProjectForOrganizationInput
->;
+export type InternalRegisterProjectInput = z.infer<typeof InternalRegisterProjectInput>;
+
+export const ProjectIdInput = z.object({
+  projectId: z.string().trim().min(1),
+});
+export type ProjectIdInput = z.infer<typeof ProjectIdInput>;
+
+export const InternalListProjectsInput = z.object({
+  limit: z.number().int().min(1).max(1_000).default(1_000),
+});
+export type InternalListProjectsInput = z.infer<typeof InternalListProjectsInput>;
 
 export const InternalProjectIngressExchangeInput = z.object({
   token: z.string().min(1),

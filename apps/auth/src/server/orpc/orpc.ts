@@ -165,7 +165,7 @@ async function loadProject(params: {
   };
   const project = {
     id: projectRow.id,
-    organizationId: projectRow.organizationId,
+    organizationId: organization.id,
     name: projectRow.name,
     slug: projectRow.slug,
     metadata: parseProjectMetadata(projectRow.metadata),

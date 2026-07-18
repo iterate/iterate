@@ -150,7 +150,8 @@ create table "oauthConsent" (
 );
 create table project (
   id TEXT primary key not null,
-  organization_id TEXT not null,
+  organization_id TEXT,
+  creator_email TEXT,
   name TEXT not null,
   slug TEXT not null,
   metadata TEXT not null,

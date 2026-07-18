@@ -8,9 +8,9 @@ import { parseStringArray } from "./db/helpers.ts";
 import {
   getFreshOAuthProjectSelectionBySessionId,
   listOrganizationsForUser,
-  listProjectsForUser,
 } from "./db/queries/.generated/index.ts";
 import type { DB } from "./db/index.ts";
+import { listProjectsForUser } from "./project-directory.ts";
 
 // Project-scoped tokens: when a client requests the `project` scope, the user
 // picks which projects the token may reach on the /project-access page, and
@@ -172,7 +172,7 @@ export async function buildAccessTokenGrantClaims(
   const [organizations, allProjects] = params.userId
     ? await Promise.all([
         listOrganizationClaimsForUser(params.userId, client),
-        listProjectsForUser(client, { userId: params.userId }),
+        listProjectsForUser({ userId: params.userId }, client),
       ])
     : [[], []];
 

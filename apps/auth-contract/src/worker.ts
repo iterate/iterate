@@ -4,14 +4,16 @@ import type {
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import type {
-  InternalCreateProjectForOrganizationInput,
+  InternalListProjectsInput,
+  InternalRegisterProjectInput,
   InternalIntrospectOAuthAccessTokenInput,
+  ProjectDirectoryRecord,
+  ProjectIdInput,
   ProjectInput,
-  ProjectRecord,
 } from "./index.ts";
 
 export type ProjectCreationResult =
-  | { ok: true; project: ProjectRecord }
+  | { ok: true; project: ProjectDirectoryRecord }
   | {
       ok: false;
       reason: "organization_not_found" | "conflict";
@@ -72,10 +74,10 @@ export type ValidatedProjectAppSession = {
  * no HTTP or bearer-token fallback.
  */
 export abstract class AuthWorker<Env = unknown> extends WorkerEntrypoint<Env> {
-  abstract createProjectForOrganization(
-    input: InternalCreateProjectForOrganizationInput,
-  ): Promise<ProjectCreationResult>;
-  abstract getProjectBySlug(input: ProjectInput): Promise<ProjectRecord | null>;
+  abstract registerProject(input: InternalRegisterProjectInput): Promise<ProjectCreationResult>;
+  abstract getProjectById(input: ProjectIdInput): Promise<ProjectDirectoryRecord | null>;
+  abstract getProjectBySlug(input: ProjectInput): Promise<ProjectDirectoryRecord | null>;
+  abstract listProjects(input: InternalListProjectsInput): Promise<ProjectDirectoryRecord[]>;
   abstract listProjectsForUser(input: { userId: string }): Promise<UserProjectRecord[]>;
   abstract mintProjectAppSession(
     input: MintProjectAppSessionInput,
@@ -83,7 +85,6 @@ export abstract class AuthWorker<Env = unknown> extends WorkerEntrypoint<Env> {
   abstract validateProjectAppSession(
     input: ValidateProjectAppSessionInput,
   ): Promise<ValidatedProjectAppSession | null>;
-  abstract mintProjectId(): Promise<{ id: string }>;
   abstract introspectAccessToken(
     input: InternalIntrospectOAuthAccessTokenInput,
   ): Promise<OAuthAccessTokenIntrospectionResult>;

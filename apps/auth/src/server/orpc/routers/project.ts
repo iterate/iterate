@@ -15,8 +15,9 @@ import {
 } from "../../db/queries/index.ts";
 import {
   createProject,
+  toOwnedProjectRecord,
   toProjectRecord,
-  toProjectRecordFromReturnedRow,
+  toProjectDirectoryRecordFromReturnedRow,
 } from "../../project-directory.ts";
 
 const list = os.project.list.use(organizationScopedMiddleware).handler(async ({ context }) => {
@@ -27,7 +28,7 @@ const list = os.project.list.use(organizationScopedMiddleware).handler(async ({ 
   return projects.map((project) =>
     toProjectRecord({
       id: project.id,
-      organizationId: project.organizationId,
+      organizationId: context.organization.id,
       name: project.name,
       slug: project.slug,
       metadata: parseProjectMetadata(project.metadata),
@@ -48,12 +49,13 @@ const create = os.project.create
       name: input.name,
       organizationId: context.organization.id,
       slug: input.slug,
+      creatorEmail: context.user.email,
       metadata: input.metadata,
     });
     if (!result.ok) {
       throw new ORPCError("CONFLICT", { message: result.message });
     }
-    return result.project;
+    return toOwnedProjectRecord(result.project);
   });
 
 const update = os.project.update.use(projectAdminMiddleware).handler(async ({ context, input }) => {
@@ -74,7 +76,7 @@ const update = os.project.update.use(projectAdminMiddleware).handler(async ({ co
     throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to update project" });
   }
 
-  return toProjectRecordFromReturnedRow(updated);
+  return toOwnedProjectRecord(toProjectDirectoryRecordFromReturnedRow(updated));
 });
 
 const remove = os.project.delete.use(projectAdminMiddleware).handler(async ({ context }) => {

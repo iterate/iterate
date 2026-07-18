@@ -475,6 +475,14 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 }
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
+const MAX_CONSECUTIVE_STREAM_WAIT_LIFECYCLE_FAILURES = 3;
+
+function isRecoverableStreamWaitLifecycleError(error: unknown): boolean {
+  return (
+    isDurableObjectLifecycleError(error) &&
+    !(error instanceof Error && error.message.includes("kill requested"))
+  );
+}
 
 function detachPlainRpcResult<T>(result: T[]): T[];
 function detachPlainRpcResult<T extends object>(result: T): T;
@@ -631,6 +639,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
     const deadline = Date.now() + args.timeoutMs;
     let replayAfterOffset = args.afterOffset;
+    let consecutiveLifecycleFailures = 0;
+    const shouldRetryLifecycleFailure = (error: unknown) => {
+      if (!isRecoverableStreamWaitLifecycleError(error)) return false;
+      consecutiveLifecycleFailures += 1;
+      return consecutiveLifecycleFailures < MAX_CONSECUTIVE_STREAM_WAIT_LIFECYCLE_FAILURES;
+    };
 
     // A cursor-less DO wait is live-from-the-head at which that individual
     // subscription opens. Re-arming it with no cursor would therefore skip a
@@ -644,14 +658,20 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       try {
         head = Promise.resolve(this.durableObjectStub.getMaxOffset());
       } catch (error) {
+        if (shouldRetryLifecycleFailure(error)) continue;
         rethrowStreamUnavailable(error);
       }
       const outcome = await settleByDeadline(head, attemptDeadline, Date.now);
       if (outcome.status === "fulfilled") {
+        consecutiveLifecycleFailures = 0;
         replayAfterOffset = outcome.value;
         break;
       }
-      if (outcome.status === "rejected") rethrowStreamUnavailable(outcome.error);
+      if (outcome.status === "rejected") {
+        if (shouldRetryLifecycleFailure(outcome.error)) continue;
+        rethrowStreamUnavailable(outcome.error);
+      }
+      consecutiveLifecycleFailures = 0;
     }
 
     const terminal = Promise.withResolvers<StreamEvent>();
@@ -677,18 +697,22 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           }),
         ).then((result) => detachPlainRpcResult(result));
       } catch (error) {
+        if (shouldRetryLifecycleFailure(error)) continue;
         rethrowStreamUnavailable(error);
       }
 
       // A superseded call can still report an ephemeral match that a fresh
       // subscription cannot replay. Let that success win. Likewise, retain a
-      // late predicate/application/lifecycle failure as the terminal result;
-      // only the explicitly modelled slice timeout is safe to replace with a
-      // fresh durable replay. In particular, an explicit kill must retain the
-      // public `stream-unavailable` rejection contract rather than being
-      // hidden behind recovery until the caller's deadline.
+      // late predicate/application failure as the terminal result. An
+      // ordinary lifecycle reset is exactly what this loop re-acquires across;
+      // an explicit kill remains terminal and keeps the public
+      // `stream-unavailable` rejection contract. Only a lifecycle reset or the
+      // explicitly modelled slice timeout is safe to replace with a fresh
+      // durable replay.
       void wait.then(terminal.resolve, (error: unknown) => {
-        if (!isStreamWaitTimeoutError(error)) terminal.reject(error);
+        if (!isStreamWaitTimeoutError(error) && !isRecoverableStreamWaitLifecycleError(error)) {
+          terminal.reject(error);
+        }
       });
 
       const outcome = await settleByDeadline(
@@ -699,11 +723,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       if (outcome.status === "fulfilled") return outcome.value;
       if (outcome.status === "rejected") {
         if (isStreamWaitTimeoutError(outcome.error)) {
+          consecutiveLifecycleFailures = 0;
           lastSliceTimeout = outcome.error;
           continue;
         }
+        if (shouldRetryLifecycleFailure(outcome.error)) continue;
         rethrowStreamUnavailable(outcome.error);
       }
+      consecutiveLifecycleFailures = 0;
     }
 
     throw new Error(
@@ -4862,10 +4889,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * The itx at the project root, addressable by `prj_…` id OR by URL slug — the
    * browser passes `params.projectSlug` straight through, no client-side
    * slug→id hop (`get("acme")` and `get("prj_123")` both work). Resolution
-   * rides the KV-cached project directory ({@link resolveProjectIdBySlug},
-   * which passes `prj_` ids through untouched and resolves slugs); slugs are
-   * immutable, so a slug handle can't silently repoint. Confinement stays keyed
-   * on the resolved id — the access check runs on the id, never the raw input.
+   * rides the bounded KV-cached project directory ({@link resolveProjectIdBySlug},
+   * which passes `prj_` ids through untouched and resolves slugs). Confinement
+   * stays keyed on the resolved id — the access check runs on the id, never the
+   * raw input — while expiring cache entries bound stale aliases after a rename.
    */
   async get(idOrSlug: string): Promise<ProjectRpcTarget> {
     const projectId = await resolveProjectIdBySlug({
@@ -4891,12 +4918,17 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   }
 
   /**
-   * Register and bootstrap a project. By default this resolves once the
+   * Register and bootstrap a project. Auth registration is the durable resume
+   * point: if a later birth append fails, retrying the same slug or caller ID
+   * adopts that exact auth row and replays the idempotent birth append. An
+   * auth-only row is the explicit `deploymentStatus: "missing"` state already
+   * surfaced and resumed by the projects page, not a second project identity.
+   * By default this resolves once the
    * bootstrap saga has committed `project/ready` — the right shape for
    * scripts and pipelined chains that use the project immediately.
    *
    * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
-   * registered, directory primed, birth events appended. The saga keeps
+   * registered, cache prime attempted, birth events appended. The saga keeps
    * running behind the returned handle — create still drives processor birth
    * via a post-response nudge, so no caller has to. Progress is ordinary
    * live state (`state.reduced.ready` flips when bootstrap lands), and
@@ -4939,7 +4971,6 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       projectId: args.projectId,
     });
 
-    const creatorEmail = userPrincipalOf(this.props.auth)?.email;
     const appendRootEvents = () =>
       stream.append(
         {
@@ -4949,7 +4980,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
             config: {
               onboardingActive: true,
               slug: registered.slug,
-              ...(creatorEmail === undefined ? {} : { creatorEmail }),
+              ...(registered.creatorEmail === null
+                ? {}
+                : { creatorEmail: registered.creatorEmail }),
             },
           },
         },
@@ -5005,51 +5038,50 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   /**
    * Register the project with the auth worker before any itx state exists.
    *
-   * The auth worker is the project directory and the id authority. The user
-   * lane creates the org-owned directory row (which is what later puts the
-   * project into the user's claims); the admin lane only needs an id. Admin
-   * callers may bring their own id (test fixtures); we never mint prj_ ids
-   * locally when the directory is configured.
+   * The auth worker is the durable project directory and id authority. User
+   * creates are owned by their organization; principal-less admin fixtures
+   * are explicitly unowned rows. Admin callers may bring their own id. This
+   * row is also the bootstrap saga's durable retry identity: a failed later
+   * append is resumed by adopting the row and replaying deterministic
+   * idempotency keys, while project listings classify it as `missing`.
    *
    * EVERY user principal takes the user lane, including platform-admin users
    * creating from the dashboard. Admin-ness must not reroute a human create
-   * into the fixture lane: that lane mints a bare id with no org-owned
-   * directory row, so the project would never enter the creator's claims
-   * (project list, slug routes) and org members could never find it. The
-   * mint-only lane is for principal-less admin credentials (admin API secret,
-   * trusted-internal) whose fixtures live outside any customer organization.
+   * into the fixture lane: that lane deliberately registers an unowned row
+   * for admin API secret and trusted-internal fixtures.
    */
   async #registerProject(args: {
     organizationSlug?: string;
     projectId?: string;
     slug: string;
-  }): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
+  }): Promise<{
+    organizationId: string | null;
+    creatorEmail: string | null;
+    projectId: string;
+    slug: string;
+  }> {
     const userPrincipal = userPrincipalOf(this.props.auth);
-
-    if (userPrincipal) {
-      const organizationSlug = resolveOrganizationSlugForCreate(
-        userPrincipal,
-        args.organizationSlug,
-      );
-      const result = await env.AUTH.createProjectForOrganization({
-        organizationSlug,
-        name: args.slug,
-        slug: args.slug,
-        ...(args.projectId === undefined ? {} : { id: args.projectId }),
-      });
-      if (!result.ok) throw new Error(result.message);
-      const created = result.project;
-      return { organizationId: created.organizationId, projectId: created.id, slug: created.slug };
-    }
-
-    if (!this.props.auth.isAdmin()) {
+    if (!userPrincipal && !this.props.auth.isAdmin()) {
       throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
     }
-    if (args.projectId !== undefined) {
-      return { organizationId: null, projectId: args.projectId, slug: args.slug };
-    }
-    const minted = await env.AUTH.mintProjectId();
-    return { organizationId: null, projectId: minted.id, slug: args.slug };
+    const organizationSlug = userPrincipal
+      ? resolveOrganizationSlugForCreate(userPrincipal, args.organizationSlug)
+      : undefined;
+    const result = await env.AUTH.registerProject({
+      name: args.slug,
+      slug: args.slug,
+      organizationSlug: organizationSlug ?? null,
+      ...(userPrincipal?.email === undefined ? {} : { creatorEmail: userPrincipal.email }),
+      ...(args.projectId === undefined ? {} : { id: args.projectId }),
+    });
+    if (!result.ok) throw new Error(result.message);
+    const registered = result.project;
+    return {
+      organizationId: registered.organizationId,
+      creatorEmail: registered.creatorEmail,
+      projectId: registered.id,
+      slug: registered.slug,
+    };
   }
 
   /**
@@ -5059,7 +5091,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
-   * "deployment" (every directory-known project) requires an admin principal
+   * "deployment" (every auth-registered project) requires an admin principal
    * and is the default for non-user admin principals, which have no claims.
    */
   async list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]> {
@@ -5082,8 +5114,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * Which projects the list covers, and what we know about each before the
    * engine probe. The scope is explicit (see the contract): "mine" reads the
    * caller's claims even when admin credentials ride the same socket; the
-   * "deployment" scope (PROJECT_DIRECTORY KV, every known project — record
-   * `name` is the PROJECT name, so no organization name) requires an admin
+   * "deployment" scope (every auth-registered project — record `name` is the
+   * PROJECT name, so no organization name) requires an admin
    * principal. Non-user admin principals have no claims, so they default to
    * "deployment"; impersonated users (test lane) list their scopes,
    * directory-read.
@@ -5099,7 +5131,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       if (!this.props.auth.isAdmin()) {
         throw new Error('projects.list({ scope: "deployment" }) requires an admin principal');
       }
-      const records = await listProjectDirectory(env.PROJECT_DIRECTORY);
+      const records = await listProjectDirectory();
       return records.map((record) => ({
         id: record.id,
         slug: record.slug,
@@ -5516,11 +5548,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * `projects.create()`.
    */
   async identity(): Promise<ProjectIdentity> {
-    // readProjectById folds transient KV read errors into null; one retry
-    // keeps a blip from reporting a just-created project as missing.
-    const record =
-      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId)) ??
-      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId));
+    const record = await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId);
     if (record == null) {
       throw new Error(`Project ${this.#props.projectId} is missing from the project directory.`);
     }

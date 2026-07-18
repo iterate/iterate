@@ -1,6 +1,7 @@
 /** @name getProjectBySlug */
 SELECT id,
   organization_id AS organizationId,
+  creator_email AS creatorEmail,
   name,
   slug,
   metadata,
@@ -12,6 +13,7 @@ LIMIT 1;
 /** @name getProjectById */
 SELECT id,
   organization_id AS organizationId,
+  creator_email AS creatorEmail,
   name,
   slug,
   metadata,
@@ -57,6 +59,19 @@ WHERE organization_id = :organizationId
 ORDER BY created_at ASC,
   slug ASC;
 
+/** @name listProjects */
+SELECT id,
+  organization_id AS organizationId,
+  creator_email AS creatorEmail,
+  name,
+  slug,
+  metadata,
+  archived_at AS archivedAt
+FROM project
+ORDER BY created_at ASC,
+  slug ASC
+LIMIT :limit;
+
 /** @name listProjectsForUser */
 SELECT p.id,
   p.organization_id AS organizationId,
@@ -70,10 +85,11 @@ WHERE m.userId = :userId
 ORDER BY p.created_at ASC,
   p.slug ASC;
 
-/** @name insertProjectReturning */
+/** @name insertProjectIfAbsent */
 INSERT INTO project (
   id,
   organization_id,
+  creator_email,
   name,
   slug,
   metadata,
@@ -84,6 +100,7 @@ INSERT INTO project (
 VALUES (
   :id,
   :organizationId,
+  :creatorEmail,
   :name,
   :slug,
   :metadata,
@@ -91,12 +108,7 @@ VALUES (
   :createdAt,
   :updatedAt
 )
-RETURNING id,
-  organization_id,
-  name,
-  slug,
-  metadata,
-  archived_at;
+ON CONFLICT DO NOTHING;
 
 /** @name updateProjectReturning */
 UPDATE project
@@ -107,6 +119,7 @@ SET name = :name,
 WHERE id = :id
 RETURNING id,
   organization_id,
+  creator_email,
   name,
   slug,
   metadata,

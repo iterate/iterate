@@ -1,7 +1,9 @@
 import { contextStorage } from "hono/context-storage";
 import type {
-  InternalCreateProjectForOrganizationInput,
+  InternalListProjectsInput,
+  InternalRegisterProjectInput,
   InternalIntrospectOAuthAccessTokenInput,
+  ProjectIdInput,
   ProjectInput,
 } from "@iterate-com/auth-contract";
 import type {
@@ -36,10 +38,11 @@ import {
   validateProjectAppSession as validateProjectAppSessionToken,
 } from "./project-app-session.ts";
 import {
-  createProjectForOrganization,
+  getProjectById,
   getProjectBySlug,
+  listProjects,
   listProjectsForUser,
-  mintProjectId,
+  registerProject,
   userCanAccessProject,
 } from "./project-directory.ts";
 
@@ -200,12 +203,20 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
     return app.fetch(request, this.env, this.ctx);
   }
 
-  createProjectForOrganization(input: InternalCreateProjectForOrganizationInput) {
-    return createProjectForOrganization(input, db);
+  registerProject(input: InternalRegisterProjectInput) {
+    return registerProject(input, db);
+  }
+
+  getProjectById(input: ProjectIdInput) {
+    return getProjectById(input, db);
   }
 
   getProjectBySlug(input: ProjectInput) {
     return getProjectBySlug(input, db);
+  }
+
+  listProjects(input: InternalListProjectsInput) {
+    return listProjects(input, db);
   }
 
   listProjectsForUser(input: { userId: string }) {
@@ -218,10 +229,6 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
 
   validateProjectAppSession(input: ValidateProjectAppSessionInput) {
     return validateProjectAppSessionToken(input, projectAppSessionDependencies());
-  }
-
-  mintProjectId() {
-    return mintProjectId();
   }
 
   introspectAccessToken(input: InternalIntrospectOAuthAccessTokenInput) {

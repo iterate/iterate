@@ -3,6 +3,7 @@ import type { Client } from "sqlfu";
 const getProjectBySlugSql = `
 SELECT id,
   organization_id AS organizationId,
+  creator_email AS creatorEmail,
   name,
   slug,
   metadata,
@@ -34,7 +35,8 @@ export namespace getProjectBySlug {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organizationId?: string;
+    creatorEmail?: string;
     name: string;
     slug: string;
     metadata: string;
@@ -45,6 +47,7 @@ export namespace getProjectBySlug {
 const getProjectByIdSql = `
 SELECT id,
   organization_id AS organizationId,
+  creator_email AS creatorEmail,
   name,
   slug,
   metadata,
@@ -76,7 +79,8 @@ export namespace getProjectById {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organizationId?: string;
+    creatorEmail?: string;
     name: string;
     slug: string;
     metadata: string;
@@ -166,7 +170,7 @@ export namespace getProjectWithOrganizationBySlug {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organizationId?: string;
     name: string;
     slug: string;
     metadata: string;
@@ -213,7 +217,51 @@ export namespace listProjectsByOrganizationId {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organizationId?: string;
+    name: string;
+    slug: string;
+    metadata: string;
+    archivedAt?: number;
+  };
+}
+
+const listProjectsSql = `
+SELECT id,
+  organization_id AS organizationId,
+  creator_email AS creatorEmail,
+  name,
+  slug,
+  metadata,
+  archived_at AS archivedAt
+FROM project
+ORDER BY created_at ASC,
+  slug ASC
+LIMIT ?;
+`.trim();
+const listProjectsQuery = (params: listProjects.Params) => ({
+  name: "listProjects",
+  sql: listProjectsSql,
+  args: [params.limit],
+});
+
+export const listProjects = Object.assign(
+  async function listProjects(
+    client: Client,
+    params: listProjects.Params,
+  ): Promise<listProjects.Result[]> {
+    return client.all<listProjects.Result>(listProjectsQuery(params));
+  },
+  { sql: listProjectsSql, query: listProjectsQuery },
+);
+
+export namespace listProjects {
+  export type Params = {
+    limit: number;
+  };
+  export type Result = {
+    id: string;
+    organizationId?: string;
+    creatorEmail?: string;
     name: string;
     slug: string;
     metadata: string;
@@ -256,7 +304,7 @@ export namespace listProjectsForUser {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organizationId?: string;
     name: string;
     slug: string;
     metadata: string;
@@ -264,10 +312,11 @@ export namespace listProjectsForUser {
   };
 }
 
-const insertProjectReturningSql = `
+const insertProjectIfAbsentSql = `
 INSERT INTO project (
   id,
   organization_id,
+  creator_email,
   name,
   slug,
   metadata,
@@ -283,21 +332,18 @@ VALUES (
   ?,
   ?,
   ?,
+  ?,
   ?
 )
-RETURNING id,
-  organization_id,
-  name,
-  slug,
-  metadata,
-  archived_at;
+ON CONFLICT DO NOTHING;
 `.trim();
-const insertProjectReturningQuery = (params: insertProjectReturning.Params) => ({
-  name: "insertProjectReturning",
-  sql: insertProjectReturningSql,
+const insertProjectIfAbsentQuery = (params: insertProjectIfAbsent.Params) => ({
+  name: "insertProjectIfAbsent",
+  sql: insertProjectIfAbsentSql,
   args: [
     params.id,
     params.organizationId,
+    params.creatorEmail,
     params.name,
     params.slug,
     params.metadata,
@@ -307,62 +353,24 @@ const insertProjectReturningQuery = (params: insertProjectReturning.Params) => (
   ],
 });
 
-function insertProjectReturningMapResult(
-  row: insertProjectReturning.RawResult,
-): insertProjectReturning.Result {
-  return {
-    id: row.id,
-    organizationId: row.organization_id,
-    name: row.name,
-    slug: row.slug,
-    metadata: row.metadata,
-    archivedAt: row.archived_at,
-  };
-}
-
-export const insertProjectReturning = Object.assign(
-  async function insertProjectReturning(
-    client: Client,
-    params: insertProjectReturning.Params,
-  ): Promise<insertProjectReturning.Result> {
-    const rows = await client.all<insertProjectReturning.RawResult>(
-      insertProjectReturningQuery(params),
-    );
-    return insertProjectReturningMapResult(rows[0]!);
+export const insertProjectIfAbsent = Object.assign(
+  async function insertProjectIfAbsent(client: Client, params: insertProjectIfAbsent.Params) {
+    return client.run(insertProjectIfAbsentQuery(params));
   },
-  {
-    sql: insertProjectReturningSql,
-    query: insertProjectReturningQuery,
-    mapResult: insertProjectReturningMapResult,
-  },
+  { sql: insertProjectIfAbsentSql, query: insertProjectIfAbsentQuery },
 );
 
-export namespace insertProjectReturning {
+export namespace insertProjectIfAbsent {
   export type Params = {
     id: string;
-    organizationId: string;
+    organizationId: string | null;
+    creatorEmail: string | null;
     name: string;
     slug: string;
     metadata: string;
     archivedAt: number | null;
     createdAt: number;
     updatedAt: number;
-  };
-  export type RawResult = {
-    id: string;
-    organization_id: string;
-    name: string;
-    slug: string;
-    metadata: string;
-    archived_at?: number;
-  };
-  export type Result = {
-    id: string;
-    organizationId: string;
-    name: string;
-    slug: string;
-    metadata: string;
-    archivedAt?: number;
   };
 }
 
@@ -375,6 +383,7 @@ SET name = ?,
 WHERE id = ?
 RETURNING id,
   organization_id,
+  creator_email,
   name,
   slug,
   metadata,
@@ -395,6 +404,7 @@ function updateProjectReturningMapResult(
   return {
     id: row.id,
     organizationId: row.organization_id,
+    creatorEmail: row.creator_email,
     name: row.name,
     slug: row.slug,
     metadata: row.metadata,
@@ -432,7 +442,8 @@ export namespace updateProjectReturning {
   };
   export type RawResult = {
     id: string;
-    organization_id: string;
+    organization_id?: string;
+    creator_email?: string;
     name: string;
     slug: string;
     metadata: string;
@@ -440,7 +451,8 @@ export namespace updateProjectReturning {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organizationId?: string;
+    creatorEmail?: string;
     name: string;
     slug: string;
     metadata: string;

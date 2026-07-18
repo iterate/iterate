@@ -45,7 +45,8 @@ create index "invitation_email_idx" on "invitation" ("email");
 
 CREATE TABLE "project" (
   id TEXT PRIMARY KEY NOT NULL,
-  organization_id TEXT NOT NULL,
+  organization_id TEXT,
+  creator_email TEXT,
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
   metadata TEXT NOT NULL,

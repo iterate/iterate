@@ -147,7 +147,8 @@ export type OrganizationRow = {
 
 export type ProjectRow = {
   id: string;
-  organization_id: string;
+  organization_id: string | null;
+  creator_email: string | null;
   name: string;
   slug: string;
   metadata: string;
