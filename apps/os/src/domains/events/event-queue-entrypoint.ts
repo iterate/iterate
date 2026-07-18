@@ -37,73 +37,120 @@ export async function handleEventQueueBatch(
   batch: MessageBatch,
   env: EventQueueEnv,
 ): Promise<void> {
-  if (!isWorkerEventsQueue(batch.queue, env)) {
-    console.warn(`[event-queue] received batch from unexpected queue ${batch.queue}`);
-  }
+  const batchStartedAt = Date.now();
+  let fanoutDurationMs: number | undefined;
+  let globalCaptureDurationMs: number | undefined;
+  let subscriptionDurationMs: number | undefined;
+  let successfulFanoutCount = 0;
+  let subscriptionRepoCount = 0;
+  let outcome: EventQueueBatchOutcome = "errored";
 
-  // Finish the authoritative stream fanout for the whole batch before making
-  // any account-level control-plane calls. Repo streams are independent, so
-  // fan them out concurrently instead of making the tenth project wait for
-  // nine unrelated Durable Objects.
-  const fanoutResults = await Promise.all(
-    batch.messages.map(async (message): Promise<RepoFanoutResult | null> => {
-      const cloudflareEvent = cloudflareEventFromMessageBody(message.body);
-      if (cloudflareEvent === null) {
-        console.warn(`[event-queue] ignoring unrecognized message ${message.id}`);
-        message.ack();
-        return null;
-      }
-
-      try {
-        const repoNameToSubscribe = await appendRepoArtifactEventIfAddressable({
-          env,
-          message,
-          event: cloudflareEvent,
-        });
-        return { message, repoNameToSubscribe };
-      } catch (error) {
-        console.error(`[event-queue] failed to fan out message ${message.id}`, error);
-        message.retry();
-        return null;
-      }
-    }),
-  );
-  const successfulFanouts = fanoutResults.filter(
-    (result): result is RepoFanoutResult => result !== null,
-  );
-  if (successfulFanouts.length === 0) return;
-
-  // One append preserves per-message idempotency while avoiding ten serial
-  // round trips to the deployment-global capture stream.
   try {
-    await appendCloudflareCaptures({
-      env,
-      messages: successfulFanouts.map((result) => result.message),
+    await handleEventQueueBatchInner();
+  } finally {
+    console.log("[event-queue] batch finished", {
+      event: "event-queue.batch-finished",
+      fanoutDurationMs,
+      globalCaptureDurationMs,
+      messageCount: batch.messages.length,
+      outcome,
+      queue: batch.queue,
+      subscriptionDurationMs,
+      subscriptionRepoCount,
+      successfulFanoutCount,
+      totalDurationMs: Date.now() - batchStartedAt,
     });
-  } catch (error) {
-    console.error(
-      `[event-queue] failed to globally capture ${successfulFanouts.length} messages`,
-      error,
-    );
-    for (const { message } of successfulFanouts) message.retry();
-    return;
   }
 
-  const repoNamesToSubscribe = new Set(
-    successfulFanouts.flatMap((result) =>
-      result.repoNameToSubscribe === null ? [] : [result.repoNameToSubscribe],
-    ),
-  );
-  await ensureRepoEventSubscriptionsIfConfigured({
-    env,
-    repoNames: [...repoNamesToSubscribe],
-  });
+  async function handleEventQueueBatchInner(): Promise<void> {
+    if (!isWorkerEventsQueue(batch.queue, env)) {
+      console.warn(`[event-queue] received batch from unexpected queue ${batch.queue}`);
+    }
 
-  // Provisioning failures are bounded and logged inside the helper. Preserve
-  // the previous best-effort semantics, but acknowledge only after the attempt
-  // so an interrupted invocation retries its idempotent stream appends.
-  for (const { message } of successfulFanouts) message.ack();
+    // Finish the authoritative stream fanout for the whole batch before making
+    // any account-level control-plane calls. Repo streams are independent, so
+    // fan them out concurrently instead of making the tenth project wait for
+    // nine unrelated Durable Objects.
+    const fanoutStartedAt = Date.now();
+    const fanoutResults = await Promise.all(
+      batch.messages.map(async (message): Promise<RepoFanoutResult | null> => {
+        const cloudflareEvent = cloudflareEventFromMessageBody(message.body);
+        if (cloudflareEvent === null) {
+          console.warn(`[event-queue] ignoring unrecognized message ${message.id}`);
+          message.ack();
+          return null;
+        }
+
+        try {
+          const repoNameToSubscribe = await appendRepoArtifactEventIfAddressable({
+            env,
+            message,
+            event: cloudflareEvent,
+          });
+          return { message, repoNameToSubscribe };
+        } catch (error) {
+          console.error(`[event-queue] failed to fan out message ${message.id}`, error);
+          message.retry();
+          return null;
+        }
+      }),
+    );
+    fanoutDurationMs = Date.now() - fanoutStartedAt;
+    const successfulFanouts = fanoutResults.filter(
+      (result): result is RepoFanoutResult => result !== null,
+    );
+    successfulFanoutCount = successfulFanouts.length;
+    if (successfulFanouts.length === 0) {
+      outcome = "no-successful-fanouts";
+      return;
+    }
+
+    // One append preserves per-message idempotency while avoiding ten serial
+    // round trips to the deployment-global capture stream.
+    const globalCaptureStartedAt = Date.now();
+    try {
+      await appendCloudflareCaptures({
+        env,
+        messages: successfulFanouts.map((result) => result.message),
+      });
+      globalCaptureDurationMs = Date.now() - globalCaptureStartedAt;
+    } catch (error) {
+      globalCaptureDurationMs = Date.now() - globalCaptureStartedAt;
+      console.error(
+        `[event-queue] failed to globally capture ${successfulFanouts.length} messages`,
+        error,
+      );
+      for (const { message } of successfulFanouts) message.retry();
+      outcome = "global-capture-failed";
+      return;
+    }
+
+    const repoNamesToSubscribe = new Set(
+      successfulFanouts.flatMap((result) =>
+        result.repoNameToSubscribe === null ? [] : [result.repoNameToSubscribe],
+      ),
+    );
+    subscriptionRepoCount = repoNamesToSubscribe.size;
+    const subscriptionStartedAt = Date.now();
+    await ensureRepoEventSubscriptionsIfConfigured({
+      env,
+      repoNames: [...repoNamesToSubscribe],
+    });
+    subscriptionDurationMs = Date.now() - subscriptionStartedAt;
+
+    // Provisioning failures are bounded and logged inside the helper. Preserve
+    // the previous best-effort semantics, but acknowledge only after the attempt
+    // so an interrupted invocation retries its idempotent stream appends.
+    for (const { message } of successfulFanouts) message.ack();
+    outcome = "completed";
+  }
 }
+
+type EventQueueBatchOutcome =
+  | "completed"
+  | "errored"
+  | "global-capture-failed"
+  | "no-successful-fanouts";
 
 type RepoFanoutResult = {
   message: Message;
