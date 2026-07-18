@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs, type DeployedEnv } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
-import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { deployApp, runTimedDeployPhase } from "../../../scripts/lib/deploy-app.ts";
 import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
@@ -58,6 +58,7 @@ import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
+const OS_DEPLOY_LABEL = "apps/os";
 
 /** Preview OS always runs its first-party integration proof against the
  * sibling dummy Petshop. Keep the formerly optional deployment setting from
@@ -124,7 +125,7 @@ export default async function deploy(
 ) {
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
-    appLabel: "apps/os",
+    appLabel: OS_DEPLOY_LABEL,
     envs,
     dopplerProject: "os",
     env: options.env,
@@ -145,23 +146,28 @@ export default async function deploy(
       });
       // The live-secret assertions and JWKS fetch are independent network
       // reads. Complete them together before any deployed resource changes.
-      const [staticAuthJwks] = await Promise.all([
-        bakeStaticAuthJwks({
-          authBaseUrl: ctx.env.authBaseUrl,
-          envName: ctx.name,
-          dopplerConfig: ctx.env.dopplerConfig,
-          secrets: ctx.secrets,
-        }),
-        Promise.all(
-          RETIRED_WORKER_SECRETS.map((secretName) =>
-            assertWorkerSecretAbsent({
-              cf: ctx.cf,
-              workerName: ctx.env.osWorkerName,
-              secretName,
+      const [staticAuthJwks] = await runTimedDeployPhase(
+        OS_DEPLOY_LABEL,
+        "prepare: auth and secret preflight",
+        () =>
+          Promise.all([
+            bakeStaticAuthJwks({
+              authBaseUrl: ctx.env.authBaseUrl,
+              envName: ctx.name,
+              dopplerConfig: ctx.env.dopplerConfig,
+              secrets: ctx.secrets,
             }),
-          ),
-        ),
-      ]);
+            Promise.all(
+              RETIRED_WORKER_SECRETS.map((secretName) =>
+                assertWorkerSecretAbsent({
+                  cf: ctx.cf,
+                  workerName: ctx.env.osWorkerName,
+                  secretName,
+                }),
+              ),
+            ),
+          ]),
+      );
 
       // Baked at deploy time, so it's the one secret not in secrets.required.
       secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = staticAuthJwks;
@@ -202,24 +208,34 @@ export default async function deploy(
       await Promise.all([
         // Wrangler validates these bindings at upload, so every resource must
         // exist before deployApp uploads the main OS version.
-        ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName),
-        ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`),
-        ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`),
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: event queue", () =>
+          ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName),
+        ),
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: files bucket", () =>
+          ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`),
+        ),
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: search bucket", () =>
+          ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`),
+        ),
         // Exports cannot enable namespaces they create (upstream gap), so the
         // container classes must already be container-enabled.
-        ensureContainerClasses({
-          ctx,
-          workerName: ctx.env.osWorkerName,
-          containerClassNames: SANDBOX_INSTANCE_TYPES.map(
-            (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-          ),
-          compatibilityDate: COMPATIBILITY_DATE,
-        }),
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: container classes", () =>
+          ensureContainerClasses({
+            ctx,
+            workerName: ctx.env.osWorkerName,
+            containerClassNames: SANDBOX_INSTANCE_TYPES.map(
+              (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+            ),
+            compatibilityDate: COMPATIBILITY_DATE,
+          }),
+        ),
         ...["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"].map((sidecarConfig) =>
-          runAsync(
-            "pnpm",
-            ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name],
-            { cwd: appRoot, env: credentials },
+          runTimedDeployPhase(OS_DEPLOY_LABEL, `prepare: ${sidecarConfig}`, () =>
+            runAsync(
+              "pnpm",
+              ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name],
+              { cwd: appRoot, env: credentials },
+            ),
           ),
         ),
       ]);

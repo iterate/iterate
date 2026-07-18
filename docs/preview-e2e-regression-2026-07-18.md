@@ -210,6 +210,21 @@ allows three total facade acquisitions under the same public deadline, with
 application failures still never retried; a regression test exercises two
 consecutive lifecycle resets before success.
 
+Experiment 10 rebased the complete fix set onto `main@aa445a659` and passed
+the full fleet with **zero retry telemetry**, but took **3m18s**
+([Depot job `6k9rplhhdt`](https://depot.dev/orgs/0p91s0lz49/workflows/4jdwjzkj7t?job=6k9rplhhdt)).
+All five app deployments and all five app test suites overlapped. OS remained
+the long pole: deploy took 77.8s and tests took 92.8s; its smoke, TUI, Vitest,
+and Playwright sublanes took 22s, 18s, 75s, and 87s. The other test lanes
+finished in 9.7s (dummy Petshop), 11.3s (auth), 14.1s (semaphore), and 57.8s
+(streams example). The deliberate page-freeze/socket-death specs emitted their
+expected transport-suspicion warnings and then proved recovery with subscribed
+runtimes and zero ingest failures; those are modelled test stimuli, not ambient
+errors. The clean result retires the retry-root-cause phase, but it does not
+meet the sub-three-minute acceptance bar. The next run adds phase-level deploy
+timings before choosing between upload/control-plane work and test-fixture
+reuse; no lane will be serialized to mask the overrun.
+
 That run also exposed an independent resource leak in slot handover. Reset took
 131.3s and deleted only 100 AI Search instances before its 90s deadline. The
 namespace still held 498 instances immediately after reset and 551 after the
@@ -522,7 +537,7 @@ observable.
   defect, not preview overload, and no project-create/capacity failure occurred.
 - 2026-07-18: replaced those facts with a zero-footprint platform subscription
   derived from `stream/created`. Focused tests prove exact birth delivery,
-  hidden config, and durable cursor advancement; the full 1,912-test OS unit
+  hidden config, and durable cursor advancement; the full 1,989-test OS unit
   suite, shared suite, typechecks, lint, formatting, and Knip pass locally.
 - 2026-07-18: corrected the cache test to compare the cached provider response.
   Cloudflare traces proved the workspace retry actually died during readiness
@@ -531,10 +546,14 @@ observable.
   deadline and has a two-reset regression test. Console retry telemetry now
   includes the first retained stack location because Depot-backed artifacts
   are not accessible through the GitHub artifact endpoint.
-- Next: deploy these changes at the same diagnostic concurrency, fix every
-  remaining first-attempt failure, then start the 25-run clean sub-three-minute
-  proof and the separate 15+ simultaneous preview-slot churn campaign. PR
-  comments mirror each experiment and result rather than rewriting history here.
+- 2026-07-18: experiment 10 passed the full fleet with zero retry telemetry in
+  3m18s (OS deploy 77.8s; OS tests 92.8s; smoke 22s; TUI 18s; Vitest 75s;
+  Playwright 87s). This is the first clean merged-main baseline, but it misses
+  the SLA by 18s. All app lanes and OS sublanes remained parallel.
+- Next: instrument the OS deploy phases, remove the measured critical-path
+  waste, then start the 25-run clean sub-three-minute proof and the separate
+  15+ simultaneous preview-slot churn campaign. PR comments mirror each
+  experiment and result rather than rewriting history here.
 
 <details>
 <summary>All 162 failed preview attempts</summary>

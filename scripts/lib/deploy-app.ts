@@ -23,6 +23,34 @@ export interface SmokeProbe {
 }
 
 /**
+ * Emit one stable timing pair around a deploy phase. Preview CI is dominated
+ * by remote control-plane waits, so a single app-level duration is not enough
+ * to distinguish our build from Cloudflare upload, resource reconciliation,
+ * or readiness. Keep this helper tiny and shared so app-specific preparation
+ * can use the same log contract as the generic deploy pipeline.
+ */
+export async function runTimedDeployPhase<T>(
+  appLabel: string,
+  phase: string,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  console.log(`[deploy:${appLabel}] phase start: ${phase}`);
+  let outcome = "passed";
+  try {
+    return await operation();
+  } catch (error) {
+    outcome = "failed";
+    throw error;
+  } finally {
+    const elapsedSeconds = (performance.now() - startedAt) / 1_000;
+    console.log(
+      `[deploy:${appLabel}] phase finish: ${phase} (${elapsedSeconds.toFixed(1)}s, ${outcome})`,
+    );
+  }
+}
+
+/**
  * THE deploy pipeline — the same top-to-bottom program every app runs:
  *
  *   resolve --env → assert resources provisioned → collect secrets →
@@ -85,12 +113,14 @@ export async function deployApp<E extends DeployableEnv>(input: {
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
   smokes: (env: E) => SmokeProbe[];
 }) {
-  const ctx = await resolveEnvContext({
-    envs: input.envs,
-    dopplerProject: input.dopplerProject,
-    env: input.env,
-    allowDopplerConfigFallback: true,
-  });
+  const ctx = await runTimedDeployPhase(input.appLabel, "resolve environment", () =>
+    resolveEnvContext({
+      envs: input.envs,
+      dopplerProject: input.dopplerProject,
+      env: input.env,
+      allowDopplerConfigFallback: true,
+    }),
+  );
   if (input.resources) assertProvisioned(ctx.name, input.resources(ctx.env));
   const workerName = input.workerName(ctx.env);
   console.log(
@@ -103,7 +133,12 @@ export async function deployApp<E extends DeployableEnv>(input: {
   };
   const secretValues = collectSecrets(ctx, input.requiredSecrets ?? [], input.optionalSecrets);
 
-  await input.prepare?.(ctx, secretValues, credentials);
+  const prepare = input.prepare;
+  if (prepare) {
+    await runTimedDeployPhase(input.appLabel, "prepare", () =>
+      prepare(ctx, secretValues, credentials),
+    );
+  }
 
   let builtConfig: string;
   let extraDeployArgs: string[] | undefined;
@@ -111,26 +146,39 @@ export async function deployApp<E extends DeployableEnv>(input: {
     builtConfig = "wrangler.jsonc";
     extraDeployArgs = ["--env", ctx.name];
   } else {
-    rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
-    run("pnpm", ["exec", "vite", "build"], {
-      cwd: input.appRoot,
-      env: { CLOUDFLARE_ENV: ctx.name, ...input.buildEnv?.(ctx) },
+    await runTimedDeployPhase(input.appLabel, "build", () => {
+      rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
+      run("pnpm", ["exec", "vite", "build"], {
+        cwd: input.appRoot,
+        env: { CLOUDFLARE_ENV: ctx.name, ...input.buildEnv?.(ctx) },
+      });
     });
     builtConfig = findBuiltWranglerConfig(input.appRoot);
   }
 
-  await deployWithSecrets({
-    cwd: input.appRoot,
-    builtConfig,
-    secretValues,
-    credentials,
-    extraDeployArgs,
-  });
+  await runTimedDeployPhase(input.appLabel, "upload and reconcile", () =>
+    deployWithSecrets({
+      cwd: input.appRoot,
+      builtConfig,
+      secretValues,
+      credentials,
+      extraDeployArgs,
+    }),
+  );
 
-  for (const probe of input.smokes(ctx.env)) {
-    await smoke(probe.url, probe.ok, probe.label);
+  await Promise.all(
+    input
+      .smokes(ctx.env)
+      .map((probe) =>
+        runTimedDeployPhase(input.appLabel, `smoke: ${probe.label}`, () =>
+          smoke(probe.url, probe.ok, probe.label),
+        ),
+      ),
+  );
+  const afterDeploy = input.afterDeploy;
+  if (afterDeploy) {
+    await runTimedDeployPhase(input.appLabel, "after deploy", () => afterDeploy(ctx, secretValues));
   }
-  await input.afterDeploy?.(ctx, secretValues);
 
   console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl(ctx.env)}`);
 }
