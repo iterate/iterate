@@ -1589,13 +1589,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // suite output and survived until Depot killed the entire 10m job.
         `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
         // The built-package PTY spec, e2e vitest lane, and Playwright specs all
-        // hit the same deployed slot. They provision independent projects,
-        // but that does not make their aggregate load independent: overlapping
-        // vitest's eight in-flight tests with Playwright's eight workers caused
-        // project-processor self-pull timeouts while both suites stayed clean
-        // in isolation. Run the three remote suites sequentially so the slot's
-        // tested peak is eight. The browser download above still overlaps the
-        // remote work because it does not touch the slot.
+        // hit the same deployed slot, but they are independent suites and must
+        // overlap: serializing them made the OS phase structurally exceed six
+        // minutes on a clean run. Their configured peak is explicit — TUI 1 +
+        // vitest 8 + Playwright 8 = 17 remote tests — and the lane markers
+        // below make each component's wall time visible. If that load exposes
+        // a product or preview-capacity defect, fail and diagnose it instead of
+        // hiding it behind permanent serialization.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -1610,13 +1610,18 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // Retry telemetry: the TUI and vitest lanes write the same compact
         // JSON shape (stale files were removed at the top of this script) for
         // preview.ts to fold into the PR body alongside Playwright's report.
-        `TUI_OK=0; E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts > /tmp/os-preview-tui.log 2>&1 || TUI_OK=$?`,
-        `E2E_OK=0; E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || E2E_OK=$?`,
-        'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
-        // Capture every lane's exit without aborting (set -e), then replay the
-        // redirected logs and fail once all three suites have had a chance to
-        // report their own result.
-        `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
+        // The helper preserves each background lane's exit code and always
+        // emits a duration marker, including failures and watchdog exits.
+        'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        `run_logged_lane tui /tmp/os-preview-tui.log env E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
+        `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
+        // A failed Chromium install must not orphan the two remote background
+        // lanes. Record it, join every child, replay their logs, then fail once.
+        'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
+        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
+        'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
+        'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         "cat /tmp/os-preview-vitest.log",
         "cat /tmp/os-preview-tui.log",
         '[ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',

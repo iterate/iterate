@@ -448,14 +448,14 @@ describe("preview test commands", () => {
     expect(workflow).not.toContain("            /tmp/marathon");
   });
 
-  test("keeps the OS TUI, vitest, and Playwright sub-lanes sequential", () => {
+  test("runs the OS TUI, vitest, and Playwright sub-lanes concurrently", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    // Only the chromium download runs in the background: it does not touch the
-    // deployed slot. The three remote suites must not overlap their independent
-    // worker pools and accidentally exceed the slot's tested concurrency.
-    const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts >";
-    const e2eLane = "pnpm e2e --project node >";
+    // Chromium installation and the two redirected lanes start in the
+    // background; Playwright runs in the foreground while TUI and Vitest are
+    // still active. Every child is joined and contributes to the final status.
+    const tuiLane = "run_logged_lane tui /tmp/os-preview-tui.log";
+    const e2eLane = "run_logged_lane vitest /tmp/os-preview-vitest.log";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
@@ -463,17 +463,21 @@ describe("preview test commands", () => {
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
     expect(script).toContain('wait "$PW_INSTALL_PID"');
-    expect(script).not.toContain("TUI_PID");
-    expect(script).not.toContain("E2E_PID");
+    expect(script).toContain("& TUI_PID=$!");
+    expect(script).toContain("& E2E_PID=$!");
+    expect(script).toContain('wait "$TUI_PID"');
+    expect(script).toContain('wait "$E2E_PID"');
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
-    // Install kicks off first; each remote suite finishes before the next one
-    // starts, and the install is joined before Playwright needs Chromium.
+    expect(script).toContain("[preview:os] lane start: $lane");
+    expect(script).toContain("[preview:os] lane finish: $lane");
+    // All background work starts before the foreground Playwright command.
     expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(tuiLane));
-    expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(e2eLane));
-    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
+    // Install failure is captured rather than exiting while remote children run.
+    expect(script).toContain('PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?');
+    expect(script).not.toContain("cat /tmp/os-preview-pw-install.log; exit 1");
   });
 });
 

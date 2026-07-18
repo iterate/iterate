@@ -36,14 +36,15 @@ seconds and run alongside OS.
   but instead of waiting for auth to finish first, the OS deploy _polls_ the
   slot's auth worker for JWKS (`bakeStaticAuthJwks` in `apps/os/scripts/deploy.ts`). All
   apps deploy at once.
-- **Parallelism is capped per deployed slot, not per runner process.** The OS
+- **Parallelism is explicit per deployed slot, not accidental.** The OS
   Vitest catalogue uses four workers with at most two concurrent tests each;
   Playwright uses eight fully-parallel workers. Each suite therefore peaks at
-  eight remote tests. The TUI, Vitest, and Playwright suites run sequentially
-  against one OS preview slot: overlapping the two eight-wide worker pools
-  produced project-processor self-pull timeouts even though each suite was
-  clean in isolation. The four apps' independent preview suites may still run
-  concurrently (`scripts/preview/preview.ts`).
+  eight remote tests. TUI, Vitest, and Playwright overlap against one OS slot
+  for an aggregate configured peak of 17. Each sublane emits start/finish
+  timing markers and retry telemetry. A capacity failure must stay visible and
+  be fixed; serializing independent suites made a clean OS phase exceed six
+  minutes. The four apps' independent preview suites also run concurrently
+  (`scripts/preview/preview.ts`).
 - **File-level parallelism plus bounded intra-file concurrency.** Every Vitest
   test provisions its own project, so files are independent (`fileParallelism`,
   `maxWorkers: 4`, `sequence.concurrent`, `maxConcurrency: 2`, `retry: 1` in

@@ -113,10 +113,11 @@ export default defineConfig({
     // single retry and two recovered inside the birth saga. Re-running the
     // complete runnable catalogue at peak 8 with retries disabled produced
     // zero storage resets in the matching trace window. The preview runner
-    // now keeps this peak from overlapping Playwright's eight workers; that
-    // omitted lane-wide load had still produced project-processor timeouts.
-    // Keep this at 4 unless a preview marathon plus trace audit proves a
-    // higher setting clean.
+    // overlaps this peak with Playwright's eight workers and the one TUI test:
+    // aggregate peak 17. That load is deliberate and measured; if it exposes
+    // a project-birth capacity defect, the run fails instead of permanently
+    // serializing independent suites. Keep this at 4 while the concurrent
+    // preview marathon and trace audit establish the next safe step.
     maxWorkers: 4,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
