@@ -284,7 +284,6 @@ export async function resolveItxAuth(input: {
   // An in-band RPC call cannot carry a rotated Set-Cookie back to the browser.
   const { session } = await auth.authenticateSession({
     headers: input.headers,
-    includeUserInfo: false,
     refresh: "never",
   });
   if (!session) throw new ItxAuthenticationError();

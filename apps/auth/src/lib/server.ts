@@ -268,8 +268,8 @@ export type AuthenticateErrorEvent = {
 type SessionAuthenticationOptions = {
   /**
    * Fetch fresh userinfo claims from the issuer while authenticating a cookie
-   * session. Route and API auth should usually leave this disabled so JWT
-   * validation stays local to the worker isolate.
+   * session. Defaults to false so route and API auth keep JWT validation local
+   * to the worker isolate.
    */
   includeUserInfo?: boolean;
   /** Reports failed session work, including a non-fatal refresh before successful verification. */
@@ -329,7 +329,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
   return {
     async authenticate({
       headers,
-      includeUserInfo = true,
+      includeUserInfo = false,
       onError,
       refresh = "if-needed",
     }: { headers: Headers } & SessionAuthenticationOptions): Promise<SessionAuthentication> {

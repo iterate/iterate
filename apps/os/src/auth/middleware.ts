@@ -124,7 +124,6 @@ async function resolveRequestAuth(input: {
   let authError: AuthenticateErrorEvent | null = null;
   const authentication = await input.auth.authenticate({
     headers: input.request.headers,
-    includeUserInfo: false,
     onError: (event) => {
       authError = event;
     },

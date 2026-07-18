@@ -231,6 +231,22 @@ describe("relying-party routes and sessions", () => {
     });
   });
 
+  it("keeps session authentication local unless userinfo is requested", async () => {
+    const signed = await signedTokenSet();
+    const getUserInfo = mock.fn(async () => null);
+    const auth = testAuthMiddleware(config, {
+      getUserInfo,
+      jwks: signed.jwks as never,
+    });
+
+    const result = await auth.authenticate({
+      headers: new Headers({ cookie: sessionCookie(signed.tokenSet) }),
+    });
+
+    assert.equal(result.session?.user.id, "usr_session");
+    assert.equal(getUserInfo.mock.callCount(), 0);
+  });
+
   it("does not rotate a still-valid session when refresh is disabled", async () => {
     const signed = await signedTokenSet({
       accessTokenExpiresAt: Date.now() + 15 * 1000,

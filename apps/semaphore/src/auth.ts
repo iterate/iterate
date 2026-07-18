@@ -64,7 +64,6 @@ export async function resolveRequestPrincipal(input: {
 }> {
   const authentication = await input.auth.authenticate({
     headers: input.headers,
-    includeUserInfo: false,
   });
   if (authentication.credential === null) {
     return {

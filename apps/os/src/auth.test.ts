@@ -77,7 +77,6 @@ describe("resolveItxAuth", () => {
     expect(authClient.authenticateSession).toHaveBeenCalledOnce();
     expect(authClient.authenticateSession).toHaveBeenCalledWith({
       headers,
-      includeUserInfo: false,
       refresh: "never",
     });
   });

@@ -39,11 +39,10 @@ export default {
 
     const authentication = await auth.authenticate({
       headers: request.headers,
-      includeUserInfo: false,
     });
     const response =
       authentication.credential === null
-        ? Response.redirect(new URL(`${auth.authHandlerBasePath}/login`, request.url))
+        ? Response.redirect(new URL(`${auth.authHandlerBasePath}/login`, request.url).href)
         : Response.json({ user: authentication.identity });
 
     // Session verification may rotate the refresh token inside the session
