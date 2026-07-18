@@ -171,6 +171,27 @@ describe("DurableDeliveryCoordinator", () => {
     expect(h.facts).toEqual([]);
   });
 
+  it("classifies alarm cleanup interrupted by a Durable Object reset outside error telemetry", async () => {
+    const h = makeHarness();
+    const reset = new Error("alarm storage read failed", {
+      cause: Object.assign(new Error("Durable Object reset because its code was updated"), {
+        durableObjectReset: true,
+        retryable: true,
+      }),
+    });
+    h.repointFailures.push(reset);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(h.coordinator.repointAfterAttempt()).resolves.toBeUndefined();
+
+    expect(info).toHaveBeenCalledWith(
+      "stream alarm repoint interrupted by durable object lifecycle",
+      { message: reset.message },
+    );
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it("exactly reprojects a live watchdog before terminally parking it", async () => {
     const h = makeHarness();
     vi.spyOn(console, "warn").mockImplementation(() => undefined);

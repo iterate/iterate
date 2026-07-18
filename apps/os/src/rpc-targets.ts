@@ -475,6 +475,15 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 }
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
+const MAX_CONSECUTIVE_STREAM_WAIT_LIFECYCLE_FAILURES = 3;
+
+/** Lifecycle loss is retryable for a waiter unless an operator explicitly killed the stream. */
+function isRecoverableStreamWaitLifecycleError(error: unknown): boolean {
+  return (
+    isDurableObjectLifecycleError(error) &&
+    !(error instanceof Error && error.message.includes("kill requested"))
+  );
+}
 
 function detachPlainRpcResult<T>(result: T[]): T[];
 function detachPlainRpcResult<T extends object>(result: T): T;
@@ -631,6 +640,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
     const deadline = Date.now() + args.timeoutMs;
     let replayAfterOffset = args.afterOffset;
+    let consecutiveLifecycleFailures = 0;
 
     // A cursor-less DO wait is live-from-the-head at which that individual
     // subscription opens. Re-arming it with no cursor would therefore skip a
@@ -644,14 +654,30 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       try {
         head = Promise.resolve(this.durableObjectStub.getMaxOffset());
       } catch (error) {
+        if (isRecoverableStreamWaitLifecycleError(error)) {
+          consecutiveLifecycleFailures += 1;
+          if (consecutiveLifecycleFailures < MAX_CONSECUTIVE_STREAM_WAIT_LIFECYCLE_FAILURES) {
+            continue;
+          }
+        }
         rethrowStreamUnavailable(error);
       }
       const outcome = await settleByDeadline(head, attemptDeadline, Date.now);
       if (outcome.status === "fulfilled") {
         replayAfterOffset = outcome.value;
+        consecutiveLifecycleFailures = 0;
         break;
       }
-      if (outcome.status === "rejected") rethrowStreamUnavailable(outcome.error);
+      if (outcome.status === "rejected") {
+        if (isRecoverableStreamWaitLifecycleError(outcome.error)) {
+          consecutiveLifecycleFailures += 1;
+          if (consecutiveLifecycleFailures < MAX_CONSECUTIVE_STREAM_WAIT_LIFECYCLE_FAILURES) {
+            continue;
+          }
+        }
+        rethrowStreamUnavailable(outcome.error);
+      }
+      consecutiveLifecycleFailures = 0;
     }
 
     const terminal = Promise.withResolvers<StreamEvent>();
@@ -682,13 +708,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
       // A superseded call can still report an ephemeral match that a fresh
       // subscription cannot replay. Let that success win. Likewise, retain a
-      // late predicate/application/lifecycle failure as the terminal result;
-      // only the explicitly modelled slice timeout is safe to replace with a
-      // fresh durable replay. In particular, an explicit kill must retain the
-      // public `stream-unavailable` rejection contract rather than being
-      // hidden behind recovery until the caller's deadline.
+      // late predicate/application failure as the terminal result. A normal
+      // lifecycle reset re-acquires below; an explicit operator kill remains
+      // terminal so kill() retains its public `stream-unavailable` contract.
       void wait.then(terminal.resolve, (error: unknown) => {
-        if (!isStreamWaitTimeoutError(error)) terminal.reject(error);
+        if (!isStreamWaitTimeoutError(error) && !isRecoverableStreamWaitLifecycleError(error)) {
+          terminal.reject(error);
+        }
       });
 
       const outcome = await settleByDeadline(
@@ -699,11 +725,19 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       if (outcome.status === "fulfilled") return outcome.value;
       if (outcome.status === "rejected") {
         if (isStreamWaitTimeoutError(outcome.error)) {
+          consecutiveLifecycleFailures = 0;
           lastSliceTimeout = outcome.error;
           continue;
         }
+        if (isRecoverableStreamWaitLifecycleError(outcome.error)) {
+          consecutiveLifecycleFailures += 1;
+          if (consecutiveLifecycleFailures < MAX_CONSECUTIVE_STREAM_WAIT_LIFECYCLE_FAILURES) {
+            continue;
+          }
+        }
         rethrowStreamUnavailable(outcome.error);
       }
+      consecutiveLifecycleFailures = 0;
     }
 
     throw new Error(

@@ -606,43 +606,62 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(5);
   });
 
-  it("a2. a post-success cursor failure schedules infrastructure replay without charging the receiver", async () => {
+  it("a2. a lifecycle reset after receiver success leaves recovery to the durable watchdog", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"));
 
     const ackAttempt = h.store.ackAttempt.bind(h.store);
+    const reset = new Error("cursor ack failed", {
+      cause: Object.assign(new Error("Durable Object reset because its code was updated"), {
+        durableObjectReset: true,
+        retryable: true,
+      }),
+    });
     let resetPending = true;
     h.store.ackAttempt = (...args) => {
       if (resetPending) {
         resetPending = false;
-        throw new Error("cursor ack failed", {
-          cause: Object.assign(new Error("Durable Object reset because its code was updated"), {
-            durableObjectReset: true,
-            retryable: true,
-          }),
-        });
+        throw reset;
       }
       ackAttempt(...args);
     };
+    let recoveryWrites = 0;
+    h.store.deferInfrastructure = () => {
+      recoveryWrites += 1;
+      throw reset;
+    };
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    h.subscribers.wake();
-    await h.settle();
+    try {
+      h.subscribers.wake();
+      await h.settle();
 
-    expect(h.pushes).toHaveLength(1);
-    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 0 });
-    expect(h.abortedIncarnations).toEqual(["stream push drain local processing failed"]);
+      expect(h.pushes).toHaveLength(1);
+      expect(h.row("k")).toMatchObject({
+        ackedOffset: 0,
+        attempt: 0,
+        watchdogAt: expect.any(Number),
+        retryAt: null,
+      });
+      expect(recoveryWrites).toBe(0);
+      expect(h.abortedIncarnations).toEqual([]);
+      expect(errorLog).not.toHaveBeenCalled();
 
-    // The persisted infrastructure deadline is the replacement incarnation's successor wake:
-    // no append or manual wake is needed on this otherwise quiet stream.
-    const retryAt = h.row("k")!.nextAttemptAt!;
-    expect(h.platformAlarm()).toBe(retryAt);
-    h.restart();
-    h.advanceTo(retryAt + 1);
-    await h.subscribers.onAlarm();
-    await h.settle();
-    expect(h.pushes).toHaveLength(2);
-    expect(h.row("k")?.ackedOffset).toBe(1);
+      // begin() persisted and projected the watchdog before dispatch. The new
+      // incarnation can therefore replay without trying another SQLite write
+      // after workerd has already declared this one reset.
+      const watchdogAt = h.row("k")!.nextAttemptAt!;
+      expect(h.platformAlarm()).toBe(watchdogAt);
+      h.restart();
+      h.advanceTo(watchdogAt + 1);
+      await h.subscribers.onAlarm();
+      await h.settle();
+      expect(h.pushes).toHaveLength(2);
+      expect(h.row("k")?.ackedOffset).toBe(1);
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it("a3. an internal drain failure gets a durable successor without receiver backoff", async () => {

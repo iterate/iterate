@@ -794,6 +794,7 @@ export class StreamSubscribers {
     this.#hooks.keepAlive(
       work.catch((error) => {
         if (error instanceof StreamDeliveryFatalInvariantError) throw error;
+        if (isDurableObjectLifecycleError(error)) throw error;
         console.error("stream wake poke failed outside its recovery boundary", {
           subscriptionKey,
           error,
@@ -1000,6 +1001,7 @@ export class StreamSubscribers {
     this.#hooks.keepAlive(
       work.catch((error: unknown) => {
         if (error instanceof StreamDeliveryFatalInvariantError) throw error;
+        if (isDurableObjectLifecycleError(error)) throw error;
         console.error("stream push drain failed outside its recovery boundary", {
           subscriptionKey,
           error,
@@ -1041,6 +1043,12 @@ export class StreamSubscribers {
     onRecovered?: () => void,
   ): Promise<InfrastructureRecoveryDisposition> {
     if (error instanceof StreamDeliveryFatalInvariantError) throw error;
+    // A workerd lifecycle rejection means this incarnation is already dying.
+    // Another local write is both unsafe and expected to fail with the same
+    // reset. An attempt that crossed a remote boundary already owns a durable
+    // watchdog; an earlier interruption is reconstructed from configured
+    // state when the replacement incarnation activates.
+    if (isDurableObjectLifecycleError(error)) throw error;
     console.error("stream delivery infrastructure failed", {
       subscriptionKey: attempt.subscriptionKey,
       operation,
@@ -1055,6 +1063,7 @@ export class StreamSubscribers {
       return disposition;
     } catch (recoveryError) {
       if (recoveryError instanceof StreamDeliveryFatalInvariantError) throw recoveryError;
+      if (isDurableObjectLifecycleError(recoveryError)) throw recoveryError;
       console.error("stream infrastructure recovery failed; restarting incarnation", {
         subscriptionKey: attempt.subscriptionKey,
         operation,
@@ -1709,6 +1718,7 @@ export class StreamSubscribers {
           fatalRecovery = true;
           throw recoveryError;
         }
+        if (isDurableObjectLifecycleError(recoveryError)) throw recoveryError;
         console.error("stream durable sink recovery failed; restarting incarnation", {
           subscriptionKey,
           error: recoveryError,

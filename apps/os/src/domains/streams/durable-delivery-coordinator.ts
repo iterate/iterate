@@ -1,5 +1,6 @@
 import type { StreamEventInput } from "iterate/processors";
 import type { CoreProcessorState } from "./core-processor-contract.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import type { SubscriptionCursorFence, SubscriptionCursorStore } from "./stream-storage.ts";
 import { computeBackoffMs, MAX_DELIVERY_ATTEMPTS } from "./subscriber-math.ts";
 
@@ -604,6 +605,12 @@ export class DurableDeliveryCoordinator {
     try {
       await this.repointAlarmFromStore();
     } catch (error) {
+      if (isDurableObjectLifecycleError(error)) {
+        console.info("stream alarm repoint interrupted by durable object lifecycle", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
       console.error("stream alarm repoint after delivery failed", error);
     }
   }
