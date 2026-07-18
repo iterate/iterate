@@ -475,6 +475,18 @@ describe("preview test commands", () => {
     expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
   });
+
+  test("budgets the serialized OS preview lane from its measured green floor", () => {
+    expect(cloudflarePreviewApps.os).toMatchObject({
+      previewDeployBudgetMs: 115_000,
+      previewTestBudgetMs: 560_000,
+    });
+
+    const workflow = parseYaml(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ) as { jobs: { preview: { "timeout-minutes": number } } };
+    expect(workflow.jobs.preview["timeout-minutes"]).toBe(15);
+  });
 });
 
 describe("preview readiness URLs", () => {

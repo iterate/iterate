@@ -91,12 +91,14 @@ jobs:
     # while halving the per-second cost. Re-check with
     # `depot ci metrics --run <id>` before changing.
     runs-on: depot-ubuntu-24.04-8
-    # Hard backstop on ONE attempt: a preview run past 10 minutes IS a flake
-    # (healthy ~4m; slot wait 6m, both e2e sub-lanes 360s watchdogs and
-    # per-test caps all fail loudly before this fires). 2026-07-09 saw 31m
-    # and ~90m attempts (unerasable-slot loops, an unbounded playwright
-    # tail); nothing can stack past this anymore.
-    timeout-minutes: 10
+    # Hard backstop on ONE attempt. After the TUI, Vitest, and Playwright
+    # lanes were deliberately serialized to cap slot load, measured green
+    # runs take ~9m30 end to end (OS e2e alone is 431–441s). Fifteen minutes
+    # leaves room above the measured phase budgets. Each remote lane retains
+    # its own 180–480s watchdog; this outer bound also catches combined lane,
+    # setup, or deploy degeneration and prevents the historical 31m and ~90m
+    # runaway attempts.
+    timeout-minutes: 15
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false
