@@ -27,7 +27,7 @@ export function searchIndexRetryDelaySeconds(attempts: number): number {
   );
 }
 
-export async function processSearchIndexQueueTask(
+async function processSearchIndexQueueTask(
   task: SearchIndexQueueTask,
   env: SearchIndexQueueEnv,
 ): Promise<void> {

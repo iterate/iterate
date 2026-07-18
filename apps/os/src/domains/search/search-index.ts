@@ -357,18 +357,6 @@ export async function removeFileFromSearchIndexStrict(input: {
   );
 }
 
-/** Remove one itx.files path from the search index. Best-effort: never throws. */
-export async function removeFileFromSearchIndex(input: {
-  path: string;
-  projectId: string;
-}): Promise<void> {
-  try {
-    await removeFileFromSearchIndexStrict(input);
-  } catch (error) {
-    console.warn("search index file removal failed", { path: input.path, error });
-  }
-}
-
 /**
  * Index a repo's full file snapshot at HEAD: write every text file, then
  * delete index objects for files no longer in the snapshot (so deletions and

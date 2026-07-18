@@ -29,7 +29,7 @@ export type SearchIndexQueueTask =
       path: string;
     };
 
-export async function enqueueSearchIndexTask(
+async function enqueueSearchIndexTask(
   task: SearchIndexQueueTask,
   queue: Queue<SearchIndexQueueTask> = itxEnv.SEARCH_INDEX_QUEUE,
 ): Promise<void> {
