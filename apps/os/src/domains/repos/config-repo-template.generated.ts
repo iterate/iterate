@@ -1059,14 +1059,31 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            <main>\n" +
       "              <p>count: <span id=\"n\">${await this.current()}</span></p>\n" +
       "              <button id=\"b\" disabled>increment</button>\n" +
-      "              <p id=\"s\">connecting…</p>\n" +
+      "              <p id=\"s\" aria-live=\"polite\">connecting…</p>\n" +
       "            </main>\n" +
       "            <script>\n" +
       "              const button = document.getElementById(\"b\");\n" +
-      "              button.onclick = () => fetch(\"${prefix}/increment\", { method: \"POST\" });\n" +
+      "              const status = document.getElementById(\"s\");\n" +
+      "              button.onclick = async () => {\n" +
+      "                button.disabled = true;\n" +
+      "                status.hidden = false;\n" +
+      "                status.textContent = \"incrementing…\";\n" +
+      "                try {\n" +
+      "                  const response = await fetch(\"${prefix}/increment\", { method: \"POST\" });\n" +
+      "                  if (!response.ok) throw new Error(\"increment failed (\" + response.status + \")\");\n" +
+      "                } catch (error) {\n" +
+      "                  status.textContent = \"increment failed\";\n" +
+      "                  button.disabled = false;\n" +
+      "                  console.error(error);\n" +
+      "                }\n" +
+      "              };\n" +
       "              const ws = new WebSocket((location.protocol === \"https:\" ? \"wss://\" : \"ws://\") + location.host + \"${prefix}/ws\");\n" +
-      "              ws.onopen = () => { button.disabled = false; document.getElementById(\"s\").remove(); };\n" +
-      "              ws.onmessage = (event) => { document.getElementById(\"n\").textContent = event.data; };\n" +
+      "              ws.onopen = () => { button.disabled = false; status.hidden = true; };\n" +
+      "              ws.onmessage = (event) => {\n" +
+      "                document.getElementById(\"n\").textContent = event.data;\n" +
+      "                button.disabled = false;\n" +
+      "                status.hidden = true;\n" +
+      "              };\n" +
       "            </script>\n" +
       "          </body>\n" +
       "        </html>`,\n" +

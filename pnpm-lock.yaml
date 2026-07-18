@@ -55,6 +55,9 @@ patchedDependencies:
   '@journeyapps/wa-sqlite@1.7.0':
     hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
     path: patches/@journeyapps__wa-sqlite@1.7.0.patch
+  middlewright@0.1.2:
+    hash: 167dc9523ebba720988a1040f92093b880931924c29c0eb6a259ab367d71eabf
+    path: patches/middlewright@0.1.2.patch
 
 importers:
 
@@ -132,7 +135,7 @@ importers:
         version: 16.3.2
       middlewright:
         specifier: 0.1.2
-        version: 0.1.2(@playwright/test@1.60.0)
+        version: 0.1.2(patch_hash=167dc9523ebba720988a1040f92093b880931924c29c0eb6a259ab367d71eabf)(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -25296,7 +25299,7 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  middlewright@0.1.2(@playwright/test@1.60.0):
+  middlewright@0.1.2(patch_hash=167dc9523ebba720988a1040f92093b880931924c29c0eb6a259ab367d71eabf)(@playwright/test@1.60.0):
     dependencies:
       '@playwright/test': 1.60.0
       dedent: 1.7.2

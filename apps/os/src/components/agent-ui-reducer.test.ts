@@ -4,12 +4,13 @@
 // items and live active-work tail the agent feed renders.
 
 import { describe, expect, test } from "vitest";
-import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
+import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
   initialAgentUiState,
   reduceAgentUi,
+  reduceAgentUiRuntime,
   summarizeAgentUiActivity,
   type AgentUiItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -63,11 +64,17 @@ function llmEvent(
   };
 }
 
-function settledRuntime(sinceOffset: number) {
-  return {
-    type: "events.iterate.com/agent/runtime-changed",
-    payload: { sinceOffset, runtime: ZERO_AGENT_RUNTIME },
-  };
+function projectRuntime(
+  reduced: ReturnType<typeof reduceAll>,
+  sinceOffset: number,
+  runtime: AgentRuntime = ZERO_AGENT_RUNTIME,
+) {
+  const projected = reduceAgentUiRuntime(reduced, {
+    runtime,
+    sinceOffset,
+    since: new Date(Date.parse("2026-06-11T00:00:00.000Z") + sinceOffset * 1_000).toISOString(),
+  });
+  return { ...projected.endState, items: [...reduced.items, ...projected.items] };
 }
 
 describe("agent-ui reducer", () => {
@@ -311,14 +318,16 @@ describe("agent-ui reducer", () => {
       status: "running",
     });
 
-    const completed = reduceAll([
-      ...countdownEvents,
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: { executionId: "agent-output:11", settlement: { status: "succeeded" } },
-      },
-      settledRuntime(20),
-    ]);
+    const completed = projectRuntime(
+      reduceAll([
+        ...countdownEvents,
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: { executionId: "agent-output:11", settlement: { status: "succeeded" } },
+        },
+      ]),
+      20,
+    );
 
     expect(completed.live).toBeNull();
     expect(completed.items.map((item) => item.kind)).toEqual(["activity", "assistant"]);
@@ -485,22 +494,24 @@ describe("agent-ui reducer", () => {
   });
 
   test("settles a completed LLM request at run-level idle even without an assistant message", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        offset: 7,
-        payload: { model: "gpt-test" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          llmRequestOffset: 7,
-          durationMs: 250,
-          result: { status: "success" },
+    const state = projectRuntime(
+      reduceAll([
+        {
+          type: "events.iterate.com/agent/llm-request-requested",
+          offset: 7,
+          payload: { model: "gpt-test" },
         },
-      },
-      settledRuntime(8),
-    ]);
+        {
+          type: "events.iterate.com/agent/llm-request-completed",
+          payload: {
+            llmRequestOffset: 7,
+            durationMs: 250,
+            result: { status: "success" },
+          },
+        },
+      ]),
+      8,
+    );
 
     expect(state.live).toBeNull();
     expect(state.items.map((item) => item.kind)).toEqual(["activity"]);
@@ -512,22 +523,24 @@ describe("agent-ui reducer", () => {
   });
 
   test("makes missing durable completions explicit when run-level idle closes work", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        offset: 7,
-        payload: { model: "gpt-test" },
-      },
-      {
-        type: "events.iterate.com/capability-host/script-run-requested",
-        payload: {
-          executionId: "script-without-completion",
-          code: "async () => mutateExternalState()",
-          expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
+    const state = projectRuntime(
+      reduceAll([
+        {
+          type: "events.iterate.com/agent/llm-request-requested",
+          offset: 7,
+          payload: { model: "gpt-test" },
         },
-      },
-      settledRuntime(8),
-    ]);
+        {
+          type: "events.iterate.com/capability-host/script-run-requested",
+          payload: {
+            executionId: "script-without-completion",
+            code: "async () => mutateExternalState()",
+            expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
+          },
+        },
+      ]),
+      8,
+    );
 
     const activity = state.items[0];
     if (activity?.kind !== "activity") throw new Error("expected activity item");
@@ -548,28 +561,31 @@ describe("agent-ui reducer", () => {
   });
 
   test("emits a same-id correction when a durable script settlement arrives after idle", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/capability-host/script-run-requested",
-        offset: 10,
-        payload: {
-          executionId: "late-script",
-          code: "async () => mutate()",
-          expiresAt: SCRIPT_EXPIRES_AT,
-        },
+    const requested = {
+      type: "events.iterate.com/capability-host/script-run-requested",
+      offset: 10,
+      payload: {
+        executionId: "late-script",
+        code: "async () => mutate()",
+        expiresAt: SCRIPT_EXPIRES_AT,
       },
-      settledRuntime(10),
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: {
-          executionId: "late-script",
-          settlement: { status: "succeeded", result: { committed: true } },
+    };
+    const provisional = projectRuntime(reduceAll([requested]), 10).items.at(-1);
+    const corrected = projectRuntime(
+      reduceAll([
+        requested,
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          offset: 11,
+          payload: {
+            executionId: "late-script",
+            settlement: { status: "succeeded", result: { committed: true } },
+          },
         },
-      },
-    ]);
+      ]),
+      11,
+    ).items.at(-1);
 
-    expect(state.items).toHaveLength(2);
-    const [provisional, corrected] = state.items;
     expect(provisional).toMatchObject({
       kind: "activity",
       steps: [{ kind: "code", outcomeSource: "inferred", success: false }],
@@ -590,11 +606,10 @@ describe("agent-ui reducer", () => {
       throw new Error("expected corrected code activity");
     }
     expect(corrected.steps[0]).not.toHaveProperty("errorMessage");
-    expect(state.provisionalActivities).toEqual({});
   });
 
-  test("stores one provisional activity for a group with several unsettled scripts", () => {
-    const state = reduceAll([
+  test("projects several unsettled scripts as one provisional activity", () => {
+    const requestedEvents = [
       {
         type: "events.iterate.com/capability-host/script-run-requested",
         offset: 10,
@@ -613,12 +628,18 @@ describe("agent-ui reducer", () => {
           expiresAt: SCRIPT_EXPIRES_AT,
         },
       },
-      settledRuntime(11),
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: { executionId: "late-a", settlement: { status: "succeeded", result: "a" } },
-      },
-    ]);
+    ];
+    const state = projectRuntime(
+      reduceAll([
+        ...requestedEvents,
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          offset: 12,
+          payload: { executionId: "late-a", settlement: { status: "succeeded", result: "a" } },
+        },
+      ]),
+      12,
+    );
 
     expect(Object.values(state.provisionalActivities)).toHaveLength(1);
     expect(Object.keys(state.provisionalActivities)).toEqual(["activity-10"]);
@@ -631,7 +652,64 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  test("bounds provisional activity corrections when completions never arrive", () => {
+  test("treats live state as authoritative when journal projection is newer", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 12,
+        payload: { model: "gpt-test" },
+      },
+    ]);
+    const projected = projectRuntime(state, 11);
+
+    expect(projected.live).toBeNull();
+    expect(projected.items).toMatchObject([
+      { kind: "activity", steps: [{ kind: "llm", status: "done" }] },
+    ]);
+  });
+
+  test("settles activity from live state after a later non-runtime-changing event", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        offset: 1,
+        payload: {
+          executionId: "reply-script",
+          code: 'async (itx) => itx.chat.sendMessage("kumquat")',
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        offset: 2,
+        payload: { message: "kumquat" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        offset: 3,
+        payload: { executionId: "reply-script", settlement: { status: "succeeded" } },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        offset: 4,
+        payload: {
+          role: "assistant",
+          content: "The assistant sent this visible web-chat message: kumquat",
+          llmRequestOffset: 99,
+        },
+      },
+    ]);
+
+    const projected = projectRuntime(state, 3);
+
+    expect(projected.live).toBeNull();
+    expect(projected.items).toMatchObject([
+      { kind: "activity", steps: [{ kind: "code", status: "done", success: true }] },
+      { kind: "assistant", text: "kumquat" },
+    ]);
+  });
+
+  test("bounds provisional corrections when later input closes expired work", () => {
     const baseMs = Date.parse("2026-06-11T00:00:00.000Z");
     const eventCount = AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT + 8;
     const events = Array.from({ length: eventCount }, (_, index) => {
@@ -644,13 +722,18 @@ describe("agent-ui reducer", () => {
           payload: {
             executionId: `missing-${index}`,
             code: "async () => mutate()",
-            expiresAt: baseMs + 15 * 60_000,
+            expiresAt: baseMs + requestedOffset * 1_000 + 500,
           },
         },
         {
-          ...settledRuntime(requestedOffset),
+          type: "events.iterate.com/agents/context-added",
           offset: requestedOffset + 1,
           createdAt: new Date(baseMs + (requestedOffset + 1) * 1_000).toISOString(),
+          payload: {
+            role: "user",
+            actor: { type: "user", origin: "web" },
+            content: `next-${index}`,
+          },
         },
       ];
     }).flat();
@@ -662,19 +745,6 @@ describe("agent-ui reducer", () => {
     );
     expect(state.provisionalActivities["activity-1"]).toBeUndefined();
     expect(state.provisionalActivities[`activity-${(eventCount - 1) * 2 + 1}`]).toBeDefined();
-  });
-
-  test("rejects a malformed runtime event", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/agent/runtime-changed",
-        offset: 7,
-        payload: { sinceOffset: 6 },
-      },
-    ]);
-
-    expect(state.live).toBeNull();
-    expect(state.runtimeChange).toBeNull();
   });
 
   test("queues a user message that arrives mid-turn", () => {
@@ -1078,18 +1148,20 @@ describe("agent-ui reducer", () => {
   });
 
   test("keeps a failed activity together while a crashed request restarts", () => {
-    const state = reduceAll([
-      llmEvent("requested", 7),
-      llmEvent("cancelled", 7, "future-cancel-reason"),
-      llmEvent("requested", 11),
-      llmEvent("cancelled", 11),
-      {
-        type: "events.iterate.com/agents/context-added",
-        payload: { role: "user", content: "queued" },
-      },
-      llmEvent("requested", 16),
-      settledRuntime(17),
-    ]);
+    const state = projectRuntime(
+      reduceAll([
+        llmEvent("requested", 7),
+        llmEvent("cancelled", 7, "future-cancel-reason"),
+        llmEvent("requested", 11),
+        llmEvent("cancelled", 11),
+        {
+          type: "events.iterate.com/agents/context-added",
+          payload: { role: "user", content: "queued" },
+        },
+        llmEvent("requested", 16),
+      ]),
+      17,
+    );
 
     expect(state.live).toBeNull();
     expect(state.items).toHaveLength(2);
@@ -1106,20 +1178,22 @@ describe("agent-ui reducer", () => {
   });
 
   test("classifies crash recovery and preserves the first settled fact", () => {
-    const state = reduceAll([
-      llmEvent("requested", 1),
-      llmEvent("cancelled", 1),
-      {
-        type: "events.iterate.com/agents/context-added",
-        payload: { role: "user", content: "and check the logs" },
-      },
-      { type: "events.iterate.com/agents/web-message-sent", payload: { message: "deferred" } },
-      llmEvent("completed", 1),
-      llmEvent("requested", 6),
-      llmEvent("completed", 6),
-      llmEvent("cancelled", 6),
-      settledRuntime(8),
-    ]);
+    const state = projectRuntime(
+      reduceAll([
+        llmEvent("requested", 1),
+        llmEvent("cancelled", 1),
+        {
+          type: "events.iterate.com/agents/context-added",
+          payload: { role: "user", content: "and check the logs" },
+        },
+        { type: "events.iterate.com/agents/web-message-sent", payload: { message: "deferred" } },
+        llmEvent("completed", 1),
+        llmEvent("requested", 6),
+        llmEvent("completed", 6),
+        llmEvent("cancelled", 6),
+      ]),
+      8,
+    );
 
     const activity = state.items[0];
     if (activity?.kind !== "activity") throw new Error("expected activity item");

@@ -91,15 +91,15 @@ jobs:
     # while halving the per-second cost. Re-check with
     # `depot ci metrics --run <id>` before changing.
     runs-on: depot-ubuntu-24.04-8
-    # Hard backstop on ONE attempt (slot wait 6m, both e2e sub-lanes 360s
-    # watchdogs and per-test caps all fail loudly before this fires).
-    # 2026-07-09 saw 31m and ~90m attempts (unerasable-slot loops, an
-    # unbounded playwright tail); nothing can stack past this anymore.
-    # 20 (was 15, was 10): the sandbox-build pipeline moved the os deploy to
-    # ~3m (container image reconcile + template-artifact seeding) and a
-    # healthy full run to ~9.5m — but the ceiling must also fit one retry of
-    # the slowest spec (a container-heavy spec retry runs ~3m); 15 killed a
-    # 55/56-green run mid-retry, which also lost its failure artifacts.
+    # Hard backstop on ONE attempt. The TUI, Vitest, and Playwright lanes are
+    # deliberately serialized to cap slot load (measured green runs ~9m30
+    # without container builds); each remote lane retains its own 180-480s
+    # watchdog, and this outer bound catches combined lane, setup, or deploy
+    # degeneration (2026-07-09 saw 31m and ~90m runaway attempts). 20, not
+    # 15: the sandbox-build pipeline adds real builder-pool container builds
+    # (~15-45s each across the worker specs) and the ceiling must also fit
+    # one retry of the slowest container-heavy spec — 15 killed a 55/56-green
+    # run mid-retry, which also lost its failure artifacts.
     timeout-minutes: 20
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
