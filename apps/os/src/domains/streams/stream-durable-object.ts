@@ -151,6 +151,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         try {
           this.append(event);
         } catch (error) {
+          if (isDurableObjectLifecycleError(error)) {
+            console.info("stream delivery fact append interrupted by durable object lifecycle", {
+              message: error instanceof Error ? error.message : String(error),
+              type: event.type,
+            });
+            return;
+          }
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
