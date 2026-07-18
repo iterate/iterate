@@ -97,6 +97,7 @@ function makeHarness() {
         projectId: PROJECT_ID,
         createRepoArtifact: (input) => create.impl(input),
         syncFromGithubPush: (input) => sync.impl(input),
+        observeArtifactPush: () => {},
         taskChangesForArtifactPush: async () => [],
       }),
       { recovery: true },

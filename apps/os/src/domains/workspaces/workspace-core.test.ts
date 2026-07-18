@@ -632,3 +632,99 @@ describe("thermo round-four regressions", () => {
     ).rejects.toThrow(/collides with the local FILE|uncommitted work/);
   });
 });
+
+describe("post-merge follow-ups (Bugbot round)", () => {
+  test("a second created event is SKIPPED by the fold, and .gitignored spill files never fabricate span errors", async () => {
+    const { core } = subject();
+    // Agent-shaped overlay: a spill dir with a "*" .gitignore under one
+    // mount, a real change under the other. Scope-less commit must infer the
+    // single genuinely dirty mount instead of rejecting with a span error.
+    await core.writeFile("/config/script-results/.gitignore", "*\n");
+    await core.writeFile("/config/script-results/huge.json", "{}");
+    await core.writeFile("/iterate/notes.md", "dirty");
+    await expect(core.gitCommit({ message: "should not span" })).rejects.toThrow(/read-only/);
+    // (the /iterate mount is read-only in the fixture — the inference chose
+    // it alone; a span error would have fired first otherwise)
+  });
+
+  test("edit() refuses mount points and their virtual ancestors", async () => {
+    const config = fakeRepo({ a: "a file named a", "worker.ts": "x" });
+    const nested = fakeRepo({ "note.md": "y" });
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({
+        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/a/b": { policy: "read-only", repoPath: "/repos/nested" },
+      }),
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
+      workspace,
+    });
+    // "/a" exists as a repo FILE in the root mount but is also a virtual
+    // ancestor of the /a/b mount — editing it would materialize the collision.
+    await expect(core.edit({ path: "/a", oldString: "a file", newString: "boom" })).rejects.toThrow(
+      /mount point/,
+    );
+  });
+});
+
+describe("virtual directory coherence", () => {
+  // The round-five repro: the outer repo has a FILE at "/a" while a nested
+  // mount sits at "/a/b". The merged view must treat "/a" as a DIRECTORY
+  // everywhere — never simultaneously a file and the parent of a mount.
+  function nestedCollisionCore(
+    configTree: Record<string, string> = { a: "a file named a", "worker.ts": "x" },
+  ) {
+    const config = fakeRepo(configTree);
+    const nested = fakeRepo({ "note.md": "y" });
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({
+        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/a/b": { policy: "read-only", repoPath: "/repos/nested" },
+      }),
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
+      workspace,
+    });
+    return { config, core, nested };
+  }
+
+  test("reads mask an outer repo file at a virtual ancestor", async () => {
+    const { core } = nestedCollisionCore();
+    expect(await core.readFile("/a")).toBeNull();
+    expect(await core.readFileBytes("/a")).toBeNull();
+    // The nested mount's contents still read through untouched.
+    expect(await core.readFile("/a/b/note.md")).toBe("y");
+  });
+
+  test("exists() reports virtual ancestors as directories — even with no outer file there", async () => {
+    const { core } = nestedCollisionCore();
+    expect(await core.exists("/a")).toBe(true);
+    // Same table, but the outer repo has NOTHING at the ancestor path: the
+    // mounted subtree alone implies the directory chain.
+    const bare = nestedCollisionCore({ "worker.ts": "x" });
+    expect(await bare.core.exists("/a")).toBe(true);
+  });
+
+  test("listing masks the outer file at a virtual ancestor", async () => {
+    const { core } = nestedCollisionCore();
+    expect(await core.listAllFiles()).toEqual(["/a/b/note.md", "/worker.ts"]);
+    expect(await core.glob("/**")).toEqual(["/a/b/note.md", "/worker.ts"]);
+  });
+
+  test("deleteFile() refuses virtual ancestors and installs no whiteout", async () => {
+    const { core } = nestedCollisionCore();
+    await expect(core.deleteFile("/a")).rejects.toThrow(/mount point/);
+    expect(await core.exists("/a")).toBe(true);
+    expect(await core.readFile("/a/b/note.md")).toBe("y");
+    const status = await core.gitStatus();
+    const root = status.mounts.find((mount) => mount.path === "/")!;
+    expect(root.changes).toEqual([]);
+  });
+
+  test("deleteFile() at an exact mount point throws instead of no-op'ing", async () => {
+    const { core } = nestedCollisionCore();
+    await expect(core.deleteFile("/a/b")).rejects.toThrow(/mount point/);
+  });
+});

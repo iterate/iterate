@@ -199,7 +199,12 @@ export class WorkspaceCore {
     const local = await this.#workspace.readFile(path);
     if (local !== null) return local;
     if (this.#isMaskedFromMount(path)) return null;
-    const resolved = await this.#mountFor(path);
+    const mounts = await this.#mounts();
+    // A virtual directory (a mount point or an ancestor of one) is a
+    // DIRECTORY in the merged view: an outer repo's file at the same path is
+    // masked, exactly as files under a deeper mount point are shadowed.
+    if (isVirtualDirectoryPath(mounts, path)) return null;
+    const resolved = routeMount(mounts, path);
     if (resolved === null || resolved.repoRelativePath === "") return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       path: resolved.repoRelativePath,
@@ -211,7 +216,9 @@ export class WorkspaceCore {
     const local = await this.#workspace.readFileBytes(path);
     if (local !== null) return local;
     if (this.#isMaskedFromMount(path)) return null;
-    const resolved = await this.#mountFor(path);
+    const mounts = await this.#mounts();
+    if (isVirtualDirectoryPath(mounts, path)) return null;
+    const resolved = routeMount(mounts, path);
     if (resolved === null || resolved.repoRelativePath === "") return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       encoding: "base64",
@@ -222,10 +229,12 @@ export class WorkspaceCore {
 
   async exists(path: string): Promise<boolean> {
     if (await this.#workspace.exists(path)) return true;
-    const resolved = await this.#mountFor(path);
-    // Mount points are virtual directories that EXIST regardless of any old
-    // file tombstone at the same path — a tombstone only ever masks a file.
-    if (resolved !== null && resolved.repoRelativePath === "") return true;
+    const mounts = await this.#mounts();
+    // Virtual directories (mount points and their ancestors) EXIST regardless
+    // of any old file tombstone at the same path — a tombstone only ever
+    // masks a file, and a mounted subtree implies its ancestor chain.
+    if (isVirtualDirectoryPath(mounts, path)) return true;
+    const resolved = routeMount(mounts, path);
     if (this.#isMaskedFromMount(path)) return false;
     if (resolved === null) return false;
     const target = resolveAbsolutePath(path);
@@ -260,15 +269,11 @@ export class WorkspaceCore {
    * are DIRECTORIES: a local file there would collide with the mounted
    * subtree (and a mount-point file would commit as an empty repo path). */
   async #assertNotMountPoint(path: string): Promise<void> {
-    const resolved = resolveAbsolutePath(path);
-    if (resolved === "/") return;
-    for (const key of Object.keys(await this.#mounts())) {
-      const mountPath = resolveAbsolutePath(key);
-      if (mountPath === resolved || mountPath.startsWith(`${resolved}/`)) {
-        throw new Error(
-          `Workspace path is not writable: "${path}" is a mount point or a directory containing one.`,
-        );
-      }
+    if (resolveAbsolutePath(path) === "/") return;
+    if (isVirtualDirectoryPath(await this.#mounts(), path)) {
+      throw new Error(
+        `Workspace path is not writable: "${path}" is a mount point or a directory containing one.`,
+      );
     }
   }
 
@@ -278,6 +283,7 @@ export class WorkspaceCore {
       throw new Error("edit oldString must be a non-empty string.");
     }
     return this.#serializeWrite(async () => {
+      await this.#assertNotMountPoint(input.path);
       // Copy-up: editing a mount file materializes the edited copy locally.
       const content = await this.readFile(input.path);
       if (content === null) {
@@ -306,6 +312,10 @@ export class WorkspaceCore {
   async deleteFile(path: string): Promise<boolean> {
     this.#assertWritablePath(path);
     return this.#serializeWrite(async () => {
+      // Inside the chain (writeFile's rule): a virtual directory cannot be
+      // deleted — a whiteout at a mount's ancestor would claim a path both
+      // gone and populated by the mounted subtree beneath it.
+      await this.#assertNotMountPoint(path);
       // An already-masked path has nothing mount-side left to hide: deleting
       // it again must NOT touch the existing whiteout (retracting it would
       // resurrect the mount file). Only a local copy — visible above an
@@ -351,6 +361,9 @@ export class WorkspaceCore {
         if (this.#isMaskedFromMount(path)) continue;
         // A deeper mount shadows this one's files under its point.
         if (routeMount(mounts, path)?.mount !== mount) continue;
+        // A repo FILE at a deeper mount's ancestor is masked: that path is a
+        // directory in the merged view (readFile/exists agree).
+        if (isVirtualDirectoryPath(mounts, path)) continue;
         merged.add(path);
       }
     }
@@ -513,14 +526,9 @@ export class WorkspaceCore {
     grouped: GroupedOverlay,
     mountPath: string,
   ): Promise<{ changes: WorkspaceChange[]; localPaths: string[]; staleWhiteouts: string[] }> {
-    const fromRel = (rel: string) => (mountPath === "/" ? rel : `${mountPath}${rel}`);
     const owned = grouped.localByMount.get(mountPath)!;
     const ownedSet = new Set(owned);
-    const publishableRel = await filterPublishablePaths({
-      paths: owned.map((path) => (mountPath === "/" ? path : path.slice(mountPath.length))),
-      readFile: (rel) => this.#workspace.readFile(fromRel(rel)),
-    });
-    const localPaths = publishableRel.map(fromRel);
+    const localPaths = await this.#publishableLocalPaths(mountPath, owned);
     const mountFiles = await this.#mountFilePaths(mountPath, snapshot.mounts[mountPath]!);
     const mountSet = new Set(mountFiles);
 
@@ -542,6 +550,18 @@ export class WorkspaceCore {
       // directory) can never mask anything and is always crash residue.
       .filter((key) => !mountSet.has(key));
     return { changes, localPaths, staleWhiteouts };
+  }
+
+  /** One mount's PUBLISHABLE local files: its own `.gitignore`s evaluated on
+   * repo-relative paths (ignore rules never cross a mount boundary). Local
+   * reads only — cheap enough for commit's dirty inference too. */
+  async #publishableLocalPaths(mountPath: string, owned: string[]): Promise<string[]> {
+    const fromRel = (rel: string) => (mountPath === "/" ? rel : `${mountPath}${rel}`);
+    const publishableRel = await filterPublishablePaths({
+      paths: owned.map((path) => (mountPath === "/" ? path : path.slice(mountPath.length))),
+      readFile: (rel) => this.#workspace.readFile(fromRel(rel)),
+    });
+    return publishableRel.map(fromRel);
   }
 
   /**
@@ -621,15 +641,19 @@ export class WorkspaceCore {
 
       let mountPath: string;
       if (input.scope === undefined) {
-        // Inferred WITHOUT repo listings: any mount holding a local file or a
-        // whiteout may have changes. (A stale whiteout can nominate a mount
-        // that classification then proves clean — that fails loudly below
-        // instead of silently guessing another mount.)
-        const dirty = snapshot.mountPaths.filter(
-          (path) =>
-            grouped.localByMount.get(path)!.length > 0 ||
-            grouped.whiteoutsByMount.get(path)!.length > 0,
-        );
+        // Inferred WITHOUT repo listings: any mount holding a PUBLISHABLE
+        // local file or a whiteout may have changes — .gitignored files (an
+        // agent's spilled script results live under "/") never nominate a
+        // mount, so they cannot fabricate span errors. (A stale whiteout can
+        // still nominate a mount that classification then proves clean —
+        // that fails loudly below instead of silently guessing another.)
+        const dirty: string[] = [];
+        for (const path of snapshot.mountPaths) {
+          const publishable =
+            grouped.whiteoutsByMount.get(path)!.length > 0 ||
+            (await this.#publishableLocalPaths(path, grouped.localByMount.get(path)!)).length > 0;
+          if (publishable) dirty.push(path);
+        }
         if (dirty.length === 0) {
           throw new Error("Nothing to commit — no mount has changes.");
         }
@@ -769,6 +793,16 @@ type GroupedOverlay = {
  * the given table, so multi-path classification routes every path against one
  * consistent snapshot.
  */
+/** A mount point or a strict ancestor of one: a DIRECTORY in the merged view
+ * by construction — no file may appear, be written, or be deleted there. */
+function isVirtualDirectoryPath(mounts: Record<string, WorkspaceMount>, path: string): boolean {
+  const resolved = resolveAbsolutePath(path);
+  return Object.keys(mounts).some((key) => {
+    const mountPath = resolveAbsolutePath(key);
+    return mountPath === resolved || mountPath.startsWith(`${resolved}/`);
+  });
+}
+
 function routeMount(mounts: Record<string, WorkspaceMount>, path: string): ResolvedMount | null {
   const resolved = resolveAbsolutePath(path);
   let best: { mount: WorkspaceMount; mountPath: string } | null = null;

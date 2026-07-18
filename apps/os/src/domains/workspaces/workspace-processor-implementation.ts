@@ -18,9 +18,10 @@ export class WorkspaceProcessor extends StreamProcessor<WorkspaceProcessorContra
   }: Parameters<StreamProcessor<WorkspaceProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/workspace/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("workspace received more than one created event");
-        }
+        // FIRST certificate wins. A second created event (a raw append under
+        // a different idempotency key is schema-valid) is skipped, never
+        // thrown on — a committed fact must not wedge the fold.
+        if (state.birthCertificate !== null) return state;
         return {
           ...state,
           birthCertificate: event.payload,
