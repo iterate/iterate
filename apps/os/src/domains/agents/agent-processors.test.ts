@@ -1,6 +1,6 @@
 import { describe, expect, it, test, vi } from "vitest";
 import type { z } from "zod";
-import { AGENT_METADATA_CHANGED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "iterate/processors/testing";
 import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
@@ -3059,7 +3059,7 @@ describe("token usage and history compaction", () => {
 });
 
 describe("semantic waiting", () => {
-  it("folds metadata and conditionally clears only the wait that preceded a wake", () => {
+  it("folds summaries and conditionally clears only the wait that preceded a wake", () => {
     const event = (type: string, payload: Record<string, unknown>, offset: number) => ({
       type,
       payload,
@@ -3079,9 +3079,9 @@ describe("semantic waiting", () => {
         },
         2,
       ),
-      event(AGENT_METADATA_CHANGED_EVENT_TYPE, { waitingFor: "timer" }, 3),
+      event(AGENT_SUMMARY_UPDATED_EVENT_TYPE, { waitingFor: "timer" }, 3),
       event(
-        AGENT_METADATA_CHANGED_EVENT_TYPE,
+        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         { waitingFor: null, clearWaitingForThroughOffset: 2 },
         4,
       ),
@@ -3111,14 +3111,14 @@ describe("semantic waiting", () => {
     await externalRunner.catchUp();
     expect(externalStream.events).toContainEqual(
       expect.objectContaining({
-        type: AGENT_METADATA_CHANGED_EVENT_TYPE,
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         payload: {
           waitingFor: null,
           clearWaitingForThroughOffset: expect.any(Number),
         },
       }),
     );
-    expect(externalRunner.currentState.metadata.waitingFor).toBeUndefined();
+    expect(externalRunner.currentState.summary.waitingFor).toBeUndefined();
 
     const continuationStream = agentStream();
     const continuation = makeAgentProcessor({
@@ -3147,7 +3147,7 @@ describe("semantic waiting", () => {
     expect(
       continuationStream.events.some(
         (event) =>
-          event.type === AGENT_METADATA_CHANGED_EVENT_TYPE &&
+          event.type === AGENT_SUMMARY_UPDATED_EVENT_TYPE &&
           event.payload?.clearWaitingForThroughOffset !== undefined,
       ),
     ).toBe(false);

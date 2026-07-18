@@ -1,6 +1,6 @@
 import {
   AGENT_BINDING_SET_EVENT_TYPE,
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
+  AGENT_SUMMARY_UPDATED_EVENT_TYPE,
   AgentLlmRequestCancelReason,
   AgentRuntime,
 } from "@iterate-com/shared/agent-events";
@@ -13,7 +13,7 @@ import {
 } from "iterate/processors";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
-import { AgentBinding, AgentMetadata, AgentMetadataChanged } from "./agent-presence.ts";
+import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -78,6 +78,14 @@ export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
  * summary attempt never races an imminent context overflow.
  */
 export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
+
+export const AGENT_SUMMARY_INSTRUCTION = [
+  "AGENT SUMMARY — keep the agent list useful by appending events.iterate.com/agent/summary-updated events through itx.agent.append(...). The event is the only update API; do not look for a setter.",
+  'FIRST TURN — TITLE IS MANDATORY: your first script must include await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { title: "A short specific title" } }). Choose the best title supported by the initial request even if the task is still unclear; do not postpone it and do not keep rewriting a good title later.',
+  'SECOND TURN — ACTIVITY IS MANDATORY: your second script must include await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { activity: "What you are doing now" } }). Keep activity current on later working turns whenever the phase changes.',
+  'LAST TURN BEFORE USER INPUT — WAITING IS MANDATORY: whenever this is your last script before control returns to the user (a completed answer, question, choice, or blocker), append { type: "events.iterate.com/agent/summary-updated", payload: { waitingFor: "user_input" } } before sending the reply and ending the script. If this is also the first or second turn, combine waitingFor with the required title or activity in that turn\'s payload. Use "external_event" or "timer" instead only when that is genuinely what must happen next. A qualifying new input clears the old wait automatically.',
+  "The free-text summary is one or two durable sentences; update it only when the purpose or conclusions materially change. Never set pinned unless a human explicitly asks.",
+].join("\n");
 
 /**
  * The default codemode system prompt for web-chat agents (child agents, MCP
@@ -459,7 +467,7 @@ export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "3.0.0",
+  version: "4.0.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z
@@ -555,11 +563,11 @@ export const AgentProcessorContract = defineProcessorContract({
        * live-state consumers.
        */
       runtimeChange: AgentRuntimeTransition.optional(),
-      /** Human- or agent-written presentation metadata. Both writers use the
-       * same setMetadata API and metadata-changed event. */
-      metadata: AgentMetadata.prefault({}),
-      /** Offset of the metadata event which established the current wait.
-       * Technical guard only; never exposed as presentation metadata. */
+      /** Human- or agent-written presentation summary. Every writer appends
+       * the same summary-updated event. */
+      summary: AgentSummary.prefault({}),
+      /** Offset of the summary event which established the current wait.
+       * Technical guard only; never exposed in the presentation summary. */
       waitingForSinceOffset: z.number().int().positive().optional(),
       /**
        * Lifetime token totals, folded from token-usage-reported. Cost/observability
@@ -869,10 +877,10 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     [AGENT_SUMMARY_UPDATED_EVENT_TYPE]: {
       description:
-        "Changes the agent's human-readable presentation metadata. Omitted fields remain " +
+        "Updates the agent's human-readable summary. Omitted fields remain " +
         "unchanged, null clears an optional field, and pinned false unpins. The same event is " +
         "used whether an agent or a human initiated the edit.",
-      payloadSchema: AgentMetadataChanged,
+      payloadSchema: AgentSummaryUpdated,
       examples: [
         {
           description: "The agent names its work and describes the current phase.",
@@ -923,7 +931,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
-    AGENT_METADATA_CHANGED_EVENT_TYPE,
+    AGENT_SUMMARY_UPDATED_EVENT_TYPE,
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-settled",
     // Core lifecycle RE-CHECK signals. Neither folds into state (reduce
@@ -957,7 +965,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
-    AGENT_METADATA_CHANGED_EVENT_TYPE,
+    AGENT_SUMMARY_UPDATED_EVENT_TYPE,
     "events.iterate.com/capability-host/script-run-requested",
   ],
 });

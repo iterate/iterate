@@ -1082,7 +1082,7 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 
-  it("captures route context as a typed Slack binding without authoring metadata", async () => {
+  it("captures route context as a typed Slack binding without authoring a summary", async () => {
     const { deliver, runner, slackCalls, stream } = setup({
       fetchSlackChannelName: async () => "trip-planning",
     });

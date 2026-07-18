@@ -57,16 +57,16 @@ export const AgentSummaryUpdate = z
 /** A partial agent-summary update; null clears an optional field and omission preserves it. */
 export type AgentSummaryUpdate = z.infer<typeof AgentSummaryUpdate>;
 
-/** Processor-authored metadata clear guarded by the source input which woke
- * the agent. Keeping this on metadata-changed lets every metadata projection
+/** Processor-authored summary clear guarded by the source input which woke
+ * the agent. Keeping this on summary-updated lets every summary projection
  * apply the same race rule without subscribing to another event type. */
 const AgentConditionalWaitingClear = z.strictObject({
   waitingFor: z.null(),
   clearWaitingForThroughOffset: z.number().int().positive(),
 });
 
-export const AgentMetadataChanged = z.union([AgentMetadataPatch, AgentConditionalWaitingClear]);
-export type AgentMetadataChanged = z.infer<typeof AgentMetadataChanged>;
+export const AgentSummaryUpdated = z.union([AgentSummaryUpdate, AgentConditionalWaitingClear]);
+export type AgentSummaryUpdated = z.infer<typeof AgentSummaryUpdated>;
 
 const BindingConnection = boundedText(AGENT_BINDING_CONNECTION_MAX_LENGTH);
 const BindingId = boundedText(AGENT_BINDING_ID_MAX_LENGTH);
@@ -134,10 +134,10 @@ type AgentCatalogTimestamps = z.infer<typeof AgentCatalogTimestamps>;
 
 /** One entry in the collection processor's durable agent database. Every
  * field is reducible from the collection's deliberately narrow created +
- * metadata event subscription. */
+ * summary event subscription. */
 export const AgentCatalogRecord = z.strictObject({
   path: AgentPath,
-  metadata: AgentMetadata,
+  summary: AgentSummary,
   timestamps: AgentCatalogTimestamps,
 });
 export type AgentCatalogRecord = z.infer<typeof AgentCatalogRecord>;

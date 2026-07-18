@@ -20,6 +20,7 @@
 // summary says the agent is waiting for a user, timer, or external event.
 
 import {
+  AGENT_SUMMARY_UPDATED_EVENT_TYPE,
   isAgentRuntimeZero,
   ZERO_AGENT_RUNTIME,
   type AgentRuntime,
@@ -32,7 +33,7 @@ import type {
   AgentFileAttachment,
   AgentRuntimeTransition,
 } from "../agents/agent-processor-contract.ts";
-import { applyAgentMetadataPatch, deriveAgentDisplayState } from "../agents/agent-presence.ts";
+import { applyAgentSummaryUpdate, deriveAgentDisplayState } from "../agents/agent-presence.ts";
 import { readRecord, readString, webhookAckIsFresh } from "./utils.ts";
 import {
   SlackAgentProcessorContract,
@@ -143,7 +144,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // or restores presentation left behind by the one that died.
     if (
       event !== null &&
-      (event.type === "events.iterate.com/agent/metadata-changed" ||
+      (event.type === AGENT_SUMMARY_UPDATED_EVENT_TYPE ||
         event.type === "events.iterate.com/stream/processor-revived")
     ) {
       this.#unpaintedPresenceFact = event;
@@ -374,7 +375,7 @@ export class SlackAgentProcessor extends StreamProcessor<
   /** Latest presence or revival fact deferred until an at-head repaint. */
   #unpaintedPresenceFact: { createdAt: string; type: string } | undefined;
   /** A revival occurred somewhere in the pending batch. Kept separately from
-   * the latest fact because a following metadata patch must not hide the
+   * the latest fact because a following summary update must not hide the
    * obligation to clear a dead incarnation's Slack status. */
   #unpaintedRevival = false;
   /** A title patch or revival requires an at-head title reconciliation even
@@ -450,7 +451,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (generation !== this.#runtimePresentationGeneration || state.birthCertificate === null) {
       return;
     }
-    const { channel, channelType, eyesReactionMessageTs, metadata, threadTs } = state;
+    const { channel, channelType, eyesReactionMessageTs, summary, threadTs } = state;
     if (channel == null || threadTs == null) return;
     const connection = state.birthCertificate.config.connection;
     const hasAssistantThreadUi = slackConversationHasAssistantThreadUi({
@@ -469,7 +470,7 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     if (fallbackActivity !== undefined) {
       if (!hasAssistantThreadUi || generation !== this.#runtimePresentationGeneration) return;
-      const paintedText = (metadata.activity ?? fallbackActivity) + "…";
+      const paintedText = (summary.activity ?? fallbackActivity) + "…";
       if (paintedText === this.#paintedActivityText) return;
       await this.#callSlackApi(connection, "assistant.threads.setStatus", {
         channel_id: channel,
@@ -498,11 +499,11 @@ export class SlackAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * Paint current metadata/runtime once per at-head pass. Freshness gates only
+   * Paint current summary/runtime once per at-head pass. Freshness gates only
    * additive transient status. A revival clears presentation left by a dead
    * incarnation; ordinary zero-runtime settlement belongs exclusively to
    * presentRuntimeTransition so its handoff debounce cannot be bypassed by an
-   * unrelated metadata delivery.
+   * unrelated summary delivery.
    */
   async #reconcilePresence(
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],

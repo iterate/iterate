@@ -3,7 +3,7 @@
 // system-context policy explicitly; the path never decides what kind of
 // processor exists on a stream.
 
-import { AGENT_METADATA_CHANGED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
@@ -24,9 +24,6 @@ import {
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
-
-const AGENT_METADATA_INSTRUCTION =
-  'Keep Iterate\'s agent UI current with itx.agent.setMetadata(...): set title once when the topic is clear and do not rewrite a good title; update activity on almost every working turn; keep summary to one or two sentences and change it only when durable purpose or conclusions change. When settled on a dependency, set waitingFor to "user_input", "external_event", or "timer"; runtime counts are exposed automatically and a qualifying wake clears the old wait. Never set pinned unless a human explicitly asks.';
 
 /**
  * These revisions identify exact, retryable setup occurrences. Change the
@@ -323,7 +320,7 @@ export function agentCreationForPath<
       subscriptionKey: "agent-collection",
       description: "Project agent collection projection",
       selector: {
-        eventTypes: ["events.iterate.com/agent/created", AGENT_METADATA_CHANGED_EVENT_TYPE],
+        eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],
       },
       delivery: { mode: "push", expression: ["agents", "processEvent"] },
       // The subscription is configured in the same birth batch as created.

@@ -1,5 +1,5 @@
 import { StreamProcessor } from "iterate/processors";
-import { AgentPath, applyAgentMetadataPatch } from "./agent-presence.ts";
+import { AgentPath, applyAgentSummaryUpdate } from "./agent-presence.ts";
 import {
   AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AgentCollectionProcessorContract,
@@ -35,7 +35,7 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
           ...state.agents,
           [path]: {
             path,
-            metadata: { pinned: false },
+            summary: { pinned: false },
             timestamps: { createdAt: source.createdAt, lastWorkAt: source.createdAt },
           },
         },
@@ -49,23 +49,23 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
     const waitingForSinceOffset = state.waitingForSinceOffsets[path];
     if (
       "clearWaitingForThroughOffset" in event.payload &&
-      (previous.metadata.waitingFor === undefined ||
+      (previous.summary.waitingFor === undefined ||
         waitingForSinceOffset === undefined ||
         waitingForSinceOffset > event.payload.clearWaitingForThroughOffset)
     ) {
       return state;
     }
-    const metadata = applyAgentMetadataPatch(previous.metadata, event.payload);
+    const summary = applyAgentSummaryUpdate(previous.summary, event.payload);
     const nextWaitingForSinceOffset =
       event.payload.waitingFor === undefined
         ? waitingForSinceOffset
         : event.payload.waitingFor === null
           ? undefined
           : source.offset;
-    if (metadata === previous.metadata && nextWaitingForSinceOffset === waitingForSinceOffset) {
+    if (summary === previous.summary && nextWaitingForSinceOffset === waitingForSinceOffset) {
       return state;
     }
-    const activityChanged = metadata.activity !== previous.metadata.activity;
+    const activityChanged = summary.activity !== previous.summary.activity;
     const waitingForSinceOffsets = { ...state.waitingForSinceOffsets };
     if (nextWaitingForSinceOffset === undefined) delete waitingForSinceOffsets[path];
     else waitingForSinceOffsets[path] = nextWaitingForSinceOffset;
@@ -76,10 +76,10 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
         ...state.agents,
         [path]: {
           ...previous,
-          metadata,
+          summary,
           timestamps: {
             ...previous.timestamps,
-            metadataUpdatedAt: source.createdAt,
+            summaryUpdatedAt: source.createdAt,
             ...(activityChanged
               ? { activityUpdatedAt: source.createdAt, lastWorkAt: source.createdAt }
               : {}),

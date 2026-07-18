@@ -2472,7 +2472,7 @@ export type AgentProcessorState = {
         since: string;
       }
     | undefined;
-  metadata: {
+  summary: {
     title?: string | undefined;
     summary?: string | undefined;
     activity?: string | undefined;
@@ -2546,7 +2546,7 @@ export type AgentEventInput =
       { maxAutonomousTurns: number; reason: string; triggerOffset: number }
     >
   | TypedConsumedEventInput<
-      "events.iterate.com/agent/metadata-changed",
+      "events.iterate.com/agent/summary-updated",
       | {
           title?: string | null | undefined;
           summary?: string | null | undefined;
@@ -2555,16 +2555,6 @@ export type AgentEventInput =
           pinned?: boolean | undefined;
         }
       | { waitingFor: null; clearWaitingForThroughOffset: number }
-    >
-  | TypedConsumedEventInput<
-      "events.iterate.com/agent/summary-updated",
-      {
-        title?: string | null | undefined;
-        summary?: string | null | undefined;
-        activity?: string | null | undefined;
-        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-        pinned?: boolean | undefined;
-      }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/token-usage-reported",
@@ -2832,7 +2822,7 @@ export type AgentCollectionProcessorState = {
     string,
     {
       path: string;
-      metadata: {
+      summary: {
         title?: string | undefined;
         summary?: string | undefined;
         activity?: string | undefined;
@@ -2842,7 +2832,7 @@ export type AgentCollectionProcessorState = {
       timestamps: {
         createdAt: string;
         lastWorkAt: string;
-        metadataUpdatedAt?: string | undefined;
+        summaryUpdatedAt?: string | undefined;
         activityUpdatedAt?: string | undefined;
       };
     }

@@ -28,7 +28,6 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
-import { AGENT_METADATA_CHANGED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {

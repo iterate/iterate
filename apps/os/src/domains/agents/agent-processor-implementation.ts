@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 import {
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
+  AGENT_SUMMARY_UPDATED_EVENT_TYPE,
   agentRuntimesEqual,
   isAgentRuntimeZero,
 } from "@iterate-com/shared/agent-events";
@@ -221,7 +221,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ) {
           blockProcessorWhile(() =>
             append({
-              type: AGENT_METADATA_CHANGED_EVENT_TYPE,
+              type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
               idempotencyKey: this.idempotencyKey("waiting-clear", event),
               payload: {
                 waitingFor: null,
@@ -1276,16 +1276,16 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
             ),
           }
         : state;
-    case AGENT_METADATA_CHANGED_EVENT_TYPE: {
+    case AGENT_SUMMARY_UPDATED_EVENT_TYPE: {
       if (
         "clearWaitingForThroughOffset" in event.payload &&
-        (state.metadata.waitingFor === undefined ||
+        (state.summary.waitingFor === undefined ||
           state.waitingForSinceOffset === undefined ||
           state.waitingForSinceOffset > event.payload.clearWaitingForThroughOffset)
       ) {
         return state;
       }
-      const metadata = applyAgentMetadataPatch(state.metadata, event.payload);
+      const summary = applyAgentSummaryUpdate(state.summary, event.payload);
       const waitingForSinceOffset =
         event.payload.waitingFor === undefined
           ? state.waitingForSinceOffset
