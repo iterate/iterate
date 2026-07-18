@@ -18,6 +18,7 @@ import {
 } from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../config.ts";
 import appCss from "../styles.css?url";
+import { PosthogContextSync } from "~/components/posthog-context.tsx";
 import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
 import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
 import type { RouterContext } from "~/router-context.ts";
@@ -117,6 +118,7 @@ function RootComponent() {
       forcedTheme="light"
     >
       <AuthClientProvider initialSession={authSession}>
+        <PosthogContextSync />
         <Outlet />
       </AuthClientProvider>
     </AppProviders>

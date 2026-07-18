@@ -1,13 +1,21 @@
 # PostHog durable stream cost investigation — 2026-07-18
 
-Status: **mitigated**. Production keeps the complete durable feed. Local and
-preview exports are disabled by application code, and a reversible staging
-ingestion transformation protects existing preview deployments while they
-update.
+Status: **mitigated, with the complete Group Analytics model prepared on this
+branch**. Production keeps the complete durable feed. Local and preview exports
+are disabled by application code, and a reversible staging ingestion
+transformation protects existing preview deployments while they update.
 
 ## Decision
 
 - Keep every non-ephemeral production stream fact in PostHog.
+- Associate every production stream fact with its `project` group and, when the
+  project belongs to one, its `organization` group. Accept identified-event and
+  Group Analytics processing for this feed as an intentional product cost.
+- Identify signed-in browser users as people. Use Group Analytics for their UI
+  activity and curated product events, with `organization` and `project` as
+  the group types, while also registering
+  `organization_id` and `project_id` as ordinary event properties.
+- Do not create a `user` group. The identified person already is the user.
 - Do not export the synthetic durable feed from local development or preview
   deployments.
 - Keep the staging `Drop Events` transformation enabled until every live
@@ -41,14 +49,56 @@ charge. The actual invoice depends on organization-wide tier allocation,
 enabled add-ons, discounts, and the partial month; the API available to this
 investigation does not expose the invoice.
 
-The post-fix production feed ran at about 42,944 stream events/day. Even applying
-the highest first-paid marginal rates for base Product Analytics, identified
-events, and Group Analytics before free tiers, that is approximately $13.70/day
-and remains below the requested $20/day emergency threshold.
+The post-fix production feed ran at about 42,944 stream events/day, or 1,288,320
+events per 30-day month. At PostHog's 2–15 million event marginal rates, that is
+about **$44.19/month** for base Product Analytics alone. Treating every row as
+identified raises the same volume to about **$133.99/month**; Group Analytics
+raises it to about **$172.63/month**. If this feed were the organization's only
+volume and therefore crossed the first-million-free boundary itself, the
+corresponding estimates would be $14.42, $71.50, and $91.97.
+
+At exactly 40,000 grouped events/day (1.2 million/month), the combined public
+price is approximately **$63.80/month** when the organization's one-million
+free allowances are otherwise unused. If other traffic has already consumed
+those allowances and this feed occupies the next million's higher marginal
+band, the same feed is approximately **$345.80/month**. If all of it lands in
+the 2–15 million marginal band, it is approximately **$160.80/month**. Grouped
+40k/day therefore does not intrinsically cost $300; the organization's prior
+usage determines which tier each row occupies. The preview flood distorted the
+current month by consuming the cheap bands before production traffic reached
+them.
+
+For the 41,331 production stream rows in the fixed 24-hour window, the 2–15
+million marginal costs are approximately $1.42 base-only, $4.30 with identified
+event processing, or $5.54 with both identified and group processing. The
+number “41k” is an event count, not a £41,000 charge.
 
 PostHog bills Product Analytics by **captured event count**, not JSON bytes. The
 large GitHub webhook payloads explain storage and query weight, but not the
 event-count spike.
+
+## What “used person profiles” means
+
+This PostHog invoice line is driven by the number of **identified events
+processed**, not by the number of unique people stored. The fixed production
+window used only 107 stable synthetic project distinct IDs, but all 41,331
+stream rows were associated with those profiles. That is why the usage looked
+like tens of thousands of “profiles” even though there were not tens of
+thousands of users.
+
+The synthetic project IDs therefore remain intentional identified profiles.
+Every production stream event uses the same stable synthetic identity for its
+project and carries PostHog's `$groups` mapping for `project` and, when known,
+`organization`. This is the cost required for the raw durable facts to
+participate in group funnels, cohorts, breakdowns, flags, and experiments.
+
+Signed-in web UI events are different. They should have a real person profile
+so funnels, cohorts, person properties, flags, and cross-session behavior can
+use the authenticated user. The browser now calls `identify(user.id, …)` and
+then attaches `organization` and `project` groups. It resets identity on
+sign-out and clears/replaces groups when route context changes. The ordinary ID
+properties provide the cheaper fallback for filters and breakdowns if Group
+Analytics is not enabled.
 
 ## Timeline
 
@@ -188,11 +238,41 @@ For the 28,689 post-fix production rows:
 | Maximum   |             335,859 |
 | Total     |         193,049,578 |
 
+3,231 rows (11.26%) exceeded 16 KiB. This matters for Cloudflare Workers
+Analytics Engine even though it does not affect PostHog event-count billing.
+
 Nine events exceeded the application's 100 KiB boundary and were
 deterministically truncated before capture. Their original size and truncation
 flag remain indexed. Payload size deserves storage/query monitoring, but
 shrinking these objects would not materially change Product Analytics
 event-count billing.
+
+## Cloudflare ClickHouse alternative
+
+Workers Analytics Engine is Cloudflare's ClickHouse-backed analytics product,
+not a general ClickHouse database. At this volume its proposed included write
+allowance would cover the feed, and its SQL API is useful for aggregate
+operational telemetry. It is not an exact replacement for this feed: it has a
+16 KiB blob budget, three-month retention, and adaptive sampling that can make
+individual rare records unavailable. 11.26% of the measured events already
+exceed its blob ceiling.
+
+An exact Cloudflare-native alternative is to stream raw events through R2
+Pipelines into R2/Iceberg and query them with R2 SQL or an external ClickHouse.
+That is likely inexpensive at the observed data volume, but it means building
+or operating the segmentation UI, joins, funnels, cohorts, retention queries,
+and identity model that PostHog supplies.
+
+The practical split is therefore:
+
+- PostHog for curated product analytics, browser identity, and full
+  organization/project Group Analytics on both browser and durable stream
+  activity.
+- Grouped `stream:append` events while their product value justifies the full
+  base, identified-event, and Group Analytics cost, with ordinary
+  `organization_id` and `project_id` properties retained for HogQL slicing.
+- R2/Iceberg as the better future home if exact long-retention raw history is
+  required independently of PostHog.
 
 ## Runaway-loop and retry checks
 
@@ -276,9 +356,9 @@ never modified.
 
 ## Recommendations
 
-1. **Keep full non-ephemeral production coverage.** The current post-fix volume
-   is below the emergency threshold and has already exposed valuable lifecycle
-   and defect evidence.
+1. **Keep full grouped non-ephemeral production coverage.** The current
+   post-fix volume is bounded and has already exposed valuable lifecycle and
+   defect evidence. Every row should join its project and organization groups.
 2. **Keep dev/preview stream export off.** Preview E2E data belongs in test logs
    and traces, not paid organization analytics. Ordinary browser analytics can
    remain separated in the existing development/staging projects.
@@ -295,18 +375,18 @@ never modified.
 5. **Use `created_at` for billing investigations.** The event `timestamp` is the
    durable source commit time and can be old when a backlog is delivered;
    `created_at` is the PostHog ingestion time that explains the bill.
-6. **Test anonymous group-linked capture in a disposable project.** PostHog
-   documents group-only events and `$process_person_profile: false`, but its
-   current billing documentation says Group Analytics processes all identified
-   events. Verify that project-group queries remain correct before considering
-   anonymous production stream events. If supported, this can retain every
-   fact while removing the identified-event add-on.
+6. **Use groups on every production event.** A browser person is the
+   authenticated user. A machine-authored stream fact uses one stable synthetic
+   identity per project. Both carry `organization` and `project` group context
+   whenever an organization exists, plus ordinary ID properties for HogQL.
 7. **Classify the production error rows.** Fix the two current
    `runtime.runningScripts` contract violations and track the old rollout/parked
    cases to explicit resolutions. Do not normalize them as expected noise.
-8. **Review Group Analytics value and billing.** The project grouping is useful,
-   but it may bill every identified event. Compare its actual invoice line item
-   against equivalent HogQL breakdowns on the immutable `project_id` property.
+8. **Keep Group Analytics for all production activity.** The product model needs
+   organization- and project-level funnels, cohorts, flags, experiments, and
+   breakdowns across browser and durable stream events. Accept its
+   identified-event charge, and track the add-on line item so a future volume
+   increase cannot silently change the economics again.
 9. **Treat billing limits as a last-resort circuit breaker.** PostHog limits can
    permanently drop data. Use a warning below the limit, document ownership and
    rollback, and keep production headroom rather than setting the limit at the
@@ -336,3 +416,8 @@ Current PostHog references:
 - [Event filtering](https://posthog.com/docs/data/event-filtering)
 - [Drop Events transformation](https://posthog.com/docs/cdp/transformations/drop-events)
 - [Billing limits and alerts](https://posthog.com/docs/billing/limits-alerts)
+- [Workers Analytics Engine](https://developers.cloudflare.com/analytics/analytics-engine/)
+- [Workers Analytics Engine limits](https://developers.cloudflare.com/analytics/analytics-engine/limits/)
+- [Workers Analytics Engine sampling](https://developers.cloudflare.com/analytics/analytics-engine/sampling/)
+- [R2 Pipelines pricing](https://developers.cloudflare.com/pipelines/platform/pricing/)
+- [R2 SQL pricing](https://developers.cloudflare.com/r2-sql/platform/pricing/)

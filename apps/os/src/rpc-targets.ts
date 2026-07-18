@@ -3200,9 +3200,16 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
     if (config === undefined) {
       throw new StreamReceiverUnavailableError("PostHog is not configured for this deployment");
     }
+    const project = await readProjectById(env.PROJECT_DIRECTORY, this.props.projectId);
+    if (project === null) {
+      throw new StreamReceiverUnavailableError(
+        `PostHog cannot resolve group context for project ${this.props.projectId}`,
+      );
+    }
     await capturePosthogStreamEventBatch({
       apiKey: config.apiKey,
       batch,
+      organizationId: project.organizationId,
       projectId: this.props.projectId,
       workerName: env.WORKER_SELF,
     });

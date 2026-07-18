@@ -10,6 +10,19 @@ export interface SetupPosthogOptions {
   sessionRecording?: boolean;
 }
 
+export type PosthogProperties = Record<string, boolean | number | string>;
+
+export interface PosthogPerson {
+  distinctId: string;
+  properties: PosthogProperties;
+}
+
+export interface PosthogGroup {
+  type: string;
+  key: string;
+  properties: PosthogProperties;
+}
+
 declare global {
   interface Window {
     __iteratePosthogInitialized?: boolean;
@@ -70,6 +83,10 @@ function setupPosthog(client: import("posthog-js").PostHog, options: SetupPostho
 }
 
 let posthogInitStarted = false;
+let posthogClientPromise: Promise<import("posthog-js").PostHog> | undefined;
+let posthogAppStage: string | undefined;
+const registeredContextPropertyNames = new Set<string>();
+const identifiedGroupMetadata = new Map<string, string>();
 
 /**
  * Once-per-app-load PostHog initialization. Nothing in our apps reads the
@@ -83,5 +100,64 @@ let posthogInitStarted = false;
 export function initPosthog(options: SetupPosthogOptions) {
   if (posthogInitStarted || !loadPosthog || !shouldEnablePosthog(options.apiKey)) return;
   posthogInitStarted = true;
-  void loadPosthog().then((posthogModule) => setupPosthog(posthogModule.default, options));
+  posthogAppStage = options.appStage;
+  posthogClientPromise = loadPosthog().then((posthogModule) => {
+    setupPosthog(posthogModule.default, options);
+    return posthogModule.default;
+  });
+}
+
+function withPosthogClient(action: (client: import("posthog-js").PostHog) => void) {
+  const clientPromise = posthogClientPromise;
+  if (!clientPromise) return;
+  void clientPromise.then(action);
+}
+
+/**
+ * Apply the complete authenticated analytics context in one ordered operation.
+ * `identify` must precede `group`: posthog-js uses the current person identity
+ * when it emits group metadata and attaches group keys to later events.
+ */
+export function syncPosthogContext(input: {
+  eventProperties: PosthogProperties;
+  person: PosthogPerson;
+  groups: PosthogGroup[];
+  resetIdentity?: boolean;
+}) {
+  withPosthogClient((client) => {
+    if (input.resetIdentity) resetPosthogClient(client);
+    client.identify(input.person.distinctId, input.person.properties);
+
+    for (const propertyName of registeredContextPropertyNames) {
+      if (!Object.hasOwn(input.eventProperties, propertyName)) client.unregister(propertyName);
+    }
+    if (Object.keys(input.eventProperties).length > 0) client.register(input.eventProperties);
+    registeredContextPropertyNames.clear();
+    for (const propertyName of Object.keys(input.eventProperties)) {
+      registeredContextPropertyNames.add(propertyName);
+    }
+
+    client.resetGroups();
+    for (const group of input.groups) {
+      const metadataKey = JSON.stringify([group.type, group.key]);
+      const metadataSignature = JSON.stringify(group.properties);
+      const metadata =
+        identifiedGroupMetadata.get(metadataKey) === metadataSignature
+          ? undefined
+          : group.properties;
+      client.group(group.type, group.key, metadata);
+      identifiedGroupMetadata.set(metadataKey, metadataSignature);
+    }
+  });
+}
+
+/** Reset both the identified person and persistent group keys after sign-out. */
+export function resetPosthogIdentity() {
+  withPosthogClient(resetPosthogClient);
+}
+
+function resetPosthogClient(client: import("posthog-js").PostHog) {
+  client.reset();
+  registeredContextPropertyNames.clear();
+  if (posthogAppStage) client.register({ $environment: posthogAppStage });
 }
