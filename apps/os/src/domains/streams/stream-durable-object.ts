@@ -9,13 +9,14 @@ import { sameIdempotentEvent } from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
-import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/processors";
+import { StreamRuntimeMetrics } from "iterate/processors";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import {
   deploymentItxForInternal,
   itxForScope,
+  LiveStateRpcTarget,
   StreamSubscriptionRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -27,11 +28,11 @@ import {
   SqliteSubscriptionCursorStore,
   StreamEventLog,
 } from "./stream-storage.ts";
+import { StreamSubscribers } from "./stream-subscribers.ts";
 import {
-  StreamSubscribers,
-  type ConnectionRuntimeState,
-  type SubscriptionRuntimeState,
-} from "./stream-subscribers.ts";
+  StreamRuntimeLiveProjection,
+  type StreamRuntimeDebugState,
+} from "./stream-runtime-live-state.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   isDurableObjectLifecycleError,
@@ -103,6 +104,7 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  * that touch SQLite/KV must remain synchronous.
  */
 export class StreamDurableObject extends DurableObject<Env> {
+  #runtimeLiveProjection!: StreamRuntimeLiveProjection;
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
@@ -110,7 +112,9 @@ export class StreamDurableObject extends DurableObject<Env> {
    * because the core-state rebuild path also reconciles these rows against
    * the freshly folded config — see #readCoreProcessorState.
    */
-  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
+  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
+    onMutation: () => this.#runtimeLiveProjection?.invalidate(),
+  });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
   readonly #subscribers = new StreamSubscribers({
@@ -156,7 +160,11 @@ export class StreamDurableObject extends DurableObject<Env> {
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
-      recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
+      recordEgress: (count, bytes) => {
+        this.#metrics.egress.bump(Date.now(), count, bytes);
+        this.#runtimeLiveProjection?.invalidate();
+      },
+      runtimeChanged: () => this.#runtimeLiveProjection?.invalidate(),
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
@@ -179,6 +187,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+    this.#runtimeLiveProjection = new StreamRuntimeLiveProjection(() => this.#readRuntimeState());
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
@@ -360,6 +369,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.length,
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
+    this.#runtimeLiveProjection.invalidate();
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -1294,20 +1304,31 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#subscribers.getProcessorRuntimeState(args.subscriptionKey);
   }
 
-  runtimeState(): {
-    coreProcessorState: CoreProcessorState;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  } {
+  runtimeState(): StreamRuntimeDebugState {
     // Observer-driven RTT sampling: being asked for runtime state IS the
     // signal someone is watching. The round runs in the background (this
-    // method is synchronous); the caller's next poll reads the samples.
+    // method is synchronous); a later read or live update carries the sample.
     this.#subscribers.samplePingsSoon();
+    return this.#readRuntimeState();
+  }
+
+  /** Push-driven twin of `runtimeState()` for polling-free debug surfaces. */
+  get runtimeLiveState(): LiveStateRpcTarget<StreamRuntimeDebugState> {
+    const projection = this.#runtimeLiveProjection;
+    return new LiveStateRpcTarget({
+      get live() {
+        return projection.live;
+      },
+      loadAndRefreshLive: () => {
+        // Seed one observer-driven RTT round when the live observer attaches;
+        // its completion invalidates the projection through runtimeChanged.
+        this.#subscribers.samplePingsSoon();
+        projection.loadAndRefreshLive();
+      },
+    });
+  }
+
+  #readRuntimeState(): StreamRuntimeDebugState {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {

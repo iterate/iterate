@@ -55,6 +55,11 @@ export class LiveState<State extends object> {
     return this.#current;
   }
 
+  /** True while at least one live subscriber makes projection work observable. */
+  get observed(): boolean {
+    return this.#subscribers.size > 0;
+  }
+
   /** Replace the state. Build a NEW value (don't mutate) so the diff stays cheap. */
   setState(next: State | ((prev: State) => State)): void {
     this.#current = typeof next === "function" ? next(this.#current) : next;

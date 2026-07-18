@@ -155,6 +155,7 @@ function makeHarness() {
   const armedAlarms: number[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
+  let runtimeChanges = 0;
   const configured: Record<string, ConfiguredEntry> = {};
 
   const pokes: StreamSubscriberWakeRequest[] = [];
@@ -231,6 +232,9 @@ function makeHarness() {
         }
       },
       recordEgress: (count, bytes) => egress.push({ count, bytes }),
+      runtimeChanged: () => {
+        runtimeChanges += 1;
+      },
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
@@ -254,6 +258,7 @@ function makeHarness() {
     facts,
     armedAlarms,
     egress,
+    runtimeChanges: () => runtimeChanges,
     pokes,
     pushes,
     pushOutcomes,
@@ -1608,6 +1613,7 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(connection.settleLatencyMs).toBeUndefined();
     // Delivery throughput landed in the stream-level egress hook.
     expect(h.egress).toEqual([{ count: 3, bytes: connection.bytesSent }]);
+    expect(h.runtimeChanges()).toBeGreaterThan(0);
   });
 
   it("push lane records delivery duration, commit→acked settle latency, and bytes", async () => {
@@ -1654,6 +1660,7 @@ describe("StreamSubscribers runtime metrics", () => {
     await h.settle();
     expect(settleBatch).toBeDefined();
     expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toBeUndefined();
+    const runtimeChangesBeforeSettle = h.runtimeChanges();
 
     h.advanceTo(600);
     settleBatch!();
@@ -1663,6 +1670,7 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 598,
       samples: 1,
     });
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforeSettle);
   });
 
   it("mutual ping: NTP math cancels responder clock skew; rounds are throttled", async () => {
@@ -1680,6 +1688,7 @@ describe("StreamSubscribers runtime metrics", () => {
 
     h.subscribers.samplePingsSoon();
     h.subscribers.samplePingsSoon(); // throttled: same round
+    const runtimeChangesBeforePing = h.runtimeChanges();
     await h.settle();
     expect(pings).toBe(1);
     // rtt = (t3−t0) − (t2−t1) = 40 − 5, regardless of the 100s skew.
@@ -1687,6 +1696,7 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 35,
       samples: 1,
     });
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforePing);
 
     h.advanceTo(h.now() + 5_001);
     h.subscribers.samplePingsSoon();

@@ -161,6 +161,8 @@ export type ThroughputReport = {
 export type StreamThroughputMetrics = {
   /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
   measuredSince: string;
+  /** ISO timestamp anchoring the trailing windows and final bucket in each raw series. */
+  reportedAt: string;
   /** Appends committed (all producers). */
   ingress: ThroughputReport;
   /** Deliveries dispatched (all lanes, all subscribers). */
@@ -189,6 +191,7 @@ export class StreamRuntimeMetrics {
     };
     return {
       measuredSince: new Date(this.#measuredSinceMs).toISOString(),
+      reportedAt: new Date(nowMs).toISOString(),
       ingress: direction(this.ingress),
       egress: direction(this.egress),
     };

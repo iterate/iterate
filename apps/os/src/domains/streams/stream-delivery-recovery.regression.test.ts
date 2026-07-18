@@ -151,6 +151,7 @@ test.fails("DESIRED: a post-delivery cursor failure schedules durable redelivery
     random: () => 0.5,
     armAlarm: (atMs) => armedAlarms.push(atMs),
     keepAlive: (promise) => kept.push(promise),
+    runtimeChanged: () => undefined,
   };
   const createSubscribers = () => new StreamSubscribers({ idleTeardownMs: 60_000, hooks });
   const settle = async () => {

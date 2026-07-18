@@ -26,8 +26,8 @@
 // delivered, lag from cursor), the durable lanes record commit→settled
 // latency on the stream's own clock (wake: the pulled result settling; push/
 // webhook: the awaited ack), and subscribers that hand over a ping capability
-// get NTP-style RTT sampled — observer-driven via runtimeState(), throttled,
-// and purely observational (a failed ping drops the sample, nothing else).
+// get NTP-style RTT sampled when runtime observation begins, throttled, and
+// purely observational (a failed ping drops the sample, nothing else).
 // Ephemeral consumption is deliberately NOT measured here: those results stay
 // unpulled (zero return frames), and the consuming host self-reports through
 // its getRuntimeState capability instead (see subscriber-metrics.ts).
@@ -246,6 +246,8 @@ type StreamSubscribersHooks = {
    * the event count and serialized payload bytes it carried (all lanes).
    */
   recordEgress(count: number, bytes: number): void;
+  /** An in-memory runtime-debug field changed; refresh any observed projection. */
+  runtimeChanged(): void;
   /** Injected clock (epoch ms). */
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
@@ -622,6 +624,7 @@ export class StreamSubscribers {
           // attempts count too (the wire carried them either way).
           const dispatchAtMs = this.#hooks.now();
           this.#hooks.recordEgress(matched.length, deliveredBytes);
+          this.#hooks.runtimeChanged();
           try {
             if (config.delivery.mode === "webhook") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
@@ -676,6 +679,7 @@ export class StreamSubscribers {
             subscriptionMetrics.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
           }
           subscriptionMetrics.bytesSent += deliveredBytes;
+          this.#hooks.runtimeChanged();
           // Fenced on the epoch read above: a seek (cursor-set, replacement
           // deliver, remove+recreate) that landed while this delivery was in
           // flight bumped the epoch, and this ack no-ops instead of
@@ -935,6 +939,7 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#subscriptionMetrics.delete(subscriptionKey);
+    this.#hooks.runtimeChanged();
   }
 
   #subscriptionMetricsFor(subscriptionKey: string) {
@@ -1096,6 +1101,7 @@ export class StreamSubscribers {
           connection.bytesSent += deliveredBytes;
           connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
           this.#hooks.recordEgress(events.length, deliveredBytes);
+          this.#hooks.runtimeChanged();
           const currentState = this.#hooks.coreState();
           if (currentState.projectId === undefined || currentState.path === undefined) {
             throw new Error(
@@ -1120,15 +1126,22 @@ export class StreamSubscribers {
               // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
               state: currentState,
             } satisfies StreamEventBatch,
-            newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
-              ? undefined
-              : {
-                  onSettled: (outcome) => {
-                    if (outcome !== "ok") return;
-                    const settledAtMs = this.#hooks.now();
-                    connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
-                  },
-                },
+            {
+              onSettled: (outcome) => {
+                if (
+                  outcome === "ok" &&
+                  newestCreatedAtMs !== undefined &&
+                  Number.isFinite(newestCreatedAtMs)
+                ) {
+                  const settledAtMs = this.#hooks.now();
+                  connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+                }
+                // `hasPendingDelivery` changed on every durable settle,
+                // including empty/state-only and rejected deliveries that
+                // record no latency sample.
+                this.#hooks.runtimeChanged();
+              },
+            },
           );
           await Promise.resolve();
         }
@@ -1159,6 +1172,7 @@ export class StreamSubscribers {
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
+          this.#hooks.runtimeChanged();
         }
         // The ping stub proxies through the same chain the sink retains
         // (wake lane), so it releases before the sink tears that chain down.
@@ -1181,6 +1195,7 @@ export class StreamSubscribers {
     };
 
     this.#connections.set(subscriptionKey, connection);
+    this.#hooks.runtimeChanged();
     this.#hooks.appendFact({
       type: "events.iterate.com/stream/subscriber-connected",
       payload: {
@@ -1239,10 +1254,9 @@ export class StreamSubscribers {
 
   /**
    * One throttled mutual-ping round over every live connection that supplied
-   * a ping capability. Observer-driven: `runtimeState()` triggers it, so RTT
-   * sampling runs only while something is reading runtime state — the debug
-   * panel's poll, or a live browser tab's ~10s liveness probe. A stream with
-   * no browser attached and no debug observer is never pinged. Purely
+   * a ping capability. Observer-driven: a one-shot `runtimeState()` read or a
+   * runtime LiveState observer attaching triggers it. A stream with no debug
+   * observer is never pinged. Purely
    * observational: a failed/garbage/slow ping drops the sample and NOTHING
    * else (liveness stays owned by result-pulling and onRpcBroken); it never
    * wakes pumps and never re-arms the idle timer.
@@ -1275,7 +1289,10 @@ export class StreamSubscribers {
             return; // a subscriber that answers garbage just has no RTT data
           }
           const { rttMs } = pingRoundTrip({ t0, t1: reply.t1, t2: reply.t2 }, t3);
-          if (connection.isLive()) connection.pingRtt.record(rttMs, t3);
+          if (connection.isLive()) {
+            connection.pingRtt.record(rttMs, t3);
+            this.#hooks.runtimeChanged();
+          }
         } catch {
           // Drop the sample; the delivery machinery owns liveness verdicts.
         }
@@ -1414,9 +1431,8 @@ export class StreamSubscribers {
 const DELIVERY_TIMEOUT_MS = 60_000;
 
 /**
- * Minimum interval between mutual-ping rounds. Sampling is observer-driven
- * (each `runtimeState()` call requests a round), so this throttle turns the
- * panel's ~2s poll into a ≤1-ping-per-5s-per-connection ceiling.
+ * Minimum interval between mutual-ping rounds. Sampling is observer-driven;
+ * this bounds repeated explicit refreshes/one-shot reads without a ticker.
  */
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 /** Bound on one ping attempt — a reply slower than this isn't a useful RTT sample. */

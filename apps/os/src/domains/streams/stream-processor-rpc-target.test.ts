@@ -8,6 +8,55 @@ import {
 } from "../../rpc-targets.ts";
 
 describe("StreamRpcTarget", () => {
+  it("relays the stream runtime LiveState property without polling runtimeState", async () => {
+    const runtimeState = {
+      coreProcessorState: { maxOffset: 4 },
+      runtime: {
+        connections: {},
+        subscriptions: {},
+        metrics: {
+          measuredSince: new Date(0).toISOString(),
+          reportedAt: new Date(1).toISOString(),
+          ingress: {},
+          egress: {},
+        },
+        storageSizeBytes: 42,
+      },
+    };
+    const handle = { ping: () => true, unsubscribe: vi.fn() };
+    const get = vi.fn(async () => runtimeState);
+    const subscribe = vi.fn(async (onUpdate: (update: unknown) => void) => {
+      onUpdate({ type: "snapshot", revision: 0, state: runtimeState });
+      return handle;
+    });
+    const runtimeStatePoll = vi.fn();
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return {
+          runtimeLiveState: Promise.resolve({ get, subscribe }),
+          runtimeState: runtimeStatePoll,
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(stream.runtimeLiveState.get()).resolves.toBe(runtimeState);
+    const updates: unknown[] = [];
+    await expect(
+      stream.runtimeLiveState.subscribe((update) => void updates.push(update)),
+    ).resolves.toBe(handle);
+
+    expect(get).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: runtimeState }]);
+    expect(runtimeStatePoll).not.toHaveBeenCalled();
+  });
+
   it("detaches every plain-data result and releases its native RPC invocation", async () => {
     const event = {
       createdAt: new Date(0).toISOString(),

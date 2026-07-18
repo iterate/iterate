@@ -1,7 +1,7 @@
 // Presence + real browser-measured metrics helpers shared by the stream
 // header chrome and the processors panel.
 
-import { useEffect, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { BrowserStreamMetrics } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 
@@ -21,43 +21,67 @@ export type BrowserStreamMetricsView = BrowserStreamMetrics & {
 };
 
 const SPARK_LENGTH = 24;
-const METRICS_POLL_MS = 1_000;
 
-/** Poll the store's measured metrics and accumulate the RTT sparkline. */
-export function useBrowserStreamMetrics(store: {
+type BrowserStreamMetricsSource = {
   metrics(): BrowserStreamMetrics;
-}): BrowserStreamMetricsView {
-  const [view, setView] = useState<BrowserStreamMetricsView>({
-    spark: [],
-    transportRttMs: null,
-    subscriber: undefined,
-  });
+  subscribeMetrics(listener: () => void): () => void;
+};
 
-  useEffect(() => {
-    let spark: number[] = [];
-    let lastSampleAt = 0;
-    let lastSerialized = "";
-    const tick = () => {
-      const current = store.metrics();
-      const rtt = current.transportRttMs;
-      if (rtt !== null && rtt.lastAt !== lastSampleAt) {
-        lastSampleAt = rtt.lastAt;
-        spark = [...spark.slice(-(SPARK_LENGTH - 1)), rtt.last];
-      }
-      // Change-gated: ticks without a new sample (a quiet stream between
-      // probes) must not rerender the whole stream view every second.
-      const next = { ...current, spark };
-      const serialized = JSON.stringify(next);
-      if (serialized === lastSerialized) return;
-      lastSerialized = serialized;
-      setView(next);
-    };
-    tick();
-    const timer = setInterval(tick, METRICS_POLL_MS);
-    return () => clearInterval(timer);
-  }, [store]);
+/**
+ * Adapt the browser runtime's stable metrics snapshot to the view shape. The
+ * source publishes only when a producer records a measurement; unrelated
+ * runtime notifications are ignored by snapshot identity. Keeping the
+ * sparkline here leaves its presentation-sized history out of the runtime.
+ */
+export function createBrowserStreamMetricsViewStore(source: BrowserStreamMetricsSource): {
+  getSnapshot(): BrowserStreamMetricsView;
+  subscribe(listener: () => void): () => void;
+} {
+  let sourceSnapshot = source.metrics();
+  let lastSampleAt = 0;
+  let spark: number[] = [];
 
-  return view;
+  const buildSnapshot = (metrics: BrowserStreamMetrics): BrowserStreamMetricsView => {
+    const rtt = metrics.transportRttMs;
+    if (rtt !== null && rtt.lastAt !== lastSampleAt) {
+      lastSampleAt = rtt.lastAt;
+      spark = [...spark.slice(-(SPARK_LENGTH - 1)), rtt.last];
+    }
+    return { ...metrics, spark };
+  };
+  let viewSnapshot = buildSnapshot(sourceSnapshot);
+
+  const refresh = (): boolean => {
+    const nextSourceSnapshot = source.metrics();
+    if (Object.is(nextSourceSnapshot, sourceSnapshot)) return false;
+    sourceSnapshot = nextSourceSnapshot;
+    viewSnapshot = buildSnapshot(sourceSnapshot);
+    return true;
+  };
+
+  return {
+    getSnapshot: () => {
+      refresh();
+      return viewSnapshot;
+    },
+    subscribe: (listener) => {
+      const unsubscribe = source.subscribeMetrics(() => {
+        if (refresh()) listener();
+      });
+      // Close the render-to-subscribe race: a producer may have published
+      // after this adapter's construction but before React committed it.
+      if (refresh()) listener();
+      return unsubscribe;
+    },
+  };
+}
+
+/** Subscribe to producer-published browser metrics; no timer or polling. */
+export function useBrowserStreamMetrics(
+  store: BrowserStreamMetricsSource,
+): BrowserStreamMetricsView {
+  const viewStore = useMemo(() => createBrowserStreamMetricsViewStore(store), [store]);
+  return useSyncExternalStore(viewStore.subscribe, viewStore.getSnapshot, viewStore.getSnapshot);
 }
 
 export function sparklinePoints(
