@@ -192,21 +192,18 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   expect(await workspace.readFile("/side/attempt.md")).toBe("not committable");
   expect(await sideRepo.readFile({ path: "attempt.md" })).toBeNull();
 
-  // Unmount via null; the private write under it becomes unmounted scratch.
+  // Unmounting over UNCOMMITTED work is refused — a config change must never
+  // silently move overlay state into a different repo's next commit.
+  await expect(workspace.configure({ config: { mounts: { "/side": null } } })).rejects.toThrow(
+    /uncommitted work/,
+  );
+  await workspace.revert("/side/attempt.md");
   const unmounted = await workspace.configure({ config: { mounts: { "/side": null } } });
   expect(unmounted).toMatchObject({
     mounts: { "/": { policy: "commit-to-main", repoPath: "/repos/config" } },
   });
   expect(await workspace.readFile("/side/side.md")).toBeNull();
-  expect(await workspace.readFile("/side/attempt.md")).toBe("not committable");
-  // With "/" still mounted nothing is ever truly unmounted — the orphaned
-  // local file now routes to the root mount as an ordinary addition.
-  const statusAfterUnmount = await workspace.git.status();
-  expect(statusAfterUnmount).toMatchObject({ unmounted: [] });
-  expect(statusAfterUnmount.mounts.find((mount) => mount.path === "/")?.changes).toContainEqual({
-    change: "added",
-    path: "/side/attempt.md",
-  });
+  expect(await workspace.git.status()).toMatchObject({ unmounted: [] });
 
   // A brand-new workspace already sees the earlier commit through the
   // fall-through (workspace commits are shared state on main, not branches)

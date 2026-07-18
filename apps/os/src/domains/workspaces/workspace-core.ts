@@ -222,12 +222,12 @@ export class WorkspaceCore {
 
   async exists(path: string): Promise<boolean> {
     if (await this.#workspace.exists(path)) return true;
-    if (this.#isMaskedFromMount(path)) return false;
     const resolved = await this.#mountFor(path);
+    // Mount points are virtual directories that EXIST regardless of any old
+    // file tombstone at the same path — a tombstone only ever masks a file.
+    if (resolved !== null && resolved.repoRelativePath === "") return true;
+    if (this.#isMaskedFromMount(path)) return false;
     if (resolved === null) return false;
-    // A mount point is a virtual directory; anything else may be a mount FILE
-    // or a mount DIRECTORY (a prefix of mount files) — one listing answers both.
-    if (resolved.repoRelativePath === "") return true;
     const target = resolveAbsolutePath(path);
     const mountFiles = await this.#mountFilePaths(resolved.mountPath, resolved.mount);
     return mountFiles.some(
@@ -256,14 +256,19 @@ export class WorkspaceCore {
     });
   }
 
-  /** A mount point is a virtual DIRECTORY — a local file there would collide
-   * with every mounted descendant and commit as an empty repo path. */
+  /** Mount points — and every virtual ancestor directory leading to one —
+   * are DIRECTORIES: a local file there would collide with the mounted
+   * subtree (and a mount-point file would commit as an empty repo path). */
   async #assertNotMountPoint(path: string): Promise<void> {
-    const resolved = await this.#mountFor(path);
-    if (resolved !== null && resolved.repoRelativePath === "" && resolved.mountPath !== "/") {
-      throw new Error(
-        `Workspace path is not writable: "${path}" is the mount point of ${resolved.mount.repoPath} (a directory).`,
-      );
+    const resolved = resolveAbsolutePath(path);
+    if (resolved === "/") return;
+    for (const key of Object.keys(await this.#mounts())) {
+      const mountPath = resolveAbsolutePath(key);
+      if (mountPath === resolved || mountPath.startsWith(`${resolved}/`)) {
+        throw new Error(
+          `Workspace path is not writable: "${path}" is a mount point or a directory containing one.`,
+        );
+      }
     }
   }
 
@@ -401,6 +406,61 @@ export class WorkspaceCore {
     return wipeWorkspace(this.#workspace);
   }
 
+  /**
+   * Guard a mount-table transition against SILENT overlay adoption and
+   * namespace collisions, from inside the configuration lock:
+   *
+   * - Dirty overlay state (local files, whiteouts) is path-bound; a
+   *   transition that changes which repo owns a dirty path would carry those
+   *   edits/deletions into a DIFFERENT repository's next commit. Rejected —
+   *   commit, revert, or reset the affected paths first.
+   * - A new mount point (or a virtual ancestor of one) colliding with an
+   *   existing local FILE would create a file/directory contradiction.
+   *
+   * Pure bookkeeping: routes local paths and tombstones under both tables,
+   * no repo listings.
+   */
+  async assertMountTransitionSafe(
+    current: Record<string, WorkspaceMount>,
+    next: Record<string, WorkspaceMount>,
+  ): Promise<void> {
+    const localFiles = await this.#localFilePaths();
+    const dirty = [...localFiles, ...Object.keys(this.#whiteouts())];
+    const moved = dirty.filter((path) => {
+      const before = routeMount(current, path);
+      const after = routeMount(next, path);
+      return (
+        before?.mountPath !== after?.mountPath || before?.mount.repoPath !== after?.mount.repoPath
+      );
+    });
+    if (moved.length > 0) {
+      throw new Error(
+        `mount change would silently move uncommitted work to a different repo (or orphan it): ` +
+          `${moved
+            .slice(0, 5)
+            .map((path) => `"${path}"`)
+            .join(", ")}${moved.length > 5 ? ` and ${moved.length - 5} more` : ""} — ` +
+          "commit, revert, or reset these paths first.",
+      );
+    }
+    const localSet = new Set(localFiles);
+    for (const key of Object.keys(next)) {
+      const mountPath = resolveAbsolutePath(key);
+      if (mountPath === "/") continue;
+      // A local file at the mount point or any ancestor segment of it makes
+      // the mount path unreachable as a directory.
+      const segments = mountPath.slice(1).split("/");
+      for (let i = 1; i <= segments.length; i++) {
+        const prefix = `/${segments.slice(0, i).join("/")}`;
+        if (localSet.has(prefix)) {
+          throw new Error(
+            `mount at "${mountPath}" collides with the local FILE at "${prefix}" — delete or move it first.`,
+          );
+        }
+      }
+    }
+  }
+
   // -- git ------------------------------------------------------------------------
 
   /** The mount table as one normalized-key snapshot: routing, grouping, and
@@ -477,9 +537,10 @@ export class WorkspaceCore {
 
     const staleWhiteouts = grouped.whiteoutsByMount
       .get(mountPath)!
-      .filter(
-        (key) => !mountSet.has(key) && !mountFiles.some((file) => file.startsWith(`${key}/`)),
-      );
+      // Exact-match semantics: a tombstone is live only when it masks a mount
+      // FILE at exactly its path. One AT the mount point (a virtual
+      // directory) can never mask anything and is always crash residue.
+      .filter((key) => !mountSet.has(key));
     return { changes, localPaths, staleWhiteouts };
   }
 

@@ -159,18 +159,26 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     plan: (current: WorkspaceConfig) => WorkspaceConfigPatch | null,
   ): Promise<WorkspaceConfig> {
     for (let attempt = 1; attempt <= MAX_CONFIGURE_ATTEMPTS; attempt++) {
-      await this.#registry.catchUp(PROCESSOR_SLUG);
-      const { offset } = await this.#reads.snapshot();
+      // Pin the RAW stream head (ephemeral rows hold offsets too, so the
+      // fold's own offset can trail the assignable head), then force the fold
+      // through it — waitUntilEvent THROWS on a wedged catch-up, so a stale
+      // runner can never validate a plan or report convergence silently.
+      const rawHead = await this.#stream.durableObjectStub.getMaxOffset();
+      await this.#reads.waitUntilEvent({ offset: rawHead, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
       const current = this.#currentConfig();
       const patch = plan(current);
       if (patch === null) return current;
+      const next = foldWorkspaceConfig(current, patch);
+      // Ownership/collision safety, judged inside the lock against the exact
+      // tables this append will transition between.
+      await this.#core.assertMountTransitionSafe(current.mounts, next.mounts);
       try {
         const [event] = await this.#stream.append({
           ...WorkspaceProcessorContract.buildEvent({
             type: "events.iterate.com/workspace/configured",
             payload: { config: patch },
           }),
-          offset: offset + 1,
+          offset: rawHead + 1,
         } as StreamEventInput);
         await this.#registry.catchUp(PROCESSOR_SLUG);
         await this.#reads.waitUntilEvent({

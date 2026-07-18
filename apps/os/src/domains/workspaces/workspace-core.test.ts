@@ -542,3 +542,84 @@ describe("thermo round-three regressions", () => {
     await expect(core.readFile("/config/worker.ts")).resolves.toBe("repo version");
   });
 });
+
+describe("thermo round-four regressions", () => {
+  test("a mount point EXISTS even when an old file tombstone sits at its path", async () => {
+    const config = fakeRepo({ vendor: "was a file", "worker.ts": "x" });
+    const vendorRepo = fakeRepo({ "readme.md": "vendor" });
+    const { workspace } = fakeLocalLayer();
+    const table: Record<string, WorkspaceMount> = {
+      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+    };
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => table,
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
+      workspace,
+    });
+    await core.deleteFile("/vendor");
+    table["/vendor"] = { policy: "read-only", repoPath: "/repos/vendor" };
+    await expect(core.exists("/vendor")).resolves.toBe(true);
+    await expect(core.exists("/vendor/readme.md")).resolves.toBe(true);
+  });
+
+  test("writes are rejected at a mount's virtual ANCESTOR directories", async () => {
+    const config = fakeRepo({ "worker.ts": "x" });
+    const nested = fakeRepo({ "note.md": "y" });
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({
+        "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+        "/a/b": { policy: "read-only", repoPath: "/repos/nested" },
+      }),
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
+      workspace,
+    });
+    await expect(core.writeFile("/a", "not a file")).rejects.toThrow(/mount point/);
+    await expect(core.writeFile("/a/b", "not a file")).rejects.toThrow(/mount point/);
+    await expect(core.writeFile("/a/c.md", "fine")).resolves.toBeUndefined();
+  });
+
+  test("mount transitions over dirty overlay state are rejected; clean ones pass", async () => {
+    const { core } = subject();
+    const current: Record<string, WorkspaceMount> = {
+      "/config": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/iterate": { policy: "read-only", repoPath: "/repos/iterate" },
+    };
+    await core.writeFile("/iterate/notes.md", "dirty");
+    // Swapping the dirty mount's repo, or unmounting it, would adopt the
+    // dirty file into another owner — rejected.
+    await expect(
+      core.assertMountTransitionSafe(current, {
+        ...current,
+        "/iterate": { policy: "read-only", repoPath: "/repos/other" },
+      }),
+    ).rejects.toThrow(/uncommitted work/);
+    const withoutIterate = { "/config": current["/config"]! };
+    await expect(core.assertMountTransitionSafe(current, withoutIterate)).rejects.toThrow(
+      /uncommitted work/,
+    );
+    // Changing only the POLICY moves nothing; adding an unrelated mount is fine.
+    await expect(
+      core.assertMountTransitionSafe(current, {
+        ...current,
+        "/iterate": { policy: "commit-to-main", repoPath: "/repos/iterate" },
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      core.assertMountTransitionSafe(current, {
+        ...current,
+        "/docs": { policy: "read-only", repoPath: "/repos/docs" },
+      }),
+    ).resolves.toBeUndefined();
+    // A new mount colliding with a local FILE is rejected.
+    await core.writeFile("/notes.md", "scratchless");
+    await expect(
+      core.assertMountTransitionSafe(current, {
+        ...current,
+        "/notes.md": { policy: "read-only", repoPath: "/repos/docs" },
+      }),
+    ).rejects.toThrow(/collides with the local FILE|uncommitted work/);
+  });
+});

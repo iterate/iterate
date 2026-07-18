@@ -450,6 +450,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       files[path] = await readCheckoutTextFile(filesystem, `${REPO_DIR}/${path}`);
     }
     const branch = REPO_DEFAULT_BRANCH;
+    // The hash is computed BEFORE the authority checks: its await yields the
+    // input gate, and a commit landing in that window must win. The checks
+    // and both puts below are synchronous, so nothing can interleave them.
+    const contentHash = await repoContentHash(files);
     // Never RECORD state that trails the last observed push (the bounded
     // clone retries can exhaust): serve it once, and let the next read's
     // cursor comparison drive another materialization toward the pushed head.
@@ -459,10 +463,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // authorities and may be NEWER — never overwrite it (getHead's rule).
     const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (!behindPush && !isRepoHeadRecord(raced)) {
-      this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
-        commitOid: head.oid,
-        contentHash: await repoContentHash(files),
-      });
+      this.ctx.storage.kv.put(repoHeadStorageKey(branch), { commitOid: head.oid, contentHash });
     }
     if (!behindPush) this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, head.oid);
     return head.oid;
@@ -596,11 +597,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // briefly clone the previous tip even after emitting its push event; the
     // recorded oid makes #checkout retry that stale clone instead of letting
     // it repopulate the just-cleared unpinned HEAD snapshot.
-    if (input.afterCommitOid === null) {
-      this.#headFilesSnapshot.clear();
-    } else {
-      this.#observeExternalPush(input.branch, input.beforeCommitOid, input.afterCommitOid);
-    }
+    this.#observeExternalPush(input.branch, input.afterCommitOid);
     const previous =
       input.beforeCommitOid === null
         ? {}
@@ -625,40 +622,34 @@ export class RepoDurableObject extends DurableObject<Env> {
    */
   /**
    * Queue-delivered push observation. Cloudflare Queues does not guarantee
-   * publication-order delivery, so only COHERENT transitions apply: a
-   * duplicate is a no-op, and an event whose `before` does not match the
-   * recorded cursor is out-of-order or superseded — applying it would REGRESS
-   * the cursor and put every read into a clone-retry loop against a remote
-   * that is already past it. Cursor movement (never regression) is what
-   * invalidates the head caches here; the DO's own write lanes stay on
-   * {@link #recordPushedHead} (their pushes are serialized and authoritative).
+   * publication-order delivery, and commit oids carry no order — so external
+   * observations NEVER assign cursors. Each non-duplicate observation only
+   * INVALIDATES the durable head record, tree sentinel, and read-your-write
+   * floor: the next read re-resolves against the ACTUAL remote head and
+   * caches that. Ordering-independent by construction (any permutation of
+   * deliveries ends with one re-resolution after the last one), so the cursor
+   * can neither regress nor wedge. The DO's own serialized write lanes stay
+   * on {@link #recordPushedHead} — their pushes really are ordered.
    */
-  #observeExternalPush(branch: string, beforeCommitOid: string | null, afterCommitOid: string) {
-    const current = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
-    if (current === afterCommitOid) return;
-    if (current !== undefined && beforeCommitOid !== null && current !== beforeCommitOid) {
-      console.warn(
-        `ignoring out-of-order push observation ${beforeCommitOid} -> ${afterCommitOid} on ${branch} (cursor at ${current})`,
-      );
-      return;
+  #observeExternalPush(branch: string, afterCommitOid: string | null) {
+    const observedKey = `repo-observed-push:${branch}`;
+    if (this.ctx.storage.kv.get<string | null>(observedKey) === afterCommitOid) return;
+    this.ctx.storage.kv.put(observedKey, afterCommitOid);
+    if (branch === REPO_DEFAULT_BRANCH) {
+      this.#headFilesSnapshot.clear();
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
-    this.#recordPushedHead({ branch, commitOid: afterCommitOid });
+    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
   }
 
   #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
     if (result.noChanges) return;
     if (result.branch === REPO_DEFAULT_BRANCH) {
       this.#headFilesSnapshot.clear();
-      // An EXTERNALLY pushed head invalidates the durable cursor too:
-      // getHead serves its cached record before consulting the pushed oid,
-      // so a lingering pre-push record would pin the head-tree cache (and
-      // worker builds) to the old commit forever. The write lanes that push
-      // through this object re-record the new head themselves.
-      const cached = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(result.branch));
-      if (isRepoHeadRecord(cached) && cached.commitOid !== result.commitOid) {
-        this.ctx.storage.kv.delete(repoHeadStorageKey(result.branch));
-        this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
-      }
+      // The head moved: the tree sentinel is stale (the write lanes re-record
+      // the head RECORD themselves right after this).
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
     this.ctx.storage.kv.put(repoPushedHeadStorageKey(result.branch), result.commitOid);
   }
