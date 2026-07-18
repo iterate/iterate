@@ -122,7 +122,7 @@ export class DurableDeliveryCoordinator {
       return;
     }
     const retryAt = this.#hooks.now() + INFRASTRUCTURE_RETRY_MS;
-    const ownership = { configOffset: args.configOffset, retryAt } as const;
+    const ownership = { configOffset: args.configOffset, retryAt };
     this.#reconcileRetryByKey.set(args.subscriptionKey, ownership);
     const ownsRetry = () => this.#reconcileRetryByKey.get(args.subscriptionKey) === ownership;
     const releaseRetry = () => {

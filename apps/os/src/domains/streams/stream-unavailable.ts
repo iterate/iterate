@@ -46,21 +46,15 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
   for (let depth = 0; depth < 8; depth += 1) {
     if (typeof current !== "object" || current === null || seen.has(current)) return false;
     seen.add(current);
-    const flags = current as {
-      cause?: unknown;
-      durableObjectReset?: unknown;
-      retryable?: unknown;
-      overloaded?: unknown;
-    };
     try {
       if (
-        flags.durableObjectReset === true ||
-        flags.retryable === true ||
-        flags.overloaded === true
+        Reflect.get(current, "durableObjectReset") === true ||
+        Reflect.get(current, "retryable") === true ||
+        Reflect.get(current, "overloaded") === true
       ) {
         return true;
       }
-      current = flags.cause;
+      current = Reflect.get(current, "cause");
     } catch {
       // This classifier runs from error-handling paths. Exotic rejection
       // values (for example a Proxy or a throwing getter) must remain an

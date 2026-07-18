@@ -291,10 +291,13 @@ export function retainWakeHandshakeResponse(args: {
     if (retainedReleased) return;
     retainedReleased = true;
     const failures: { capability: string; error: unknown }[] = [];
-    for (const [capability, release] of [
-      ["ping", () => ping?.[Symbol.dispose]()],
-      ["getProcessorRuntimeState", () => getRuntimeState?.[Symbol.dispose]()],
-    ] as const) {
+    for (const { capability, release } of [
+      { capability: "ping", release: () => ping?.[Symbol.dispose]() },
+      {
+        capability: "getProcessorRuntimeState",
+        release: () => getRuntimeState?.[Symbol.dispose](),
+      },
+    ]) {
       try {
         release();
       } catch (error) {
@@ -455,7 +458,8 @@ export function createSubscriberDial(deps: {
       } catch (error) {
         if (webhookEgress === egress) webhookEgress = undefined;
         try {
-          (egress as Partial<Disposable>)[Symbol.dispose]?.();
+          const dispose = Reflect.get(egress, Symbol.dispose);
+          if (typeof dispose === "function") Reflect.apply(dispose, egress, []);
         } catch (disposeError) {
           console.warn("stream webhook egress dispose failed after delivery failure", {
             deliveryError: error,

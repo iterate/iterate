@@ -1360,11 +1360,11 @@ export class StreamSubscribers {
     getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
   }): void {
     const failures: { capability: string; error: unknown }[] = [];
-    for (const [capability, retained] of [
-      ["ping", args.ping],
-      ["getProcessorRuntimeState", args.getProcessorRuntimeState],
-      ["sink", args.sink],
-    ] as const) {
+    for (const { capability, retained } of [
+      { capability: "ping", retained: args.ping },
+      { capability: "getProcessorRuntimeState", retained: args.getProcessorRuntimeState },
+      { capability: "sink", retained: args.sink },
+    ]) {
       if (retained === undefined) continue;
       try {
         retained[Symbol.dispose]();
@@ -1634,10 +1634,13 @@ export class StreamSubscribers {
         ? Object.assign(connectionBase, {
             subscriptionType: "configured",
             ownership: args.ownership,
-          } as const)
+          } satisfies {
+            subscriptionType: "configured";
+            ownership: DeliveryAttempt;
+          })
         : Object.assign(connectionBase, {
             subscriptionType: "ephemeral",
-          } as const);
+          } satisfies { subscriptionType: "ephemeral" });
 
     try {
       this.#connections.set(subscriptionKey, connection);
