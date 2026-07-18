@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
+import { E2E_HEAVY_TEST_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-policy";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import {
   signUpWithEmailOtp,
@@ -19,6 +20,7 @@ test("the seeded hello and counter apps work after creating a project", async ({
   helpers,
   page,
 }) => {
+  test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   await using fixture = await helpers.createFixture("seeded-apps");
 
   // Hello: an app's first use is a cold worker build; the router serves a
@@ -48,6 +50,7 @@ test("the seeded hello and counter apps work after creating a project", async ({
 // directory on every request, not merely the OS access-token claims used by
 // the suite's usual forged-session fixture.
 test("the seeded internal app authenticates a real project member", async ({ baseURL, page }) => {
+  test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
     !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
@@ -97,6 +100,26 @@ test("the seeded internal app authenticates a real project member", async ({ bas
     .getByRole("heading", { name: "Latest project root events" })
     .waitFor({ timeout: 30_000 });
   await page.getByText(marker).waitFor();
+
+  // `/api` is an unauthenticated Cap'n Web root. The page explicitly
+  // exchanges its exact-origin app cookie for an app-defined session target;
+  // only that attenuated target (not project ITX) reaches the browser.
+  await page
+    .locator("#identity")
+    .filter({ hasText: /^authenticated as \S+$/ })
+    .waitFor();
+  const refresh = page.getByRole("button", { name: "refresh over Cap'n Web" });
+
+  // Prove the session's LiveState channel, rather than the initial HTML: add
+  // an event after render, invoke the app-session RPC method, and wait for the
+  // pushed snapshot/patch projection to repaint the page.
+  const liveMarker = `capnweb-live-state-${crypto.randomUUID()}`;
+  await root.append({
+    type: "events.iterate.test/spec/internal-app-live-state",
+    payload: { marker: liveMarker },
+  });
+  await refresh.click();
+  await page.getByText(liveMarker).waitFor();
 
   // Partial-fetch fall-through must preserve the original request. Exercise
   // that contract across the real dynamic-worker + ITX RPC boundary, not just

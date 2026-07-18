@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { LiveStateRpcTarget } from "iterate/live-state";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
@@ -7,7 +8,6 @@ import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
-  LiveStateRpcTarget,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,

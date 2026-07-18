@@ -219,13 +219,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAuth",
     kind: "interface",
     sourceText:
-      "/** A partial fetch: return its response, or continue the app when it returns null. */\nexport interface ProjectAuth {\n  /** Bind a project-member gate to this itx's project. */\n  get(policy: ProjectAuthPolicy): ProjectAuth;\n  /**\n   * Own login, callback, logout, and the host-only cookie. Returns null only\n   * when this request belongs to a current project member. Like any partial\n   * fetch, a null result leaves the request body untouched for the app.\n   */\n  fetch(request: Request): Promise<Response | null>;\n}",
+      "/** A partial fetch: return its response, or continue the app when it returns null. */\nexport interface ProjectAuth {\n  /** Select the project-member policy for this project's auth gate. */\n  get(policy: ProjectAuthPolicy): ProjectAuth;\n  /**\n   * Exchange an exact-origin app cookie for its authenticated actor. An app's\n   * unauthenticated Cap'n Web root uses this to construct its own session\n   * RpcTarget; the browser never receives the project's itx.\n   */\n  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;\n  /**\n   * Own login, callback, logout, and the host-only cookie. Returns null only\n   * when this request belongs to a current project member. Like any partial\n   * fetch, a null result leaves the request body untouched for the app.\n   */\n  fetch(request: Request): Promise<Response | null>;\n}",
     summary: "A partial fetch: return its response, or continue the app when it returns null.",
     memberSummaries: {
-      get: "Bind a project-member gate to this itx's project.",
+      get: "Select the project-member policy for this project's auth gate.",
+      authenticate: "Exchange an exact-origin app cookie for its authenticated actor.",
       fetch: "Own login, callback, logout, and the host-only cookie.",
     },
-    referencedTypeNames: ["ProjectAuthPolicy"],
+    referencedTypeNames: ["ProjectAuthPolicy", "ProjectAuthCredentials", "ProjectAuthActor"],
   },
   {
     name: "CfBrowserCapability",
@@ -1219,6 +1220,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       '/** A declarative access rule for a project-host web app. */\nexport type ProjectAuthPolicy = { policy: "project-member" };',
     summary: "A declarative access rule for a project-host web app.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ProjectAuthCredentials",
+    kind: "typeAlias",
+    sourceText:
+      '/** Browser credentials accepted by a project app\'s unauthenticated RPC root. */\nexport type ProjectAuthCredentials = { type: "from-server-cookie" };',
+    summary: "Browser credentials accepted by a project app's unauthenticated RPC root.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ProjectAuthActor",
+    kind: "typeAlias",
+    sourceText:
+      "/** Identity proven by the app-origin session, safe for app-defined authorization. */\nexport type ProjectAuthActor = { userId: string };",
+    summary: "Identity proven by the app-origin session, safe for app-defined authorization.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

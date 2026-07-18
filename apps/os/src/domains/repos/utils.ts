@@ -62,8 +62,39 @@ export class RepoNotSeededError extends Error {
   override readonly name = RepoNotSeededError.NAME;
 }
 
+const ARTIFACTS_REPO_NOT_READY_CODES = new Set([
+  "NOT_FOUND",
+  "IMPORT_IN_PROGRESS",
+  "FORK_IN_PROGRESS",
+]);
+// The binding exposes both forms; 10200/10302/10303 are the documented
+// numericCode values for the three string codes above.
+const ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES = new Set([10200, 10302, 10303]);
+// Workers RPC can strip ArtifactsError's own code properties. Keep the
+// fallback specific to the service's retryable repository-lifecycle wording.
+const ARTIFACTS_REPO_NOT_READY_MESSAGE =
+  /^Repository "[^"]+" is currently being (?:created|imported|forked)\. The repository is not yet available\. Retry after \d+ seconds\.$/;
+
+function isArtifactsRepoNotReadyError(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  const code = "code" in error ? error.code : undefined;
+  const message = "message" in error ? error.message : undefined;
+  const name = "name" in error ? error.name : undefined;
+  const numericCode = "numericCode" in error ? error.numericCode : undefined;
+  return (
+    (typeof code === "string" && ARTIFACTS_REPO_NOT_READY_CODES.has(code)) ||
+    (name === "ArtifactsError" &&
+      ((typeof numericCode === "number" &&
+        ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES.has(numericCode)) ||
+        (typeof message === "string" && ARTIFACTS_REPO_NOT_READY_MESSAGE.test(message))))
+  );
+}
+
 export function isRepoNotSeededError(error: unknown): boolean {
-  return (error as { name?: string } | null)?.name === RepoNotSeededError.NAME;
+  return (
+    (error as { name?: string } | null)?.name === RepoNotSeededError.NAME ||
+    isArtifactsRepoNotReadyError(error)
+  );
 }
 
 /**
@@ -72,9 +103,10 @@ export function isRepoNotSeededError(error: unknown): boolean {
  * ref (an empty Artifacts remote answers HEAD with a branch that has no
  * commits, observed as either "Could not find refs/heads/master" or "Could
  * not find main" depending on whether isomorphic-git resolves HEAD or an
- * explicitly requested branch), or the Artifacts repo itself missing
- * (`NOT_FOUND` — created lazily by the bootstrap saga). Anything else returns
- * unchanged.
+ * explicitly requested branch), or the Artifacts repo itself missing or not
+ * materialized yet (`NOT_FOUND`, `IMPORT_IN_PROGRESS`, or
+ * `FORK_IN_PROGRESS` — created lazily by the bootstrap saga). Anything else
+ * returns unchanged.
  */
 export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
@@ -83,7 +115,7 @@ export function classifyRepoAccessError(error: unknown, branch?: string): unknow
     typeof message === "string" &&
     (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
   const notSeeded =
-    code === "NOT_FOUND" ||
+    isArtifactsRepoNotReadyError(error) ||
     (code === "NotFoundError" &&
       typeof message === "string" &&
       (message.includes("refs/") || missingRequestedBranch));
