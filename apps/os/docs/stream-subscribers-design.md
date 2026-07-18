@@ -105,7 +105,8 @@ payload: {
 
 Latest-config-wins per `subscriptionKey` (existing replacement semantics — also the worker-feed
 override story, R5). `subscription-removed` deletes the row. New facts:
-`subscription-parked {subscriptionKey, atOffset, attempts, reason, error}`,
+`subscription-parked {subscriptionKey, atOffset?, attempts, reason, error}`
+(`atOffset` is absent only when cursor storage itself could not be read),
 `subscription-resumed {subscriptionKey}`, and
 `subscription-cursor-set {subscriptionKey, afterOffset}`. Cursor-set applies
 only to stream-cursor-owned push/webhook subscriptions; a wake processor owns
@@ -139,7 +140,10 @@ CREATE TABLE subscriptions (
 There is one current-schema migration and deliberately no adoption chain:
 production is recreated for this breaking shape, so a stale database fails
 loudly. The one shared platform alarm projects the minimum non-null
-`watchdog_at`/`retry_at` across rows.
+`watchdog_at`/`retry_at` across rows plus any config-owned retry whose cursor
+could not yet be read. Successful row acquisition transfers that obligation
+into the ordinary fenced cursor retry; if storage remains unreadable, the
+terminal infrastructure park omits `atOffset` instead of inventing one.
 
 Rows are projections of config events (created on configure, deleted on remove); config itself is
 read from folded core state, never duplicated into rows. Parked status lives in the **fold** (it
@@ -164,10 +168,10 @@ State machine (diagram goes in the README):
 - **Wake mode:** if watermark < maxOffset and no live sink → poke (below). In-memory retry
   (`#wakeRetryTimers`/`#wakeRetryAttempts`, `stream-durable-object.ts:82-91, 728-748`) is deleted;
   the spine's rows retry pokes durably, fixing the documented write-once-stream stall.
-- **Push mode:** drain serially per subscription, concurrently across subscriptions: read ≤100
+- **Push mode:** drain serially per subscription, concurrently across subscriptions: read ≤1000
   events / ≤1 MiB after `acked_offset`, apply selector, evaluate expression, one awaited call with
   the frame, ack → advance row. `onPoison: "skip"`: bisect the batch (halve until the poison
-  offset is isolated, ≤~7 extra calls), append idempotent `error-occurred`, step over; park only
+  offset is isolated, ≤~10 extra calls), append idempotent `error-occurred`, step over; park only
   on _consecutive_ failures (endpoint down ≠ event poisoned).
 - **Coalescing falls out of the cursor:** fifty appends while a poke/batch is in flight produce
   one follow-up, not fifty.

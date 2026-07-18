@@ -338,7 +338,7 @@ export const CoreProcessorContract = defineProcessorContract({
            * not facts — see the streams README doctrine.
            */
           parkedAtOffset: z.number().int().min(0).optional(),
-          /** Durable classification of why delivery stopped. */
+          /** Durable classification of why delivery stopped; its presence is the parked marker. */
           parkedReason: z.enum(["receiver-failure", "infrastructure-failure"]).optional(),
         }),
       )
@@ -493,11 +493,14 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-parked": {
       description:
-        "Delivery for one subscription gave up after sustained failure and stopped. Appended by the stream's own delivery spine, idempotent per (subscriptionKey, atOffset). Parked is a fact, loud by design; resume it explicitly with subscription-resumed.",
+        "Delivery for one subscription gave up after sustained failure and stopped. Appended by the stream's own delivery spine. Parked is a fact, loud by design; resume it explicitly with subscription-resumed. atOffset is absent only when cursor storage itself was unreadable.",
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
-        /** The cursor at park time: delivery stopped without acking past this offset. */
-        atOffset: z.number().int().min(0),
+        /**
+         * The cursor at park time. Absent only when cursor storage itself was
+         * unreadable, so the stream must not invent an audit offset.
+         */
+        atOffset: z.number().int().min(0).optional(),
         attempts: z.number().int().positive(),
         /** Whether receiver policy or delivery infrastructure forced the stop. */
         reason: z.enum(["receiver-failure", "infrastructure-failure"]),

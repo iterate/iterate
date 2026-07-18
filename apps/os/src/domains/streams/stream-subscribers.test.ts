@@ -289,6 +289,7 @@ function makeHarness() {
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
+  const readFailures: Error[] = [];
 
   const pokes: StreamSubscriberWakeRequest[] = [];
   const pushes: StreamPushEventBatch[] = [];
@@ -334,13 +335,28 @@ function makeHarness() {
 
   let storageReads = 0;
   const applyFact = (event: StreamEventInput) => {
+    if (event.idempotencyKey !== undefined) {
+      const existing = facts.find((fact) => fact.idempotencyKey === event.idempotencyKey);
+      if (existing !== undefined) {
+        if (
+          existing.type !== event.type ||
+          JSON.stringify(existing.payload) !== JSON.stringify(event.payload) ||
+          JSON.stringify(existing.metadata) !== JSON.stringify(event.metadata)
+        ) {
+          throw new Error(
+            `idempotency key "${event.idempotencyKey}" already names a different event`,
+          );
+        }
+        return;
+      }
+    }
     facts.push(event);
     // Mimic the core reducer: a parked fact folds into desired state, and
     // the spine reads parked-ness from coreState().
     if (event.type === PARKED) {
       const payload = event.payload as {
         subscriptionKey: string;
-        atOffset: number;
+        atOffset?: number;
         reason: "receiver-failure" | "infrastructure-failure";
       };
       const entry = configured[payload.subscriptionKey];
@@ -352,6 +368,8 @@ function makeHarness() {
   };
   const hooks: ConstructorParameters<typeof StreamSubscribers>[0]["hooks"] = {
     readEvents: ({ afterOffset, limit }) => {
+      const failure = readFailures.shift();
+      if (failure !== undefined) throw failure;
       storageReads += 1;
       return log
         .filter((event) => event.offset > afterOffset)
@@ -395,6 +413,9 @@ function makeHarness() {
   const restart = () => {
     subscribers = new StreamSubscribers({ idleTeardownMs: 60_000, hooks });
     subscribers.recoverAlarmAfterBoot();
+    // StreamDurableObject appends `stream/woken` in every constructor, whose
+    // post-commit fan-out immediately reconciles durable subscriptions.
+    subscribers.wake();
   };
   restart();
 
@@ -454,6 +475,9 @@ function makeHarness() {
     },
     failNextAlarmRepointWith: (error: Error) => {
       alarmRepointFailures.push(error);
+    },
+    failNextReadWith: (error: Error) => {
+      readFailures.push(error);
     },
     configure: (payload: SubscriptionConfiguredPayload, offset = 0) => {
       configured[payload.subscriptionKey] = {
@@ -673,6 +697,178 @@ describe("StreamSubscribers", () => {
     expect(h.pushes).toHaveLength(0);
   });
 
+  it("a3c. an unfenced reconcile read failure arms a successor on a quiet stream", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const get = h.store.get.bind(h.store);
+    let failurePending = true;
+    h.store.get = (subscriptionKey) => {
+      if (failurePending) {
+        failurePending = false;
+        throw new Error("reconcile cursor read failed");
+      }
+      return get(subscriptionKey);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      lastError: "reconcile cursor read failed",
+    });
+    const retryAt = h.row("k")!.nextAttemptAt!;
+    expect(retryAt).not.toBeNull();
+    expect(h.platformAlarm()).toBe(retryAt);
+
+    h.restart();
+    h.advanceTo(retryAt + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
+  });
+
+  it("a3d. a cursor read failure between webhook batches retains the prior fence", async () => {
+    const h = makeHarness();
+    h.configure(webhookPayload(), 0);
+    h.append(evt(1, "a"), evt(2, "b"));
+
+    const get = h.store.get.bind(h.store);
+    const ackAttempt = h.store.ackAttempt.bind(h.store);
+    let failNextGet = false;
+    h.store.ackAttempt = (...args) => {
+      ackAttempt(...args);
+      if (args[1] === 1) failNextGet = true;
+    };
+    h.store.get = (subscriptionKey) => {
+      if (failNextGet) {
+        failNextGet = false;
+        throw new Error("next batch cursor read failed");
+      }
+      return get(subscriptionKey);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.webhooks).toHaveLength(1);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 1,
+      attempt: 0,
+      lastError: "next batch cursor read failed",
+    });
+    const retryAt = h.row("k")!.nextAttemptAt!;
+    expect(retryAt).not.toBeNull();
+    expect(h.platformAlarm()).toBe(retryAt);
+
+    h.restart();
+    h.advanceTo(retryAt + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.webhooks).toHaveLength(2);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 2, attempt: 0, nextAttemptAt: null });
+  });
+
+  it("a3e. an unreadable cursor retains a config-owned alarm until reconciliation succeeds", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const get = h.store.get.bind(h.store);
+    h.store.get = () => {
+      throw new Error("cursor storage temporarily unavailable");
+    };
+
+    h.subscribers.wake();
+    h.subscribers.wake();
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.armedAlarms).toHaveLength(1);
+    const retryAt = h.platformAlarm();
+    expect(retryAt).not.toBeNull();
+
+    h.restart();
+    await h.settle();
+    const restartedRetryAt = h.platformAlarm();
+    expect(restartedRetryAt).not.toBeNull();
+
+    h.store.get = get;
+    h.advanceTo(Math.max(retryAt!, restartedRetryAt!) + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
+  });
+
+  it("a3f. exhausted config-owned alarm recovery parks without inventing a cursor offset", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const get = h.store.get.bind(h.store);
+    h.store.get = () => {
+      throw new Error("cursor storage unavailable");
+    };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmArmWith(new Error("alarm projection unavailable"));
+    }
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    const parked = h.factsOfType(PARKED);
+    expect(parked).toHaveLength(1);
+    expect(parked[0]!.payload).toMatchObject({
+      subscriptionKey: "k",
+      attempts: 3,
+      reason: "infrastructure-failure",
+    });
+    expect(parked[0]!.payload).not.toHaveProperty("atOffset");
+    expect(h.configured["k"].parkedReason).toBe("infrastructure-failure");
+
+    h.store.get = get;
+    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 0, nextAttemptAt: null });
+  });
+
+  it("a3g. removing a config retires its pre-cursor alarm ownership", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 1);
+    h.append(evt(1, "a"));
+
+    const get = h.store.get.bind(h.store);
+    h.store.get = () => {
+      throw new Error("cursor storage temporarily unavailable");
+    };
+
+    h.subscribers.wake();
+    delete h.configured.k;
+    h.subscribers.onSubscriptionRemoved("k");
+    await h.settle();
+
+    const staleAlarmAt = h.platformAlarm();
+    expect(staleAlarmAt).not.toBeNull();
+
+    h.store.get = get;
+    h.advanceTo(staleAlarmAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.platformAlarm()).toBeNull();
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.pushes).toHaveLength(0);
+  });
+
   it("a4. a failed recovery write aborts the incarnation instead of losing the retry", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
@@ -801,6 +997,60 @@ describe("StreamSubscribers", () => {
     });
     expect(h.row("k")!.nextAttemptAt).toBeNull();
     expect(h.configured["k"].parkedAtOffset).toBe(0);
+  });
+
+  it("a8b. a failed final-retry park fact reprojects the row before restarting", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(pushPayload(), 0);
+    h.store.ensure("k", 0);
+    h.store.nack(h.row("k")!, {
+      attempt: 0,
+      nextAttemptAt: 10_000,
+      error: "infrastructure retry owed",
+    });
+    h.failNextAlarmRepointWith(new Error("final native projection failed"));
+    h.failRequiredFactsWith(new Error("park fact append failed"));
+    h.failNextAlarmRepointWith(new Error("recovery projection failed once"));
+    h.failNextAlarmRepointWith(new Error("recovery projection failed twice"));
+
+    await expect(
+      h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 }),
+    ).resolves.toBeUndefined();
+
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")!.nextAttemptAt).toBe(10_000);
+    expect(h.platformAlarm()).toBe(10_000);
+    expect(h.abortedIncarnations).toEqual(["stream final alarm parking failed"]);
+  });
+
+  it("a8c. an infrastructure park closes a live configured connection", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const returned = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: returned.sink });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    h.store.nack(h.row("k")!, {
+      attempt: 0,
+      nextAttemptAt: 10_000,
+      error: "infrastructure retry owed",
+    });
+    h.failNextAlarmRepointWith(new Error("final native projection failed"));
+
+    await h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 });
+    await h.settle();
+
+    expect(h.configured.k.parkedReason).toBe("infrastructure-failure");
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.factsOfType(DISCONNECTED).at(-1)?.payload).toMatchObject({
+      subscriptionKey: "k",
+      reason: "delivery-failed",
+    });
   });
 
   it("a9. boot-time alarm recovery failure becomes explicit parked state without another activation", async () => {
@@ -1153,6 +1403,55 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
   });
 
+  it("g3. a committed poison-skip fact replays idempotently after its cursor write fails", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"));
+    let rejection = 0;
+    h.dialImpl.push = async () => {
+      rejection += 1;
+      throw new Error(`receiver diagnostic ${rejection}`);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    while (h.row("k")!.poisonConfirmations < SKIP_CONFIRM_ATTEMPTS - 1) {
+      h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+      await h.subscribers.onAlarm();
+      await h.settle();
+    }
+
+    const skipPoison = h.store.skipPoison.bind(h.store);
+    let skipWriteFailurePending = true;
+    h.store.skipPoison = (...args) => {
+      if (skipWriteFailurePending) {
+        skipWriteFailurePending = false;
+        throw new Error("skip cursor write failed");
+      }
+      skipPoison(...args);
+    };
+
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(1);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: SKIP_CONFIRM_ATTEMPTS - 1,
+      lastError: "skip cursor write failed",
+    });
+
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(rejection).toBe(SKIP_CONFIRM_ATTEMPTS + 1);
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(1);
+    expect(h.factsOfType(ERROR_OCCURRED)[0]!.idempotencyKey).toBe("push-poison-skipped:k:1");
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
+  });
+
   it("h. skip mode parks when everything fails instead of mass-skipping the backlog", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
@@ -1306,6 +1605,43 @@ describe("StreamSubscribers", () => {
     });
     expect(h.row("k")!.nextAttemptAt).not.toBeNull();
     expect(h.abortedIncarnations).toEqual(["stream wake response processing failed"]);
+  });
+
+  it("i2b. a configured pump read failure is owned and retried without another append", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const deliveries: StreamEventBatch[] = [];
+    h.dialImpl.poke = async () => {
+      const sink = Object.assign((batch: StreamEventBatch) => deliveries.push(batch), {
+        [Symbol.dispose]: () => undefined,
+      }) as RetainedProcessEventBatch;
+      return { checkpointOffset: 0, sink };
+    };
+    h.failNextReadWith(new Error("configured pump read failed"));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(deliveries).toHaveLength(0);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      lastError: "configured pump read failed",
+    });
+    const retryAt = h.row("k")!.nextAttemptAt!;
+    expect(retryAt).not.toBeNull();
+    expect(h.platformAlarm()).toBe(retryAt);
+
+    h.restart();
+    h.advanceTo(retryAt + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(2);
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]!.events.map((event) => event.offset)).toEqual([1]);
   });
 
   it("i3. a wake response made stale by an epoch-changing seek is disposed before opening", async () => {

@@ -740,7 +740,9 @@ export class StreamDurableObject extends DurableObject<Env> {
               ...next.configuredSubscribersByKey,
               [event.payload.subscriptionKey]: {
                 ...existing,
-                parkedAtOffset: event.payload.atOffset,
+                ...(event.payload.atOffset === undefined
+                  ? {}
+                  : { parkedAtOffset: event.payload.atOffset }),
                 parkedReason: event.payload.reason,
               },
             },

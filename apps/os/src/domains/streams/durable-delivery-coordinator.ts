@@ -45,26 +45,143 @@ type DurableDeliveryCoordinatorHooks = {
  */
 export class DurableDeliveryCoordinator {
   readonly #hooks: DurableDeliveryCoordinatorHooks;
+  /**
+   * Config-owned retries for failures that happened before a cursor row could
+   * be read and fenced. The platform alarm is their durable successor; this
+   * slice keeps exact in-incarnation alarm projection from erasing it.
+   */
+  readonly #reconcileRetryByKey = new Map<
+    string,
+    { readonly configOffset: number; readonly retryAt: number }
+  >();
 
   constructor(hooks: DurableDeliveryCoordinatorHooks) {
     this.#hooks = hooks;
-  }
-
-  capture(subscriptionKey: string, configOffset: number): DeliveryAttempt | undefined {
-    const row = this.#hooks.store.get(subscriptionKey);
-    return row === undefined ? undefined : { subscriptionKey, configOffset, epoch: row.epoch };
   }
 
   isCurrent(attempt: DeliveryAttempt): boolean {
     const configured = this.#hooks.coreState().configuredSubscribersByKey[attempt.subscriptionKey];
     if (
       configured === undefined ||
-      configured.parkedAtOffset !== undefined ||
+      configured.parkedReason !== undefined ||
       configured.latestConfiguredEvent.offset !== attempt.configOffset
     ) {
       return false;
     }
     return this.#hooks.store.get(attempt.subscriptionKey)?.epoch === attempt.epoch;
+  }
+
+  /** A successful row read transfers this exact config's retry ownership to its cursor row. */
+  reconciled(subscriptionKey: string, configOffset: number): void {
+    if (this.#reconcileRetryByKey.get(subscriptionKey)?.configOffset === configOffset) {
+      this.#reconcileRetryByKey.delete(subscriptionKey);
+    }
+  }
+
+  /** A parked configuration has no remaining automatic delivery obligation. */
+  forgetReconcile(subscriptionKey: string): void {
+    this.#reconcileRetryByKey.delete(subscriptionKey);
+  }
+
+  /**
+   * Recover a failure that happened before reconciliation acquired a cursor
+   * epoch. First retry row acquisition and enter the ordinary fenced
+   * infrastructure path. If the row remains unreadable, retain a config-owned
+   * alarm slice; terminal alarm-projection failure parks without inventing a
+   * cursor offset or fence.
+   */
+  recoverReconcile(args: {
+    subscriptionKey: string;
+    configOffset: number;
+    initialCursor: number;
+    error: unknown;
+  }): void {
+    const existing = this.#reconcileRetryByKey.get(args.subscriptionKey);
+    if (existing?.configOffset === args.configOffset && existing.retryAt > this.#hooks.now()) {
+      return;
+    }
+    const retryAt = this.#hooks.now() + INFRASTRUCTURE_RETRY_MS;
+    const ownership = { configOffset: args.configOffset, retryAt } as const;
+    this.#reconcileRetryByKey.set(args.subscriptionKey, ownership);
+    const ownsRetry = () => this.#reconcileRetryByKey.get(args.subscriptionKey) === ownership;
+    const releaseRetry = () => {
+      if (ownsRetry()) this.#reconcileRetryByKey.delete(args.subscriptionKey);
+    };
+    const work = (async () => {
+      let acquisitionError: unknown = args.error;
+      for (
+        let recoveryAttempt = 1;
+        recoveryAttempt <= ALARM_PROJECTION_ATTEMPTS;
+        recoveryAttempt += 1
+      ) {
+        if (!ownsRetry() || !this.#isConfigurationCurrent(args)) {
+          releaseRetry();
+          return;
+        }
+        try {
+          this.#hooks.store.ensure(args.subscriptionKey, args.initialCursor);
+          const row = this.#hooks.store.get(args.subscriptionKey);
+          if (row === undefined) throw new Error("subscription cursor missing after ensure");
+          const disposition = await this.retryInfrastructure(
+            {
+              subscriptionKey: args.subscriptionKey,
+              configOffset: args.configOffset,
+              epoch: row.epoch,
+            },
+            args.error,
+          );
+          if (disposition !== "stale" || !this.#isConfigurationCurrent(args)) {
+            releaseRetry();
+            return;
+          }
+          acquisitionError = new Error(
+            `subscription cursor changed during reconciliation recovery for ${args.subscriptionKey}`,
+          );
+        } catch (error) {
+          acquisitionError = error;
+          console.warn("stream cursor acquisition recovery failed", {
+            subscriptionKey: args.subscriptionKey,
+            recoveryAttempt,
+            attempts: ALARM_PROJECTION_ATTEMPTS,
+            error,
+          });
+        }
+      }
+
+      if (!ownsRetry() || !this.#isConfigurationCurrent(args)) {
+        releaseRetry();
+        return;
+      }
+      const projectionError = await this.#armWithRetries(
+        retryAt,
+        `subscription reconciliation ${args.subscriptionKey}`,
+      );
+      if (projectionError === undefined) {
+        if (!this.#isConfigurationCurrent(args)) releaseRetry();
+        return;
+      }
+      if (!ownsRetry() || !this.#isConfigurationCurrent(args)) {
+        releaseRetry();
+        return;
+      }
+
+      await this.#parkConfigurationWithoutCursor({
+        subscriptionKey: args.subscriptionKey,
+        configOffset: args.configOffset,
+        error: new AggregateError(
+          [args.error, acquisitionError, projectionError],
+          "subscription reconciliation and alarm projection failed",
+        ),
+      });
+      releaseRetry();
+    })().catch((error) => {
+      console.error("stream cursor acquisition terminal recovery failed", {
+        subscriptionKey: args.subscriptionKey,
+        error,
+      });
+      this.#hooks.abortIncarnation("stream cursor acquisition recovery failed");
+    });
+    this.#hooks.keepAlive(work);
   }
 
   /** Persist and arm the successor wake before crossing a remote boundary. */
@@ -291,14 +408,46 @@ export class DurableDeliveryCoordinator {
     for (const row of this.#hooks.store.list()) {
       if (row.nextAttemptAt === null) continue;
       const configured = state.configuredSubscribersByKey[row.subscriptionKey];
-      if (configured === undefined || configured.parkedAtOffset !== undefined) continue;
+      if (configured === undefined || configured.parkedReason !== undefined) continue;
       const candidate =
         this.#hooks.isInFlight(row.subscriptionKey) && row.nextAttemptAt <= now
           ? now + DELIVERY_WATCHDOG_RECHECK_MS
           : row.nextAttemptAt;
       if (next === null || candidate < next) next = candidate;
     }
+    for (const [subscriptionKey, pending] of this.#reconcileRetryByKey) {
+      const configured = state.configuredSubscribersByKey[subscriptionKey];
+      if (
+        configured === undefined ||
+        configured.parkedReason !== undefined ||
+        configured.latestConfiguredEvent.offset !== pending.configOffset
+      ) {
+        this.#reconcileRetryByKey.delete(subscriptionKey);
+        continue;
+      }
+      if (next === null || pending.retryAt < next) next = pending.retryAt;
+    }
     return this.#hooks.repointAlarm(next);
+  }
+
+  /** Bounded exact projection for a path whose current activation has no successor left. */
+  async repointAlarmWithRetries(purpose: string): Promise<void> {
+    const failures: unknown[] = [];
+    for (let attempt = 1; attempt <= ALARM_PROJECTION_ATTEMPTS; attempt += 1) {
+      try {
+        await this.repointAlarmFromStore();
+        return;
+      } catch (error) {
+        failures.push(error);
+        console.warn("stream exact alarm projection attempt failed", {
+          purpose,
+          attempt,
+          attempts: ALARM_PROJECTION_ATTEMPTS,
+          error,
+        });
+      }
+    }
+    throw new AggregateError(failures, `${purpose} failed after bounded retries`);
   }
 
   /** Best-effort cleanup after an already-durable attempt transition. */
@@ -320,7 +469,7 @@ export class DurableDeliveryCoordinator {
     for (const row of this.#hooks.store.list()) {
       if (row.nextAttemptAt === null) continue;
       const configured = state.configuredSubscribersByKey[row.subscriptionKey];
-      if (configured === undefined || configured.parkedAtOffset !== undefined) continue;
+      if (configured === undefined || configured.parkedReason !== undefined) continue;
       await this.#park(
         {
           subscriptionKey: row.subscriptionKey,
@@ -363,6 +512,64 @@ export class DurableDeliveryCoordinator {
       this.#hooks.abortIncarnation("stream alarm recovery terminal transition failed");
     });
     this.#hooks.keepAlive(work);
+  }
+
+  async #parkConfigurationWithoutCursor(args: {
+    subscriptionKey: string;
+    configOffset: number;
+    error: unknown;
+  }): Promise<void> {
+    const configured = this.#hooks.coreState().configuredSubscribersByKey[args.subscriptionKey];
+    if (
+      configured === undefined ||
+      configured.parkedReason !== undefined ||
+      configured.latestConfiguredEvent.offset !== args.configOffset
+    ) {
+      return;
+    }
+
+    let row;
+    try {
+      row = this.#hooks.store.get(args.subscriptionKey);
+    } catch (error) {
+      console.error("stream cursor remained unreadable while parking reconciliation", {
+        subscriptionKey: args.subscriptionKey,
+        error,
+      });
+    }
+    if (row !== undefined) {
+      await this.#park(
+        {
+          subscriptionKey: args.subscriptionKey,
+          configOffset: args.configOffset,
+          epoch: row.epoch,
+        },
+        ALARM_PROJECTION_ATTEMPTS,
+        args.error,
+        "infrastructure-failure",
+      );
+      return;
+    }
+
+    this.#hooks.appendRequiredFact({
+      type: "events.iterate.com/stream/subscription-parked",
+      payload: {
+        subscriptionKey: args.subscriptionKey,
+        attempts: ALARM_PROJECTION_ATTEMPTS,
+        reason: "infrastructure-failure",
+        error: errorMessage(args.error),
+      },
+    });
+    this.#hooks.onParked(args.subscriptionKey);
+  }
+
+  #isConfigurationCurrent(args: { subscriptionKey: string; configOffset: number }): boolean {
+    const configured = this.#hooks.coreState().configuredSubscribersByKey[args.subscriptionKey];
+    return (
+      configured !== undefined &&
+      configured.parkedReason === undefined &&
+      configured.latestConfiguredEvent.offset === args.configOffset
+    );
   }
 }
 

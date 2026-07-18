@@ -63,7 +63,7 @@ function makeHarness() {
       facts.push(event);
       if (event.type === "events.iterate.com/stream/subscription-parked") {
         const payload = event.payload as {
-          atOffset: number;
+          atOffset?: number;
           reason: "receiver-failure" | "infrastructure-failure";
         };
         state.configuredSubscribersByKey.k!.parkedAtOffset = payload.atOffset;
@@ -87,7 +87,7 @@ function makeHarness() {
     isInFlight: () => false,
     onParked: (subscriptionKey) => parked.push(subscriptionKey),
   });
-  const attempt = coordinator.capture("k", 1)!;
+  const attempt = { subscriptionKey: "k", configOffset: 1, epoch: store.get("k")!.epoch };
 
   return {
     coordinator,

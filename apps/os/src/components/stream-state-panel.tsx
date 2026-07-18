@@ -956,14 +956,11 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
     return entry.subscriptionType === "configured" ? "connected durable" : "connected ephemeral";
   }
   const subscription = entry.runtimeSubscription;
-  if (subscription?.parkedAtOffset != null) {
-    const reason =
-      subscription.parkedReason === "infrastructure-failure"
-        ? "infrastructure failure"
-        : subscription.parkedReason === "receiver-failure"
-          ? "receiver failure"
-          : "unclassified failure";
-    return `subscription-parked (${reason}) at #${subscription.parkedAtOffset}`;
+  if (subscription?.parkedReason != null) {
+    const reason = parkedReasonLabel(subscription.parkedReason);
+    return subscription.parkedAtOffset == null
+      ? `subscription-parked (${reason}; cursor unavailable)`
+      : `subscription-parked (${reason}) at #${subscription.parkedAtOffset}`;
   }
   if (entry.subscriptionType === "configured") {
     const configured =
@@ -985,6 +982,14 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
     return configured;
   }
   return "disconnected";
+}
+
+function parkedReasonLabel(
+  reason: NonNullable<ProcessorPanelEntry["runtimeSubscription"]>["parkedReason"],
+): string {
+  if (reason === "infrastructure-failure") return "infrastructure failure";
+  if (reason === "receiver-failure") return "receiver failure";
+  return "unclassified failure";
 }
 
 function readCoreConnections(value: unknown): Record<string, Record<string, unknown>> {
@@ -1753,21 +1758,19 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
       ) : null}
       {entry.configuredAtOffset == null &&
       runtime?.lastError == null &&
-      runtime?.parkedAtOffset == null &&
+      runtime?.parkedReason == null &&
       runtime?.watchdogAt == null &&
       runtime?.retryAt == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
             <div>configured at #{entry.configuredAtOffset}</div>
           )}
-          {runtime?.parkedAtOffset == null ? null : (
+          {runtime?.parkedReason == null ? null : (
             <div>
-              parked at #{runtime.parkedAtOffset} ·{" "}
-              {runtime.parkedReason === "infrastructure-failure"
-                ? "infrastructure failure"
-                : runtime.parkedReason === "receiver-failure"
-                  ? "receiver failure"
-                  : "unclassified failure"}
+              {runtime.parkedAtOffset == null
+                ? "parked · cursor unavailable"
+                : `parked at #${runtime.parkedAtOffset}`}{" "}
+              · {parkedReasonLabel(runtime.parkedReason)}
             </div>
           )}
           {runtime?.watchdogAt == null ? null : (

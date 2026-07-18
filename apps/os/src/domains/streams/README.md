@@ -212,6 +212,11 @@ successor after an observed failure. Runtime/UI surfaces must preserve that
 distinction. Local storage, metrics, and alarm-projection failures do not
 increment receiver attempts; after bounded projection failure they produce an
 explicit infrastructure-classified parked fact instead of orphaning work.
+If reconciliation fails before a cursor epoch can be acquired, a short
+config-owned alarm slice supplies the successor activation. Exact alarm
+projection includes that slice, and successful row acquisition transfers the
+obligation into the ordinary fenced cursor retry. A terminal park omits its
+cursor offset rather than inventing one when cursor storage remains unreadable.
 
 Doctrine, worth memorizing:
 
