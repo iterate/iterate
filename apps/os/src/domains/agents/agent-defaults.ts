@@ -1,7 +1,7 @@
-// The platform's generic agent creation policy: an existence-only birth plus
-// the ordinary setup events every agent receives. Transport processors choose
-// their own system-context policy explicitly; the path never decides what
-// kind of processor exists on a stream.
+// Generic agent creation policy: an existence-only birth plus the ordinary
+// setup events every agent receives. Transport processors choose their own
+// system-context policy explicitly; the path never decides what kind of
+// processor exists on a stream.
 
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
@@ -21,6 +21,9 @@ import {
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
+
+const AGENT_METADATA_INSTRUCTION =
+  'Keep Iterate\'s agent UI current with itx.agent.setMetadata(...): set title once when the topic is clear and do not rewrite a good title; update activity on almost every working turn; keep summary to one or two sentences and change it only when durable purpose or conclusions change. When settled on a dependency, set waitingFor to "user_input", "external_event", or "timer"; runtime counts are normally emitted automatically and a qualifying wake clears the old wait. Never set pinned unless a human explicitly asks.';
 
 /**
  * These revisions identify exact, retryable setup occurrences. Change the
@@ -75,7 +78,7 @@ export function slackAgentSystemPrompt(connection: string): string {
     'If asked about GitHub, use `const octokit = itx.integrations.github.get().octokit`; this 99% path selects the first connected installation. Only inspect `await itx.integrations.list()` and pass its connection slug to `get(slug)` when a particular installation matters. `octokit` is the all-in-one client from the `octokit` package, with Iterate supplying installation auth and transport: use `octokit.rest.*` for routine endpoints or `octokit.graphql(query, variables)` when GraphQL is a better fit. Use the package types and https://github.com/octokit/octokit.js/; there is no direct `.rest` or `.graphql` on the connection. GitHub repo.data.permissions is a user-style view and can report every flag false for a GitHub App installation that can write; never call the installation read-only from that field—attempt the requested operation and use GitHub\'s actual error if denied. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.get().request(...)]) — so the thread is never silent while you fetch.`,
-    `Keep your live status current the same way: name the thread once its topic is clear — await itx.agent.setTitle("...") in the same Promise.all as your first reply — and update await itx.agent.setStatus({ shortStatus: "checking your calendar" }) as work moves (surfaces complete the sentence "<you> is ..."). Ending a turn to wait on a human (an answer, an approval, a key)? Mark it: await itx.agent.setStatus({ blocked: true, shortStatus: "waiting for the Acme API key" }) — the platform clears blocked when they reply.`,
+    AGENT_METADATA_INSTRUCTION,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
     `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call ${postMessage}. itx.scheduler.list() / cancel(key) manage schedules.`,
     'Use project capabilities on itx when they are relevant. TWO SEARCHES, ONE RULE — HOW: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities (word-overlap matching — synonyms buy recall; await itx.docs.get({ name }) fetches one). WHAT/WHEN: await itx.search.query({ q }) searches everything this project has accumulated — conversations, webhooks, events, files, repo — and every hit carries a ref back to the exact source; search before paging streams. await itx.__describe() works on every node, including provided capabilities.',
@@ -113,6 +116,7 @@ export function telegramAgentSystemPrompt(input: {
     "v1 limitation: photos/voice/stickers people send arrive only as bracketed placeholders like [photo] — you cannot view them yet; say so if asked about one.",
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the chat in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${sendRequest(input.agentPath, '"Checking that now..."')}, itx.mcp.exa.web_search_exa({ query })]) — so the chat is never silent while you fetch.`,
+    AGENT_METADATA_INSTRUCTION,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
     `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this chat, bake the chat_id into it and call ${telegramConnection}.sendMessage (scheduled scripts outlive sessions, so use the direct call there, not a session send request). itx.scheduler.list() / cancel(key) manage schedules.`,
     'Use project capabilities on itx when they are relevant. TWO SEARCHES, ONE RULE — HOW: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities (word-overlap matching — synonyms buy recall; await itx.docs.get({ name }) fetches one). WHAT/WHEN: await itx.search.query({ q }) searches everything this project has accumulated — conversations, webhooks, events, files, repo — and every hit carries a ref back to the exact source; search before paging streams. await itx.__describe() works on every node, including provided capabilities.',
@@ -134,6 +138,7 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = [
   "ATTACHMENTS people email you are stored in project file storage and attached to your inputs automatically: images (png/jpeg/webp/svg) are directly visible to you — just look at them. Documents are NOT directly readable; convert them to markdown first with Cloudflare's converter: const bytes = await itx.files.get(path).bytes(); const [converted] = await itx.ai.toMarkdown([{ name: filename, blob: new Blob([bytes]) }]); converted.data is the markdown. Supported formats: PDF (.pdf), spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.csv/.ods/.numbers), Word documents (.docx/.odt), HTML, XML, and images. The stored `path` for each attachment is in your input's file list.",
   'To attach files when replying (PDFs, images, any type): store bytes as a project file first (await itx.files.get("/email/report.pdf").put({ data, contentType })), then reply({ text, attachments: [{ path: "/email/report.pdf" }] }). Limits: 32 files, 5 MiB total per email.',
   "Email is not chat: one complete, well-written reply per inbound message. No acknowledgements, no progress updates — every reply you send is a real email in someone's inbox. Do the work first (fetch data, run scripts across turns), then reply once with the full answer.",
+  AGENT_METADATA_INSTRUCTION,
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
   "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
@@ -192,9 +197,12 @@ export function agentSystemPromptContextEvent(input: { content: string; idempote
  */
 export function agentCreationForPath<
   const SiblingBirthCertificate extends StreamEventInput = never,
+  const InitialEvent extends StreamEventInput = never,
 >(input: {
   agentPath: string;
   projectId: string;
+  /** Events that must commit in the same creation batch. */
+  initialEvents?: readonly InitialEvent[];
   /**
    * Human-facing project facts from the directory, when the caller has them:
    * the very first question a real user asked their agent was "which project
@@ -203,8 +211,8 @@ export function agentCreationForPath<
    * have no directory at hand — the id-only line still works.
    */
   project?: { name: string; slug: string; workerUrl?: string };
-  /** Platform-owned execution policy; public `agent.create()` never exposes this. */
-  platformSystemPrompt?: AgentSystemPromptPolicy;
+  /** Initial execution policy for a routed agent. */
+  systemPromptPolicy?: AgentSystemPromptPolicy;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     processorSlug: string;
@@ -212,7 +220,7 @@ export function agentCreationForPath<
 }) {
   const { agentPath, projectId, project } = input;
   const model = DEFAULT_AGENT_MODEL;
-  const systemPromptPolicy: AgentSystemPromptPolicy = input.platformSystemPrompt ?? {
+  const systemPromptPolicy: AgentSystemPromptPolicy = input.systemPromptPolicy ?? {
     content: DEFAULT_AGENT_SYSTEM_PROMPT,
     id: "default",
     revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
@@ -270,7 +278,7 @@ export function agentCreationForPath<
       role: "system",
       key: "agent/boot-context",
       content: [
-        "Platform context for this agent:",
+        "Context for this agent:",
         project === undefined
           ? `- Project id: ${projectId}`
           : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
@@ -320,6 +328,7 @@ export function agentCreationForPath<
     model,
     events: [
       birthCertificate,
+      ...(input.initialEvents ?? []),
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
       configured,

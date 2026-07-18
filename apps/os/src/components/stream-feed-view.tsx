@@ -1,5 +1,6 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { AgentUiItem, AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { Spinner } from "@iterate-com/ui/components/spinner";
@@ -94,6 +95,7 @@ export function StreamFeedView({
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const live = filter.agent == null ? null : (liveState?.live ?? null);
+  const runtime = liveState?.runtimeChange?.runtime ?? ZERO_AGENT_RUNTIME;
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids of activity summaries the user expanded. Operation rows inside an
   // expanded activity open their URL-backed inspector instead of nesting a
@@ -251,6 +253,7 @@ export function StreamFeedView({
                 {isLiveItem ? (
                   <AgentLiveActivity
                     live={live}
+                    runtime={runtime}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
                     onInspectLlmRequest={onInspectLlmRequest}

@@ -51,7 +51,7 @@ export const EmailAgentProcessorContract = defineProcessorContract({
     // adapter appends it raw, as the runtime speaking.
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
-  emits: ["events.iterate.com/agents/context-added", "events.iterate.com/agent/status-changed"],
+  emits: ["events.iterate.com/agents/context-added", "events.iterate.com/agent/binding-set"],
 });
 
 export type EmailAgentProcessorState = z.infer<typeof EmailAgentProcessorContract.stateSchema>;

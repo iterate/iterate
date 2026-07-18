@@ -383,11 +383,12 @@ export interface Agent {
   /**
    * Append durable events the Agent processor consumes. The input union and
    * runtime parser both derive from `AgentProcessorContract.consumes`, so the
-   * domain door cannot drift from the processor. This validates shape and
-   * vocabulary, not state-machine order: possession of this handle is the
-   * append authority, and `create()` remains the normal birth path. Use
-   * `stream.append` for an event outside that vocabulary or for an
-   * intentionally ephemeral event.
+   * typed helper cannot drift from the processor. This validates shape and
+   * vocabulary, not state-machine order or provenance, and grants no special
+   * append rights: any project member can append any event through
+   * `stream.append`, with the same reducer meaning for a valid matching event.
+   * `create()` remains the normal birth path. Use `stream.append` for an event
+   * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
   /** The agent's web-chat door (what the user sees). */
@@ -419,32 +420,13 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Update this agent's status record — the title, note, and shortStatus that
-   * project surfaces (the agents list, the Slack thread status) show for it.
-   * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — waiting for a response vs running code)
-   * into the same record on its own. `shortStatus` completes the sentence
-   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
-   * while the agent works — update it as your work moves through phases.
-   * `note` is a one-or-two-sentence description of the agent or its current
-   * focus; `title` names the agent/conversation; `blocked: true` marks a
-   * turn that ended waiting on a human.
+   * Merge human-readable metadata for this agent. Omitted properties remain
+   * unchanged; null clears an optional property; pinned false unpins. Title is
+   * a stable identity, activity is the current-condition sentence updated as
+   * work moves through phases, summary is one or two durable sentences, and
+   * waitingFor declares a semantic dependency once current runtime is zero.
    */
-  setStatus(input: {
-    title?: string;
-    note?: string;
-    shortStatus?: string;
-    /** Set true when ending a turn to wait on a human (an answer, an
-     * approval, a secret) — surfaces show the agent as blocked instead of
-     * idle. The platform clears it when the next message wakes you. */
-    blocked?: boolean;
-    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
-     * "web") or an https image URL, shown next to this agent on roster
-     * surfaces. */
-    icon?: string;
-  }): Promise<StreamEvent>;
-  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
-  setTitle(title: string): Promise<StreamEvent>;
+  setMetadata(input: AgentMetadataPatch): Promise<StreamEvent>;
   /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -1875,8 +1857,8 @@ export type ProjectProcessorState = {
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
- * - `agents` — the agents roster: every agent stream's merged status record
- *   (busy, title, note, shortStatus), same SQLite home as the streams index.
+ * - `agents` — every agent's metadata, exact runtime facts, external binding,
+ *   and meaningful timestamps, in the same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -1887,8 +1869,8 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
-  /** The agents roster keyed by agent path — each agent's merged status record, folded from its status-changed patches. */
-  agents: Record<string, AgentStatusRow>;
+  /** The complete agent catalog keyed by agent path. */
+  agents: Record<string, AgentRecord>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };
@@ -2114,18 +2096,70 @@ export type StreamIndexRow = {
   eventCount: number;
 };
 
-/** One row of the agents roster: an agent stream and its merged status record. */
-export type AgentStatusRow = {
+/** The project catalog's complete current projection for one explicitly created agent. */
+export type AgentRecord = {
   path: string;
-  /** The merged status record (mergeAgentStatusPatch over the agent's own
-   * status-changed patches — same fold as the agent processor and the Slack
-   * painter, so every surface agrees). */
-  status: AgentStatusRecord;
-  /** Offset of the last folded status-changed event — redelivered batches
-   * fold to nothing past it. */
-  lastEventOffset: number;
-  /** createdAt of that event. */
-  updatedAt: string;
+  metadata: {
+    title?: string | undefined;
+    summary?: string | undefined;
+    activity?: string | undefined;
+    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+    pinned: boolean;
+  };
+  runtime: {
+    triggers: { pending: number; runnable: number };
+    llmRequests: { scheduled: number; requested: number; started: number };
+    runningScripts: number;
+  };
+  binding?:
+    | {
+        type: "slack_thread";
+        connection: string;
+        channelId: string;
+        threadTs: string;
+        channelName?: string | undefined;
+        url?: string | undefined;
+      }
+    | {
+        type: "telegram_thread";
+        connection: string;
+        chatId: string;
+        messageThreadId?: string | undefined;
+      }
+    | {
+        type: "email_thread";
+        threadId: string;
+        subject?: string | undefined;
+        counterpart?: string | undefined;
+      }
+    | {
+        type: "github_pull_request";
+        connection: string;
+        installationId: string;
+        owner: string;
+        repo: string;
+        number: number;
+        url?: string | undefined;
+      }
+    | {
+        type: "github_check_run";
+        connection: string;
+        installationId: string;
+        owner: string;
+        repo: string;
+        number: number;
+        checkRunId?: number | undefined;
+        headSha?: string | undefined;
+        url?: string | undefined;
+      }
+    | undefined;
+  timestamps: {
+    createdAt: string;
+    lastWorkAt: string;
+    metadataUpdatedAt?: string | undefined;
+    activityUpdatedAt?: string | undefined;
+    runtimeUpdatedAt?: string | undefined;
+  };
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
@@ -2487,21 +2521,35 @@ export type AgentProcessorState = {
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
   activeScriptExecutionIds: string[];
-  status?:
-    | { busy: boolean; phase?: "llm" | "script" | undefined; sinceOffset: number; since: string }
-    | undefined;
-  announcedStatus?:
+  runtimeChange?:
     | {
-        busy?: boolean | undefined;
-        phase?: "llm" | "script" | undefined;
-        sinceOffset?: number | undefined;
-        blocked?: boolean | undefined;
-        title?: string | undefined;
-        note?: string | undefined;
-        shortStatus?: string | undefined;
-        icon?: string | undefined;
+        sinceOffset: number;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        since: string;
       }
     | undefined;
+  announcedRuntime?:
+    | {
+        sinceOffset: number;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+      }
+    | undefined;
+  metadata: {
+    title?: string | undefined;
+    summary?: string | undefined;
+    activity?: string | undefined;
+    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+    pinned: boolean;
+  };
+  waitingForSinceOffset?: number | undefined;
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -2553,16 +2601,24 @@ export type AgentEventInput =
       { maxAutonomousTurns: number; reason: string; triggerOffset: number }
     >
   | TypedConsumedEventInput<
-      "events.iterate.com/agent/status-changed",
+      "events.iterate.com/agent/metadata-changed",
       {
-        busy?: boolean | undefined;
-        phase?: "llm" | "script" | undefined;
-        sinceOffset?: number | undefined;
-        blocked?: boolean | undefined;
-        title?: string | undefined;
-        note?: string | undefined;
-        shortStatus?: string | undefined;
-        icon?: string | undefined;
+        title?: string | null | undefined;
+        summary?: string | null | undefined;
+        activity?: string | null | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+        pinned?: boolean | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/runtime-changed",
+      {
+        sinceOffset: number;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
       }
     >
   | TypedConsumedEventInput<
@@ -2577,6 +2633,7 @@ export type AgentEventInput =
         reasoningOutputTokens?: number | undefined;
       }
     >
+  | TypedConsumedEventInput<"events.iterate.com/agent/waiting-cleared", { throughOffset: number }>
   | TypedConsumedEventInput<
       "events.iterate.com/agents/context-added",
       | {
@@ -2800,6 +2857,15 @@ export type StreamEvent = {
  * `itx.ai.run` output straight into storage.
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+
+/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
+export type AgentMetadataPatch = {
+  title?: string | null | undefined;
+  summary?: string | null | undefined;
+  activity?: string | null | undefined;
+  waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+  pinned?: boolean | undefined;
+};
 
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
@@ -3652,18 +3718,6 @@ export type ProcessorSnapshot<State> = {
 export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
-
-/** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
-export type AgentStatusRecord = {
-  busy?: boolean | undefined;
-  phase?: "llm" | "script" | undefined;
-  sinceOffset?: number | undefined;
-  blocked?: boolean | undefined;
-  title?: string | undefined;
-  note?: string | undefined;
-  shortStatus?: string | undefined;
-  icon?: string | undefined;
-};
 
 /**
  * A durable processor input. Wake processors never receive ephemeral rows, so

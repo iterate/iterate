@@ -8,38 +8,28 @@ import { readStreamStateOnce, type StreamTreeSource } from "~/lib/stream-navigat
 import { streamPathAncestors } from "~/lib/stream-links.ts";
 
 /**
- * THE stream explorer — the one tree in the codebase. The ⌘K switcher and the
- * catalogue side panels (/agents, /sandboxes) all render this.
- *
- * Loading model: every RENDERED node eagerly fetches its own state (one-shot
- * subscribe → first push → unsubscribe, cached in react-query), so the whole
- * visible frontier — including collapsed leaves — resolves at once. That's
- * what lets a node's expand caret appear only when we KNOW it has children;
- * until its state lands the row shimmers instead of guessing.
+ * Lazy tree for the platform-wide admin explorer, whose remote/global streams
+ * do not have a project live-state index. Product project surfaces use the
+ * materialized `streamsIndex` instead.
  */
-export function StreamTree({
+export function AdminRemoteStreamTree({
   currentPath,
   onOpenPath,
-  rootPath = "/",
   scope,
   source,
 }: {
-  /** Highlighted node; its ancestors start expanded. */
-  currentPath?: string;
+  currentPath: string;
   onOpenPath: (streamPath: string) => void;
-  /** The stream the tree is rooted at — e.g. `/agents` scopes it to agents. */
-  rootPath?: string;
-  /** Query-cache scope (project id, or an admin-prefixed id). */
   scope: string;
   source: StreamTreeSource;
 }) {
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(
-    () => new Set([rootPath, ...(currentPath ? streamPathAncestors(currentPath) : [])]),
+    () => new Set(["/", ...streamPathAncestors(currentPath)]),
   );
 
   return (
-    <StreamTreeNode
-      path={rootPath}
+    <AdminRemoteStreamTreeNode
+      path="/"
       depth={0}
       tree={{
         currentPath,
@@ -59,8 +49,8 @@ export function StreamTree({
   );
 }
 
-type StreamTreeContext = {
-  currentPath?: string;
+type AdminRemoteTreeContext = {
+  currentPath: string;
   expandedPaths: ReadonlySet<string>;
   scope: string;
   source: StreamTreeSource;
@@ -68,24 +58,18 @@ type StreamTreeContext = {
   onToggle: (path: string) => void;
 };
 
-/**
- * One tree node and (when expanded) its recursive children. Rendering IS the
- * fetch trigger: the node loads its own state immediately, which supplies the
- * event-count badge, decides whether it earns an expand caret, and (when
- * expanded) the child paths to recurse into.
- */
-function StreamTreeNode({
+function AdminRemoteStreamTreeNode({
   path,
   depth,
   tree,
 }: {
   path: string;
   depth: number;
-  tree: StreamTreeContext;
+  tree: AdminRemoteTreeContext;
 }) {
   const expanded = tree.expandedPaths.has(path);
   const { data, isError, isPending, refetch } = useQuery({
-    queryKey: ["stream-tree", tree.scope, path],
+    queryKey: ["admin-remote-stream-tree", tree.scope, path],
     queryFn: async () => {
       const streamState = await readStreamStateOnce(tree.source, normalizePath(path));
       return { eventCount: streamState.eventCount, childPaths: streamState.childPaths.toSorted() };
@@ -100,7 +84,6 @@ function StreamTreeNode({
         className={cn(
           "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5",
           selected ? "bg-accent" : "hover:bg-accent/70",
-          // Children unknown yet: shimmer the row instead of guessing a caret.
           isPending && "animate-pulse",
         )}
       >
@@ -152,7 +135,12 @@ function StreamTreeNode({
       </div>
       {expanded
         ? childPaths.map((childPath) => (
-            <StreamTreeNode key={childPath} path={childPath} depth={depth + 1} tree={tree} />
+            <AdminRemoteStreamTreeNode
+              key={childPath}
+              path={childPath}
+              depth={depth + 1}
+              tree={tree}
+            />
           ))
         : null}
     </>

@@ -610,8 +610,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  };\n" +
       "  // The copied webhook is durable agent-stream history but is deliberately\n" +
       "  // outside the Agent processor's consumed vocabulary. Its companion tasks\n" +
-      "  // may therefore share this raw stream batch; processor-owned setup below\n" +
-      "  // goes through the typed Agent append door.\n" +
+      "  // may therefore share this raw stream batch. The typed append below is only\n" +
+      "  // a schema-validating convenience; either append API has identical reducer\n" +
+      "  // meaning for a valid Agent event.\n" +
       "  const agentEvents: StreamEventInput[] = [\n" +
       "    {\n" +
       "      type: event.type,\n" +
@@ -717,12 +718,30 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      },\n" +
       "    },\n" +
       "    {\n" +
-      "      type: \"events.iterate.com/agent/status-changed\",\n" +
-      "      idempotencyKey: \"github-pr/status\",\n" +
-      "      payload: { icon: \"github\", title: `PR #${number}` },\n" +
+      "      type: \"events.iterate.com/agent/metadata-changed\",\n" +
+      "      idempotencyKey: \"github-pr/metadata\",\n" +
+      "      payload: {\n" +
+      "        title: `PR #${number}`,\n" +
+      "        activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,\n" +
+      "        summary: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,\n" +
+      "      },\n" +
       "    },\n" +
       "  );\n" +
-      "  await agent.stream.append(...agentEvents);\n" +
+      "  await agent.stream.append(\n" +
+      "    {\n" +
+      "      type: \"events.iterate.com/agent/binding-set\",\n" +
+      "      idempotencyKey: \"github-pr/binding\",\n" +
+      "      payload: {\n" +
+      "        type: \"github_pull_request\",\n" +
+      "        connection: route.connection,\n" +
+      "        installationId: route.installationId,\n" +
+      "        owner: repository.owner,\n" +
+      "        repo: repository.repo,\n" +
+      "        number,\n" +
+      "      },\n" +
+      "    },\n" +
+      "    ...agentEvents,\n" +
+      "  );\n" +
       "}\n" +
       "\n" +
       "type GithubWebhookPayload = {\n" +

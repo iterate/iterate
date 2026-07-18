@@ -88,20 +88,20 @@ test("agent create installs only generic machinery; later events configure it", 
   );
 });
 
-test("Agent scripts update their own status record via itx.agent.setStatus", async () => {
+test("Agent scripts update presentation metadata via itx.agent.setMetadata", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-set-status" });
-  const agentPath = `/agents/set-status-${crypto.randomUUID()}`;
+  using project = itx.projects.create({ slug: "agent-set-metadata" });
+  const agentPath = `/agents/set-metadata-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
 
-  const statusPatch = agent.stream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/status-changed"],
+  const metadataPatch = agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/agent/metadata-changed"],
     predicate: (event) =>
       (event.payload as { title?: string } | undefined)?.title === "Lisbon trip",
     timeoutMs: 30_000,
@@ -111,34 +111,31 @@ test("Agent scripts update their own status record via itx.agent.setStatus", asy
     agent.stream,
     fencedAgentScript(
       defineItxScript<{ agent: Agent }>(async (itx) => {
-        await itx.agent.setStatus({
+        await itx.agent.setMetadata({
           title: "Lisbon trip",
-          note: "Planning a 3-day Lisbon trip.",
-          shortStatus: "comparing flights",
+          summary: "Planning a three-day Lisbon trip and comparing the practical options.",
+          activity: "Comparing flights",
         });
       }).code,
     ),
   );
 
-  expect(await statusPatch).toMatchObject({
-    type: "events.iterate.com/agent/status-changed",
+  expect(await metadataPatch).toMatchObject({
+    type: "events.iterate.com/agent/metadata-changed",
     payload: {
       title: "Lisbon trip",
-      note: "Planning a 3-day Lisbon trip.",
-      shortStatus: "comparing flights",
+      summary: "Planning a three-day Lisbon trip and comparing the practical options.",
+      activity: "Comparing flights",
     },
   });
 
-  // The merged record lands in the agent's reduced state (announcedStatus),
-  // which is what the project roster and every painter read.
+  // The same canonical metadata fold feeds the project projection and painters.
   await waitForCondition(
     async () => {
       const snapshot = await agent.processor.snapshot();
-      const announced = (snapshot.state as { announcedStatus?: { title?: string } })
-        .announcedStatus;
-      return announced?.title === "Lisbon trip";
+      return snapshot.state.metadata.title === "Lisbon trip";
     },
-    { description: "announcedStatus.title folded into agent state", timeoutMs: 30_000 },
+    { description: "metadata.title folded into agent state", timeoutMs: 30_000 },
   );
 });
 

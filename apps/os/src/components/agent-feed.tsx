@@ -1,5 +1,6 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
+import type { AgentRuntime } from "@iterate-com/shared/agent-events";
 import {
   BanIcon,
   ChevronRightIcon,
@@ -32,6 +33,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import {
   formatClockTime,
   formatDateTime,
@@ -591,12 +593,14 @@ function stepMeta(step: AgentUiStep): string {
  */
 export function AgentLiveActivity({
   live,
+  runtime,
   toggledIds,
   onToggle,
   onInspectLlmRequest,
   onInspectScriptExecution,
 }: {
   live: AgentUiActivity;
+  runtime: AgentRuntime;
   toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
@@ -608,7 +612,7 @@ export function AgentLiveActivity({
   const summary = summarizeAgentUiActivity(live);
   const doneSummary = summarizeAgentUiActivity(live, doneSteps);
   const recovering = summary.restartPending;
-  const working = isAgentUiActivityWorking(live);
+  const working = isAgentUiActivityWorking(live, runtime);
   const activityToggleId = `live-activity:${live.id}`;
   const activityExpanded = toggledIds.has(activityToggleId);
   const toggleActivity = useCallback(
@@ -620,31 +624,44 @@ export function AgentLiveActivity({
     (doneSteps.length > 0 ||
       runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step)));
 
-  const phaseKind = live.phase === "script" ? "code" : live.phase === "llm" ? "llm" : null;
-  const phaseStep =
-    phaseKind == null ? liveStep : runningSteps.findLast((step) => step.kind === phaseKind);
-  const recoveringBetweenPhases = recovering && live.phase == null && phaseStep == null;
-  const basePhaseLabel = recoveringBetweenPhases
+  const runtimeDisplayState = deriveAgentDisplayState(runtime);
+  const runtimeWorkKind =
+    runtimeDisplayState === "running_code"
+      ? "code"
+      : runtimeDisplayState === "waiting_for_model"
+        ? "llm"
+        : runtimeDisplayState === "queued"
+          ? "queued"
+          : null;
+  const currentWorkKind = runtimeWorkKind ?? liveStep?.kind ?? null;
+  const currentStep =
+    currentWorkKind === "code" || currentWorkKind === "llm"
+      ? runningSteps.findLast((step) => step.kind === currentWorkKind)
+      : liveStep;
+  const recoveringBetweenWork = recovering && currentWorkKind == null && currentStep == null;
+  const currentLabel = recoveringBetweenWork
     ? "Restarted — continuing…"
-    : live.phase === "script"
+    : currentWorkKind === "code"
       ? "Running code"
-      : live.phase === "llm"
-        ? phaseStep?.kind === "llm"
-          ? liveActivityLabel([phaseStep])
+      : currentWorkKind === "llm"
+        ? currentStep?.kind === "llm"
+          ? liveActivityLabel([currentStep])
           : "Waiting for a response"
-        : liveActivityLabel(phaseStep == null ? [] : [phaseStep]);
-  const phaseStartedAtMs = recoveringBetweenPhases
+        : currentWorkKind === "queued"
+          ? "Queued"
+          : liveActivityLabel(currentStep == null ? [] : [currentStep]);
+  const currentStartedAtMs = recoveringBetweenWork
     ? summary.recoveryStartedAtMs
-    : (live.phaseStartedAtMs ?? phaseStep?.startedAtMs ?? live.startedAtMs);
-  const inspectCurrentPhase =
-    phaseStep?.kind === "llm"
+    : (currentStep?.startedAtMs ?? live.startedAtMs);
+  const inspectCurrentWork =
+    currentStep?.kind === "llm"
       ? onInspectLlmRequest == null
         ? undefined
-        : () => onInspectLlmRequest(phaseStep.llmRequestOffset)
-      : phaseStep?.kind === "code"
+        : () => onInspectLlmRequest(currentStep.llmRequestOffset)
+      : currentStep?.kind === "code"
         ? onInspectScriptExecution == null
           ? undefined
-          : () => onInspectScriptExecution(phaseStep.executionId)
+          : () => onInspectScriptExecution(currentStep.executionId)
         : undefined;
 
   if (!working) {
@@ -715,10 +732,10 @@ export function AgentLiveActivity({
         </div>
       ) : null}
       <AgentLiveStatus
-        label={basePhaseLabel}
-        startedAtMs={phaseStartedAtMs}
-        deadlineMs={phaseStep?.kind === "code" ? phaseStep.expiresAtMs : null}
-        onInspect={inspectCurrentPhase}
+        label={currentLabel}
+        startedAtMs={currentStartedAtMs}
+        deadlineMs={currentStep?.kind === "code" ? currentStep.expiresAtMs : null}
+        onInspect={inspectCurrentWork}
       />
     </div>
   );
