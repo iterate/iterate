@@ -24,6 +24,7 @@ import {
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
 import { WORKER_BUILDER_POOL_SIZE } from "../src/domains/workers/builder-pool.ts";
+import { UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID } from "../src/domains/workers/worker-build-contract.ts";
 import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SANDBOX_INSTANCE_TYPES,
@@ -140,6 +141,17 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 export const COMPATIBILITY_DATE = "2026-07-01";
 
 const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
+
+/** One immutable identity shared by the main worker and builder sidecar. */
+export function workerBuildDeploymentId(environment: NodeJS.ProcessEnv = process.env): string {
+  return (
+    environment.PREVIEW_PULL_REQUEST_HEAD_SHA?.trim() ||
+    environment.GITHUB_SHA?.trim() ||
+    UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID
+  );
+}
+
+const WORKER_BUILD_DEPLOYMENT_ID = workerBuildDeploymentId();
 
 /** The typechecker sidecar's worker name, derived — never spelled out in envs.ts. */
 function typecheckerWorkerName(osWorkerName: string) {
@@ -294,6 +306,7 @@ function workerBindings(input: {
   return {
     vars: {
       WORKER_SELF: input.workerName,
+      WORKER_BUILD_DEPLOYMENT_ID,
       ARTIFACTS_ACCOUNT_ID: input.accountId,
       ARTIFACTS_NAMESPACE: `${input.workerName}-repos`,
       // Sandbox workspace backup config — names the Sandbox SDK reads from
@@ -690,6 +703,7 @@ function workerBuilderBindings(sandboxCaps: "preview" | "production") {
     // cold-host ceilings as project sandboxes; a quick warm start returns
     // immediately, while a genuinely stuck container still fails boundedly.
     vars: {
+      WORKER_BUILD_DEPLOYMENT_ID,
       SANDBOX_TRANSPORT: "rpc",
       SANDBOX_INSTANCE_TIMEOUT_MS: "300000",
       SANDBOX_PORT_TIMEOUT_MS: "300000",

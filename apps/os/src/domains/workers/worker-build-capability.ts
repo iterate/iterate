@@ -1,6 +1,7 @@
 import { itxEnv as env } from "../../env.ts";
 import {
   WORKER_BUILD_COORDINATOR_NAME,
+  type WorkerBuildDeployment,
   type WorkerBuildOutcome,
   type WorkerBuildRequest,
 } from "./worker-build-contract.ts";
@@ -14,4 +15,9 @@ export async function coordinateWorkerBuild(
   request: WorkerBuildRequest,
 ): Promise<WorkerBuildOutcome> {
   return await env.WORKER_BUILDER.getByName(WORKER_BUILD_COORDINATOR_NAME).build(request);
+}
+
+/** Readiness identity of the deployment-global build service. */
+export async function workerBuildDeployment(): Promise<WorkerBuildDeployment> {
+  return await env.WORKER_BUILDER.getByName(WORKER_BUILD_COORDINATOR_NAME).deployment();
 }

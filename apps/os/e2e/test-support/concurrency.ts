@@ -4,4 +4,4 @@
  * Family-owned project pools use the same value so acquiring an exclusive
  * mutable project never serializes tests that Vitest has made runnable.
  */
-export const E2E_FILE_TEST_CONCURRENCY = 2;
+export const E2E_FILE_TEST_CONCURRENCY = 4;

@@ -16,6 +16,7 @@ import {
   REQUIRED_SECRETS,
   envShapedVars,
   typecheckerConfig,
+  workerBuildDeploymentId,
 } from "./generate-wrangler-config.ts";
 
 it("does not emit the local forge JWKS into deployed builds", () => {
@@ -54,6 +55,23 @@ it("names the top-level configs by service so cf:service script tags stay env-le
   expect(config.name).toBe("os");
   expect(builderConfig.name).toBe("os-builder");
   expect(typecheckerConfig.name).toBe("os-typechecker");
+});
+
+it("gives the main worker and builder sidecar one immutable deployment identity", () => {
+  expect(
+    workerBuildDeploymentId({
+      GITHUB_SHA: "github-sha",
+      PREVIEW_PULL_REQUEST_HEAD_SHA: "preview-head",
+    }),
+  ).toBe("preview-head");
+  expect(workerBuildDeploymentId({ GITHUB_SHA: "github-sha" })).toBe("github-sha");
+  expect(workerBuildDeploymentId({})).toBe("unversioned");
+
+  for (const envName of Object.keys(config.env) as Array<keyof typeof config.env>) {
+    expect(config.env[envName].vars.WORKER_BUILD_DEPLOYMENT_ID, String(envName)).toBe(
+      builderConfig.env[envName].vars.WORKER_BUILD_DEPLOYMENT_ID,
+    );
+  }
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {

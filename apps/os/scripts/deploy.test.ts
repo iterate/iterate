@@ -4,7 +4,7 @@
 // e2e-proven deploy pipeline's job, the invariants below are what must never
 // regress.) `deploy.ts` guards its own CLI entrypoint (trpc-cli's main-module
 // check), so importing it here is inert.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
@@ -13,9 +13,36 @@ import {
   assertPreviewPetshopIntegrationConfigured,
   isExactOsProjectMiss,
   posthogBuildEnv,
+  readWorkerBuilderDeploymentId,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+
+describe("worker-builder deployment reuse probe", () => {
+  it("reads the immutable builder deployment id from a healthy OS", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () =>
+      Response.json({ ok: true, workerBuildDeploymentId: "commit-123" }),
+    );
+
+    await expect(
+      readWorkerBuilderDeploymentId("https://os.example.com", fetchImplementation),
+    ).resolves.toBe("commit-123");
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      new URL("https://os.example.com/api/health"),
+      expect.objectContaining({ headers: { "cache-control": "no-cache" } }),
+    );
+  });
+
+  it.each([
+    new Response("unready", { status: 503 }),
+    Response.json({ ok: true }),
+    Response.json({ ok: true, workerBuildDeploymentId: "" }),
+  ])("falls back to a normal sidecar deploy when the probe is unavailable", async (response) => {
+    await expect(
+      readWorkerBuilderDeploymentId("https://os.example.com", async () => response),
+    ).resolves.toBeNull();
+  });
+});
 
 describe("preview Petshop deployment invariant", () => {
   it("requires first-party Petshop credentials in every preview OS config", () => {

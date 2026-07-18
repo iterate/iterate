@@ -1,8 +1,12 @@
 import type { WorkerBuildOptions } from "./schemas.ts";
 
 /** The one deployment-scoped coordinator instance. The name is an internal
- * routing detail; callers see only {@link WorkerBuildService.build}. */
+ * routing detail; callers see only the technology-neutral
+ * {@link WorkerBuildService} capability. */
 export const WORKER_BUILD_COORDINATOR_NAME = "deployment";
+
+/** Marker used when a deploy was not launched from an immutable git revision. */
+export const UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID = "unversioned";
 
 /** Technology-neutral request sent from the OS worker to its build service. */
 export type WorkerBuildRequest = {
@@ -26,9 +30,13 @@ export type WorkerBuildOutcome =
   | { status: "built"; output: WorkerBuildOutput }
   | { status: "build-failed"; message: string };
 
+/** Identity of the worker-build service revision currently answering RPC. */
+export type WorkerBuildDeployment = { deploymentId: string };
+
 /** The deployment-global RPC capability consumed by the main OS worker. */
 export interface WorkerBuildService {
   build(request: WorkerBuildRequest): Promise<WorkerBuildOutcome>;
+  deployment(): Promise<WorkerBuildDeployment>;
 }
 
 /**

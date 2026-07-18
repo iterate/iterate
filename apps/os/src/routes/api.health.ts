@@ -1,28 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { workerBuildDeployment } from "../domains/workers/worker-build-capability.ts";
+import { workerBuildReadinessResponse } from "../domains/workers/worker-build-readiness.ts";
 import { itxEnv, workerVersion } from "../env.ts";
 
-const workerVersionHeader = "x-iterate-worker-version";
-
 /**
- * Trivial liveness probe. Replaces the oRPC `__internal.health` procedure: a
- * plain JSON route the runtime smoke test and external tooling can hit without
- * any RPC client.
+ * Deployment readiness probe. The main version is healthy only when its
+ * route-less worker-build service answers with the same immutable deployment
+ * identity; this keeps dynamic-worker tests behind sidecar propagation too.
  */
 export const Route = createFileRoute("/api/health")({
   server: {
     handlers: {
-      GET: () => {
-        const version = workerVersion(itxEnv);
-        return Response.json(
-          { ok: true, app: "os", version },
-          {
-            headers: {
-              "cache-control": "no-store",
-              [workerVersionHeader]: version,
-            },
-          },
-        );
-      },
+      GET: () =>
+        workerBuildReadinessResponse({
+          expectedDeploymentId: itxEnv.WORKER_BUILD_DEPLOYMENT_ID,
+          readDeployment: workerBuildDeployment,
+          version: workerVersion(itxEnv),
+        }),
     },
   },
 });

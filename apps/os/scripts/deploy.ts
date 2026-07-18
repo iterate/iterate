@@ -43,6 +43,7 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
+import { UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID } from "../src/domains/workers/worker-build-contract.ts";
 import { cloudflareContainerApplicationName } from "../src/lib/cloudflare-containers-dashboard-url.ts";
 import {
   OS_CONTAINER_CLASS_NAMES,
@@ -56,6 +57,7 @@ import {
   REQUIRED_SECRETS,
   RETIRED_AUTH_SERVICE_TOKEN,
   RETIRED_WORKER_SECRETS,
+  workerBuildDeploymentId,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
 import { waitForContainerRollouts } from "./container-rollout-readiness.ts";
@@ -158,6 +160,29 @@ function previewContainerApplicationNames(env: DeployedEnv): string[] {
   ].map(containerApplicationName);
 }
 
+/** Best-effort read used only to avoid redeploying an identical route-less
+ * builder. A miss is observable and safely falls back to a normal deploy. */
+export async function readWorkerBuilderDeploymentId(
+  baseUrl: string,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<string | null> {
+  try {
+    const response = await fetchImplementation(new URL("/api/health", baseUrl), {
+      headers: { "cache-control": "no-cache" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return null;
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || !("workerBuildDeploymentId" in body)) {
+      return null;
+    }
+    const deploymentId = body.workerBuildDeploymentId;
+    return typeof deploymentId === "string" && deploymentId.trim() ? deploymentId : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
 export default async function deploy(
   options: {
@@ -165,6 +190,8 @@ export default async function deploy(
     env?: string;
   } = {},
 ) {
+  const desiredWorkerBuildDeploymentId = workerBuildDeploymentId();
+  let reuseWorkerBuilder = false;
   await deployApp({
     appRoot: OS_APP_ROOT,
     appLabel: OS_DEPLOY_LABEL,
@@ -189,7 +216,7 @@ export default async function deploy(
       });
       // The live-secret assertions and JWKS fetch are independent network
       // reads. Complete them together before any deployed resource changes.
-      const [staticAuthJwks] = await runTimedDeployPhase(
+      const [staticAuthJwks, , currentWorkerBuildDeploymentId] = await runTimedDeployPhase(
         OS_DEPLOY_LABEL,
         "prepare: auth and secret preflight",
         () =>
@@ -209,7 +236,17 @@ export default async function deploy(
                 }),
               ),
             ),
+            readWorkerBuilderDeploymentId(ctx.env.baseUrl),
           ]),
+      );
+
+      reuseWorkerBuilder =
+        desiredWorkerBuildDeploymentId !== UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID &&
+        currentWorkerBuildDeploymentId === desiredWorkerBuildDeploymentId;
+      console.log(
+        reuseWorkerBuilder
+          ? `worker builder already serves deployment ${desiredWorkerBuildDeploymentId}; skipping identical sidecar deploy`
+          : `worker builder deployment is ${currentWorkerBuildDeploymentId ?? "unavailable"}; deploying ${desiredWorkerBuildDeploymentId}`,
       );
 
       // Baked at deploy time, so it's the one secret not in secrets.required.
@@ -285,6 +322,7 @@ export default async function deploy(
         // bootstrap can add the class container-enabled without deleting any
         // Worker, then the declarative-exports deploy installs the real class.
         runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: wrangler.builder.jsonc", async () => {
+          if (reuseWorkerBuilder) return;
           const builderWorkerName = workerBuilderWorkerName(ctx.env.osWorkerName);
           await ensureContainerClasses({
             ctx,

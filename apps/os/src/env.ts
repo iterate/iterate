@@ -59,6 +59,9 @@ export interface Env {
    * no containers. Never set in deployed envs.
    */
   WORKER_BUILD_DEV_ENDPOINT?: string;
+  /** Immutable git revision expected from the deployed worker-build service.
+   * `unversioned` in local/manual environments without a revision marker. */
+  WORKER_BUILD_DEPLOYMENT_ID: string;
   /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types

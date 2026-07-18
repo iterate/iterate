@@ -4,7 +4,7 @@ import {
   collectSecrets,
   deployWithSecrets,
   findBuiltWranglerConfig,
-  run,
+  runAsync,
   smoke,
 } from "./deploy-helpers.ts";
 import {
@@ -173,7 +173,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
     await Promise.all([
       runTimedDeployPhase(input.appLabel, "build", () => {
         rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
-        run("pnpm", ["exec", "vite", "build"], {
+        return runAsync("pnpm", ["exec", "vite", "build"], {
           cwd: input.appRoot,
           env: { CLOUDFLARE_ENV: ctx.name, ...buildEnv },
         });

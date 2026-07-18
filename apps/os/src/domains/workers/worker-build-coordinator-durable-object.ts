@@ -2,7 +2,11 @@ import { DurableObject } from "cloudflare:workers";
 import { WORKER_BUILDER_POOL_SIZE } from "./builder-pool.ts";
 import { CloudflareSandboxWorkerBuildBackend } from "./cloudflare-sandbox-build-backend.ts";
 import type { WorkerBuilderDurableObject } from "./builder-pool-sandbox.ts";
-import type { WorkerBuildOutcome, WorkerBuildRequest } from "./worker-build-contract.ts";
+import type {
+  WorkerBuildDeployment,
+  WorkerBuildOutcome,
+  WorkerBuildRequest,
+} from "./worker-build-contract.ts";
 import {
   WorkerBuildCoordinator,
   type WorkerBuildCoordinatorEvent,
@@ -10,6 +14,7 @@ import {
 
 /** Bindings owned solely by the route-less builder sidecar. */
 interface WorkerBuildCoordinatorEnv {
+  WORKER_BUILD_DEPLOYMENT_ID: string;
   WORKER_BUILDER_SANDBOX: DurableObjectNamespace<WorkerBuilderDurableObject>;
 }
 
@@ -54,6 +59,11 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<WorkerBui
       ),
     );
     return await operation;
+  }
+
+  /** Lightweight readiness identity; does not start or inspect a container. */
+  async deployment(): Promise<WorkerBuildDeployment> {
+    return { deploymentId: this.env.WORKER_BUILD_DEPLOYMENT_ID };
   }
 }
 

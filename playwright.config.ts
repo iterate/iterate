@@ -52,12 +52,14 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Twelve is this suite's explicit deployed-slot share. Preview CI overlaps
-  // it with Vitest's 24 in-flight tests, one TUI workflow, and the one-project
-  // onboarding smoke (aggregate peak 38). The trace audit found no
-  // capacity rejection under the overlapping lanes; lane timing and retry
-  // telemetry keep any future saturation visible.
-  workers: parallelDeployedSuite ? 12 : 1,
+  // Twenty-four is this suite's explicit deployed-slot share. The eight-core
+  // preview runner spent most of the old 12-worker lane at 70-82% total CPU,
+  // so the 16-core runner has real work for the extra browser processes. It
+  // overlaps Vitest's configured peak of 64, one TUI workflow, and the
+  // one-project onboarding smoke (aggregate configured peak 90). Every spec
+  // owns a fresh project or unique resource namespace; lane timing and retry
+  // telemetry keep any actual platform saturation visible.
+  workers: parallelDeployedSuite ? 24 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],

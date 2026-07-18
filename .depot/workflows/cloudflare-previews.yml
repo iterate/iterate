@@ -85,12 +85,11 @@ jobs:
       (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
         (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
-    # 8-core: the job is network-bound (waiting on deployed slots), not
-    # CPU-bound. Depot metrics on a full run showed peak CPU ~30% and peak
-    # memory ~10% of a 16-core box, so 8 cores keeps peak ~60% with headroom
-    # while halving the per-second cost. Re-check with
-    # `depot ci metrics --run <id>` before changing.
-    runs-on: depot-ubuntu-24.04-8
+    # 16-core: the old 8-core runner sustained 70-82% total CPU through most
+    # of the fully parallel browser + Vitest phase (attempt zzww8p219d), so
+    # more test workers need real host capacity rather than another scheduler
+    # queue. Re-check with `depot ci metrics <attempt-id>` before changing.
+    runs-on: depot-ubuntu-24.04-16
     # Hard backstop on ONE attempt: slot acquisition may wait for 6 minutes,
     # while the eligible deploy+e2e critical path has its own 210s budget.
     # Builder-container work remains inside the per-lane watchdogs; it does

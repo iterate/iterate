@@ -46,7 +46,7 @@ type QueueWaiter = {
  * That keeps cross-request I/O ownership inside the leader while still
  * coalescing work in a Durable Object incarnation.
  */
-export class WorkerBuildCoordinator implements WorkerBuildService {
+export class WorkerBuildCoordinator implements Pick<WorkerBuildService, "build"> {
   readonly #backend: WorkerBuildBackend;
   readonly #flights = new Map<string, Flight>();
   readonly #maxConcurrent: number;

@@ -52,23 +52,28 @@ watchdog.
   reports every target instance updated and healthy. Production keeps gradual
   rollout. Do not replace this API-backed barrier with a sleep or test
   serialization.
+- **Main and builder readiness share one immutable identity.** The route-less
+  dynamic-worker builder reports the same PR-head deployment ID baked into the
+  main OS worker. `/api/health` returns 503 until they match, and the existing
+  exact-version smoke must then remain stable for ten seconds. Repeating the
+  same immutable head skips an identical builder-sidecar deploy, avoiding a
+  needless deployment-global Durable Object reset; a changed head always
+  deploys it. This is the reset barrier—do not replace it with a sleep.
 - **Parallelism is explicit per deployed slot, not accidental.** The OS
-  Vitest catalogue uses twelve workers with at most two concurrent tests each;
-  Playwright uses twelve fully-parallel workers. The create/onboarding smoke,
-  TUI, Vitest, and Playwright overlap against one OS slot for an aggregate
-  configured peak of 38. Each sublane emits start/finish timing markers and
-  retry telemetry. A capacity failure must stay visible and be fixed;
-  serializing independent suites made a clean OS phase exceed six minutes. The
-  five apps' independent preview suites also run concurrently
+  Vitest catalogue uses sixteen workers with at most four concurrent tests
+  each; Playwright uses twenty-four fully-parallel workers. The
+  create/onboarding smoke, TUI, Vitest, and Playwright overlap against one OS
+  slot for an aggregate configured peak of 90. Each sublane emits start/finish
+  timing markers and retry telemetry. A capacity failure must stay visible and
+  be fixed; serializing independent suites made a clean OS phase exceed six
+  minutes. The five apps' independent preview suites also run concurrently
   (`scripts/preview/preview.ts`).
 - **File-level parallelism plus bounded intra-file concurrency.** Every Vitest
   file either uses unique state or leases from a bounded family-owned project
-  pool, so files are independent (`fileParallelism`, `maxWorkers: 12`,
-  `sequence.concurrent`, `maxConcurrency: 2`, `retry: 1` in
-  `apps/os/e2e/vitest.config.ts`). The deployed slot — not the Depot runner —
-  is the bottleneck. The real speedup for the slow itx suite is splitting its
-  monolith file so file-level parallelism covers it.
-- **Playwright runs 12 workers, `fullyParallel`, in CI**
+  pool sized to the in-file concurrency, so files and runnable tests remain
+  independent (`fileParallelism`, `maxWorkers: 16`, `sequence.concurrent`,
+  `maxConcurrency: 4`, `retry: 1` in `apps/os/e2e/vitest.config.ts`).
+- **Playwright runs 24 workers, `fullyParallel`, in preview CI**
   (`playwright.config.ts`). Specs isolate mutable state with unique namespaces,
   worker-owned project fixtures, or an explicit fresh project when creation is
   what the spec proves. Preview queues the long reconnect/resume project first,
@@ -93,9 +98,16 @@ watchdog.
   intermittently 5xxs (its "Unicorn!" 503 page failed a run mid-flight). The
   calls retry with backoff (`withGithubRetry` in `scripts/preview/preview.ts`)
   so a blip doesn't fail the whole run and force a re-run.
-- **Right-sized runner.** The job is network-bound on average. The 2026-07-18
-  full-fleet run on the current runner averaged 33% CPU / 16.5% memory, with
-  short build peaks of 81.4% CPU / 37% memory. It stays on 8 cores.
+- **The build subprocess is asynchronous.** Vite and the independent
+  Cloudflare preparation promises must actually make progress together. A
+  synchronous child process froze Node's event loop for the whole build, so
+  queue, bucket, container, and sidecar requests all appeared to finish at the
+  same ~50-second mark despite being started together. `deployApp` uses the
+  async child-process helper and joins build + preparation before upload.
+- **Right-sized runner.** Attempt `zzww8p219d` sustained 70–82% of all eight
+  cores through most of the browser + Vitest phase. Preview and its immutable-
+  head marathon therefore use 16 cores so the additional parallel workers run
+  instead of waiting in a host scheduler queue.
 
 ## Keeping it fast
 

@@ -119,7 +119,7 @@ export default defineConfig({
     // independent. `pnpm preview test` uses the same parallel profile even
     // outside CI; direct runs against a local dev server remain sequential.
     fileParallelism: parallelDeployedSuite,
-    // 12 workers × maxConcurrency 2 = peak ~24 concurrent tests. History of
+    // 16 workers × maxConcurrency 4 = peak ~64 concurrent tests. History of
     // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
     // (DO-storage timeouts), 4×3 = ~12 still produced rotating
     // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
@@ -127,9 +127,11 @@ export default defineConfig({
     // trace audit showed project birth taking ~1,067 aggregate seconds across
     // 176 successful creates without a capacity failure. The failures seen at
     // lower concurrency were product lifecycle defects, not evidence that the
-    // preview slot needed protection from independent tests. The preview
-    // runner overlaps this peak with Playwright's twelve workers, one TUI test,
-    // and the one-project onboarding smoke: aggregate peak 38. Experiment 5
+    // preview slot needed protection from independent tests. Family-owned
+    // mutable projects use pools sized to maxConcurrency, so raising this does
+    // not trade speed for cross-test state races. The preview runner overlaps
+    // this peak with Playwright's 24 workers, one TUI test, and the one-project
+    // onboarding smoke: aggregate configured peak 90. Experiment 5
     // cut Vitest from 210s to 138s at six workers; its only retry was a traced,
     // explicitly marked cold-build response rather than a capacity rejection.
     // Experiment 6 ran an aggregate peak of 30 with zero retries and no
@@ -139,7 +141,7 @@ export default defineConfig({
     // despite every service operation succeeding. Keep that load visible;
     // project reuse removes needless births, while fresh-project lifecycle
     // tests still exercise project creation.
-    maxWorkers: 12,
+    maxWorkers: 16,
     sequence: { concurrent: parallelDeployedSuite, sequencer: SlowestFirstSequencer },
     maxConcurrency: E2E_FILE_TEST_CONCURRENCY,
     passWithNoTests: true,

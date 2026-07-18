@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
     name: "preview_1",
     secrets: { CLOUDFLARE_API_TOKEN: "token" },
   })),
-  run: vi.fn(),
+  runAsync: vi.fn(async () => undefined),
   smoke: vi.fn(async () => undefined),
 }));
 
@@ -21,7 +21,7 @@ vi.mock("./deploy-helpers.ts", () => ({
   collectSecrets: mocks.collectSecrets,
   deployWithSecrets: mocks.deployWithSecrets,
   findBuiltWranglerConfig: mocks.findBuiltWranglerConfig,
-  run: mocks.run,
+  runAsync: mocks.runAsync,
   smoke: mocks.smoke,
 }));
 
@@ -69,8 +69,11 @@ describe("deployApp upload preparation", () => {
   it("starts independent remote preparation before build and joins both before upload", async () => {
     const events: string[] = [];
     const preparation = Promise.withResolvers<void>();
-    mocks.run.mockImplementation(() => {
+    const build = Promise.withResolvers<void>();
+    mocks.runAsync.mockImplementation(async () => {
       events.push("build");
+      await build.promise;
+      events.push("build-finish");
     });
     mocks.deployWithSecrets.mockImplementation(async () => {
       events.push("upload");
@@ -100,10 +103,16 @@ describe("deployApp upload preparation", () => {
     expect(mocks.deployWithSecrets).not.toHaveBeenCalled();
 
     preparation.resolve();
+    await vi.waitFor(() => {
+      expect(events).toEqual(["prepare-start", "build", "prepare-finish"]);
+    });
+    expect(mocks.deployWithSecrets).not.toHaveBeenCalled();
+
+    build.resolve();
     await deployment;
 
-    expect(events).toEqual(["prepare-start", "build", "prepare-finish", "upload"]);
-    expect(mocks.run).toHaveBeenCalledWith("pnpm", ["exec", "vite", "build"], {
+    expect(events).toEqual(["prepare-start", "build", "prepare-finish", "build-finish", "upload"]);
+    expect(mocks.runAsync).toHaveBeenCalledWith("pnpm", ["exec", "vite", "build"], {
       cwd: "/app",
       env: { CLOUDFLARE_ENV: "preview_1" },
     });
