@@ -15,6 +15,7 @@ import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../.
 import {
   deriveOpenRequests,
   EVENT,
+  focusOpenRequest,
   grant,
   reject,
   safeHost,
@@ -27,7 +28,13 @@ import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ApprovalsScreen() {
-  const { projectId } = useLocalSearchParams<{ projectId: string }>();
+  const { projectId, approvalRequestEventOffset } = useLocalSearchParams<{
+    projectId: string;
+    approvalRequestEventOffset?: string;
+  }>();
+  const parsedTargetOffset = Number(approvalRequestEventOffset);
+  const targetOffset =
+    Number.isSafeInteger(parsedTargetOffset) && parsedTargetOffset > 0 ? parsedTargetOffset : null;
 
   const server = useQuery({
     queryKey: ["server"],
@@ -70,7 +77,10 @@ export default function ApprovalsScreen() {
     staleTime: Infinity,
   });
 
-  const open = useMemo(() => deriveOpenRequests(events.data || []), [events.data]);
+  const open = useMemo(
+    () => focusOpenRequest(deriveOpenRequests(events.data || []), targetOffset),
+    [events.data, targetOffset],
+  );
   const recentOutcomes = useMemo(() => {
     const outcomes = (events.data || []).filter(
       (event) => event.type === EVENT.settled || event.type === EVENT.rejected,
@@ -150,12 +160,18 @@ export default function ApprovalsScreen() {
           renderItem={({ item: request }) => {
             const pending =
               respond.isPending && respond.variables?.request.offset === request.offset;
+            const targeted = request.offset === targetOffset;
             return (
-              <View style={styles.card}>
+              <View style={[styles.card, targeted && styles.targetedCard]}>
+                {targeted ? (
+                  <Text style={styles.targetedLabel}>
+                    Opened from notification · request #{request.offset}
+                  </Text>
+                ) : null}
                 <Text style={styles.method}>
                   {request.payload.method} {safeHost(request.payload.url)}
                 </Text>
-                <Text style={styles.url} numberOfLines={2}>
+                <Text style={styles.url} selectable>
                   {request.payload.url}
                 </Text>
                 {request.payload.secretPaths.length > 0 ? (
@@ -244,8 +260,15 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: 4,
   },
+  targetedCard: { borderColor: colors.accent, borderWidth: 2 },
+  targetedLabel: {
+    color: colors.accent,
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
   method: { color: colors.text, fontSize: 15, fontWeight: "600" },
-  url: { color: colors.textMuted, fontSize: 12, fontFamily: "Menlo" },
+  url: { color: colors.textMuted, fontSize: 12, fontFamily: "Menlo", flexShrink: 1 },
   secretLine: { color: colors.working, fontSize: 12 },
   meta: { color: colors.textFaint, fontSize: 11 },
   submitted: { color: colors.textMuted, fontSize: 12, marginTop: spacing.xs },

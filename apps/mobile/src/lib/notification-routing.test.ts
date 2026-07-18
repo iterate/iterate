@@ -1,16 +1,16 @@
 import { expect, test } from "vitest";
 import { notificationOpenedEvent, pushNotificationRoute } from "./notification-routing.ts";
 
-test("an approval push opens the project's approval queue", () => {
+test("an approval push focuses its request in the project's approval queue", () => {
   expect(
     pushNotificationRoute({
-      destination: { kind: "approvals" },
+      destination: { kind: "approvals", approvalRequestEventOffset: 137 },
       projectId: "prj_test",
       requestOffset: 42,
     }),
   ).toEqual({
     pathname: "/project/[projectId]/approvals",
-    params: { projectId: "prj_test" },
+    params: { projectId: "prj_test", approvalRequestEventOffset: "137" },
   });
 });
 

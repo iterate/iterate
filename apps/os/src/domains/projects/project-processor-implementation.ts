@@ -127,7 +127,10 @@ export class ProjectProcessor extends StreamProcessor<
                 payload: {
                   title: "Approval needed",
                   body: `${event.payload.method} ${new URL(event.payload.url).host} is waiting for approval.`,
-                  destination: { kind: "approvals" },
+                  destination: {
+                    kind: "approvals",
+                    approvalRequestEventOffset: event.offset,
+                  },
                   expiresAt: Date.parse(event.payload.expiresAt),
                 },
               }),

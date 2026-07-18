@@ -14,7 +14,10 @@ const StoredEncryptedDevicePushToken = EncryptedDevicePushToken.extend({
 
 export const DeviceNotificationDestination = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("project") }),
-  z.strictObject({ kind: z.literal("approvals") }),
+  z.strictObject({
+    kind: z.literal("approvals"),
+    approvalRequestEventOffset: z.number().int().positive(),
+  }),
   z.strictObject({ kind: z.literal("agent-chat"), path: z.string().startsWith("/agents/") }),
 ]);
 

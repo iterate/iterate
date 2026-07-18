@@ -3830,7 +3830,7 @@ export type DeviceAppendInput =
         body: string;
         destination:
           | { kind: "project" }
-          | { kind: "approvals" }
+          | { kind: "approvals"; approvalRequestEventOffset: number }
           | { kind: "agent-chat"; path: string };
         expiresAt: number;
         title: string;

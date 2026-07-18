@@ -207,7 +207,7 @@ test("a started attempt from a lost incarnation settles uncertain and is never r
       type: T.requested,
       payload: {
         body: "Approve the held request",
-        destination: { kind: "approvals" },
+        destination: { kind: "approvals", approvalRequestEventOffset: 42 },
         expiresAt: Date.parse("2026-07-18T08:05:00Z"),
         title: "Approval needed",
       },
@@ -337,7 +337,7 @@ test("a notification requested after revocation settles as device unavailable", 
 
 test("a later Expo receipt records push-service acceptance without claiming device delivery", async () => {
   let now = Date.parse("2026-07-18T08:00:00Z");
-  const stream = deviceStream();
+  const stream = new MemoryStreamNetwork(() => now).get("/devices/phone");
   const processor = new DeviceProcessor({
     stream,
     path: stream.path,
@@ -378,7 +378,9 @@ test("a later Expo receipt records push-service acceptance without claiming devi
   );
   await driver.deliver();
   await vi.waitFor(() => expect(stream.events.some((event) => event.type === T.ticket)).toBe(true));
-  await driver.deliver();
+  await driver.runner.waitUntilEvent({
+    offset: stream.events.find((event) => event.type === T.ticket)!.offset,
+  });
 
   now += 15 * 60_000;
   await processor.checkReceipts(driver.state);
@@ -394,7 +396,7 @@ test("a later Expo receipt records push-service acceptance without claiming devi
 
 test("a DeviceNotRegistered receipt revokes the token before settling the request", async () => {
   let now = Date.parse("2026-07-18T08:00:00Z");
-  const stream = deviceStream();
+  const stream = new MemoryStreamNetwork(() => now).get("/devices/phone");
   const processor = new DeviceProcessor({
     stream,
     path: stream.path,
@@ -420,7 +422,9 @@ test("a DeviceNotRegistered receipt revokes the token before settling the reques
   });
   await driver.deliver();
   await vi.waitFor(() => expect(stream.events.some((event) => event.type === T.ticket)).toBe(true));
-  await driver.deliver();
+  await driver.runner.waitUntilEvent({
+    offset: stream.events.find((event) => event.type === T.ticket)!.offset,
+  });
 
   now += 15 * 60_000;
   await processor.checkReceipts(driver.state);

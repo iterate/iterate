@@ -280,7 +280,7 @@ it("cross-appends one deterministic held-approval notification per enrolled devi
     payload: {
       title: "Approval needed",
       body: "POST api.stripe.com is waiting for approval.",
-      destination: { kind: "approvals" },
+      destination: { kind: "approvals", approvalRequestEventOffset: 5 },
       expiresAt: Date.parse("2026-07-18T08:05:00.000Z"),
     },
   });
