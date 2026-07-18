@@ -295,8 +295,8 @@ describe("resolveWorkerSource serve matrix", () => {
     const callsAfterFirst = h.state.buildCalls.length;
 
     // Identical source + options, different project: a project-trusted
-    // principal can influence its own builder sandbox's output, so the cache
-    // must NOT answer across projects — prj_g2 pays its own build.
+    // principal controls runtime build input, so the cache must NOT answer
+    // across projects — prj_g2 pays its own build.
     const other = await resolveWorkerSource({
       projectId: "prj_g2",
       source: repoSource("/repos/g"),
@@ -322,8 +322,9 @@ describe("resolveWorkerSource serve matrix", () => {
   // A project worker is loaded independently by every stream delivering to
   // it, so one commit fans out into many concurrent cold resolves of ONE
   // build key. The stampede guard makes the followers wait on the first
-  // resolve's build instead of each launching a duplicate (observed live:
-  // 100 pool builds for 27 distinct keys drowned the builder pool).
+  // resolve's build instead of each making a redundant coordinator call
+  // (observed before global coalescing: 100 pool builds for 27 distinct keys
+  // drowned the builder pool).
   test("concurrent same-key blocking resolves share one build", async () => {
     setCommit("c1", "repo-sg-v1", "SG1");
     const callsBefore = h.state.buildCalls.length;

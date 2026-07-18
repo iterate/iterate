@@ -31,17 +31,18 @@ describe("workerBuildRecipe", () => {
     expect(recipe.outputDir).toBe(".iterate-build.out");
   });
 
-  it("installs only when the source has a package.json, always bundles via wrangler dry-run", () => {
+  it("uses pinned pnpm by default and always bundles via wrangler dry-run", () => {
     const withPackage = workerBuildRecipe({
       files: templateFiles,
       options: { entryPoint: "worker.ts" },
     });
     expect(withPackage.commands.map((step) => step.command.split(" ")[0])).toEqual([
-      "npm",
+      "if",
       "WRANGLER_SEND_METRICS=false",
     ]);
     expect(withPackage.commands[0]!.command).toContain("--ignore-scripts");
-    expect(withPackage.commands[0]!.command).toContain("--omit=dev");
+    expect(withPackage.commands[0]!.command).toContain("pnpm install --prod");
+    expect(withPackage.commands[0]!.command).toContain("--prefer-offline");
 
     const withoutPackage = workerBuildRecipe({
       files: { "worker.ts": "export default {};" },
@@ -49,6 +50,24 @@ describe("workerBuildRecipe", () => {
     });
     expect(withoutPackage.commands).toHaveLength(1);
     expect(withoutPackage.commands[0]!.command).toContain("wrangler deploy --dry-run");
+  });
+
+  it("honors explicit package-manager lockfile semantics", () => {
+    const pnpmLocked = workerBuildRecipe({
+      files: { ...templateFiles, "pnpm-lock.yaml": "lockfileVersion: '9.0'" },
+      options: { entryPoint: "worker.ts" },
+    }).commands[0]!.command;
+    expect(pnpmLocked).toContain("[ -f pnpm-lock.yaml ]");
+    expect(pnpmLocked).toContain("pnpm install --prod");
+    expect(pnpmLocked).toContain("--frozen-lockfile");
+
+    const npmLocked = workerBuildRecipe({
+      files: { ...templateFiles, "package-lock.json": "{}" },
+      options: { entryPoint: "worker.ts" },
+    }).commands[0]!.command;
+    expect(npmLocked).toContain("[ -f package-lock.json ]");
+    expect(npmLocked).toContain("npm install --ignore-scripts");
+    expect(npmLocked).toContain("--omit=dev");
   });
 
   it("materializes virtual modules as files aliased in the wrangler config", () => {

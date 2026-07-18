@@ -1,10 +1,11 @@
 /**
- * Route-less host for the deployment-wide dynamic-worker builder pool.
+ * Route-less host for the deployment-wide dynamic-worker build service.
  *
- * Keeping this container class on its own script lets existing OS workers
- * remain on Cloudflare's one-way declarative-exports flow unchanged. The OS
- * worker reaches the namespace through an external Durable Object binding.
+ * The main OS worker binds the singleton coordinator. The coordinator's
+ * private backend binds the fixed Cloudflare Sandbox pool; neither the RPC
+ * contract nor its callers know which container technology implements it.
  */
+export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-build-coordinator-durable-object.ts";
 export { WorkerBuilderDurableObject } from "./domains/workers/builder-pool-sandbox.ts";
 
 export default {

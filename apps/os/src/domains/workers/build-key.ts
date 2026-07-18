@@ -52,11 +52,10 @@ export type WorkerBuildInput = {
  * and a repeated request is a cache hit.
  *
  * This content-only key is the TRUSTED tier: artifacts under it may be served
- * to ANY project, so only trusted builders (the deploy-time template seeder —
- * real CI toolchain, no project influence) may ever write it. Runtime builds
- * run in the project's own builder sandbox, whose output a project-trusted
- * principal can influence, so they read and write the project-scoped
- * {@link projectWorkerBuildKey} instead.
+ * to ANY project, so only the deploy-time template seeder may write it.
+ * Runtime builds consume project-controlled source and may resolve lockless
+ * registry state; even though they use a deployment-owned backend, their
+ * output remains in the project-scoped {@link projectWorkerBuildKey} tier.
  */
 export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
   return await stableSha256({
@@ -71,8 +70,8 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
 }
 
 /** The runtime tier's key: the content-only {@link workerBuildKey} plus the
- * project identity, so artifacts built in one project's builder sandbox are
- * never served to another project. */
+ * project identity, so runtime-produced artifacts are never promoted across
+ * project trust boundaries. */
 export async function projectWorkerBuildKey(projectId: string, sharedKey: string): Promise<string> {
   return await stableSha256({
     projectId,

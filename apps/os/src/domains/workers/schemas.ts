@@ -47,10 +47,11 @@ export type WorkerFileSource =
 /**
  * Build options for a dynamic worker.
  *
- * Deliberately small: exactly what the build recipe (build-recipe.ts — real
- * `npm install` plus wrangler's canonical bundling pipeline) expresses.
- * When the file map has a `package.json`, dependencies are installed from
- * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
+ * Deliberately small: exactly what the build recipe (build-recipe.ts — pinned
+ * pnpm by default plus wrangler's canonical bundling pipeline) expresses.
+ * When the file map has a `package.json`, dependencies are installed from the
+ * npm registry at build time (`--ignore-scripts`; pnpm and npm lockfiles are
+ * honored with their own package manager).
  */
 export type WorkerBuildOptions = {
   /** Entry point file path relative to the source root. Default: "worker.ts". */

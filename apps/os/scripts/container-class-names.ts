@@ -4,6 +4,7 @@ import {
 } from "../src/domains/sandboxes/instance-types.ts";
 
 export const WORKER_BUILDER_CONTAINER_CLASS_NAME = "WorkerBuilderDurableObject";
+export const WORKER_BUILD_COORDINATOR_CLASS_NAME = "WorkerBuildCoordinatorDurableObject";
 
 /** The builder pool lives on a dedicated, route-less Worker. Existing
  * environments reuse the retired esbuild builder script at this name, so a

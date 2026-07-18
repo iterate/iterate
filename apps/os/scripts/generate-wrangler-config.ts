@@ -36,6 +36,7 @@ import {
 } from "../src/queue-names.ts";
 import {
   workerBuilderWorkerName,
+  WORKER_BUILD_COORDINATOR_CLASS_NAME,
   WORKER_BUILDER_CONTAINER_CLASS_NAME,
 } from "./container-class-names.ts";
 
@@ -263,10 +264,11 @@ function workerBuilderContainer(sandboxCaps: "preview" | "production") {
     // max_instances is a hard match rather than an independent capacity cap.
     class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
     image: "./sandbox/Dockerfile",
-    // standard-3 (2 vCPU, 8 GiB), NOT basic: npm install + wrangler's esbuild
-    // bundle are CPU/IO-bound. The fixed pool sleeps after 300s, so this costs
-    // active minutes during build bursts rather than permanent idle capacity.
-    instance_type: "standard-3",
+    // standard-4 (4 vCPU, 12 GiB): dependency resolution and wrangler's
+    // esbuild bundle are CPU/IO-bound, and the coordinator gives each member
+    // at most one active build per vCPU. The fixed pool sleeps after 300s, so
+    // this costs active burst minutes rather than permanent idle capacity.
+    instance_type: "standard-4",
     max_instances: WORKER_BUILDER_POOL_SIZE,
     ...(sandboxCaps === "preview" ? { rollout_step_percentage: 100 } : {}),
     ssh: { enabled: true },
@@ -282,8 +284,8 @@ function workerBindings(input: {
   authRemote?: boolean;
   kvId?: string;
   workerBuildCacheKvId?: string;
-  /** Deployed OS workers reach the builder pool through this sidecar script.
-   * Local dev omits it and uses WORKER_BUILD_DEV_ENDPOINT instead. */
+  /** Deployed OS workers reach the build coordinator through this sidecar
+   * script. Local dev omits it and uses WORKER_BUILD_DEV_ENDPOINT instead. */
   workerBuilderScriptName?: string;
   /** Which SANDBOX_MAX_INSTANCES column to apply — deploy-time memory quota
    * is validated per account, and previews share one account. */
@@ -326,7 +328,7 @@ function workerBindings(input: {
           ? [
               {
                 name: "WORKER_BUILDER",
-                class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+                class_name: WORKER_BUILD_COORDINATOR_CLASS_NAME,
                 script_name: input.workerBuilderScriptName,
               },
             ]
@@ -589,8 +591,8 @@ function localDevBindings() {
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
       // Local dev's dynamic-worker build backend: the vite dev server's
       // host-toolchain endpoint (scripts/worker-build-dev-endpoint.ts).
-      // Deployed envs never set this — they build in the project's builder
-      // sandbox (domains/workers/build-backend.ts).
+      // Deployed envs never set this — they use the deployment-global build
+      // coordinator (domains/workers/build-backend.ts).
       ...(process.env.PORT
         ? {
             WORKER_BUILD_DEV_ENDPOINT: `http://localhost:${process.env.PORT}/__dev/worker-build`,
@@ -678,6 +680,7 @@ export const config = {
 };
 
 const WORKER_BUILDER_EXPORTS = {
+  [WORKER_BUILD_COORDINATOR_CLASS_NAME]: { type: "durable-object", storage: "sqlite" },
   [WORKER_BUILDER_CONTAINER_CLASS_NAME]: { type: "durable-object", storage: "sqlite" },
 };
 
@@ -694,7 +697,7 @@ function workerBuilderBindings(sandboxCaps: "preview" | "production") {
     durable_objects: {
       bindings: [
         {
-          name: "WORKER_BUILDER",
+          name: "WORKER_BUILDER_SANDBOX",
           class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
         },
       ],
@@ -705,9 +708,9 @@ function workerBuilderBindings(sandboxCaps: "preview" | "production") {
 }
 
 /**
- * Route-less host for the stock-sandbox worker-builder pool. The main OS
- * worker binds its Durable Object namespace externally by deployed script
- * name; there is no service binding and no public route.
+ * Route-less host for the technology-neutral build coordinator and its
+ * private stock-sandbox backend. The main OS worker externally binds only the
+ * coordinator namespace; there is no service binding and no public route.
  */
 export const builderConfig = {
   $schema: "node_modules/wrangler/config-schema.json",

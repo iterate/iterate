@@ -33,15 +33,32 @@ service binding; deploy.ts deploys it first (a name binding to a missing
 script fails the deploy). Local dev runs it as a vite `auxiliaryWorkers`
 entry in the same workerd.
 
-Dynamic worker builds use a fixed pool of four stock sandbox containers on the
-route-less `os-<env>-builder` sidecar. That script name deliberately reuses the
-retired esbuild-wasm builder Worker (Workers are never deleted), but none of
-its old service API survives: the primary OS Worker binds only the
-`WorkerBuilderDurableObject` namespace externally via `script_name`. The pool
-has no project credentials, catalogue entry, stream, or public route; it runs
-real `npm install --ignore-scripts` plus pinned Wrangler, with each concurrent
-build isolated in its own directory. Local dev runs the identical recipe on
-the host toolchain via `/__dev/worker-build` and does not start the sidecar.
+Dynamic worker builds go through one deployment-global
+`WorkerBuildCoordinatorDurableObject` on the route-less
+`os-<env>-builder` sidecar. Its RPC is deliberately technology-neutral: source
+files + build options in, loader-ready modules or a modeled source-build
+failure out. A bounded in-memory semaphore runs at most 16 distinct builds,
+queues one additional wave of 16, and coalesces simultaneous calls for the
+same content key. Infrastructure failures throw and remain retryable; the
+coordinator stores no artifacts or project state.
+
+The current private backend load-balances those builds over four stock
+standard-4 Cloudflare Sandbox containers. The pool has no project credentials,
+catalogue entry, stream, or public route. Each build uses sessionless bounded
+commands and its own directory; pinned pnpm installs production dependencies
+with scripts disabled (npm is retained only for committed npm lockfiles), and
+pinned Wrangler performs the canonical dry-run bundle. pnpm's content-addressed
+store and the Bun-installed platform toolchain are shared while a member is
+warm; neither is baked into a custom image, preserving the stock image's fast
+cold placement. A future backend such as Depot can replace this adapter without
+changing the OS worker binding or build contract.
+
+That sidecar name deliberately reuses the retired esbuild-wasm builder Worker
+(Workers are never deleted), but none of its old service API survives. The
+primary OS Worker externally binds only the coordinator namespace via
+`script_name`; the container namespace is private to the sidecar. Local dev
+runs the identical recipe on the host toolchain via `/__dev/worker-build` and
+does not start the sidecar.
 
 Both sidecars deploy in parallel with the main Vite build and resource
 preparation. Preview tests start only after the main upload and all seven

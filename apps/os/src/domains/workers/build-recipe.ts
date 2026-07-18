@@ -6,7 +6,7 @@ import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generat
 
 /**
  * The one dynamic-worker build recipe, shared verbatim by every runner: the
- * project's builder sandbox (deployed envs), the vite dev server's
+ * deployment build service (deployed envs), the vite dev server's
  * `/__dev/worker-build` endpoint (local dev), and the deploy-time template
  * seeder. One module generating identical files and commands is what keeps
  * those environments from growing separate resolution semantics; the runner
@@ -58,17 +58,18 @@ export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 /**
- * The wrangler pin that IS the build toolchain. Two places must agree:
- * apps/os's own `wrangler` devDependency (the host/dev runner and the deploy
- * seeder — asserted by build-key.test.ts) and this constant, which the
- * container lane installs from directly (build-backend.ts — deliberately NOT
- * baked into the sandbox image; see sandbox/Dockerfile) and which
- * participates in the build key so a toolchain bump invalidates cached
- * artifacts instead of serving output from an older bundler. esbuild rides
- * inside wrangler — there is no separate bundler pin.
+ * The fixed platform toolchain. These pins participate in every build key:
+ * pnpm is the default package installer and wrangler owns the production-
+ * shaped bundle. The stock container backend installs both with Bun into a
+ * shared versioned directory on first use; neither is baked into the image.
+ *
+ * The wrangler pin must agree with apps/os's own `wrangler` devDependency
+ * (the host/dev runner and deploy seeder — asserted by build-key.test.ts).
+ * esbuild rides inside wrangler; there is no separate bundler pin.
  */
 export const WRANGLER_VERSION = "4.107.0";
-export const BUILD_TOOLCHAIN_VERSION = `wrangler@${WRANGLER_VERSION}`;
+export const PNPM_VERSION = "10.24.0";
+export const BUILD_TOOLCHAIN_VERSION = `wrangler@${WRANGLER_VERSION};pnpm@${PNPM_VERSION}`;
 
 /**
  * Everything the recipe generates lives under this reserved name prefix in
@@ -85,7 +86,7 @@ const ENTRY_SHIM_FILE = `${RESERVED_PREFIX}.entry.ts`;
 /** Hard per-command bounds on container/host work — independent of the
  * caller's buildBudgetMs race, which keeps working unchanged (past budget the
  * caller serves the building page while the build finishes into the cache). */
-const NPM_INSTALL_TIMEOUT_MS = 150_000;
+const DEPENDENCY_INSTALL_TIMEOUT_MS = 150_000;
 const BUNDLE_TIMEOUT_MS = 90_000;
 
 export type WorkerBuildRecipe = {
@@ -105,10 +106,12 @@ export type WorkerBuildRecipe = {
 /**
  * Build a worker source snapshot into loader-ready modules:
  *
- * 1. `npm install --ignore-scripts --omit=dev` — only when the snapshot has a
- *    `package.json`. Real npm: every dependency npm can resolve just works,
- *    lockfiles are honored, and `--ignore-scripts` keeps build INPUTS from
- *    executing code during a build the platform runs on the project's behalf.
+ * 1. Install production dependencies only when the snapshot has a
+ *    `package.json`. pnpm is the default and reuses the builder member's
+ *    content-addressed store. A committed npm lockfile deliberately selects
+ *    npm so the source's package-manager semantics remain intact. Both lanes
+ *    ignore lifecycle scripts: build INPUTS never execute code on the
+ *    platform's behalf.
  * 2. `wrangler deploy --dry-run` — wrangler's bundling is the canonical
  *    nodejs_compat pipeline (node-builtin externalization, CJS require
  *    interop, unenv aliases), i.e. exactly what production workers get, so
@@ -177,15 +180,13 @@ export function workerBuildRecipe(input: {
       ...("package.json" in input.files
         ? [
             {
-              // --prefer-offline: resolve from the runner's npm cache without
-              // registry freshness checks — on a warm builder-pool member this
-              // is the difference between ~23s and a few seconds per build,
-              // and delivery to a freshly committed worker waits on exactly
-              // this step. (NOT --no-package-lock: that would also stop npm
-              // READING a committed lockfile, and lockfiles are honored here.)
+              // A pnpm lockfile is strict; an npm lockfile preserves npm
+              // semantics; lockless sources use pinned pnpm without inventing
+              // a committed lock. --prefer-offline makes warm pool members
+              // reuse their shared stores without registry freshness checks.
               command:
-                "npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline",
-              timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+                "if [ -f pnpm-lock.yaml ]; then pnpm install --prod --ignore-scripts --prefer-offline --frozen-lockfile; elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline; else pnpm install --prod --ignore-scripts --prefer-offline --no-frozen-lockfile; fi",
+              timeoutMs: DEPENDENCY_INSTALL_TIMEOUT_MS,
             },
           ]
         : []),

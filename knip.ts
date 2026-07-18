@@ -21,6 +21,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // generated and gitignored — knip cannot see the configs that
       // reference them).
       "src/builder.ts",
+      "src/worker-builder.ts",
       "src/typechecker.ts",
       // Local operational commands mounted by scripts/cli.ts.
       "scripts/cli.ts",

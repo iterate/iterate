@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { projectWorkerBuildKey, workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
-import { WRANGLER_VERSION } from "./build-recipe.ts";
+import { PNPM_VERSION, WRANGLER_VERSION } from "./build-recipe.ts";
 
 const baseInput: WorkerBuildInput = {
   compatibilityDate: "2026-05-01",
@@ -85,13 +85,14 @@ describe("workerBuildKey", () => {
     const projectKey = await projectWorkerBuildKey("prj_one", sharedKey);
     expect(projectKey).toMatch(/^[a-f0-9]{64}$/);
     expect(await projectWorkerBuildKey("prj_one", sharedKey)).toBe(projectKey);
-    // A project-trusted principal can influence its own builder sandbox's
-    // output — runtime artifacts must never be shared across projects.
+    // Runtime builds consume project-controlled source (and potentially
+    // mutable lockless registry state), so their artifacts never cross
+    // project trust boundaries.
     expect(await projectWorkerBuildKey("prj_two", sharedKey)).not.toBe(projectKey);
     expect(projectKey).not.toBe(sharedKey);
   });
 
-  it("pins the wrangler toolchain constant to the repo's own wrangler pin", () => {
+  it("pins the build toolchain constants to the repo's own package-manager pins", () => {
     // The toolchain version participates in every build key; the constant and
     // the workspace override backing apps/os's wrangler devDependency (what
     // the host/dev runner and the deploy seeder execute) must agree or two
@@ -103,5 +104,9 @@ describe("workerBuildKey", () => {
       "utf8",
     );
     expect(workspaceYaml).toMatch(new RegExp(`^  wrangler: ${WRANGLER_VERSION}$`, "m"));
+    const rootPackage = JSON.parse(
+      readFileSync(new URL("../../../../../package.json", import.meta.url), "utf8"),
+    ) as { packageManager?: string };
+    expect(rootPackage.packageManager).toBe(`pnpm@${PNPM_VERSION}`);
   });
 });

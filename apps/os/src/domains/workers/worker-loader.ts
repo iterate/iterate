@@ -149,12 +149,12 @@ type ResolveContext = {
   resolved: ResolvedWorkerFileSource;
 };
 
-// Concurrent cold resolutions of one build key deliberately do NOT share a
-// promise: awaiting another request's in-flight RPC is workerd's
-// "cannot perform I/O on behalf of a different request" trap. Blocking
-// callers instead WAIT by polling the artifact cache with their own request's
-// I/O (waitForBuildElsewhere) and fall back to a duplicate build — which is
-// harmless (content-addressed, idempotent artifact writes), just redundant.
+// Concurrent cold resolutions deliberately do NOT share a promise in this
+// isolate: awaiting another request's in-flight RPC is workerd's "cannot
+// perform I/O on behalf of a different request" trap. Blocking callers can
+// still avoid an RPC by waiting on this isolate's artifact memo; otherwise
+// each makes its own request to the deployment coordinator, which safely
+// coalesces identical build keys behind request-local follower promises.
 async function resolveThroughBuilder(input: {
   /** Whether the caller runs under a build budget — the fetch lane. Budgeted
    * callers prefer availability (previous good build now, fresh build in the
@@ -173,10 +173,11 @@ async function resolveThroughBuilder(input: {
     options,
     source: resolved,
   });
-  // Runtime builds live under the project-scoped key (a project can influence
-  // its own builder sandbox's output, so runtime artifacts are never shared);
-  // the content-only key is the TRUSTED read-first tier, written exclusively
-  // by the deploy-time template seeder — see build-key.ts.
+  // Runtime builds live under the project-scoped key: they consume project-
+  // controlled source and potentially mutable lockless registry state, so
+  // their artifacts never cross project trust boundaries. The content-only
+  // key is the TRUSTED read-first tier, written exclusively by the deploy-time
+  // template seeder — see build-key.ts.
   const buildKey = await projectWorkerBuildKey(input.projectId, sharedKey);
   const context: ResolveContext = { options, projectId: input.projectId, resolved };
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
@@ -228,9 +229,10 @@ async function resolveThroughBuilder(input: {
     // stream delivering to it, so one commit can fan out into DOZENS of
     // concurrent cold resolves of ONE key (observed live: 100 pool builds
     // for 27 distinct keys in one e2e run, top key built 24×, drowning the
-    // builder pool). When THIS ISOLATE is already building the key, wait for
+    // build service). When THIS ISOLATE is already building the key, wait for
     // its artifact instead of piling on. Never worse than building: the wait
-    // is bounded and falls back to a duplicate build.
+    // is bounded and falls back to an independent coordinator request (which
+    // still coalesces with the leader when it is running).
     const built = await waitForBuildElsewhere(store, buildKey);
     if (built !== null) {
       input.waitUntil(noteLastGoodBuild(store, context, buildKey));
@@ -242,20 +244,20 @@ async function resolveThroughBuilder(input: {
 }
 
 /**
- * One build-run through the build backend (the project's builder sandbox, or
- * local dev's host-toolchain endpoint — build-backend.ts). The file snapshot
- * is resolved HERE and passed by value (this worker owns the REPO binding),
- * sized by the ref's source masks; the artifact is written to the cache by
- * THIS side (the container never holds KV credentials) and returned by value,
- * so nothing waits on KV write propagation. A GENUINE build failure (the
- * backend's named error) is recorded so the fetch lane can fall back without
- * re-running it — and clears the in-flight marker, so budgeted callers are
- * never held in "building" by a build that already died; transport and
- * cancellation errors pass through unrecorded and stay retryable.
+ * One build-run through the deployment coordinator (or local dev's host-
+ * toolchain endpoint — build-backend.ts). The file snapshot is resolved HERE
+ * and passed by value (this worker owns the REPO binding), sized by the ref's
+ * source masks; the artifact is written to the cache by THIS side (the build
+ * service never holds KV credentials) and returned by value, so nothing waits
+ * on KV write propagation. A GENUINE build failure (the backend's modeled
+ * answer) is recorded so the fetch lane can fall back without re-running it —
+ * and clears the in-flight marker, so budgeted callers are never held in
+ * "building" by a build that already died; transport and cancellation errors
+ * pass through unrecorded and stay retryable.
  *
- * Concurrent cold builds of one key are NOT deduped across isolates: they
- * converge on one content-addressed, idempotent artifact write — redundant
- * work, never wrong output.
+ * Across deployed isolates, identical calls converge inside the deployment-
+ * global coordinator before reaching its backend. Artifact writes remain
+ * content-addressed and idempotent independently of that optimization.
  */
 // Presence of a running build per key IN THIS ISOLATE. Presence-only, like
 // backgroundBuilds below — the build promise itself is never shared across
@@ -265,7 +267,7 @@ async function resolveThroughBuilder(input: {
 const buildsInFlight = new Set<string>();
 
 /** How long a blocking caller waits on this isolate's in-flight build of the
- * same key before falling back to its own duplicate build. */
+ * same key before making its own coordinator request. */
 const BUILD_WAIT_CAP_MS = 120_000;
 const BUILD_WAIT_POLL_MS = 1_000;
 
@@ -287,8 +289,8 @@ const BUILD_WAIT_POLL_MS = 1_000;
  * resolve stalled toward the cap (observed live: an entire e2e lane ran
  * ~90-160s per spec with first-attempt failures across the board, while the
  * pool sat nearly idle at 30 builds). Cross-isolate duplicates are the
- * cheaper poison: bounded by isolate count, idempotent, and the builder pool
- * absorbs them.
+ * cheaper poison: bounded by isolate count, idempotent, and now coalesced by
+ * the deployment coordinator before backend execution.
  */
 async function waitForBuildElsewhere(
   store: KvWorkerBuildArtifactStore,

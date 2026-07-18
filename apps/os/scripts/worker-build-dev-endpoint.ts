@@ -1,9 +1,9 @@
 /**
  * Local dev's dynamic-worker build backend: a dev-only vite middleware at
- * `/__dev/worker-build` that runs the SHARED build recipe (npm install +
- * pinned wrangler dry-run — src/domains/workers/build-recipe.ts) on the host
- * toolchain. Deployed envs run the identical recipe in the project's builder
- * sandbox; local dev has no containers, and keeping a second bundler
+ * `/__dev/worker-build` that runs the SHARED build recipe (pinned pnpm by
+ * default plus pinned wrangler dry-run — src/domains/workers/build-recipe.ts)
+ * on the host toolchain. Deployed envs run the identical recipe through the
+ * deployment build service; local dev has no containers, and keeping a second bundler
  * implementation around for dev is exactly the resolution-semantics drift
  * this pipeline exists to kill.
  *

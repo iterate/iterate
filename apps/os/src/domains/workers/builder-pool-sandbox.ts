@@ -1,12 +1,14 @@
 import { getSandbox, Sandbox } from "@cloudflare/sandbox";
-import type { Env } from "../../env.ts";
-import { builderPoolMember } from "./builder-pool.ts";
+
+/** The container class itself consumes only Sandbox SDK configuration vars;
+ * it has no product bindings, project identity, or secrets. */
+type WorkerBuilderSandboxEnv = Record<string, unknown>;
 
 /**
  * The deployment's worker-builder pool: a FIXED, small fleet of stock
  * Cloudflare sandbox containers that run every dynamic-worker build
- * (build-backend.ts), owned by the platform — deliberately NOT project
- * sandboxes.
+ * (cloudflare-sandbox-build-backend.ts), owned by the platform — deliberately
+ * NOT project sandboxes.
  *
  * The per-project builder this replaces was an ordinary catalogued sandbox at
  * `/sandboxes/worker-builder`: it journaled lifecycle into project streams,
@@ -20,8 +22,8 @@ import { builderPoolMember } from "./builder-pool.ts";
  *
  * Isolation model, explicit because it is WEAKER per-container than the pet
  * lane and stronger everywhere else:
- * - The recipe never executes project code: `npm install --ignore-scripts`
- *   installs without running package scripts, and wrangler's dry-run bundles
+ * - The recipe never executes project code: pnpm (or npm for an npm-locked
+ *   source) installs with `--ignore-scripts`, and wrangler's dry-run bundles
  *   with esbuild, which parses sources but does not run them. Compromising a
  *   pool container requires escaping those parsers.
  * - No project secrets, tokens, or env vars ever enter a pool container; the
@@ -29,8 +31,8 @@ import { builderPoolMember } from "./builder-pool.ts";
  * - Runtime-tier artifacts stay PROJECT-SCOPED in the cache key
  *   (build-key.ts) — a poisoned artifact write can still only serve the
  *   project whose build produced it, never the trusted seeded tier.
- * - Concurrent builds on one member run in separate exec sessions and
- *   separate `/build/<key>-<nonce>` trees (build-backend.ts).
+ * - Concurrent builds on one member use sessionless commands and separate
+ *   `/build/<key>-<nonce>` trees (cloudflare-sandbox-build-backend.ts).
  *
  * Members are addressed by plain pool-slot names on a namespace no project
  * code can reach — there is no catalogue entry, no stream, no processor, no
@@ -39,10 +41,11 @@ import { builderPoolMember } from "./builder-pool.ts";
  * preview-slot erase/handover; each build still uses a unique directory and
  * the containers sleep after the bounded warm period.
  */
-export class WorkerBuilderDurableObject extends Sandbox<Env> {
+export class WorkerBuilderDurableObject extends Sandbox<WorkerBuilderSandboxEnv> {
   // Long enough that a burst of builds reuses the warm toolchain (installed
-  // in-container once per boot, see build-backend.ts), short enough that an
-  // idle deployment holds zero builder containers. The pool is capacity-safe
+  // in-container once per boot, see cloudflare-sandbox-build-backend.ts),
+  // short enough that an idle deployment holds zero builder containers. The
+  // pool is capacity-safe
   // at any value — max_instances equals the pool size — so this trades only
   // idle-container cost against toolchain-reinstall latency.
   //
@@ -55,13 +58,13 @@ export class WorkerBuilderDurableObject extends Sandbox<Env> {
   override labels = { app: "iterate-os", component: "worker-builder" };
 }
 
-/** The builder for a build key, as the stock SDK client. `attempt` > 0
- * addresses the failover member (next slot in ring order) when the key's own
- * member is sick — see builderPoolMember. */
+/** One explicitly scheduled pool member as the stock SDK client. Disabling
+ * the implicit default session is load-bearing: live preview inspection found
+ * orphaned bash sessions and 102 zombie esbuild processes on one member after
+ * canceled RPCs. Every operation now gets a fresh bounded process instead. */
 export function getBuilderSandbox(
   namespace: DurableObjectNamespace<WorkerBuilderDurableObject>,
-  buildKey: string,
-  attempt = 0,
+  member: string,
 ): WorkerBuilderDurableObject {
-  return getSandbox(namespace, builderPoolMember(buildKey, attempt));
+  return getSandbox(namespace, member, { enableDefaultSession: false });
 }

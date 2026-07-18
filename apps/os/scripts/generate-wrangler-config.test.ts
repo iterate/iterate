@@ -4,6 +4,7 @@ import { envs } from "../../../envs.ts";
 import {
   OS_CONTAINER_CLASS_NAMES,
   workerBuilderWorkerName,
+  WORKER_BUILD_COORDINATOR_CLASS_NAME,
   WORKER_BUILDER_CONTAINER_CLASS_NAME,
 } from "./container-class-names.ts";
 import {
@@ -75,7 +76,7 @@ it("binds the builder namespace externally without reviving its old service API"
   const builderSidecarNames = Object.values(builderConfig.env).map((sidecar) => sidecar.name);
   for (const [envName, envBlock] of Object.entries(config.env)) {
     // The retired esbuild-wasm BUILDER service API stays gone. Its route-less
-    // script name is reused only to host the new container-backed DO pool.
+    // script name now hosts the technology-neutral coordinator and backend.
     expect(
       envBlock.services.find((service) => service.binding === "BUILDER"),
       envName,
@@ -86,7 +87,7 @@ it("binds the builder namespace externally without reviving its old service API"
       envName,
     ).toEqual({
       name: "WORKER_BUILDER",
-      class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+      class_name: WORKER_BUILD_COORDINATOR_CLASS_NAME,
       script_name: builderWorkerName,
     });
     expect(builderSidecarNames, envName).toContain(builderWorkerName);
@@ -116,11 +117,11 @@ it("hosts the worker-builder pool only on its dedicated sidecar", async () => {
     expect(builderEnvBlock.containers[0], envName).toMatchObject({
       class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
       max_instances: WORKER_BUILDER_POOL_SIZE,
-      instance_type: "standard-3",
+      instance_type: "standard-4",
     });
     expect(builderEnvBlock.durable_objects.bindings, envName).toEqual([
       {
-        name: "WORKER_BUILDER",
+        name: "WORKER_BUILDER_SANDBOX",
         class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
       },
     ]);
@@ -129,6 +130,7 @@ it("hosts the worker-builder pool only on its dedicated sidecar", async () => {
     );
   }
   expect(builderConfig.exports).toEqual({
+    [WORKER_BUILD_COORDINATOR_CLASS_NAME]: { type: "durable-object", storage: "sqlite" },
     [WORKER_BUILDER_CONTAINER_CLASS_NAME]: { type: "durable-object", storage: "sqlite" },
   });
 });
@@ -301,15 +303,19 @@ it("keeps deployed sandbox capacity within account quota", () => {
     }
   }
 
-  // A preview slot's fleet reserves well under production's — ten slots share
-  // one account quota.
-  expect(
-    reservedGib([
-      ...(config.env.preview_6.containers ?? []),
-      ...builderConfig.env.preview_6.containers,
-    ]),
-  ).toBeLessThan(100);
-  expect(
-    reservedGib([...(config.env.prd.containers ?? []), ...builderConfig.env.prd.containers]),
-  ).toBeLessThan(300);
+  const previewSlotGib = reservedGib([
+    ...(config.env.preview_6.containers ?? []),
+    ...builderConfig.env.preview_6.containers,
+  ]);
+  const productionGib = reservedGib([
+    ...(config.env.prd.containers ?? []),
+    ...builderConfig.env.prd.containers,
+  ]);
+
+  expect(previewSlotGib).toBe(115);
+  expect(productionGib).toBe(306.5);
+  // The preview account's live concurrent-memory quota is 6 TiB. Fifteen
+  // simultaneously eligible slots reserve only 1.725 TiB, leaving the test's
+  // required PR-churn scenario comfortably below the placement boundary.
+  expect(previewSlotGib * 15).toBeLessThan(6 * 1024);
 });

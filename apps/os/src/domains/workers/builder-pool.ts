@@ -7,7 +7,7 @@
 export const WORKER_BUILDER_POOL_SIZE = 4;
 
 /** The pool member that owns a build key — stable so retries of one key land
- * on the member whose npm cache they already warmed, spread so unrelated
+ * on the member whose pnpm store they already warmed, spread so unrelated
  * builds use the whole pool. `attempt` shifts to the next member in ring
  * order: affinity is a warmth optimization, but a member whose container is
  * sick (hung toolchain install, dead placement) would otherwise own its

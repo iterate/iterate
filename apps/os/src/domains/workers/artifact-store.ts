@@ -65,8 +65,8 @@ function inFlightKey(buildKey: string) {
  * How long a recorded build failure short-circuits every caller without
  * re-running the failed build. A build key is content-addressed, so a genuine
  * compile/install failure is deterministic for that key and a fix always
- * commits a NEW key — the TTL exists only so a transient failure mislabelled
- * as genuine (npm weather during install) heals on its own. It must be LONG:
+ * commits a NEW key — the TTL exists only so a transient registry failure
+ * mislabelled as genuine during install heals on its own. It must be LONG:
  * abandoned projects with broken heads retry delivery forever, and each TTL
  * expiry costs a real builder-container rebuild whose exec resets the
  * container's idle timer. At 120s that loop kept one warm container per
@@ -149,16 +149,15 @@ export class KvWorkerBuildArtifactStore {
   ) {}
 
   /**
-   * Best-effort duplicate-build suppression for BUDGETED callers only: the
-   * building-page refresh loop would otherwise dispatch a fresh full build
-   * every ~18s per open tab while a slow cold build runs. Budgeted callers
-   * can answer "still building" from the marker without work; blocking
-   * callers ignore it (they need a result and idempotent duplicate builds
-   * are their fallback — waiting on ANOTHER isolate's build via this marker
-   * was tried and reverted: KV negative-caches the missing artifact key per
-   * colo, so waiters stall instead of converging; worker-loader's stampede
-   * guard is in-isolate only). Best-effort because KV propagation is
-   * eventually consistent — a missed marker just means a duplicate build.
+   * Best-effort redundant-request suppression for BUDGETED callers only: the
+   * building-page refresh loop would otherwise resend the full source to the
+   * coordinator every ~18s per open tab while a slow cold build runs.
+   * Budgeted callers can answer "still building" from the marker without
+   * work; blocking callers ignore it because they need a result (their
+   * coordinator calls coalesce by key). Waiting on ANOTHER isolate's artifact
+   * via this marker was tried and reverted: KV negative-caches the missing key
+   * per colo, so waiters stall instead of converging. Best-effort because KV
+   * propagation is eventually consistent; a missed marker is still correct.
    */
   async isBuildInFlight(buildKey: string): Promise<boolean> {
     return (await this.kv.get(inFlightKey(buildKey), "text")) !== null;

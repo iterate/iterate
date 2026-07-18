@@ -55,8 +55,8 @@ export interface Env {
    * Local dev only: the vite dev server's `/__dev/worker-build` endpoint URL
    * (generate-wrangler-config.ts sets it under `pnpm dev`). When present,
    * dynamic worker builds run the shared build recipe on the HOST toolchain
-   * via this endpoint instead of the project's builder sandbox — local dev
-   * has no containers. Never set in deployed envs.
+   * via this endpoint instead of the deployment build service — local dev has
+   * no containers. Never set in deployed envs.
    */
   WORKER_BUILD_DEV_ENDPOINT?: string;
   /**
@@ -108,13 +108,12 @@ export interface Env {
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
   >;
   /**
-   * The deployment's worker-builder pool — stock SDK sandboxes that run every
-   * dynamic-worker build. Platform infrastructure, not project sandboxes: no
-   * catalogue, no streams, and project code can never reach this binding
-   * (src/domains/workers/builder-pool.ts).
+   * The deployment-global dynamic-worker build coordinator. Callers see one
+   * technology-neutral build capability; its route-less sidecar currently
+   * implements that capability with a private fixed Cloudflare Sandbox pool.
    */
   WORKER_BUILDER: DurableObjectNamespace<
-    import("./domains/workers/builder-pool-sandbox.ts").WorkerBuilderDurableObject
+    import("./domains/workers/worker-build-coordinator-durable-object.ts").WorkerBuildCoordinatorDurableObject
   >;
   /**
    * Workspace persistence for sandbox containers. Container disk is
