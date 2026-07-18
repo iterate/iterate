@@ -5,7 +5,7 @@ import type {
   PosthogProperties,
 } from "@iterate-com/ui/components/posthog";
 
-export type RouteProject = {
+type RouteProject = {
   id: string;
   organizationId: string | null;
   slug: string;
