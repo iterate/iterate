@@ -106,10 +106,15 @@ return {
     code: `
 // A stream is addressed by a path within the project. append() commits the
 // events and returns them with their assigned offsets.
-const stream = itx.streams.get(vars.path ?? "/repl/demo");
+const path = vars.path ?? "/repl/demo";
+const note = vars.note ?? "hello from the REPL";
+const stream = itx.streams.get(path);
 const [appended] = await stream.append({
+  // This example models one logical note, so a lifecycle replay returns
+  // the first commit instead of duplicating it.
+  idempotencyKey: \`repl-demo:\${JSON.stringify([path, note])}\`,
   type: "events.iterate.repl/demo",
-  payload: { note: vars.note ?? "hello from the REPL" },
+  payload: { note },
 });
 
 // Read the whole path back. Streams also carry platform lifecycle events

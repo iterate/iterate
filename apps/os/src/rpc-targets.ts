@@ -1143,12 +1143,34 @@ function streamDurableObjectName(props: { projectId: string | null; path: string
   return DurableObjectNameCodec.stringify(props, { allowNullProjectId: true });
 }
 
+function retryIdempotentDurableObjectRead<Result>(args: {
+  call: () => Promise<Result>;
+  operation: string;
+  path: string;
+  projectId: string;
+}): Promise<Result> {
+  return retryIdempotentDurableObjectOperation({
+    operation: args.call,
+    onRetry: ({ attempt, error, maxAttempts }) => {
+      console.info("idempotent Durable Object read retrying after lifecycle reset", {
+        attempt,
+        error,
+        maxAttempts,
+        operation: args.operation,
+        path: args.path,
+        projectId: args.projectId,
+      });
+    },
+  });
+}
+
 async function requestRepoCreate(input: {
   auth: ItxAuth;
   path: string;
   projectId: string | null;
 }): Promise<RepoRpcTarget> {
   const path = normalizePath(input.path);
+  const durableObjectName = streamDurableObjectName({ projectId: input.projectId, path });
   const stream = new StreamRpcTarget({
     auth: input.auth,
     path,
@@ -1163,7 +1185,8 @@ async function requestRepoCreate(input: {
         payload: { config: {} },
       },
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+        durableObjectName,
+        idempotencyKey: `stream/subscription-configured:${durableObjectName}#${RepoProcessorContract.slug}`,
         processor: ["repos", ["get", path], "processor"],
         processorSlug: RepoProcessorContract.slug,
       }),
@@ -5093,6 +5116,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       auth: this.props.auth,
       projectId: args.projectId,
     });
+    const projectDurableObjectName = streamDurableObjectName({
+      projectId: registered.projectId,
+      path: "/",
+    });
 
     const creatorEmail = userPrincipalOf(this.props.auth)?.email;
     const appendRootEvents = () =>
@@ -5109,10 +5136,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
           },
         },
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
-          }),
+          durableObjectName: projectDurableObjectName,
+          idempotencyKey: `stream/subscription-configured:${projectDurableObjectName}#${ProjectProcessorContract.slug}`,
           processor: ["processor"],
           processorSlug: ProjectProcessorContract.slug,
         }),
@@ -5439,7 +5464,12 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   async __describe(): Promise<
     Description & { capabilities: CapabilityDescription[]; path: string }
   > {
-    const capabilities = await this.#durableObject.describeCapabilities();
+    const capabilities = await retryIdempotentDurableObjectRead({
+      call: async () => await this.#durableObject.describeCapabilities(),
+      operation: "capability-host.describeCapabilities",
+      path: this.#props.path,
+      projectId: this.#props.projectId,
+    });
     // (DO method name: describeCapabilities — it returns the raw array; the
     // Description envelope is assembled here, where the scope context lives.)
     return describeNode({
@@ -5732,7 +5762,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#props.capabilityHost.path;
     const [project, hostDescription] = await Promise.all([
-      this.durableObjectStub.describe(),
+      retryIdempotentDurableObjectRead({
+        call: async () => await this.durableObjectStub.describe(),
+        operation: "project.describe",
+        path: scopePath,
+        projectId: this.#props.projectId,
+      }),
       this.#props.capabilityHost.__describe(),
     ]);
     const mountedCapabilities = hostDescription.capabilities;

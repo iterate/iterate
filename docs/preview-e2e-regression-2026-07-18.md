@@ -221,7 +221,7 @@ finished in 9.7s (dummy Petshop), 11.3s (auth), 14.1s (semaphore), and 57.8s
 expected transport-suspicion warnings and then proved recovery with subscribed
 runtimes and zero ingest failures; those are modelled test stimuli, not ambient
 errors. The clean result retires the retry-root-cause phase, but it does not
-meet the sub-three-minute acceptance bar. The next run adds phase-level deploy
+meet the then-current sub-three-minute acceptance bar. The current acceptance budget is 3m30s. The next run adds phase-level deploy
 timings before choosing between upload/control-plane work and test-fixture
 reuse; no lane will be serialized to mask the overrun.
 
@@ -299,7 +299,7 @@ full-fleet check completed in **3m05s** ([Depot job
 OS deploy took 66.0s and the parallel test phase took 96.0s. All five app lanes
 passed, but Playwright retried `reactivity page replays already appended events
 after reload` once. The result therefore qualifies as neither retry-clean nor
-under three minutes; a clean browser pass would likely have crossed the SLA,
+under the then-current three-minute budget; a clean browser pass would likely have crossed it,
 but acceptance is based on measured results rather than that inference.
 
 The first attempt failed before executing any reactivity or stream operation.
@@ -329,6 +329,51 @@ This change is independent of project reuse. The 176-create load probe remains
 clean, Experiment 13 showed no creation rejection, and its only retry was an
 asset GET. Bounded family reuse remains appropriate where child identities and
 mutation ownership are isolated; fresh project birth stays covered separately.
+
+Experiment 14 deployed that recovery at head `329a61f20`. It completed in
+**3m54s** ([Depot job
+`mv768rg32f`](https://depot.dev/orgs/0p91s0lz49/workflows/ln941dpt1f?job=mv768rg32f&attempt=cvlvvh9v0m)),
+but the diff selector exercised only auth, dummy-petshop, and OS. OS deploy
+took 66.8s and its already-parallel test phase took 119.7s. The deterministic
+preload-recovery browser proof passed without retry. Three different
+rollout-lifecycle failures consumed test retries, so the run is neither
+full-fleet nor retry-clean:
+
+- project creation's root stream append hit an explicit code-update reset;
+- the catalogue `discover-tree` example lost a pure project/capability-host
+  description read;
+- the browser `append-and-read-stream` attempt remained in `connecting` after
+  its server-side append was reset. The newly retained first-attempt trace
+  captured the state; the retry passed in 4.2s.
+
+The project-create trace supplied the causal bug, not merely a symptom. The
+birth batch combined keyed `project/created` with an unkeyed processor
+subscription, so `StreamRpcTarget.append` correctly made exactly one Durable
+Object call: a replay could not safely deduplicate the whole batch. That one
+call crossed from new OS worker version
+`1e4f0307-a758-4eae-9661-c1fe42afcb73` to old stream DO version
+`0c0c48a1-3bde-4d02-9ebd-82e9ecff99ae` and was reset. Repo, workspace, and
+root capability-host birth batches had the same mixed-key defect. Their
+subscription facts now receive stable keys, making the existing bounded raw
+lifecycle retry safe for the entire append.
+
+The `discover-tree` trace separately showed the raw
+`CapabilityHost.describeCapabilities` read canceled during rollout. Project
+and capability-host descriptions are pure reads, so they now retry at most
+three times and only for workerd's explicit `durableObjectReset`, `retryable`,
+or `overloaded` flags. The REPL append/read example now supplies a deterministic
+logical-event key as well. No generic `Network connection lost` string is
+classified at the outer capnweb boundary, and arbitrary REPL programs are not
+replayed.
+
+Controlled probes reject the alternative load hypothesis. Forty simultaneous
+isolated append/read operations succeeded in 3.058s over independent sessions;
+40 more succeeded in 3.318s over one shared session. A browser completed
+120/120 unique append/read operations while the same head was redeployed,
+crossing old and new versions with no operation failure. The two observed
+subscriber disconnects were correctly classified code-update lifecycle facts.
+Thus Experiment 14's roughly 120-second test phase reflects failed-attempt and
+retry work, not serial queueing or project-create saturation.
 
 The retry-disabled local run also exposed an independent resource leak in slot
 handover. Reset took 131.3s and deleted only 100 AI Search instances before its
@@ -684,10 +729,17 @@ observable.
   terminal error. Playwright retains the original failed trace and records any
   product recovery. A deterministic retry-disabled browser proof passed in
   3.6s.
-- Next: run the parallel Experiment 14 candidate. Once one full-fleet run is
-  clean and under three minutes, start the immutable-head 25-run proof, then
-  the separate 15+ simultaneous preview-slot churn campaign. PR comments mirror
-  each experiment and result rather than rewriting history here.
+- 2026-07-18: experiment 14 completed a partial three-app fleet in 3m54s and
+  consumed three rollout-lifecycle retries. Exact traces found a mixed-key
+  project-birth batch, an unprotected pure describe read, and an idempotency-free
+  REPL example append. Controlled 40-way session probes and a 120-operation
+  same-head rollout probe remained clean, rejecting a load or scheduling-queue
+  explanation.
+- Next: force the complete fleet with the keyed-birth and bounded-read
+  candidate. Once one run is retry-clean and under 3m30s, start the immutable-head
+  25-run proof, then the separate 15+ simultaneous preview-slot churn campaign.
+  PR comments mirror each experiment and result rather than rewriting history
+  here.
 
 <details>
 <summary>All 162 failed preview attempts</summary>

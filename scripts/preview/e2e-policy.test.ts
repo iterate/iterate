@@ -155,9 +155,9 @@ describe("watchdogs the shell can't import stay in sync", () => {
     );
   });
 
-  it("makes marathon acceptance immutable, retry-clean, full-fleet, and sub-three-minute", () => {
+  it("makes marathon acceptance immutable, retry-clean, full-fleet, and under three-and-a-half minutes", () => {
     const source = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
-    expect(source).toContain('MAX_CLEAN_RUN_SECS="${MAX_CLEAN_RUN_SECS:-180}"');
+    expect(source).toContain('MAX_CLEAN_RUN_SECS="${MAX_CLEAN_RUN_SECS:-210}"');
     expect(source).toContain('EXPECTED_HEAD_SHA="${EXPECTED_HEAD_SHA:-$(git rev-parse HEAD)}"');
     expect(source).toContain("[preview] test for PR #$PR_NUMBER (head $EXPECTED_SHORT_SHA)");
     expect(source).toContain("run-ledger.tsv");

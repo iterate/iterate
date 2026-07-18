@@ -91,6 +91,7 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/capability-host/created",
       "events.iterate.com/stream/subscription-configured",
     ]);
+    expect(network.eventsAt("/")[2]?.idempotencyKey).toContain("#capability-host");
     expect(network.eventsAt("/scheduler/primary").map((event) => event.type)).toEqual([
       "events.iterate.com/scheduler/created",
       "events.iterate.com/stream/subscription-configured",

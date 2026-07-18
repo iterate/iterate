@@ -135,6 +135,10 @@ export class ProjectProcessor extends StreamProcessor<
               `project create: search instance ensure failed (lazy self-heal remains): ${String(error).slice(0, 200)}`,
             );
           });
+          const rootCapabilityHostDurableObjectName = DurableObjectNameCodec.stringify({
+            projectId: this.deps.itx.projectId,
+            path: "/",
+          });
           const siblingBirths = Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -145,10 +149,8 @@ export class ProjectProcessor extends StreamProcessor<
                   payload: { config: {}, fallback: capabilityFallbackForScope("/") },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.itx.projectId,
-                    path: "/",
-                  }),
+                  durableObjectName: rootCapabilityHostDurableObjectName,
+                  idempotencyKey: `stream/subscription-configured:${rootCapabilityHostDurableObjectName}#${CapabilityHostProcessorContract.slug}`,
                   processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
                 }),

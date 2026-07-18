@@ -47,10 +47,9 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
  * config cannot smuggle cross-project reach, structurally.
  *
  * The default `subscriptionKey` is `${durableObjectName}#${processorSlug}` and
- * should be treated as opaque. `idempotencyKey` is an optional pass-through for
- * unusual repair/debug flows; normal bootstrap call sites intentionally omit it
- * so repeated configuration appends remain visible in the event log while
- * debugging failed subscription setup.
+ * should be treated as opaque. `idempotencyKey` is an optional pass-through.
+ * Lifecycle-replay-safe bootstrap batches supply a stable key; deliberate
+ * reconfiguration may omit it when each append must remain visible in the log.
  */
 export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
   durableObjectName: string;

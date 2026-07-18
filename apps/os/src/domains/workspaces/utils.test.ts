@@ -3,6 +3,7 @@ import {
   agentWorkspacePath,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
+  workspaceCreationEvents,
 } from "./utils.ts";
 
 describe("normalizeWorkspacePath", () => {
@@ -65,5 +66,18 @@ describe("normalizeWorkspaceMountKeys", () => {
     expect(normalizeWorkspaceMountKeys({ "/a": { policy: "read-only" } })).toEqual({
       "/a": { policy: "read-only" },
     });
+  });
+});
+
+describe("workspaceCreationEvents", () => {
+  test("makes the complete birth batch safe to replay after a lifecycle reset", () => {
+    const events = workspaceCreationEvents({
+      path: "/workspaces/demo",
+      projectId: "prj_test",
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events.every((event) => event.idempotencyKey !== undefined)).toBe(true);
+    expect(events[1]?.idempotencyKey).toContain("#workspace");
   });
 });

@@ -106,6 +106,10 @@ export function normalizeWorkspaceMountKeys<
  * are `workspace/configured` patches on top, never certificate variants.
  */
 export function workspaceCreationEvents(input: { path: string; projectId: string }) {
+  const durableObjectName = DurableObjectNameCodec.stringify({
+    path: input.path,
+    projectId: input.projectId,
+  });
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
@@ -116,10 +120,8 @@ export function workspaceCreationEvents(input: { path: string; projectId: string
       payload: { config: { mounts: defaultWorkspaceMounts() } },
     }),
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: DurableObjectNameCodec.stringify({
-        path: input.path,
-        projectId: input.projectId,
-      }),
+      durableObjectName,
+      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${WorkspaceProcessorContract.slug}`,
       processor: ["workspaces", ["get", input.path], "processor"],
       processorSlug: WorkspaceProcessorContract.slug,
     }),
