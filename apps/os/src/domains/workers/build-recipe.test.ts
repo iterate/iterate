@@ -36,12 +36,14 @@ describe("workerBuildRecipe", () => {
       files: templateFiles,
       options: { entryPoint: "worker.ts" },
     });
-    expect(withPackage.commands.map((step) => step.command.split(" ")[0])).toEqual([
-      "npm",
-      "WRANGLER_SEND_METRICS=false",
-    ]);
-    expect(withPackage.commands[0]!.command).toContain("--ignore-scripts");
-    expect(withPackage.commands[0]!.command).toContain("--omit=dev");
+    expect(withPackage.commands).toHaveLength(2);
+    expect(withPackage.commands[1]!.command).toContain("WRANGLER_SEND_METRICS=false wrangler");
+    // The install step is nub-first with an npm fallback; BOTH lanes must
+    // keep the no-lifecycle-scripts security property and skip dev deps.
+    const install = withPackage.commands[0]!.command;
+    expect(install).toContain("nub install --ignore-scripts --prod");
+    expect(install).toContain("|| npm install --ignore-scripts");
+    expect(install).toContain("--omit=dev");
 
     const withoutPackage = workerBuildRecipe({
       files: { "worker.ts": "export default {};" },

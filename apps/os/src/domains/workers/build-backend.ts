@@ -2,6 +2,7 @@ import { itxEnv as env } from "../../env.ts";
 import { buildFailureMessageFromError, WorkerBuildFailedError } from "./artifact-store.ts";
 import {
   collectRecipeOutputs,
+  NUB_VERSION,
   workerBuildRecipe,
   WRANGLER_VERSION,
   type WorkerBuildRecipe,
@@ -141,9 +142,15 @@ async function buildOnPoolMember(
     // re-check, and skip. The coreutils-timeout wrap kills a genuinely hung
     // install IN the container (the SDK timeout alone leaves the orphan npm
     // holding the lock for the next attempt).
+    // The toolchain is wrangler (the bundler) plus nub (the fast install lane
+    // the recipe tries first — build-recipe.ts NUB_VERSION). One guarded npm
+    // command installs both; @nubjs/nub's postinstall fetches its platform
+    // binary, so scripts are explicitly enabled for this TRUSTED toolchain
+    // install only — recipe installs of project dependencies keep
+    // --ignore-scripts.
     const toolchain = await session.exec(
       withCommandTimeout(
-        `command -v wrangler >/dev/null || flock /tmp/.builder-toolchain.lock sh -c 'command -v wrangler >/dev/null || npm install -g wrangler@${WRANGLER_VERSION} --no-audit --no-fund'`,
+        `{ command -v wrangler >/dev/null && command -v nub >/dev/null; } || flock /tmp/.builder-toolchain.lock sh -c '{ command -v wrangler >/dev/null && command -v nub >/dev/null; } || npm install -g wrangler@${WRANGLER_VERSION} @nubjs/nub@${NUB_VERSION} --no-audit --no-fund --ignore-scripts=false'`,
         TOOLCHAIN_TIMEOUT_MS,
       ),
       { timeout: TOOLCHAIN_TIMEOUT_MS + 30_000 },
