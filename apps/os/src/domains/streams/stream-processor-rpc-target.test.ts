@@ -16,6 +16,7 @@ describe("StreamRpcTarget", () => {
         subscriptions: {},
         metrics: {
           measuredSince: new Date(0).toISOString(),
+          reportedAt: new Date(0).toISOString(),
           ingress: {},
           egress: {},
         },

@@ -134,6 +134,7 @@ function streamRuntimeState(maxOffset: number): StreamRuntimePanelState {
       subscriptions: {},
       metrics: {
         measuredSince: "2026-07-18T00:00:00.000Z",
+        reportedAt: "2026-07-18T00:00:00.000Z",
         ingress: {
           bytesPerSecond5s: 0,
           perSecond5s: 0,

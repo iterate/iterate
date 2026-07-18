@@ -3981,10 +3981,12 @@ export type SubscriptionRuntimeState = {
   deliveryDurationMs?: LatencyStats;
 };
 
-/** What `runtimeState()` reports for the stream's own throughput. */
+/** What a stream runtime snapshot reports for the stream's own throughput. */
 export type StreamThroughputMetrics = {
   /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
   measuredSince: string;
+  /** ISO timestamp anchoring the trailing windows and final series bucket. */
+  reportedAt: string;
   /** Appends committed (all producers). */
   ingress: ThroughputReport;
   /** Deliveries dispatched (all lanes, all subscribers). */

@@ -2135,8 +2135,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamThroughputMetrics",
     kind: "typeAlias",
     sourceText:
-      "/** What `runtimeState()` reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
-    summary: "What `runtimeState()` reports for the stream's own throughput.",
+      "/** What a stream runtime snapshot reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** ISO timestamp anchoring the trailing windows and final series bucket. */\n  reportedAt: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
+    summary: "What a stream runtime snapshot reports for the stream's own throughput.",
     memberSummaries: {},
     referencedTypeNames: ["ThroughputReport"],
   },

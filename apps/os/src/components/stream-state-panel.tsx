@@ -10,7 +10,7 @@ import type {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { ProcessorRuntimeState } from "iterate/processors";
+import { ageStreamThroughputMetrics, type ProcessorRuntimeState } from "iterate/processors";
 import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
 import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
@@ -21,6 +21,7 @@ import {
   SectionHeading,
 } from "~/components/stream-processor-pretty-state.tsx";
 import { readNumber, readRuntimeRecord } from "~/lib/runtime-record.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import {
   presenceColorClasses,
   presenceInitials,
@@ -376,7 +377,22 @@ function ProcessorsOverview({
   const sections = processorEntrySections(entries);
   const rtt = metrics.transportRttMs;
   const subscriber = metrics.subscriber;
-  const throughput = streamRuntime?.runtime.metrics;
+  const throughputSnapshot = streamRuntime?.runtime.metrics;
+  const throughputReportedAtMs = Date.parse(throughputSnapshot?.reportedAt ?? "");
+  const canAgeThroughput =
+    throughputSnapshot !== undefined && Number.isFinite(throughputReportedAtMs);
+  const throughputNowMs = useTickingNowMs(
+    1_000,
+    canAgeThroughput,
+    canAgeThroughput ? throughputReportedAtMs + 60_000 : null,
+  );
+  const throughput = useMemo(
+    () =>
+      throughputSnapshot === undefined
+        ? undefined
+        : ageStreamThroughputMetrics(throughputSnapshot, throughputNowMs),
+    [throughputNowMs, throughputSnapshot],
+  );
   const coreState = streamRuntime?.coreProcessorState;
   const createdAt = readRuntimeRecord(coreState)?.createdAt;
   const serverEventCount = readNumber(coreState, "eventCount");
