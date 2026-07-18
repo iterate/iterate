@@ -186,9 +186,15 @@ async function buildOnPoolMember(
       }
     }
 
-    // `ls -1` instead of the SDK's listFiles: the output directory is flat by
-    // construction (wrangler bundles into it) and a name list is all we need.
-    const listing = await session.exec(`ls -1 '${recipe.outputDir}'`, {
+    // `ls -1A` instead of the SDK's listFiles: the output directory is flat
+    // by construction (wrangler bundles into it) and a name list is all we
+    // need. The -A is LOAD-BEARING: the entry module is dot-named
+    // (`.iterate-build.entry.js`), and plain `ls -1` hides dotfiles — which
+    // made every real bundling build on the pool report "did not produce the
+    // entry module (got: nothing)" while the bundle sat in the directory
+    // (observed live across five e2e runs; reproduced byte-for-byte in the
+    // stock image).
+    const listing = await session.exec(`ls -1A '${recipe.outputDir}'`, {
       cwd: buildDir,
       timeout: 30_000,
     });
