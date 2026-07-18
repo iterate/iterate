@@ -128,9 +128,14 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   // idempotencyKey makes cross-incarnation and cross-door races collapse).
   #birth: Promise<void> | undefined;
 
-  /** Pull the fold current; append the birth certificate on first touch. */
+  /** Pull the fold current; append the birth certificate on first touch.
+   * STRICT catch-up (throws): every public operation routes and classifies
+   * against `currentState.config`, and a swallowed catch-up failure would let
+   * it proceed on a stale mount table — misrouting reads and commits — when a
+   * committed `configured` event exists but has not folded. Failing the
+   * operation loudly is the only safe disposition. */
   async #ensureCreated(): Promise<void> {
-    await this.#registry.catchUp(PROCESSOR_SLUG);
+    await this.#reads.catchUp();
     if (this.#reads.currentState.birthCertificate !== null) return;
     if (this.#birth === undefined) {
       this.#birth = (async () => {
@@ -138,7 +143,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           ...workspaceCreationEvents({ path: this.#name.path, projectId: this.#name.projectId }),
         );
         const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-        await this.#registry.catchUp(PROCESSOR_SLUG);
+        await this.#reads.catchUp();
         await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
       })().catch((error: unknown) => {
         this.#birth = undefined;
@@ -159,12 +164,20 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     plan: (current: WorkspaceConfig) => WorkspaceConfigPatch | null,
   ): Promise<WorkspaceConfig> {
     for (let attempt = 1; attempt <= MAX_CONFIGURE_ATTEMPTS; attempt++) {
-      // Pin the RAW stream head (ephemeral rows hold offsets too, so the
-      // fold's own offset can trail the assignable head), then force the fold
-      // through it — waitUntilEvent THROWS on a wedged catch-up, so a stale
-      // runner can never validate a plan or report convergence silently.
-      const rawHead = await this.#stream.durableObjectStub.getMaxOffset();
-      await this.#reads.waitUntilEvent({ offset: rawHead, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
+      // Pin BOTH heads in one read: the fold barrier waits for the DURABLE
+      // head — a processor catch-up never sees ephemeral rows, so waiting for
+      // the raw head would wedge on a trailing ephemeral suffix — while the
+      // CAS below asserts against the RAW head, where offsets are actually
+      // assigned. waitUntilEvent THROWS on a wedged catch-up, so a stale
+      // runner can never validate a plan or report convergence silently; the
+      // exact-offset append turns any raw/durable skew into a plain conflict
+      // retry.
+      const { maxDurableOffset, maxOffset: rawHead } =
+        await this.#stream.durableObjectStub.getHeadOffsets();
+      await this.#reads.waitUntilEvent({
+        offset: maxDurableOffset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
       const current = this.#currentConfig();
       const patch = plan(current);
       if (patch === null) return current;
@@ -180,7 +193,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           }),
           offset: rawHead + 1,
         } as StreamEventInput);
-        await this.#registry.catchUp(PROCESSOR_SLUG);
+        await this.#reads.catchUp();
         await this.#reads.waitUntilEvent({
           offset: event!.offset,
           timeoutMs: INGEST_WAIT_TIMEOUT_MS,

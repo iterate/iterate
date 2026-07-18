@@ -74,7 +74,7 @@ function acceptingFetch(requests: CapturedRequest[] = []) {
   });
 }
 
-function captureArgs(events: StreamEvent[], workerName = "os-preview-6") {
+function captureArgs(events: StreamEvent[], workerName = "os-prd") {
   return {
     apiKey: "phc_test",
     batch: batch(events),
@@ -140,6 +140,16 @@ describe("first-party PostHog stream integration", () => {
         stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
     });
+  });
+
+  it("does not export stream events from dev or preview deployments", async () => {
+    for (const workerName of ["os", "os-preview-6"]) {
+      const captureFetch = acceptingFetch();
+      await capturePosthogStreamEventBatch(captureArgs([streamEvent()], workerName), {
+        fetch: captureFetch,
+      });
+      expect(captureFetch).not.toHaveBeenCalled();
+    }
   });
 
   it("drops ephemeral rows from capture, including all-ephemeral batches", async () => {
@@ -265,23 +275,18 @@ describe("first-party PostHog stream integration", () => {
     });
   });
 
-  it("keeps source identity stable on retry and distinct between deployments", async () => {
+  it("keeps source identity stable on retry", async () => {
     const first: CapturedRequest[] = [];
     const retry: CapturedRequest[] = [];
-    const production: CapturedRequest[] = [];
     await capturePosthogStreamEventBatch(captureArgs([streamEvent()]), {
       fetch: acceptingFetch(first),
     });
     await capturePosthogStreamEventBatch(captureArgs([streamEvent()]), {
       fetch: acceptingFetch(retry),
     });
-    await capturePosthogStreamEventBatch(captureArgs([streamEvent()], "os"), {
-      fetch: acceptingFetch(production),
-    });
 
     expect(first[0]!.batch[0]!.uuid).toBe(retry[0]!.batch[0]!.uuid);
     expect(first[0]!.batch[0]!.timestamp).toBe(retry[0]!.batch[0]!.timestamp);
-    expect(first[0]!.batch[0]!.uuid).not.toBe(production[0]!.batch[0]!.uuid);
   });
 
   it("rejects malformed source timestamps and non-2xx capture responses", async () => {
