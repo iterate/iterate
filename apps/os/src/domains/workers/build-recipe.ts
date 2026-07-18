@@ -68,7 +68,20 @@ export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
  * inside wrangler — there is no separate bundler pin.
  */
 export const WRANGLER_VERSION = "4.107.0";
-export const BUILD_TOOLCHAIN_VERSION = `wrangler@${WRANGLER_VERSION}`;
+
+/**
+ * The nub pin (https://github.com/nubjs/nub): a Rust package manager whose
+ * `install` is an order of magnitude faster than npm's for the trees it can
+ * resolve. The install command below runs nub FIRST and falls back to npm on
+ * any nonzero exit or when nub is absent — nub's resolver is stricter than
+ * npm's (observed live: react-dom@19.2.x's `scheduler@^0.27.0` has no stable
+ * satisfying version, npm accommodates, nub refuses), and the host/dev/seeder
+ * lanes may not have nub installed at all. npm reconciles whatever a failed
+ * nub attempt left behind, so the fallback is always safe. The container lane
+ * installs this pin in its toolchain step (build-backend.ts).
+ */
+export const NUB_VERSION = "0.4.13";
+export const BUILD_TOOLCHAIN_VERSION = `wrangler@${WRANGLER_VERSION}+nub@${NUB_VERSION}`;
 
 /**
  * Everything the recipe generates lives under this reserved name prefix in
@@ -177,14 +190,20 @@ export function workerBuildRecipe(input: {
       ...("package.json" in input.files
         ? [
             {
-              // --prefer-offline: resolve from the runner's npm cache without
-              // registry freshness checks — on a warm builder-pool member this
-              // is the difference between ~23s and a few seconds per build,
-              // and delivery to a freshly committed worker waits on exactly
-              // this step. (NOT --no-package-lock: that would also stop npm
-              // READING a committed lockfile, and lockfiles are honored here.)
+              // nub first (pinned in the container toolchain; an order of
+              // magnitude faster and flag-compatible: --ignore-scripts is the
+              // same security property, --prod = --omit=dev, lockfiles are
+              // honored, --node-linker hoisted keeps npm's physical layout),
+              // npm as the fallback for a nub failure or a lane without nub —
+              // see NUB_VERSION above. npm's --prefer-offline: resolve from
+              // the runner's cache without registry freshness checks — on a
+              // warm builder-pool member this is the difference between ~23s
+              // and a few seconds per build, and delivery to a freshly
+              // committed worker waits on exactly this step. (NOT
+              // --no-package-lock: that would also stop npm READING a
+              // committed lockfile, and lockfiles are honored here.)
               command:
-                "npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline",
+                "{ command -v nub >/dev/null && nub install --ignore-scripts --prod --prefer-offline --node-linker hoisted; } || npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline",
               timeoutMs: NPM_INSTALL_TIMEOUT_MS,
             },
           ]
@@ -198,6 +217,9 @@ export function workerBuildRecipe(input: {
     ],
     files: {
       ...input.files,
+      ...("package.json" in input.files
+        ? { "package.json": withoutDevDependencies(input.files["package.json"]!) }
+        : {}),
       ...entryShim,
       [CONFIG_FILE]: JSON.stringify(config, null, 2),
       ...Object.fromEntries(
@@ -210,6 +232,27 @@ export function workerBuildRecipe(input: {
     mainModule: entryEmitName(ENTRY_SHIM_FILE),
     outputDir: OUTPUT_DIR,
   };
+}
+
+/**
+ * The build tree's package.json, with devDependencies removed. The build
+ * installs production dependencies only (--prod / --omit=dev), so dev entries
+ * are dead weight at best — and at worst they break the fast install lane
+ * outright: every seeded project repo carries the `iterate` devDependency as
+ * a pkg.pr.new URL, whose packument nub insists on resolving even under
+ * --prod (npm merely skips it). Malformed JSON passes through untouched; the
+ * install step then fails on it with npm's own error, which is the clearer
+ * message and the same genuine-build-failure classification.
+ */
+function withoutDevDependencies(packageJson: string): string {
+  try {
+    const parsed = JSON.parse(packageJson) as Record<string, unknown>;
+    if (typeof parsed !== "object" || parsed === null) return packageJson;
+    delete parsed.devDependencies;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return packageJson;
+  }
 }
 
 /**
