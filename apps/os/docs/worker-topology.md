@@ -1,8 +1,10 @@
 # Worker topology
 
-OS deploys as **one Cloudflare Worker per environment** (`os-prd`,
-`os-preview-N`): the TanStack Start dashboard, the capnweb itx API, ingress
-routing, and **all eight Durable Object classes** live in a single script.
+OS deploys one primary Cloudflare Worker per environment (`os-prd`,
+`os-preview-N`): the TanStack Start dashboard, capnweb itx API, ingress
+routing, product-state Durable Objects, and project sandbox classes live in a
+single script. Two route-less infrastructure sidecars carry the typechecker
+and the deployment-wide worker-builder pool.
 
 The entry is [`src/worker.ts`](../src/worker.ts). Its fetch handler makes the
 one hostname/path routing decision (shared logic in `src/ingress.ts`):
@@ -13,32 +15,38 @@ one hostname/path routing decision (shared logic in `src/ingress.ts`):
 | api lanes       | capnweb `/api`, operator sessions, Slack webhooks, project ingress         |
 | everything else | dashboard SSR + server functions; client assets served from Workers Assets |
 
-Durable Object classes (all same-script bindings — declared by class name in
-wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
+Main-worker Durable Object classes (same-script bindings — declared by class
+name in wrangler.jsonc, no namespace IDs): Agent,
 CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
 container-backed CloudflareSandbox (`sandbox/Dockerfile`, built by
 `wrangler deploy`).
 
-## The typechecker sidecar (the "+1")
+## Infrastructure sidecars
 
 One deliberate exception to "one worker": `itx.docs.typecheck` runs in a
 separate `os-<env>-typechecker` worker (`src/typechecker.ts`, generated
 config `wrangler.typechecker.jsonc`) — the only script carrying the
 TypeScript compiler (tswasm, ~30MB wasm), so the product script stays small.
-It is the minimum possible worker: a pure function (files in, diagnostics
+The typechecker is the minimum possible worker: a pure function (files in, diagnostics
 out) with no bindings at all. The os worker calls it via the `TYPECHECKER`
 service binding; deploy.ts deploys it first (a name binding to a missing
 script fails the deploy). Local dev runs it as a vite `auxiliaryWorkers`
 entry in the same workerd.
 
-Dynamic worker BUILDS carry no sidecar at all: on artifact-cache misses the
-os worker drives the project's builder sandbox — real `npm install` plus
-pinned wrangler inside an ordinary project container
-(`src/domains/workers/build-backend.ts`); local dev runs the identical
-recipe on the host toolchain via the dev server's `/__dev/worker-build`
-endpoint. The retired `os-<env>-builder` workers (the old esbuild-wasm
-bundler) still exist on Cloudflare — workers are never deleted — but nothing
-binds them.
+Dynamic worker builds use a fixed pool of four stock sandbox containers on the
+route-less `os-<env>-builder` sidecar. That script name deliberately reuses the
+retired esbuild-wasm builder Worker (Workers are never deleted), but none of
+its old service API survives: the primary OS Worker binds only the
+`WorkerBuilderDurableObject` namespace externally via `script_name`. The pool
+has no project credentials, catalogue entry, stream, or public route; it runs
+real `npm install --ignore-scripts` plus pinned Wrangler, with each concurrent
+build isolated in its own directory. Local dev runs the identical recipe on
+the host toolchain via `/__dev/worker-build` and does not start the sidecar.
+
+Both sidecars deploy in parallel with the main Vite build and resource
+preparation. Preview tests start only after the main upload and all seven
+container application rollouts (six project sizes plus the builder pool) are
+authoritatively complete.
 
 ## Why one worker
 
@@ -58,7 +66,7 @@ Everything is declared in two places:
 
 - [`envs.ts`](../../../envs.ts) (repo root) — the typed map of deployed
   environments: hostnames, worker names, Cloudflare account, resource IDs.
-- `wrangler.jsonc` — generated from envs.ts (gitignored; vite.config.ts
+- `wrangler{,.builder,.typechecker}.jsonc` — generated from envs.ts (gitignored; vite.config.ts
   regenerates it before every dev/build, `pnpm gen:wrangler` by hand). Top
   level is local dev; each env gets a flattened block selected at build time
   via `CLOUDFLARE_ENV`. Its header comments explain the layout.
@@ -73,7 +81,7 @@ code via `wrangler deploy --secrets-file`.
 | Command                           | What                                                                                                |
 | --------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
-| `pnpm run deploy --env preview_3` | build → deploy+secrets (one version) → smoke probe                                                  |
+| `pnpm run deploy --env preview_3` | parallel build/resources/sidecars → deploy+secrets (one version) → rollout + smoke proofs           |
 | `pnpm ensure-resources --env X`   | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                |
 | `pnpm erase-data --env X`         | wipe auth D1 rows + project-directory KV; DOs become unreachable orphans                            |
 
@@ -103,6 +111,6 @@ split creates FRESH Durable Object namespaces on the merged script — every
 existing stream/agent/project DO in that env becomes an unreachable orphan.
 That's a data reset, not a code deploy: pair it with `erase-data` and an
 auth redeploy so the env is coherently empty rather than half-remembered.
-The old `os-<env>` per-DO scripts (`os-<env>-stream`, `-agent`, …) are dead
-afterwards and can be deleted from the Cloudflare dashboard at leisure —
-deleting them cascades nothing the new world uses.
+The old `os-<env>` per-DO scripts (`os-<env>-stream`, `-agent`, …) remain
+parked and unbound. They are retained under the fleet-wide rule that Workers
+are never deleted.

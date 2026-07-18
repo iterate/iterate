@@ -43,7 +43,6 @@ type WorkerSettings = {
 };
 
 const SETTINGS_SCAN_CONCURRENCY = 10;
-
 const PARKED_WORKER_MODULE = new URL("./parked-worker/worker.js", import.meta.url);
 
 /** Deterministic 8-hex-char suffix so the same input always names the same tag. */
@@ -495,17 +494,21 @@ export async function resetWorkerDurableObjects(input: {
  * live `exports` entries and attaches the container applications — both
  * proven to work over migrations-created classes.
  *
- * No-op when every container class already exists. Throws with the repair
- * recipe when classes are missing on a worker that is already
- * exports-locked (only reachable by bypassing this bootstrap; the repair is
- * queue-consumer remove → `wrangler delete` → redeploy). Delete this whole
- * function when Cloudflare fixes exports reconciliation for containers.
+ * No-op when every container class already exists. Throws when classes are
+ * missing on a worker that is already exports-locked; callers must host a new
+ * class on a dedicated script still eligible for legacy bootstrap because
+ * Workers are never deleted. Delete this whole function when Cloudflare fixes
+ * exports reconciliation for containers.
  */
 export async function ensureContainerClasses(input: {
   ctx: CfContext;
   workerName: string;
   /** The container-bearing DO class names the app's config declares. */
   containerClassNames: string[];
+  /** Exact Wrangler-generated application names this worker will deploy.
+   * Cleanup is restricted to these names so parallel preview slots cannot
+   * delete one another's control-plane state. */
+  containerApplicationNames: string[];
   compatibilityDate: string;
 }): Promise<{ action: "skipped" | "bootstrapped"; missing: string[] }> {
   if (input.containerClassNames.length === 0) return { action: "skipped", missing: [] };
@@ -517,12 +520,10 @@ export async function ensureContainerClasses(input: {
   const liveNames = new Set(live.map((namespace) => namespace.className));
   const missing = input.containerClassNames.filter((className) => !liveNames.has(className)).sort();
 
-  // A worker recreated after `wrangler delete` leaves container applications
-  // pinned to its DELETED namespaces (wrangler never deletes applications),
-  // and an application name collision with a dead namespace fails the
-  // containers phase of the coming deploy. Sweep dangling applications
-  // unconditionally: an application whose namespace no longer exists in the
-  // account is garbage by definition.
+  // Historical worker recreation could leave an application pinned to a dead
+  // namespace, and an exact name collision then blocks the coming deploy.
+  // Restrict cleanup to this worker's declared application names: account-wide
+  // sweeping is unsafe while independent preview slots deploy in parallel.
   const allNamespaceIds = new Set<string>();
   for (let page = 1; ; page++) {
     const batch = await input.ctx.cf<{ id: string }[]>(
@@ -535,9 +536,14 @@ export async function ensureContainerClasses(input: {
     await input.ctx.cf<{ id: string; name: string; durable_objects?: { namespace_id?: string } }[]>(
       `/containers/applications`,
     );
+  const ownedApplicationNames = new Set(input.containerApplicationNames);
   for (const application of applications) {
     const namespaceId = application.durable_objects?.namespace_id;
-    if (namespaceId && !allNamespaceIds.has(namespaceId)) {
+    if (
+      ownedApplicationNames.has(application.name) &&
+      namespaceId &&
+      !allNamespaceIds.has(namespaceId)
+    ) {
       await input.ctx.cf(`/containers/applications/${application.id}`, { method: "DELETE" });
       console.log(
         `container-class bootstrap: deleted dangling container application ${application.name} ` +
@@ -593,9 +599,9 @@ export async function ensureContainerClasses(input: {
       throw new Error(
         `container-class bootstrap: ${input.workerName} is already on the exports flow but is ` +
           `missing container classes (${missing.join(", ")}) — its namespaces can never be ` +
-          `container-enabled (upstream Cloudflare gap). Repair: remove the worker's queue ` +
-          `consumer, \`wrangler delete\` it, and redeploy — the bootstrap then recreates ` +
-          `everything enabled.`,
+          `container-enabled (upstream Cloudflare gap). Host the new class on a dedicated ` +
+          `script still eligible for legacy bootstrap and bind it externally; workers are ` +
+          `never deleted.`,
       );
     }
     throw error;

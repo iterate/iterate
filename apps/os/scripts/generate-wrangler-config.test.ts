@@ -2,6 +2,12 @@ import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
 import {
+  OS_CONTAINER_CLASS_NAMES,
+  workerBuilderWorkerName,
+  WORKER_BUILDER_CONTAINER_CLASS_NAME,
+} from "./container-class-names.ts";
+import {
+  builderConfig,
   config,
   localDevAuthJwks,
   localAuthServiceBinding,
@@ -45,6 +51,7 @@ it.each([
 // under a fake "dev" service (observed live on os-prd-builder, 2026-07-04).
 it("names the top-level configs by service so cf:service script tags stay env-less", () => {
   expect(config.name).toBe("os");
+  expect(builderConfig.name).toBe("os-builder");
   expect(typecheckerConfig.name).toBe("os-typechecker");
 });
 
@@ -64,35 +71,73 @@ it("binds the os worker to its own env's typechecker sidecar", () => {
   }
 });
 
-it("never binds the retired builder sidecar", () => {
-  // The esbuild-wasm builder is gone: dynamic workers build in the
-  // deployment's builder pool (deployed) or the dev server's host endpoint
-  // (local).
+it("binds the builder namespace externally without reviving its old service API", () => {
+  const builderSidecarNames = Object.values(builderConfig.env).map((sidecar) => sidecar.name);
   for (const [envName, envBlock] of Object.entries(config.env)) {
+    // The retired esbuild-wasm BUILDER service API stays gone. Its route-less
+    // script name is reused only to host the new container-backed DO pool.
     expect(
       envBlock.services.find((service) => service.binding === "BUILDER"),
       envName,
     ).toBeUndefined();
+    const builderWorkerName = workerBuilderWorkerName(envBlock.name);
+    expect(
+      envBlock.durable_objects.bindings.find((binding) => binding.name === "WORKER_BUILDER"),
+      envName,
+    ).toEqual({
+      name: "WORKER_BUILDER",
+      class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+      script_name: builderWorkerName,
+    });
+    expect(builderSidecarNames, envName).toContain(builderWorkerName);
   }
+  expect(
+    config.durable_objects.bindings,
+    "local dev uses WORKER_BUILD_DEV_ENDPOINT",
+  ).not.toContainEqual(expect.objectContaining({ name: "WORKER_BUILDER" }));
 });
 
-it("hosts a worker-builder pool app sized to the pool", async () => {
+it("hosts the worker-builder pool only on its dedicated sidecar", async () => {
   // The pool addresses exactly WORKER_BUILDER_POOL_SIZE member names, so the
   // container app's max_instances must match — smaller would deny placements
   // for members that exist, larger would reserve quota nothing can use.
   const { WORKER_BUILDER_POOL_SIZE } = await import("../src/domains/workers/builder-pool.ts");
-  for (const [envName, envBlock] of Object.entries(config.env)) {
-    const pool = (envBlock.containers ?? []).find(
-      (entry) => entry.class_name === "WorkerBuilderDurableObject",
-    );
-    expect(pool, envName).toBeDefined();
-    expect(pool?.max_instances, envName).toBe(WORKER_BUILDER_POOL_SIZE);
-    expect(pool?.instance_type, envName).toBe("standard-3");
+  for (const [envName, osEnvBlock] of Object.entries(config.env)) {
     expect(
-      envBlock.durable_objects.bindings.find((b) => b.class_name === "WorkerBuilderDurableObject")
-        ?.name,
+      (osEnvBlock.containers ?? []).find(
+        (entry) => entry.class_name === WORKER_BUILDER_CONTAINER_CLASS_NAME,
+      ),
       envName,
-    ).toBe("WORKER_BUILDER");
+    ).toBeUndefined();
+
+    const builderEnvBlock = builderConfig.env[envName as keyof typeof builderConfig.env];
+    expect(builderEnvBlock.name, envName).toBe(workerBuilderWorkerName(osEnvBlock.name));
+    expect(builderEnvBlock.containers, envName).toHaveLength(1);
+    expect(builderEnvBlock.containers[0], envName).toMatchObject({
+      class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+      max_instances: WORKER_BUILDER_POOL_SIZE,
+      instance_type: "standard-3",
+    });
+    expect(builderEnvBlock.durable_objects.bindings, envName).toEqual([
+      {
+        name: "WORKER_BUILDER",
+        class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+      },
+    ]);
+    expect(builderEnvBlock.containers[0]?.rollout_step_percentage, envName).toBe(
+      envName.startsWith("preview_") ? 100 : undefined,
+    );
+  }
+  expect(builderConfig.exports).toEqual({
+    [WORKER_BUILDER_CONTAINER_CLASS_NAME]: { type: "durable-object", storage: "sqlite" },
+  });
+});
+
+it("declares exactly the container classes preserved by erase-data", () => {
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    expect((envBlock.containers ?? []).map((entry) => entry.class_name).sort(), envName).toEqual(
+      [...OS_CONTAINER_CLASS_NAMES].sort(),
+    );
   }
 });
 
@@ -186,6 +231,13 @@ it("does not retain a reconciled Durable Object tombstone", () => {
   expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
 });
 
+it("retires the short-lived main-worker builder namespace", () => {
+  expect(config.exports).toHaveProperty(WORKER_BUILDER_CONTAINER_CLASS_NAME, {
+    type: "durable-object",
+    state: "deleted",
+  });
+});
+
 it("routes public event docs hosts to the os worker", () => {
   const productionRoutes = config.env.prd.routes ?? [];
 
@@ -240,17 +292,7 @@ it("keeps deployed sandbox capacity within account quota", () => {
     expect(
       containers.map((entry) => entry.instance_type),
       envName,
-      // The trailing standard-3 entry is the worker-builder pool's own app
-      // (npm + esbuild are CPU-bound; basic starved an e2e burst live).
-    ).toEqual([
-      "lite",
-      "basic",
-      "standard-1",
-      "standard-2",
-      "standard-3",
-      "standard-4",
-      "standard-3",
-    ]);
+    ).toEqual(["lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4"]);
     for (const entry of containers) {
       expect(entry.max_instances, `${envName} ${entry.instance_type}`).toBeGreaterThan(0);
       expect(entry.rollout_step_percentage, `${envName} ${entry.instance_type}`).toBe(
@@ -261,6 +303,13 @@ it("keeps deployed sandbox capacity within account quota", () => {
 
   // A preview slot's fleet reserves well under production's — ten slots share
   // one account quota.
-  expect(reservedGib(config.env.preview_6.containers ?? [])).toBeLessThan(100);
-  expect(reservedGib(config.env.prd.containers ?? [])).toBeLessThan(300);
+  expect(
+    reservedGib([
+      ...(config.env.preview_6.containers ?? []),
+      ...builderConfig.env.preview_6.containers,
+    ]),
+  ).toBeLessThan(100);
+  expect(
+    reservedGib([...(config.env.prd.containers ?? []), ...builderConfig.env.prd.containers]),
+  ).toBeLessThan(300);
 });

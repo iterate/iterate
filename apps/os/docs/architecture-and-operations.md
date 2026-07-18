@@ -196,14 +196,15 @@ It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth pr
 
 ## Deployment
 
-The generated `wrangler.jsonc` (from the root `envs.ts`) defines the
-deployment: a single worker ([worker-topology.md](./worker-topology.md))
-carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
+The generated `wrangler.jsonc` (from the root `envs.ts`) defines the primary
+deployment ([worker-topology.md](./worker-topology.md)), carrying product-state
+and project-sandbox Durable Object classes same-script, the `PROJECT_DIRECTORY` and
 `WORKER_BUILD_CACHE` KV namespaces, the Worker Loader, the Workers AI
 binding, Cloudflare Artifacts for repos, and routes for the app base URL,
-the MCP base URL, and each project hostname base. One sidecar rides along:
-the typechecker worker (`wrangler.typechecker.jsonc`, deployed first by
-deploy.ts), the only script carrying the TypeScript compiler wasm. Deploys
+the MCP base URL, and each project hostname base. Two route-less sidecars ride
+along in parallel: the typechecker (`wrangler.typechecker.jsonc`), carrying the
+TypeScript compiler wasm, and the fixed worker-builder container pool
+(`wrangler.builder.jsonc`). Deploys
 take the env explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
 
 ## Smoke Tests

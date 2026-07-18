@@ -65,6 +65,18 @@ describe("cloudflareContainerApplicationName", () => {
         workerName: "os-preview-3",
       }),
     ).toBe("os-preview-3-sandboxlitedurableobject-preview_3");
+    expect(
+      cloudflareContainerApplicationName({
+        className: "WorkerBuilderDurableObject",
+        workerName: "os-preview-3-builder",
+      }),
+    ).toBe("os-preview-3-builder-workerbuilderdurableobject-preview_3");
+    expect(
+      cloudflareContainerApplicationName({
+        className: "WorkerBuilderDurableObject",
+        workerName: "os-prd-builder",
+      }),
+    ).toBe("os-prd-builder-workerbuilderdurableobject-prd");
   });
 
   it("does not guess application names for unknown workers", () => {

@@ -34,9 +34,10 @@ import { builderPoolMember } from "./builder-pool.ts";
  *
  * Members are addressed by plain pool-slot names on a namespace no project
  * code can reach — there is no catalogue entry, no stream, no processor, no
- * create ceremony (the stock SDK boots the container on first use), and
- * `erase-data` destroying the Durable Objects just means the next build
- * boots a fresh member.
+ * create ceremony (the stock SDK boots the container on first use). The
+ * namespace lives on a route-less builder sidecar and deliberately survives
+ * preview-slot erase/handover; each build still uses a unique directory and
+ * the containers sleep after the bounded warm period.
  */
 export class WorkerBuilderDurableObject extends Sandbox<Env> {
   // Long enough that a burst of builds reuses the warm toolchain (installed

@@ -54,10 +54,7 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
-import {
-  SANDBOX_INSTANCE_TYPE_BINDINGS,
-  SANDBOX_INSTANCE_TYPES,
-} from "../src/domains/sandboxes/instance-types.ts";
+import { OS_CONTAINER_CLASS_NAMES } from "./container-class-names.ts";
 import { COMPATIBILITY_DATE, RETIRED_WORKER_SECRETS } from "./generate-wrangler-config.ts";
 
 /** Erase ALL user data in a deployed environment; infrastructure stays (see file header). */
@@ -100,9 +97,7 @@ export default async function eraseData(options: {
       CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,
     },
     compatibilityDate: COMPATIBILITY_DATE,
-    containerClassNames: SANDBOX_INSTANCE_TYPES.map(
-      (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-    ),
+    containerClassNames: OS_CONTAINER_CLASS_NAMES,
   });
 
   if (options.preserveAuth) {

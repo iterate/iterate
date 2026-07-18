@@ -23,7 +23,7 @@ revisions to this document:
    survives: deduped concurrent builds, deterministic content-addressed
    artifacts (now two-tier: a trusted content-only key for deploy-seeded
    template artifacts, and a project-scoped key for runtime builds, because a
-   project can influence its own builder sandbox's output), and build
+   project can influence its own build inputs and therefore the output), and build
    failures reaching callers as plain errors.
 
 ## Goal

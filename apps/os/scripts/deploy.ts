@@ -25,8 +25,10 @@
  *      service token is absent from Doppler too. After deploy, force an
  *      uncached project-directory lookup through AUTH.
  *
- * The worker script is never deleted and routes are ensure-only, so a deploy
- * can never strand the env's hostnames (the old zombie-route/522 class).
+ * Worker scripts are never deleted and routes are ensure-only, so a deploy
+ * can never strand the env's hostnames. New container classes live on
+ * dedicated sidecars still eligible for legacy bootstrap when the main
+ * worker's one-way exports set cannot grow.
  */
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
@@ -41,11 +43,12 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
-import {
-  SANDBOX_INSTANCE_TYPE_BINDINGS,
-  SANDBOX_INSTANCE_TYPES,
-} from "../src/domains/sandboxes/instance-types.ts";
 import { cloudflareContainerApplicationName } from "../src/lib/cloudflare-containers-dashboard-url.ts";
+import {
+  OS_CONTAINER_CLASS_NAMES,
+  workerBuilderWorkerName,
+  WORKER_BUILDER_CONTAINER_CLASS_NAME,
+} from "./container-class-names.ts";
 import {
   COMPATIBILITY_DATE,
   envShapedVars,
@@ -63,13 +66,6 @@ import { seedTemplateWorkerArtifact } from "./lib/seed-template-worker-artifact.
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 const OS_DEPLOY_LABEL = "apps/os";
 const OS_APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const WORKER_BUILDER_CONTAINER_CLASS = "WorkerBuilderDurableObject";
-const OS_CONTAINER_CLASS_NAMES = [
-  ...SANDBOX_INSTANCE_TYPES.map(
-    (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-  ),
-  WORKER_BUILDER_CONTAINER_CLASS,
-];
 
 /** Preview OS always runs its first-party integration proof against the
  * sibling dummy Petshop. Keep the formerly optional deployment setting from
@@ -127,17 +123,25 @@ async function smokeAuthRpc(env: DeployedEnv, label: string) {
   await smokeResponse(url, isExactOsProjectMiss, label);
 }
 
+function containerApplicationName(input: { className: string; workerName: string }): string {
+  const applicationName = cloudflareContainerApplicationName(input);
+  if (!applicationName) {
+    throw new Error(`Cannot derive a Container application name for ${input.workerName}.`);
+  }
+  return applicationName;
+}
+
 function previewContainerApplicationNames(env: DeployedEnv): string[] {
-  return OS_CONTAINER_CLASS_NAMES.map((className) => {
-    const applicationName = cloudflareContainerApplicationName({
+  return [
+    ...OS_CONTAINER_CLASS_NAMES.map((className) => ({
       className,
       workerName: env.osWorkerName,
-    });
-    if (!applicationName) {
-      throw new Error(`Cannot derive a Container application name for ${env.osWorkerName}.`);
-    }
-    return applicationName;
-  });
+    })),
+    {
+      className: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+      workerName: workerBuilderWorkerName(env.osWorkerName),
+    },
+  ].map(containerApplicationName);
 }
 
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
@@ -244,6 +248,9 @@ export default async function deploy(
             ctx,
             workerName: ctx.env.osWorkerName,
             containerClassNames: OS_CONTAINER_CLASS_NAMES,
+            containerApplicationNames: OS_CONTAINER_CLASS_NAMES.map((className) =>
+              containerApplicationName({ className, workerName: ctx.env.osWorkerName }),
+            ),
             compatibilityDate: COMPATIBILITY_DATE,
           }),
         ),
@@ -258,8 +265,31 @@ export default async function deploy(
             kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
           }),
         ),
-        // The builder is now a container app on the main OS worker. Only the
-        // typechecker remains a separately deployed worker service binding.
+        // Host the builder namespace on its dedicated route-less sidecar. The
+        // retired esbuild worker at this name is deliberately reused: legacy
+        // bootstrap can add the class container-enabled without deleting any
+        // Worker, then the declarative-exports deploy installs the real class.
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: wrangler.builder.jsonc", async () => {
+          const builderWorkerName = workerBuilderWorkerName(ctx.env.osWorkerName);
+          await ensureContainerClasses({
+            ctx,
+            workerName: builderWorkerName,
+            containerClassNames: [WORKER_BUILDER_CONTAINER_CLASS_NAME],
+            containerApplicationNames: [
+              containerApplicationName({
+                className: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+                workerName: builderWorkerName,
+              }),
+            ],
+            compatibilityDate: COMPATIBILITY_DATE,
+          });
+          await runAsync(
+            "pnpm",
+            ["exec", "wrangler", "deploy", "--config", "wrangler.builder.jsonc", "--env", ctx.name],
+            { cwd: OS_APP_ROOT, env: credentials },
+          );
+        }),
+        // The typechecker remains a separately deployed worker service binding.
         runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: wrangler.typechecker.jsonc", () =>
           runAsync(
             "pnpm",

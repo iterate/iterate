@@ -8,10 +8,11 @@
  *                           path lane, project platform hosts, custom hostnames)
  *   OS host               → the dashboard app (TanStack Start SSR + assets)
  *
- * All Durable Object classes live here too (same-script bindings — no
- * cross-script namespaces, no service bindings, no ingress worker). Worker
- * bindings are not threaded through request context — modules import `env`
- * from "cloudflare:workers" directly:
+ * Product-state and project-sandbox Durable Object classes live here too.
+ * The deployment-wide builder pool is the sole cross-script DO namespace: a
+ * route-less sidecar owns its container class so this script's one-way
+ * declarative-exports set never has to grow. Worker bindings are not threaded
+ * through request context — modules import `env` from "cloudflare:workers" directly:
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/#importing-env-as-a-global
  */
 import handler from "@tanstack/react-start/server-entry";
@@ -71,7 +72,6 @@ export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
-export { WorkerBuilderDurableObject } from "./domains/workers/builder-pool-sandbox.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";

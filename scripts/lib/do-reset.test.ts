@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { detachExternalDurableObjectBindings, resetWorkerDurableObjects } from "./do-reset.ts";
+import {
+  detachExternalDurableObjectBindings,
+  ensureContainerClasses,
+  resetWorkerDurableObjects,
+} from "./do-reset.ts";
 
 type Settings = {
   annotations?: Record<string, unknown>;
@@ -135,6 +139,61 @@ describe("detachExternalDurableObjectBindings", () => {
         workerNames: ["os-preview-4", "sidecar"],
       }),
     ).rejects.toThrow("settings readback did not preserve");
+  });
+});
+
+describe("ensureContainerClasses", () => {
+  test("cleans only an exact application name owned by the worker", async () => {
+    const deletedApplicationIds: string[] = [];
+    const cf = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === "/workers/scripts") return [{ id: "os-preview-4" }];
+      if (path.startsWith("/workers/durable_objects/namespaces?")) {
+        return [
+          {
+            id: "live-namespace",
+            script: "os-preview-4",
+            class: "SandboxBasicDurableObject",
+          },
+        ];
+      }
+      if (path === "/containers/applications") {
+        return [
+          {
+            id: "owned-dangling",
+            name: "os-preview-4-sandboxbasicdurableobject-preview_4",
+            durable_objects: { namespace_id: "dead-owned-namespace" },
+          },
+          {
+            id: "other-slot-dangling",
+            name: "os-preview-5-sandboxbasicdurableobject-preview_5",
+            durable_objects: { namespace_id: "dead-other-namespace" },
+          },
+          {
+            id: "builder-dangling",
+            name: "os-preview-4-builder-workerbuilderdurableobject-preview_4",
+            durable_objects: { namespace_id: "dead-builder-namespace" },
+          },
+        ];
+      }
+      if (path === "/containers/applications/owned-dangling") {
+        expect(init?.method).toBe("DELETE");
+        deletedApplicationIds.push("owned-dangling");
+        return undefined;
+      }
+      throw new Error(`unexpected Cloudflare request: ${path}`);
+    });
+
+    await expect(
+      ensureContainerClasses({
+        ctx: { cf } as never,
+        workerName: "os-preview-4",
+        containerClassNames: ["SandboxBasicDurableObject"],
+        containerApplicationNames: ["os-preview-4-sandboxbasicdurableobject-preview_4"],
+        compatibilityDate: "2026-07-01",
+      }),
+    ).resolves.toEqual({ action: "skipped", missing: [] });
+
+    expect(deletedApplicationIds).toEqual(["owned-dangling"]);
   });
 });
 

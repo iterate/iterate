@@ -14,9 +14,10 @@ supply everything.
 Local dev is **fully local**: D1/DOs run in miniflare inside your worktree's
 `.wrangler/`, the server listens on a random free port at
 `http://localhost:<port>`, and the only external dependency is the shared dev auth at
-`https://auth.iterate-dev.com`. OS is a single worker (all Durable Object
-classes + app + api in one script, see `apps/os/docs/worker-topology.md`)
-running inside vite's workerd — production-shaped by construction. Nothing
+`https://auth.iterate-dev.com`. OS runs the app, API, and local Durable Object
+classes in one Vite workerd (see `apps/os/docs/worker-topology.md`); the
+deployed builder sidecar is replaced locally by the host build endpoint.
+Nothing
 is contested between worktrees: twenty
 agents on one machine each run their own isolated environment with the same
 shared `dev` config.

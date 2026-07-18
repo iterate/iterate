@@ -42,12 +42,12 @@ export function cloudflareContainerApplicationName(input: {
   if (!workerName || !className) return null;
 
   let environmentName: string | null;
-  if (workerName === "os") {
+  if (workerName === "os" || workerName === "os-builder") {
     environmentName = null;
-  } else if (workerName === "os-prd") {
+  } else if (workerName === "os-prd" || workerName === "os-prd-builder") {
     environmentName = "prd";
   } else {
-    const preview = /^os-preview-(\d+)$/.exec(workerName);
+    const preview = /^os-preview-(\d+)(?:-builder)?$/.exec(workerName);
     if (!preview) return null;
     environmentName = `preview_${preview[1]}`;
   }

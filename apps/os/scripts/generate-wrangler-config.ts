@@ -34,6 +34,10 @@ import {
   searchIndexQueueName,
   workerEventsQueueName,
 } from "../src/queue-names.ts";
+import {
+  workerBuilderWorkerName,
+  WORKER_BUILDER_CONTAINER_CLASS_NAME,
+} from "./container-class-names.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -177,10 +181,6 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
-  // The deployment's worker-builder pool: stock-SDK sandbox containers that
-  // run dynamic-worker builds, deliberately outside the project sandbox
-  // catalogue (src/domains/workers/builder-pool.ts).
-  WORKER_BUILDER: "WorkerBuilderDurableObject",
   // Deliberately NOT "WorkspaceDurableObject": declarative exports key
   // namespaces by class name, and the retired single-parent-overlay workspace
   // occupied that name — reusing it would inherit the old namespace's storage.
@@ -223,6 +223,10 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
+  // Main briefly declared the builder pool before it moved to the dedicated
+  // sidecar. Keep the tombstone until every deployed main OS worker confirms
+  // the same class name is gone; the sidecar owns an unrelated namespace.
+  [WORKER_BUILDER_CONTAINER_CLASS_NAME]: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -250,6 +254,26 @@ const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; prod
     "standard-4": { preview: 1, production: 3 },
   };
 
+/** The builder pool's single container application. It lives on a dedicated
+ * sidecar worker so adding it never mutates the main OS worker's one-way
+ * declarative-exports class set. */
+function workerBuilderContainer(sandboxCaps: "preview" | "production") {
+  return {
+    // The pool addresses exactly WORKER_BUILDER_POOL_SIZE member names, so
+    // max_instances is a hard match rather than an independent capacity cap.
+    class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+    image: "./sandbox/Dockerfile",
+    // standard-3 (2 vCPU, 8 GiB), NOT basic: npm install + wrangler's esbuild
+    // bundle are CPU/IO-bound. The fixed pool sleeps after 300s, so this costs
+    // active minutes during build bursts rather than permanent idle capacity.
+    instance_type: "standard-3",
+    max_instances: WORKER_BUILDER_POOL_SIZE,
+    ...(sandboxCaps === "preview" ? { rollout_step_percentage: 100 } : {}),
+    ssh: { enabled: true },
+    authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+  };
+}
+
 /** Binding config identical across local dev and every deployed env, apart from names/ids. */
 function workerBindings(input: {
   workerName: string;
@@ -258,6 +282,9 @@ function workerBindings(input: {
   authRemote?: boolean;
   kvId?: string;
   workerBuildCacheKvId?: string;
+  /** Deployed OS workers reach the builder pool through this sidecar script.
+   * Local dev omits it and uses WORKER_BUILD_DEV_ENDPOINT instead. */
+  workerBuilderScriptName?: string;
   /** Which SANDBOX_MAX_INSTANCES column to apply — deploy-time memory quota
    * is validated per account, and previews share one account. */
   sandboxCaps?: "preview" | "production";
@@ -293,7 +320,18 @@ function workerBindings(input: {
       SANDBOX_PORT_TIMEOUT_MS: "300000",
     },
     durable_objects: {
-      bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
+      bindings: [
+        ...Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
+        ...(input.workerBuilderScriptName
+          ? [
+              {
+                name: "WORKER_BUILDER",
+                class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+                script_name: input.workerBuilderScriptName,
+              },
+            ]
+          : []),
+      ],
     },
     kv_namespaces: [
       {
@@ -401,46 +439,24 @@ function workerBindings(input: {
     // builds and deploys are fast and every size shares one cached image).
     // `instance_type` is the size verbatim: our size names ARE Cloudflare's
     // instance-type names (instance-types.ts).
-    containers: [
-      ...SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
-        class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-        image: "./sandbox/Dockerfile",
-        instance_type: instanceType as string,
-        max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
-        // Preview deploys replace a test environment; they are not a canary.
-        // A gradual rollout kept killing warm test sandboxes after Wrangler
-        // returned, so preview applications switch atomically and deploy.ts
-        // waits for authoritative rollout completion before tests start.
-        ...(input.sandboxCaps === "preview" ? { rollout_step_percentage: 100 } : {}),
-        // Interactive shell into any running sandbox via `wrangler containers
-        // ssh <instance-id>` (find ids with `wrangler containers instances`).
-        // Account-authenticated + gated on the keys below; opens no public
-        // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
-        // the wrangler schema, so it is set explicitly.
-        ssh: { enabled: true },
-        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
-      })),
-      {
-        // The worker-builder pool: its own app so builder demand can NEVER
-        // compete with pet sandboxes for placement. max_instances equals the
-        // pool size — there are exactly that many member names.
-        //
-        // standard-3 (2 vCPU, 8 GiB), NOT basic: the pool concentrates every
-        // project's builds onto these few containers, and npm install +
-        // wrangler's esbuild bundle are CPU/IO-bound — on basic (1/4 vCPU) an
-        // e2e-style burst ran installs at 73–165s each (observed live), which
-        // blows delivery deadlines fleet-wide. With a 300s sleepAfter the
-        // fleet only exists during build bursts, so the bigger type costs
-        // active-minutes, not idle capacity.
-        class_name: "WorkerBuilderDurableObject",
-        image: "./sandbox/Dockerfile",
-        instance_type: "standard-3",
-        max_instances: WORKER_BUILDER_POOL_SIZE,
-        ...(input.sandboxCaps === "preview" ? { rollout_step_percentage: 100 } : {}),
-        ssh: { enabled: true },
-        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
-      },
-    ],
+    containers: SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
+      class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+      image: "./sandbox/Dockerfile",
+      instance_type: instanceType as string,
+      max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
+      // Preview deploys replace a test environment; they are not a canary.
+      // A gradual rollout kept killing warm test sandboxes after Wrangler
+      // returned, so preview applications switch atomically and deploy.ts
+      // waits for authoritative rollout completion before tests start.
+      ...(input.sandboxCaps === "preview" ? { rollout_step_percentage: 100 } : {}),
+      // Interactive shell into any running sandbox via `wrangler containers
+      // ssh <instance-id>` (find ids with `wrangler containers instances`).
+      // Account-authenticated + gated on the keys below; opens no public
+      // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
+      // the wrangler schema, so it is set explicitly.
+      ssh: { enabled: true },
+      authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+    })),
     secrets: { required: REQUIRED_SECRETS },
     observability: OBSERVABILITY,
   };
@@ -490,6 +506,7 @@ function envBlock(env: DeployedEnv) {
     authWorkerName: env.authWorkerName,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
+    workerBuilderScriptName: workerBuilderWorkerName(env.osWorkerName),
     sandboxCaps: isProduction ? "production" : "preview",
   });
   return {
@@ -660,6 +677,59 @@ export const config = {
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
 };
 
+const WORKER_BUILDER_EXPORTS = {
+  [WORKER_BUILDER_CONTAINER_CLASS_NAME]: { type: "durable-object", storage: "sqlite" },
+};
+
+function workerBuilderBindings(sandboxCaps: "preview" | "production") {
+  return {
+    // These are consumed inside the Sandbox Durable Object. Keep the same
+    // cold-host ceilings as project sandboxes; a quick warm start returns
+    // immediately, while a genuinely stuck container still fails boundedly.
+    vars: {
+      SANDBOX_TRANSPORT: "rpc",
+      SANDBOX_INSTANCE_TIMEOUT_MS: "300000",
+      SANDBOX_PORT_TIMEOUT_MS: "300000",
+    },
+    durable_objects: {
+      bindings: [
+        {
+          name: "WORKER_BUILDER",
+          class_name: WORKER_BUILDER_CONTAINER_CLASS_NAME,
+        },
+      ],
+    },
+    containers: [workerBuilderContainer(sandboxCaps)],
+    observability: OBSERVABILITY,
+  };
+}
+
+/**
+ * Route-less host for the stock-sandbox worker-builder pool. The main OS
+ * worker binds its Durable Object namespace externally by deployed script
+ * name; there is no service binding and no public route.
+ */
+export const builderConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: "os-builder",
+  main: "./src/worker-builder.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  exports: WORKER_BUILDER_EXPORTS,
+  dev: { enable_containers: false },
+  ...workerBuilderBindings("preview"),
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: workerBuilderWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        ...workerBuilderBindings(env.osWorkerName === "os-prd" ? "production" : "preview"),
+      },
+    ]),
+  ),
+};
+
 /**
  * The typechecker sidecar's config: the minimum possible worker around the
  * TypeScript compiler wasm — a pure function (files in, diagnostics out)
@@ -688,6 +758,11 @@ export const typecheckerConfig = {
 
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
+    appLabel: "apps/os (worker-builder sidecar)",
+    config: builderConfig,
+  });
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
     appLabel: "apps/os (typechecker sidecar)",

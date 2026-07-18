@@ -314,11 +314,11 @@ fixes, documented here in case they resurface:
    host-platform pull can't resolve arm64 from it. `apps/os/vite.config.ts`
    defaults `MINIFLARE_CONTAINER_EGRESS_IMAGE` to the digest-free multi-arch
    tag instead.
-3. **Same-script containers only.** The single-worker topology declares the
-   containers in wrangler.jsonc's `containers` alongside same-script DO
-   bindings — there is no cross-script `script_name` to get wrong anymore
-   (the historical failure mode where a self-referential cross-script
-   binding dropped `ctx.id.name`).
+3. **Project containers stay same-script.** The six user-visible sandbox
+   classes live beside their same-script DO bindings in wrangler.jsonc. The
+   sole external container namespace is the platform-owned worker-builder
+   pool on a route-less sidecar; its binding uses the derived
+   `os-<env>-builder` script name and never carries project identity.
 
 Two more facts worth knowing:
 
