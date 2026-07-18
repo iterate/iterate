@@ -236,7 +236,7 @@ describe("first-party PostHog stream integration", () => {
 
     await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(requests) });
 
-    expect(requests[0]!.batch).toHaveLength(2);
+    expect(requests[0]!.batch).toHaveLength(3);
     expect(requests[0]!.batch[0]).toMatchObject({
       event: "$groupidentify",
       properties: {
@@ -247,11 +247,18 @@ describe("first-party PostHog stream integration", () => {
           slug: "gold-path",
         },
         $group_type: "project",
+        distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
+      },
+    });
+    expect(requests[0]!.batch[1]).toMatchObject({
+      event: "$set",
+      properties: {
+        $groups: { project: "prj_123" },
         $set: { name: "project:gold-path" },
         distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
       },
     });
-    const capturedBirth = requests[0]!.batch[1]!;
+    const capturedBirth = requests[0]!.batch[2]!;
     expect(capturedBirth).toMatchObject({
       event: posthogEventName(created),
       properties: {

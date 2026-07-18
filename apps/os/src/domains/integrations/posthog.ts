@@ -75,7 +75,7 @@ function normalizeEventTimestamp(createdAt: string): string {
   return new Date(createdAt).toISOString();
 }
 
-function groupIdentifyEvents(args: {
+function projectBirthEvents(args: {
   batch: StreamPushEventBatch;
   distinctId: string;
   projectId: string;
@@ -114,7 +114,6 @@ function groupIdentifyEvents(args: {
         },
         $group_type: "project",
         $is_server: true,
-        $set: { name: `project:${project.config.slug}` },
         distinct_id: distinctId,
       },
       timestamp,
@@ -126,6 +125,18 @@ function groupIdentifyEvents(args: {
         projectBirth.offset,
         timestamp,
       ]),
+    },
+    {
+      event: "$set",
+      properties: {
+        $geoip_disable: true,
+        $groups: { project: projectId },
+        $is_server: true,
+        $set: { name: `project:${project.config.slug}` },
+        distinct_id: distinctId,
+      },
+      timestamp,
+      uuid: posthogUuid(["project-person-v1", workerName, projectId]),
     },
   ];
 }
@@ -184,7 +195,7 @@ function posthogEvents(args: {
       uuid: eventUuid,
     };
   });
-  return [...groupIdentifyEvents({ batch, distinctId, projectId, workerName }), ...occurrences];
+  return [...projectBirthEvents({ batch, distinctId, projectId, workerName }), ...occurrences];
 }
 
 /**
