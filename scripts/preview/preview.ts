@@ -1626,11 +1626,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // critical path.
         `run_logged_lane smoke /tmp/os-preview-smoke.log timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
-        `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
+        `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_PREVIEW_PARALLEL=1 E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
         // A failed Chromium install must not orphan the three remote background
         // lanes. Record it, join every child, replay their logs, then fail once.
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
-        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
+        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env E2E_PREVIEW_PARALLEL=1 PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
@@ -1771,7 +1771,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         'wait "$install_pid" || { cat /tmp/os-preview-streams-example-pw-install.log; exit 1; }',
         // Capture Playwright's exit without aborting (set -e) so the vitest
         // sub-lane always finishes and its log is replayed.
-        `PW_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
+        `PW_OK=0; env E2E_PREVIEW_PARALLEL=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
         'VITEST_OK=0; wait "$vitest_pid" || VITEST_OK=$?',
         "cat /tmp/os-preview-streams-example-vitest.log",
         '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',

@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS,
   isDurableObjectLifecycleError,
   isStreamWaitTimeoutError,
   isStreamUnavailableError,
   rethrowStreamUnavailable,
+  retryIdempotentDurableObjectOperation,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
@@ -26,6 +28,63 @@ describe("isDurableObjectLifecycleError", () => {
     ["undefined", undefined, false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isDurableObjectLifecycleError(error)).toBe(expected);
+  });
+});
+
+describe("retryIdempotentDurableObjectOperation", () => {
+  it("runs once when the operation succeeds", async () => {
+    const operation = vi.fn(async () => "done");
+    const onRetry = vi.fn();
+
+    await expect(retryIdempotentDurableObjectOperation({ operation, onRetry })).resolves.toBe(
+      "done",
+    );
+    expect(operation).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("retries lifecycle failures and returns the fresh incarnation's result", async () => {
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(withFlag("durableObjectReset"))
+      .mockRejectedValueOnce(withFlag("overloaded"))
+      .mockResolvedValueOnce("recovered");
+    const onRetry = vi.fn();
+
+    await expect(retryIdempotentDurableObjectOperation({ operation, onRetry })).resolves.toBe(
+      "recovered",
+    );
+    expect(operation).toHaveBeenCalledTimes(3);
+    expect(onRetry).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenLastCalledWith({
+      attempt: 2,
+      error: expect.objectContaining({ overloaded: true }),
+      maxAttempts: IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS,
+    });
+  });
+
+  it("never retries an application error", async () => {
+    const applicationError = new Error("invalid workspace mount");
+    const operation = vi.fn(async () => {
+      throw applicationError;
+    });
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).rejects.toBe(
+      applicationError,
+    );
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("stops at the bounded attempt count and preserves the final error", async () => {
+    const finalError = withFlag("durableObjectReset");
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(withFlag("durableObjectReset"))
+      .mockRejectedValueOnce(withFlag("retryable"))
+      .mockRejectedValueOnce(finalError);
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).rejects.toBe(finalError);
+    expect(operation).toHaveBeenCalledTimes(IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS);
   });
 });
 

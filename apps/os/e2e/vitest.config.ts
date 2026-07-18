@@ -28,6 +28,10 @@ console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 const ci = process.env.CI === "true";
+// `pnpm preview test` also runs from developer machines. Its target is the
+// same isolated deployed slot as CI, so exercise the production concurrency
+// profile there too; only direct local-dev-server runs stay sequential.
+const parallelDeployedSuite = ci || process.env.E2E_PREVIEW_PARALLEL === "1";
 
 // Observed wall-clock seconds per file on a zero-retry preview lane (Depot run
 // r9whdcvbwl, 2026-07-18). Used for longest-first scheduling below — vitest
@@ -111,9 +115,9 @@ export default defineConfig({
     // Run-scheduler options live at the ROOT test level — this is where vitest
     // reads them, even with `projects`. Parallel in CI: each file either uses
     // unique state or a bounded family-owned project pool, so FILES are
-    // independent.
-    // Sequential locally so a single dev server isn't hammered.
-    fileParallelism: ci,
+    // independent. `pnpm preview test` uses the same parallel profile even
+    // outside CI; direct runs against a local dev server remain sequential.
+    fileParallelism: parallelDeployedSuite,
     // 12 workers × maxConcurrency 2 = peak ~24 concurrent tests. History of
     // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
     // (DO-storage timeouts), 4×3 = ~12 still produced rotating
@@ -135,7 +139,7 @@ export default defineConfig({
     // project reuse removes needless births, while fresh-project lifecycle
     // tests still exercise project creation.
     maxWorkers: 12,
-    sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
+    sequence: { concurrent: parallelDeployedSuite, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
     passWithNoTests: true,
     // Retry telemetry (policy rule 5 — see @iterate-com/shared

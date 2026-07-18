@@ -68,6 +68,7 @@ invocation; the same logical run number is repeated after a bounded reclaim.
 | 9          |         4m37 |                    38 | Deterministic public stream-offset assertion was wrong by two; not load.                          |
 | 10         |         3m18 |                    38 | Full fleet, zero retries. OS test 92.8s, deploy 77.8s.                                            |
 | 11         |         4m18 |                    38 | Check green only by absorbing three retries; does not qualify.                                    |
+| 12         |         3m44 |                    38 | Failed: one shared-path race plus two post-deploy DO resets; does not qualify.                    |
 
 Experiment 11 (head a2d850761, Depot job 4cr9hswz8t) is the most useful
 failure sample:
@@ -86,6 +87,24 @@ The deploy trace split the OS path into about 10 seconds of preparation,
 Resource ensures plus the builder/typechecker sidecars are independent of the
 Vite build, so the candidate overlaps them and joins both before upload.
 
+Experiment 12 (head 47528196f, Depot job 4qb8nf7gf7) reduced OS Vitest to
+74 seconds, but the full check failed after 3m44s. OS deploy took 75.2s and
+the OS test phase took 125.2s; Playwright passed all 56 tests in 118s. The
+failures were concrete and unrelated to project-create load:
+
+- the now-parallel `workspace-files-transfer` matrix variants still wrote the
+  same project-file addresses, so one runtime could read another runtime's
+  marker;
+- `Worker expression capabilities dispatch nested RpcTarget paths` received
+  a tagged stream lifecycle reset while the new worker version rolled out;
+- the event-sourced workspace test received the same workerd code-update reset
+  before that raw workspace RPC boundary had bounded recovery.
+
+The run recorded three retries and one matrix failure, so it qualifies as
+neither green nor retry-clean. It did prove the deployment-preparation overlap
+and the per-runtime scheduling change: Vitest was no longer the timing long
+pole.
+
 ### Project creation and reuse finding
 
 The data does not support a preview-overload explanation. Experiment 2 made
@@ -99,14 +118,17 @@ Reuse is still valuable where ownership is explicit:
 - the catalogue matrix creates and bakes one project per run, then all
   examples reuse it with per-runtime markers;
 - stateful test families use one-project-per-family fixtures;
-- mutation-heavy families use concurrency-sized exclusive project pools.
+- mutation-heavy families use concurrency-sized exclusive project pools;
+- the browser chat routing proof reuses one deterministic project for its
+  family, while every invocation creates a unique agent path. Project birth
+  plus the onboarding greeting remain covered by the separate smoke test.
 
 A global mutable project would replace create traffic with state collisions
 and stale Durable Object identity. Constant slugs in mutation tests are also
 not reuse: they can repoint the slug directory while old durable state still
 exists. Those tests use unique identities instead.
 
-### Candidate after Experiment 11
+### Candidate after Experiment 12
 
 - auth and semaphore now emit the same retry telemetry as the other Vitest
   lanes; compatibility was exercised against their pinned Vitest 4.0.15;
@@ -122,11 +144,32 @@ exists. Those tests use unique identities instead.
   waiting an additional fixed 25 or 35 seconds after the outage condition is
   already established;
 - OS remote upload prerequisites overlap the Vite build;
+- every matrix runtime now receives unique project-file and workspace paths;
+- the browser chat proof no longer repeats project bootstrap plus an automatic
+  onboarding LLM turn. Its focused preview run fell from 1.9 minutes in
+  Experiment 12 to 14.3 seconds while still proving a real browser send, a
+  real LLM reply, the durable event, and the live feed repaint;
+- exact workerd lifecycle failures get at most three operation-level attempts
+  only at replay-safe boundaries: a stream append must have an idempotency key
+  on every event, and workspace calls must be reads or set-style mutations.
+  Configuration patches, edits, deletes, commits, and unkeyed/mixed appends
+  remain one-shot;
+- local `pnpm preview test` now selects the same 12-worker Vitest/Playwright
+  topology as CI. Direct tests against a developer's local server remain
+  sequential;
 - the full marathon default is 25 cold-start runs on one immutable head.
 
-The candidate is locally typechecked, formatted, linted, and covered by the
-focused deploy, retry-policy, preview-orchestration, and sandbox-lifecycle
-tests. Live Experiment 12 and both acceptance campaigns remain pending.
+A retry-disabled, production-shaped local run against the still-deployed
+Experiment 12 head passed the full warm fleet in **83.5s**: OS Vitest 65s, OS
+Playwright 82s, and streams-example 52.1s. The fresh-project smoke created its
+project in 4.9s, while the family-reused chat proof completed in 15.7s. This is
+not an acceptance run because the new product code was not deployed from the
+same immutable head, but it proves the local orchestration now exercises the
+CI concurrency shape and supplies no evidence of project-create saturation.
+
+The focused lifecycle, stream RPC, generated-catalogue, and browser-chat tests,
+the full repository test suite, formatting, lint, and typecheck pass. Live
+Experiment 13 and both acceptance campaigns remain pending.
 
 ## Round 4 (2026-07-13/14, PR #1938)
 

@@ -185,6 +185,7 @@ import {
   isDurableObjectLifecycleError,
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
+  retryIdempotentDurableObjectOperation,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import { createSandboxWithLifecycleRetry } from "./domains/sandboxes/create-lifecycle-retry.ts";
@@ -570,7 +571,33 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     ) {
       throw new Error("ancestor-announcement delivery state is platform-owned");
     }
-    const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    // A lifecycle rejection can arrive after the append committed but before
+    // its acknowledgement reached this worker. Replay is therefore safe only
+    // when EVERY event has a durable deduplication key; a mixed/unkeyed batch
+    // remains one-shot and keeps the public stream-unavailable contract.
+    const allEventsAreReplaySafe =
+      events.length > 0 &&
+      events.every(
+        (event) =>
+          typeof event.idempotencyKey === "string" && event.idempotencyKey.trim().length > 0,
+      );
+    const append = () => Promise.resolve(this.durableObjectStub.append(...events));
+    const invocation = allEventsAreReplaySafe
+      ? retryIdempotentDurableObjectOperation({
+          operation: append,
+          onRetry: ({ attempt, error, maxAttempts }) => {
+            console.info("idempotent stream append retrying after Durable Object lifecycle reset", {
+              attempt,
+              error,
+              eventCount: events.length,
+              maxAttempts,
+              path: this.props.path,
+              projectId: this.props.projectId,
+            });
+          },
+        })
+      : append();
+    const result = await invocation.catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
@@ -1762,6 +1789,27 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   }
 }
 
+function retryIdempotentWorkspaceOperation<Result>(args: {
+  call: () => Promise<Result>;
+  operation: string;
+  path: string;
+  projectId: string;
+}): Promise<Result> {
+  return retryIdempotentDurableObjectOperation({
+    operation: args.call,
+    onRetry: ({ attempt, error, maxAttempts }) => {
+      console.info("idempotent workspace operation retrying after Durable Object lifecycle reset", {
+        attempt,
+        error,
+        maxAttempts,
+        operation: args.operation,
+        path: args.path,
+        projectId: args.projectId,
+      });
+    },
+  });
+}
+
 /**
  * Catalog of durable workspaces within one project: EVENT-SOURCED,
  * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
@@ -1826,8 +1874,15 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     // The whole lane runs inside the workspace Durable Object under its
     // serialized authority (birth is idempotent; a custom table converges via
     // one configured patch) — concurrent creators cannot interleave.
-    await workspace.durableObjectStub.ensureCreatedWith({
-      mounts: input.mounts === undefined ? undefined : normalizeWorkspaceMountKeys(input.mounts),
+    await retryIdempotentWorkspaceOperation({
+      call: async () =>
+        await workspace.durableObjectStub.ensureCreatedWith({
+          mounts:
+            input.mounts === undefined ? undefined : normalizeWorkspaceMountKeys(input.mounts),
+        }),
+      operation: "create",
+      path,
+      projectId: this.props.projectId,
     });
     return workspace;
   }
@@ -1887,7 +1942,12 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   }
 
   whoami(): Promise<string> {
-    return Promise.resolve(this.durableObjectStub.whoami());
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.whoami(),
+      operation: "whoami",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Restart the workspace's server-side object; the next request boots it fresh. */
@@ -1905,67 +1965,120 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** The folded configuration (birth certificate + configured patches). */
   getConfig(): Promise<WorkspaceConfig> {
-    return this.durableObjectStub.getConfig();
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.getConfig(),
+      operation: "getConfig",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
   configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig> {
+    // One-shot: a lost acknowledgement does not prove the patch event was not appended.
     return this.durableObjectStub.configure(input);
   }
 
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null> {
-    return this.durableObjectStub.readFile(path);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.readFile(path),
+      operation: "readFile",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null> {
-    return this.durableObjectStub.readFileBytes(path);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.readFileBytes(path),
+      operation: "readFileBytes",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Whether a path exists in the merged view. */
   exists(path: string): Promise<boolean> {
-    return this.durableObjectStub.exists(path);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.exists(path),
+      operation: "exists",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Write one file into the private overlay. */
   writeFile(path: string, content: string): Promise<void> {
-    return this.durableObjectStub.writeFile(path, content);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.writeFile(path, content),
+      operation: "writeFile",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Write raw bytes to one file in the private overlay. */
   writeFileBytes(path: string, data: Uint8Array): Promise<void> {
-    return this.durableObjectStub.writeFileBytes(path, data);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.writeFileBytes(path, data),
+      operation: "writeFileBytes",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Replace an exact string in one file (copies a mount file up first). */
   edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
+    // One-shot: replaying an exact replacement can observe its own first mutation.
     return this.durableObjectStub.edit(input);
   }
 
   /** Delete one file (whiteouts a mount copy; false when it did not exist). */
   deleteFile(path: string): Promise<boolean> {
+    // One-shot: replay would change the caller-visible true/false outcome.
     return this.durableObjectStub.deleteFile(path);
   }
 
   /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
   listAllFiles(): Promise<string[]> {
-    return this.durableObjectStub.listAllFiles();
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.listAllFiles(),
+      operation: "listAllFiles",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Merged file paths matching a glob pattern. */
   glob(pattern: string): Promise<string[]> {
-    return this.durableObjectStub.glob(pattern);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.glob(pattern),
+      operation: "glob",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
   reset(): Promise<void> {
-    return this.durableObjectStub.reset();
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.reset(),
+      operation: "reset",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */
   revert(path: string): Promise<void> {
-    return this.durableObjectStub.revert(path);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.revert(path),
+      operation: "revert",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Per-mount git surface. */
@@ -2013,17 +2126,28 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** Changes grouped by owning mount, plus the unmounted local scratch. */
   status(): Promise<WorkspaceStatus> {
-    return this.durableObjectStub.gitStatus();
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.gitStatus(),
+      operation: "git.status",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Commit one mount's changes to its repo's main branch. */
   commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
+    // One-shot: a lost acknowledgement does not prove the commit was not created.
     return this.durableObjectStub.gitCommit(input);
   }
 
   /** One mount's repo history, newest first. */
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]> {
-    return this.durableObjectStub.gitLog(input);
+    return retryIdempotentWorkspaceOperation({
+      call: async () => await this.durableObjectStub.gitLog(input),
+      operation: "git.log",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 }
 

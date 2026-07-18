@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { z } from "zod/v4";
 import type {
@@ -152,6 +153,42 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
       return Promise.resolve();
     },
   };
+}
+
+/**
+ * Idempotently provision one project for a Playwright test family in this
+ * deployed slot. The project identity is deterministic from the slot URL and
+ * family name, so repeated marathon invocations reuse its already-completed
+ * bootstrap while parallel invocations converge on the same birth events.
+ *
+ * Callers MUST give every mutable child (agent, stream, repo, workspace, and
+ * so on) a per-test path. Tests whose subject is project creation or isolation
+ * continue to use createAdminProject/createProjectFixture instead.
+ */
+export async function createReusableAdminProject(input: {
+  baseUrl: string;
+  family: string;
+}): Promise<ProjectIdentity> {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.family)) {
+    throw new Error(`Reusable project family must be a slug fragment; received ${input.family}.`);
+  }
+
+  const config = await resolveOsPlaywrightAuthConfig();
+  const origin = new URL(input.baseUrl).origin;
+  const identityHash = createHash("sha256").update(`${origin}\0${input.family}`).digest("hex");
+  const projectId = `prj_${identityHash.slice(0, 32)}`;
+  const slug = `e2e-${input.family}-family`;
+
+  using session = connectItx({
+    auth: { type: "admin-secret", secret: config.adminApiSecret },
+    baseUrl: origin,
+  });
+  // Admin callers may supply an id. create() is event-idempotent for that id,
+  // so two concurrent jobs cannot split one family slug across two projects.
+  using project = session.projects.create({ projectId, slug });
+  const identity = await project.identity();
+  console.log(`[project-reuse] using Playwright family project ${identity.slug} (${projectId})`);
+  return { id: identity.projectId, slug: identity.slug };
 }
 
 export async function mintIterateSession(input: {

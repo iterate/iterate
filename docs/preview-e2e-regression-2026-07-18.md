@@ -250,6 +250,49 @@ clean, while cross-test identity reuse has already produced stale-state flakes.
 If later evidence shows creation itself saturating, the safe reuse design is a
 bounded pool partitioned by test family, never one global project.
 
+Experiment 12 (head `47528196f`, Depot job `4qb8nf7gf7`) failed in **3m44s**
+and is not an acceptance run. OS deploy took 75.2s, the OS
+test phase 125.2s, Vitest 74s, and Playwright 118s with all 56 browser tests
+passing. Vitest exposed three retry events and one surviving matrix failure.
+The causes were not saturation:
+
+- parallel `workspace-files-transfer` runtimes used a unique workspace but
+  still shared the same two project-file paths, allowing one runtime's marker
+  to overwrite another's;
+- the nested-RpcTarget worker test crossed a code rollout and received
+  `stream-unavailable: Durable Object reset because its code was updated.`;
+- the event-sourced workspace test crossed the same rollout at a raw workspace
+  RPC boundary and received the untagged workerd reset.
+
+The file-transfer example now accepts per-runtime source, publication, and
+workspace paths. More importantly, first post-deploy traffic gets bounded
+product recovery at explicitly replay-safe boundaries rather than a sleep or
+whole-test rerun. A stream append is replayed only when every event carries a
+non-empty idempotency key. Workspace reads and set-style writes may retry an
+exact workerd lifecycle failure up to three total attempts; configuration
+patches, edits, deletes, git commits, and unkeyed/mixed stream appends remain
+one-shot. Application errors are never retried, and every recovery attempt is
+logged with its operation and object identity.
+
+The longest ordinary Playwright test in Experiment 12 was the browser chat
+proof at about 1.9 minutes because it created a project and waited for both the
+automatic onboarding greeting and a second LLM turn. That duplicated the
+separate onboarding smoke. The test now reuses one deterministic project for
+the `agent-chat` family but creates a unique agent path on every invocation;
+its retry-disabled focused preview proof passed in **14.3s** while still
+covering browser input, a real LLM turn, the durable `web-message-sent` event,
+and the live feed repaint. This is the bounded family reuse model: never a
+global mutable project, and never a shared mutable child address.
+
+A full retry-disabled local preview run then exercised that candidate's tests
+against the still-deployed Experiment 12 worker with the same parallel topology
+as CI. All five apps passed in **83.5s**: OS Vitest 65s, OS Playwright 82s, and
+streams-example 52.1s. The independent fresh-project smoke created its project
+in 4.9s; the family-reused browser chat completed in 15.7s. This is deliberately
+not counted as Experiment 13 because source and deployed product were different
+heads, but it validates the test-side speed and concurrency changes without a
+retry or a project-create capacity signal.
+
 That run also exposed an independent resource leak in slot handover. Reset took
 131.3s and deleted only 100 AI Search instances before its 90s deadline. The
 namespace still held 498 instances immediately after reset and 551 after the
@@ -581,9 +624,20 @@ observable.
   preparation, 8.6s build, and 37.9s upload/reconciliation; OS Vitest took
   160s. This is not a qualifying run and still supplies no evidence of project
   creation overload.
-- Next: run the parallel Experiment 12 candidate with overlapping deploy prep,
-  per-runtime deadlines, bounded sandbox-create recovery, condition-based
-  resume assertions, and complete retry telemetry. Once one full-fleet run is
+- 2026-07-18: experiment 12 failed in 3m44s (OS deploy 75.2s; OS tests 125.2s;
+  Vitest 74s; Playwright 118s). Its three retry events and surviving matrix
+  failure were a shared project-file path race plus two exact code-update DO
+  resets—not capacity rejection. The file paths are now per-runtime, replay-safe
+  DO operations have bounded lifecycle recovery, and the duplicated browser
+  onboarding/chat setup has been replaced by family project reuse plus a unique
+  agent; the focused browser proof passed in 14.3s.
+- 2026-07-18: a retry-disabled, production-shaped local run against the old
+  deployed head passed all five warm app suites in 83.5s (OS Vitest 65s,
+  Playwright 82s, streams-example 52.1s). Fresh project creation took 4.9s and
+  the family-reused chat proof took 15.7s. It validates the test topology but
+  cannot count toward acceptance because the product changes were not deployed
+  from the same head.
+- Next: run the parallel Experiment 13 candidate. Once one full-fleet run is
   clean and under three minutes, start the immutable-head 25-run proof, then
   the separate 15+ simultaneous preview-slot churn campaign. PR comments mirror
   each experiment and result rather than rewriting history here.

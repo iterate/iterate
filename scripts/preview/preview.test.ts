@@ -471,7 +471,8 @@ describe("preview test commands", () => {
     expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
-    expect(script).toContain("env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
+    expect(script).toContain("env E2E_PREVIEW_PARALLEL=1 PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
+    expect(script).toContain("env E2E_PREVIEW_PARALLEL=1 E2E_RETRY_TELEMETRY_FILE=");
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("& SMOKE_PID=$!");
     expect(script).toContain("& TUI_PID=$!");

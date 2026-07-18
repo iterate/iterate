@@ -15,6 +15,10 @@ const videoMode = process.env.VIDEO_MODE === "1";
 // outage/recovery windows with useful work. Outside preview, keep the public
 // `web` / `mobile` project interface unchanged.
 const previewSlowFirst = process.env.PLAYWRIGHT_PREVIEW_SLOW_FIRST === "1";
+// `pnpm preview test` runs outside GitHub Actions during local experiments but
+// still targets an isolated deployed slot. Treat it like CI for concurrency;
+// only a developer's single local OS server needs the one-worker default.
+const parallelDeployedSuite = !!process.env.CI || process.env.E2E_PREVIEW_PARALLEL === "1";
 const resumeAfterSuspendSpec = "**/stream-resume-after-suspend.spec.ts";
 // CI retry artifacts already include screenshots/traces; retaining videos can
 // leave ffmpeg workers alive after a retry and keep the job open.
@@ -40,9 +44,9 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   // Specs isolate mutable state with fresh projects or unique resource
   // namespaces in worker-local projects, so they remain parallel-safe. Run
-  // parallel in CI against a deployed slot; sequential locally so a single
-  // dev server isn't hammered.
-  fullyParallel: !!process.env.CI,
+  // parallel against a deployed preview slot (CI or `pnpm preview test`);
+  // sequential only against a developer's single local server.
+  fullyParallel: parallelDeployedSuite,
   forbidOnly: !!process.env.CI,
   // One retry in CI — the only retry layer, per the fleet-wide policy
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
@@ -53,7 +57,7 @@ export default defineConfig({
   // onboarding smoke (aggregate peak 38). The trace audit found no
   // capacity rejection under the overlapping lanes; lane timing and retry
   // telemetry keep any future saturation visible.
-  workers: process.env.CI ? 12 : 1,
+  workers: parallelDeployedSuite ? 12 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],

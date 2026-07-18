@@ -48,6 +48,41 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
   return flags.durableObjectReset === true || flags.retryable === true || flags.overloaded === true;
 }
 
+/** A deploy/eviction reset should normally clear on the next DO incarnation. */
+export const IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS = 3;
+
+/**
+ * Retry an explicitly idempotent Durable Object operation only when workerd
+ * classifies the rejection as a lifecycle failure. This helper deliberately
+ * says "idempotent" in its name: callers must prove that a committed result
+ * whose acknowledgement was lost can be replayed without duplicating or
+ * changing the outcome. Application errors are never retried, and repeated
+ * lifecycle failures stay bounded and observable through `onRetry`.
+ */
+export async function retryIdempotentDurableObjectOperation<Result>(args: {
+  operation: () => Promise<Result>;
+  onRetry?: (context: { attempt: number; error: unknown; maxAttempts: number }) => void;
+}): Promise<Result> {
+  for (let attempt = 1; attempt <= IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await args.operation();
+    } catch (error) {
+      if (
+        attempt === IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS ||
+        !isDurableObjectLifecycleError(error)
+      ) {
+        throw error;
+      }
+      args.onRetry?.({
+        attempt,
+        error,
+        maxAttempts: IDEMPOTENT_DURABLE_OBJECT_LIFECYCLE_MAX_ATTEMPTS,
+      });
+    }
+  }
+  throw new Error("idempotent Durable Object operation exhausted its bounded lifecycle retry");
+}
+
 /**
  * Rethrow `error` tagged with {@link STREAM_UNAVAILABLE_MESSAGE_PREFIX} when
  * it is a DO-lifecycle failure, unchanged otherwise. `.catch` this onto stream

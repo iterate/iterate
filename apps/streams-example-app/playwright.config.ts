@@ -9,6 +9,7 @@ const localUrl = "http://127.0.0.1:5173";
 // target; a loopback WORKER_URL is the auth-less playground. Gate storageState
 // on the SAME predicate so the config never points at a file setup skipped.
 const usesSavedSession = resolveDeployedEnv(workerUrl) !== null;
+const parallelDeployedSuite = !!process.env.CI || process.env.E2E_PREVIEW_PARALLEL === "1";
 
 export default defineConfig({
   testDir: "e2e/playwright",
@@ -19,11 +20,11 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   // Every test creates its own unique stream paths and its own browser
   // contexts (fresh OPFS origin per context), so tests are independent.
-  // Parallel in CI so the FULL suite fits the preview sub-lane watchdog
-  // (docs/testing.md#retries-and-timeouts); sequential locally, where the
-  // manual lane often shares a single vite dev server with a human.
-  fullyParallel: !!process.env.CI,
-  workers: process.env.CI ? 4 : 1,
+  // Parallel on a deployed preview (CI or `pnpm preview test`) so the FULL
+  // suite fits the sub-lane watchdog (docs/testing.md#retries-and-timeouts);
+  // sequential only when a manual lane shares a local Vite server.
+  fullyParallel: parallelDeployedSuite,
+  workers: parallelDeployedSuite ? 4 : 1,
   // Fleet-wide CI retry policy (docs/testing.md#retries-and-timeouts): one
   // retry re-rolls an isolated platform blip; a real regression still fails
   // both attempts fast.

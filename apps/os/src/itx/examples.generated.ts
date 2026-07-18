@@ -439,25 +439,27 @@ return {
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+const sourceFilePath = vars.sourceFilePath ?? "/examples/transfer.txt";
+const publishedFilePath = vars.publishedFilePath ?? "/examples/package-from-workspace.json";
 
 // files -> workspace: pull a stored file into the checkout. put() string data
 // must be base64, so encode plain text as bytes instead.
-await itx.files.get("/examples/transfer.txt").put({
+await itx.files.get(sourceFilePath).put({
   data: new TextEncoder().encode(vars.note ?? "born in itx.files"),
   contentType: "text/plain",
 });
-const stored = await itx.files.get("/examples/transfer.txt").bytes();
+const stored = await itx.files.get(sourceFilePath).bytes();
 await workspace.writeFileBytes("/imported/transfer.txt", stored);
 const inWorkspace = await workspace.readFile("/imported/transfer.txt");
 
 // workspace -> files: publish a checkout file (here the seeded package.json)
 // to project file storage and mint a shareable signed URL.
 const packageJsonBytes = await workspace.readFileBytes("/package.json");
-const published = await itx.files.get("/examples/package-from-workspace.json").put({
+const published = await itx.files.get(publishedFilePath).put({
   data: packageJsonBytes,
   contentType: "application/json",
 });
-const url = await itx.files.get("/examples/package-from-workspace.json").url();
+const url = await itx.files.get(publishedFilePath).url();
 
 return {
   inWorkspace,

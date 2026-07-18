@@ -354,12 +354,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "workspace-files-transfer": {
-    // Fresh workspace per run (same identity reasoning as above); the files
-    // paths are shared but every put() overwrites, and `note` makes each
-    // run's transferred content self-identifying.
+    // Fresh workspace and project-file paths per runtime. A shared project is
+    // safe only when every mutable address is isolated: parallel puts to the
+    // old constant source path could make one runtime read another's marker.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({
       note: `transfer-${marker}`,
+      publishedFilePath: `/examples/package-from-workspace-${marker}.json`,
+      sourceFilePath: `/examples/transfer-${marker}.txt`,
       workspacePath: `/workspaces/examples/transfer-${marker}`,
     }),
     assert: (result, ctx, expect) => {
@@ -367,7 +369,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
         inWorkspace: `transfer-${ctx.marker}`,
         published: {
           contentType: "application/json",
-          path: "/examples/package-from-workspace.json",
+          path: `/examples/package-from-workspace-${ctx.marker}.json`,
         },
       });
       expect((result as { published: { size: number } }).published.size).toBeGreaterThan(0);

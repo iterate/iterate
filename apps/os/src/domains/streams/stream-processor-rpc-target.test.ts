@@ -129,6 +129,80 @@ describe("StreamRpcTarget", () => {
     }
   });
 
+  it("retries an append after a lifecycle reset only when every event has an idempotency key", async () => {
+    const lifecycleError = Object.assign(new Error("code was updated"), {
+      durableObjectReset: true,
+    });
+    const committed = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "deploy-retry-1",
+      offset: 1,
+      path: "/events",
+      type: "events.iterate.com/test/idempotent-append",
+    } satisfies StreamEvent;
+    const append = vi
+      .fn<() => Promise<StreamEvent[]>>()
+      .mockRejectedValueOnce(lifecycleError)
+      .mockResolvedValueOnce([committed]);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return { append } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    try {
+      await expect(
+        stream.append({
+          idempotencyKey: committed.idempotencyKey,
+          type: committed.type,
+        }),
+      ).resolves.toEqual([committed]);
+      expect(append).toHaveBeenCalledTimes(2);
+      expect(info).toHaveBeenCalledWith(
+        "idempotent stream append retrying after Durable Object lifecycle reset",
+        expect.objectContaining({ attempt: 1, eventCount: 1, path: "/events" }),
+      );
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("does not replay a mixed append batch when any event lacks an idempotency key", async () => {
+    const lifecycleError = Object.assign(new Error("code was updated"), {
+      durableObjectReset: true,
+    });
+    const append = vi.fn(async () => {
+      throw lifecycleError;
+    });
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return { append } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream.append(
+        {
+          idempotencyKey: "safe-half",
+          type: "events.iterate.com/test/idempotent-append",
+        },
+        { type: "events.iterate.com/test/unkeyed-append" },
+      ),
+    ).rejects.toThrow("stream-unavailable: code was updated");
+    expect(append).toHaveBeenCalledOnce();
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();
