@@ -186,13 +186,13 @@ describe("userspace GitHub pull-request routing", () => {
           },
         },
         {
-          idempotencyKey: "github-pr/metadata",
+          idempotencyKey: "github-pr/summary",
           payload: {
             activity: "Reviewing acme/widgets#7",
             summary: "Reviewing pull request #7 in acme/widgets and reporting findings on GitHub.",
             title: "PR #7",
           },
-          type: "events.iterate.com/agent/metadata-changed",
+          type: "events.iterate.com/agent/summary-updated",
         },
       ],
     });
@@ -349,8 +349,8 @@ describe("userspace GitHub pull-request routing", () => {
     );
 
     expect(test.agentAppendBatches[0]?.events[1]).toEqual({
-      type: "events.iterate.com/agent/metadata-changed",
-      idempotencyKey: "github-pr/metadata",
+      type: "events.iterate.com/agent/summary-updated",
+      idempotencyKey: "github-pr/summary",
       payload: {
         title: "PR #7",
         activity: "Reviewing renamed/widgets-next#7",

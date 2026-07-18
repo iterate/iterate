@@ -261,7 +261,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       create:
         "Create the generic agent machinery on this stream and wait until the agent, capability-host, and singleton collection processors have reduced the birth.",
       message: "Send a message to this agent — THE inbound door for every caller.",
-      setMetadata: "Merge human-readable metadata for this agent.",
       ask: "Send-and-wait convenience: appends a message and resolves with the agent's next chat reply on this stream.",
       addFiles: "Store files AND make them part of this agent's conversation in one call.",
       __describe:
@@ -282,7 +281,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamEvent",
       "AgentChat",
       "FileData",
-      "AgentMetadataPatch",
       "AgentFileAttachment",
       "Description",
     ],
@@ -1307,16 +1305,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/**\n * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as\n * base64 (optionally a full `data:` URL) — that is what Workers AI image\n * models return, and the whole point of accepting strings is piping\n * `itx.ai.run` output straight into storage.\n */\nexport type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;",
     summary: "Bytes accepted by every file-writing surface.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "AgentMetadataPatch",
-    kind: "typeAlias",
-    sourceText:
-      '/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */\nexport type AgentMetadataPatch = {\n  title?: string | null | undefined;\n  summary?: string | null | undefined;\n  activity?: string | null | undefined;\n  waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;\n  pinned?: boolean | undefined;\n};',
-    summary:
-      "A partial presentation-metadata update; null clears an optional field and omission preserves it.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

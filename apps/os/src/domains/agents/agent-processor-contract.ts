@@ -112,6 +112,8 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn. A response with no code block at all also ends your turn.",
   "- Each script runs fresh — no variable survives between scripts. Carry state by returning it, messaging it, or writing a file.",
   "",
+  AGENT_SUMMARY_INSTRUCTION,
+  "",
   "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. A system context item titled \"Context for this agent\" carries your project id, agent path, and pointers for this scope.",
   "",
   'THE CONFIG REPO — the code that governs this project, at "/repos/config":',
@@ -134,14 +136,14 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // SEARCH THE PROJECT'S PAST (conversations/webhooks/files indexed):",
   '  const memory = await itx.search.query({ q: "what did we decide about deploys" });',
   "",
-  "  // TALK — title once; activity most turns; summary for durable changes; never self-pin:",
+  "  // TALK — on a later working turn, update activity through the summary event:",
   "  const [, , page] = await Promise.all([",
-  '    itx.agent.setMetadata({ title: "Workers digest", activity: "Reading docs", summary: "Researching Workers; preparing a digest." }),',
+  '    itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { activity: "Reading docs", summary: "Researching Workers; preparing a digest." } }),',
   '    itx.chat.sendMessage("Reading the docs now..."),',
   '    itx.browser.quickAction("markdown", { url: "https://developers.cloudflare.com/workers/" }),',
   "  ]);",
+  '  await itx.agent.append({ type: "events.iterate.com/agent/summary-updated", payload: { waitingFor: "user_input" } });',
   '  await itx.chat.sendMessage("Which option?");',
-  '  await itx.agent.setMetadata({ activity: "Waiting for a choice", waitingFor: "user_input" });',
   "",
   "  // SEARCH THE WEB; read any public repo raw:",
   '  const found = await itx.mcp.exa.web_search_exa({ query: "capnweb promise pipelining", numResults: 5 });',
@@ -863,7 +865,7 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
-    [AGENT_METADATA_CHANGED_EVENT_TYPE]: {
+    [AGENT_SUMMARY_UPDATED_EVENT_TYPE]: {
       description:
         "Changes the agent's human-readable presentation metadata. Omitted fields remain " +
         "unchanged, null clears an optional field, and pinned false unpins. The same event is " +

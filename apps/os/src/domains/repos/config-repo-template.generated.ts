@@ -790,8 +790,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      },\n" +
       "    },\n" +
       "    {\n" +
-      "      type: \"events.iterate.com/agent/metadata-changed\",\n" +
-      "      idempotencyKey: \"github-pr/metadata\",\n" +
+      "      type: \"events.iterate.com/agent/summary-updated\",\n" +
+      "      idempotencyKey: \"github-pr/summary\",\n" +
       "      payload: {\n" +
       "        title: `PR #${number}`,\n" +
       "        activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,\n" +

@@ -363,8 +363,8 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
       },
     },
     {
-      type: "events.iterate.com/agent/metadata-changed",
-      idempotencyKey: "github-pr/metadata",
+      type: "events.iterate.com/agent/summary-updated",
+      idempotencyKey: "github-pr/summary",
       payload: {
         title: `PR #${number}`,
         activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,

@@ -3,13 +3,13 @@
 //
 // Rewritten new-style for itx from the pre-migration (git history)
 // reference. The processor owns no event types of its own: Slack presentation
-// is a pure paint of the agent's canonical metadata and exact runtime counts.
+// is a pure paint of the agent's canonical summary and exact runtime counts.
 
 import { z } from "zod";
 import { defineProcessorContract, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { AgentMetadata } from "../agents/agent-presence.ts";
+import { AgentSummary } from "../agents/agent-presence.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";
 

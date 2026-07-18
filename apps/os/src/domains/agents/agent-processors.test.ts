@@ -3068,7 +3068,7 @@ describe("semantic waiting", () => {
       path: "/agents/test",
     });
     const state = reduceAgentEvents([
-      event(AGENT_METADATA_CHANGED_EVENT_TYPE, { waitingFor: "user_input" }, 1),
+      event(AGENT_SUMMARY_UPDATED_EVENT_TYPE, { waitingFor: "user_input" }, 1),
       event(
         "events.iterate.com/agents/context-added",
         {
@@ -3087,7 +3087,7 @@ describe("semantic waiting", () => {
       ),
     ]);
 
-    expect(state.metadata.waitingFor).toBe("timer");
+    expect(state.summary.waitingFor).toBe("timer");
     expect(state.waitingForSinceOffset).toBe(3);
   });
 
@@ -3101,7 +3101,7 @@ describe("semantic waiting", () => {
     const externalRunner = agentRunner(external, externalStream);
     await externalStream.append(
       {
-        type: AGENT_METADATA_CHANGED_EVENT_TYPE,
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         payload: { waitingFor: "user_input" },
       },
       systemContext(),
@@ -3129,7 +3129,7 @@ describe("semantic waiting", () => {
     const continuationRunner = agentRunner(continuation, continuationStream);
     await continuationStream.append(
       {
-        type: AGENT_METADATA_CHANGED_EVENT_TYPE,
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         payload: { waitingFor: "timer" },
       },
       {
@@ -3151,6 +3151,6 @@ describe("semantic waiting", () => {
           event.payload?.clearWaitingForThroughOffset !== undefined,
       ),
     ).toBe(false);
-    expect(continuationRunner.currentState.metadata.waitingFor).toBe("timer");
+    expect(continuationRunner.currentState.summary.waitingFor).toBe("timer");
   });
 });

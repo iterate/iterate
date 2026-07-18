@@ -429,14 +429,6 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Merge human-readable metadata for this agent. Omitted properties remain
-   * unchanged; null clears an optional property; pinned false unpins. Title is
-   * a stable identity, activity is the current-condition sentence updated as
-   * work moves through phases, summary is one or two durable sentences, and
-   * waitingFor declares a semantic dependency once current runtime is zero.
-   */
-  setMetadata(input: AgentMetadataPatch): Promise<StreamEvent>;
-  /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -2565,6 +2557,16 @@ export type AgentEventInput =
       | { waitingFor: null; clearWaitingForThroughOffset: number }
     >
   | TypedConsumedEventInput<
+      "events.iterate.com/agent/summary-updated",
+      {
+        title?: string | null | undefined;
+        summary?: string | null | undefined;
+        activity?: string | null | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+        pinned?: boolean | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
       "events.iterate.com/agent/token-usage-reported",
       {
         llmRequestOffset: number;
@@ -2799,15 +2801,6 @@ export type StreamEvent = {
  * `itx.ai.run` output straight into storage.
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
-
-/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
-export type AgentMetadataPatch = {
-  title?: string | null | undefined;
-  summary?: string | null | undefined;
-  activity?: string | null | undefined;
-  waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-  pinned?: boolean | undefined;
-};
 
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time

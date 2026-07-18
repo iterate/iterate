@@ -33,7 +33,7 @@ export function SidebarAgents({
     // beyond PINNED_LIMIT drop out of the sidebar entirely (their roots are
     // filtered too); the /agents catalog keeps them one click away.
     const pinned = pinnedAgentShortcuts(forest).slice(0, PINNED_LIMIT);
-    const roots = forest.filter((node) => !node.agent.metadata.pinned).slice(0, ROOT_LIMIT);
+    const roots = forest.filter((node) => !node.agent.summary.pinned).slice(0, ROOT_LIMIT);
     return [...pinned, ...roots];
   }, [forest]);
 

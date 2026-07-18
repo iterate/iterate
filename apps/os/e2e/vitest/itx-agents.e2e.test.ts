@@ -88,20 +88,20 @@ test("agent create installs only generic machinery; later events configure it", 
   );
 });
 
-test("Agent scripts update presentation metadata via itx.agent.setMetadata", async () => {
+test("Agent scripts update their summary through the typed append door", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-set-metadata" });
-  const agentPath = `/agents/set-metadata-${crypto.randomUUID()}`;
+  using project = itx.projects.create({ slug: "agent-update-summary" });
+  const agentPath = `/agents/update-summary-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
 
-  const metadataPatch = agent.stream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/metadata-changed"],
+  const summaryUpdate = agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/agent/summary-updated"],
     predicate: (event) =>
       (event.payload as { title?: string } | undefined)?.title === "Lisbon trip",
     timeoutMs: 30_000,
@@ -111,17 +111,20 @@ test("Agent scripts update presentation metadata via itx.agent.setMetadata", asy
     agent.stream,
     fencedAgentScript(
       defineItxScript<{ agent: Agent }>(async (itx) => {
-        await itx.agent.setMetadata({
-          title: "Lisbon trip",
-          summary: "Planning a three-day Lisbon trip and comparing the practical options.",
-          activity: "Comparing flights",
+        await itx.agent.append({
+          type: "events.iterate.com/agent/summary-updated",
+          payload: {
+            title: "Lisbon trip",
+            summary: "Planning a three-day Lisbon trip and comparing the practical options.",
+            activity: "Comparing flights",
+          },
         });
       }).code,
     ),
   );
 
-  expect(await metadataPatch).toMatchObject({
-    type: "events.iterate.com/agent/metadata-changed",
+  expect(await summaryUpdate).toMatchObject({
+    type: "events.iterate.com/agent/summary-updated",
     payload: {
       title: "Lisbon trip",
       summary: "Planning a three-day Lisbon trip and comparing the practical options.",
@@ -129,13 +132,13 @@ test("Agent scripts update presentation metadata via itx.agent.setMetadata", asy
     },
   });
 
-  // The same canonical metadata fold feeds the project projection and painters.
+  // The same canonical summary fold feeds the project projection and painters.
   await waitForCondition(
     async () => {
       const snapshot = await agent.processor.snapshot();
-      return snapshot.state.metadata.title === "Lisbon trip";
+      return snapshot.state.summary.title === "Lisbon trip";
     },
-    { description: "metadata.title folded into agent state", timeoutMs: 30_000 },
+    { description: "summary.title folded into agent state", timeoutMs: 30_000 },
   );
 });
 

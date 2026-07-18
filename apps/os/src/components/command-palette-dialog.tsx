@@ -35,7 +35,7 @@ import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathAncestors } from "~/lib/stream-links.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
-import { patchAgentMetadata } from "~/components/agents/agent-metadata.ts";
+import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
 import {
   buildAgentForest,
   flattenVisibleAgentRows,
@@ -105,7 +105,7 @@ export function CommandPaletteDialog({
   }
 
   async function togglePinned(agent: AgentRecord): Promise<void> {
-    await patchAgentMetadata(scope, agent.path, { pinned: !agent.metadata.pinned });
+    await updateAgentSummary(scope, agent.path, { pinned: !agent.summary.pinned });
   }
 
   if (!liveIndex) {

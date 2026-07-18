@@ -41,7 +41,7 @@ import {
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
-import { applyAgentMetadataPatch, deriveAgentRuntime } from "./agent-presence.ts";
+import { applyAgentSummaryUpdate, deriveAgentRuntime } from "./agent-presence.ts";
 import {
   extractChunkText,
   jsonCompatible,
@@ -216,7 +216,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // reconcile lane. User/developer items may interrupt a request; an
         // assistant item may contain the one codemode script to execute.
         if (
-          previousState.metadata.waitingFor !== undefined &&
+          previousState.summary.waitingFor !== undefined &&
           contextClearsWaitingFor(event.payload)
         ) {
           blockProcessorWhile(() =>
@@ -1292,10 +1292,10 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
           : event.payload.waitingFor === null
             ? undefined
             : event.offset;
-      if (metadata === state.metadata && waitingForSinceOffset === state.waitingForSinceOffset) {
+      if (summary === state.summary && waitingForSinceOffset === state.waitingForSinceOffset) {
         return state;
       }
-      return { ...state, metadata, waitingForSinceOffset };
+      return { ...state, summary, waitingForSinceOffset };
     }
     default:
       return state;
@@ -1352,7 +1352,7 @@ function contextTriggerSource(
 
 /** A later external input wakes the agent and retires its prior dependency.
  * Script results and platform feedback are continuations of the same turn,
- * so they deliberately do not clear waiting metadata. */
+ * so they deliberately do not clear the waiting summary. */
 function contextClearsWaitingFor(payload: AgentContextAddedEvent["payload"]): boolean {
   if (payload.role !== "user" && payload.role !== "developer") return false;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return false;

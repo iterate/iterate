@@ -14,7 +14,10 @@ import {
   EXEC_TYPESCRIPT_DESCRIPTION,
   inboundMcpServerInstructions,
 } from "../inbound-mcp-server/exec-typescript-description.ts";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
+import {
+  AGENT_SUMMARY_INSTRUCTION,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "./agent-processor-contract.ts";
 import {
   EMAIL_AGENT_SYSTEM_PROMPT,
   agentCreationForPath,
@@ -28,10 +31,12 @@ const CHARS_PER_TOKEN = 4;
 // capabilities were the two key bits the diet had cut too deep to keep).
 // Still an order of magnitude under the 33k it replaced — the next raise
 // should be argued in a PR, not absorbed.
-// 3500 → 3600 (2026-07-14): the agent-metadata teach (title alongside the
-// first message, activity freshness, semantic waiting) was an explicit product ask
-// and did not fit the previous ceiling's ~15-token headroom.
-const DEFAULT_PROMPT_TOKEN_CEILING = 3_600;
+// 3500 → 3600 (2026-07-14): the original presentation teach was an explicit
+// product ask and did not fit the previous ceiling's ~15-token headroom.
+// 3600 → 4100 (2026-07-18): summary became an event-first lifecycle with
+// mandatory first-turn title, second-turn activity, and final-turn waiting;
+// the explicit block is the behavior, not incidental prompt accretion.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_100;
 
 const CHANNEL_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -50,10 +55,34 @@ const CHANNEL_PROMPTS: Record<string, string> = {
   }),
 };
 
+const AGENT_PROMPTS: Record<string, string> = {
+  default: DEFAULT_AGENT_SYSTEM_PROMPT,
+  email: EMAIL_AGENT_SYSTEM_PROMPT,
+  slack: slackAgentSystemPrompt("main-slack"),
+  telegram: telegramAgentSystemPrompt({
+    agentPath: "/agents/telegram/main/chat-42",
+    chatId: "42",
+    connection: "main",
+  }),
+};
+
 test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(
     DEFAULT_PROMPT_TOKEN_CEILING * CHARS_PER_TOKEN,
   );
+});
+
+test("every agent prompt teaches the summary turn lifecycle and append event", () => {
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("FIRST TURN — TITLE IS MANDATORY");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("SECOND TURN — ACTIVITY IS MANDATORY");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("LAST TURN BEFORE USER INPUT — WAITING IS MANDATORY");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("events.iterate.com/agent/summary-updated");
+
+  for (const [channel, prompt] of Object.entries(AGENT_PROMPTS)) {
+    expect(prompt, `${channel} lacks the summary lifecycle block`).toContain(
+      AGENT_SUMMARY_INSTRUCTION,
+    );
+  }
 });
 
 test("no platform prompt embeds the type surface", () => {

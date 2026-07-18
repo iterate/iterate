@@ -19,7 +19,7 @@ const createdAt = "2026-07-17T10:00:00.000Z";
 function agent(path: string, input: Partial<AgentRecord> = {}): AgentRecord {
   return {
     path,
-    metadata: { pinned: false },
+    summary: { pinned: false },
     runtime: ZERO_AGENT_RUNTIME,
     timestamps: { createdAt, lastWorkAt: createdAt },
     ...input,
@@ -48,7 +48,7 @@ describe("agent forest", () => {
   test("aggregates descendant runtime, waits, counts, and latest work", () => {
     const records = Object.fromEntries(
       [
-        agent("/agents/root", { metadata: { pinned: false, waitingFor: "user_input" } }),
+        agent("/agents/root", { summary: { pinned: false, waitingFor: "user_input" } }),
         agent("/agents/root/child", {
           runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 2 },
           timestamps: { createdAt, lastWorkAt: "2026-07-17T11:00:00.000Z" },
@@ -67,7 +67,7 @@ describe("agent forest", () => {
   });
 
   test("keeps pinned children in the forest and also returns flat shortcuts", () => {
-    const child = agent("/agents/root/child", { metadata: { pinned: true } });
+    const child = agent("/agents/root/child", { summary: { pinned: true } });
     const records = {
       "/agents/root": agent("/agents/root"),
       [child.path]: child,
@@ -80,11 +80,11 @@ describe("agent forest", () => {
 
   test("search retains ancestors and reveals matching descendants", () => {
     const records = {
-      "/agents/root": agent("/agents/root", { metadata: { pinned: false, title: "Parent" } }),
+      "/agents/root": agent("/agents/root", { summary: { pinned: false, title: "Parent" } }),
       "/agents/root/child": agent("/agents/root/child", {
-        metadata: { pinned: false, activity: "Researching cows near Bath" },
+        summary: { pinned: false, activity: "Researching cows near Bath" },
       }),
-      "/agents/other": agent("/agents/other", { metadata: { pinned: false, title: "Other" } }),
+      "/agents/other": agent("/agents/other", { summary: { pinned: false, title: "Other" } }),
     };
     const rows = flattenVisibleAgentRows(buildAgentForest(records), new Set(), "cows");
 
@@ -127,7 +127,7 @@ describe("agent forest", () => {
         const urlPrefix = "https://example.com/";
         const record = AgentRecord.parse(
           agent(path, {
-            metadata: {
+            summary: {
               pinned: index < 5,
               title: "t".repeat(AGENT_TITLE_MAX_LENGTH),
               activity: "a".repeat(AGENT_ACTIVITY_MAX_LENGTH),
@@ -144,7 +144,7 @@ describe("agent forest", () => {
             timestamps: {
               createdAt,
               lastWorkAt: createdAt,
-              metadataUpdatedAt: createdAt,
+              summaryUpdatedAt: createdAt,
               activityUpdatedAt: createdAt,
               runtimeUpdatedAt: createdAt,
             },

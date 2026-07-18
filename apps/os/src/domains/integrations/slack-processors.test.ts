@@ -13,8 +13,8 @@ import {
 const TEAM_ID = "T0TEAM";
 const CONNECTION = "nustom";
 
-function metadataChanged(payload: Record<string, unknown>) {
-  return { type: "events.iterate.com/agent/metadata-changed" as const, payload };
+function summaryUpdated(payload: Record<string, unknown>) {
+  return { type: "events.iterate.com/agent/summary-updated" as const, payload };
 }
 
 function newSlackRouter(input: ConstructorParameters<typeof SlackProcessor>[0]): SlackProcessor {
@@ -879,7 +879,7 @@ describe("SlackAgentProcessor", () => {
       await deliver();
       slackCalls.length = 0;
 
-      await stream.append(metadataChanged({ title: "Trip planning" }));
+      await stream.append(summaryUpdated({ title: "Trip planning" }));
       await deliver();
 
       expect(slackCalls).toEqual([
@@ -888,7 +888,7 @@ describe("SlackAgentProcessor", () => {
           body: { channel_id: "D123", thread_ts: "111.222", title: "Trip planning" },
         },
       ]);
-      expect(runner.currentState.metadata).toMatchObject({ title: "Trip planning" });
+      expect(runner.currentState.summary).toMatchObject({ title: "Trip planning" });
       expect(error).toHaveBeenCalledWith(
         "[slack-agent] Slack side effect failed",
         expect.objectContaining({ method: "assistant.threads.setTitle" }),
@@ -910,11 +910,11 @@ describe("SlackAgentProcessor", () => {
       payload: assistantMessageWebhookPayload(),
     });
     await deliver();
-    await stream.append(metadataChanged({ title: "Trip planning" }));
+    await stream.append(summaryUpdated({ title: "Trip planning" }));
     await deliver();
     slackCalls.length = 0;
 
-    await stream.append(metadataChanged({ title: null }));
+    await stream.append(summaryUpdated({ title: null }));
     await deliver();
     expect(slackCalls).toEqual([
       {
@@ -924,7 +924,7 @@ describe("SlackAgentProcessor", () => {
     ]);
 
     slackCalls.length = 0;
-    await stream.append(metadataChanged({ activity: "Waiting for a choice" }));
+    await stream.append(summaryUpdated({ activity: "Waiting for a choice" }));
     await deliver();
     expect(slackCalls).toEqual([]);
   });
@@ -945,11 +945,11 @@ describe("SlackAgentProcessor", () => {
         payload: assistantMessageWebhookPayload(),
       });
       await deliver();
-      await stream.append(metadataChanged({ title: "Trip planning" }));
+      await stream.append(summaryUpdated({ title: "Trip planning" }));
       await deliver();
       slackCalls.length = 0;
 
-      await stream.append(metadataChanged({ title: null }));
+      await stream.append(summaryUpdated({ title: null }));
       await deliver();
       expect(slackCalls).toEqual([
         {
@@ -977,7 +977,7 @@ describe("SlackAgentProcessor", () => {
         type: "events.iterate.com/slack/webhook-received",
         payload: assistantMessageWebhookPayload(),
       },
-      metadataChanged({ title: "Trip planning" }),
+      summaryUpdated({ title: "Trip planning" }),
     );
     setCase.clock.now += 16 * 60_000;
     await setCase.deliver();
@@ -994,8 +994,8 @@ describe("SlackAgentProcessor", () => {
         type: "events.iterate.com/slack/webhook-received",
         payload: assistantMessageWebhookPayload(),
       },
-      metadataChanged({ title: "Trip planning" }),
-      metadataChanged({ title: null }),
+      summaryUpdated({ title: "Trip planning" }),
+      summaryUpdated({ title: null }),
     );
     clearCase.clock.now += 16 * 60_000;
     await clearCase.deliver();
@@ -1040,7 +1040,7 @@ describe("SlackAgentProcessor", () => {
     expect(runner.currentState.eyesReactionMessageTs).toBe("111.444");
   });
 
-  it("a metadata-only patch paints the title but clears no transient status", async () => {
+  it("a summary-only update paints the title but clears no transient status", async () => {
     const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
@@ -1052,7 +1052,7 @@ describe("SlackAgentProcessor", () => {
 
     // The agent set its title before any runtime was announced. That says
     // nothing about work: no status clear, and the 👀 ack MUST survive.
-    await stream.append(metadataChanged({ title: "Trip planning" }));
+    await stream.append(summaryUpdated({ title: "Trip planning" }));
     await deliver();
 
     expect(slackCalls).toEqual([
@@ -1102,10 +1102,10 @@ describe("SlackAgentProcessor", () => {
       streamPath: "/agents/slack/nustom/c123/ts-111-222",
       threadTs: "111.222",
     });
-    const metadata = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/metadata-changed",
+    const summaries = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/summary-updated",
     );
-    expect(metadata).toHaveLength(0);
+    expect(summaries).toHaveLength(0);
     const bindings = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/binding-set",
     );

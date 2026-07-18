@@ -50,14 +50,14 @@ export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen:
             <span className="min-w-0 flex-1 truncate text-sm">{agentTitle(agent)}</span>
             <StateDot state={state} className="size-1.5" />
           </span>
-          {agent.metadata.activity === undefined ? null : (
+          {agent.summary.activity === undefined ? null : (
             <span
               className={cn(
                 "block truncate text-[11px] text-muted-foreground",
                 state.active && "motion-safe:animate-pulse",
               )}
             >
-              {agent.metadata.activity}
+              {agent.summary.activity}
             </span>
           )}
         </span>
@@ -90,7 +90,7 @@ export function AgentListRow({
   const agent = node.agent;
   const displayState = agentNodeDisplayState(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const description = agent.metadata.activity ?? agent.metadata.summary;
+  const description = agent.summary.activity ?? agent.summary.summary;
   const descendantCount = node.aggregateAgentCount - 1;
   const expandable = node.children.length > 0 && onToggleChildren !== undefined;
   return (
@@ -132,7 +132,7 @@ export function AgentListRow({
           >
             {agentTitle(agent)}
           </button>
-          {agent.metadata.pinned ? (
+          {agent.summary.pinned ? (
             <Star
               className="size-3 shrink-0 self-center fill-amber-400 text-amber-500 group-hover/agent:opacity-0"
               aria-hidden
@@ -163,7 +163,7 @@ export function AgentListRow({
         </div>
       </div>
       <PinButton
-        pinned={agent.metadata.pinned}
+        pinned={agent.summary.pinned}
         onToggle={onTogglePinned}
         className="absolute right-1 top-1.5 opacity-0 focus-visible:opacity-100 group-hover/agent:opacity-100"
       />
@@ -188,7 +188,7 @@ export function AgentDetailCard({
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(() => agentTitle(agent));
-  const displayState = deriveAgentDisplayState(agent.runtime, agent.metadata.waitingFor);
+  const displayState = deriveAgentDisplayState(agent.runtime, agent.summary.waitingFor);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const counts = runtimeCountSummaries(agent);
   const focusTitleInput = useCallback((node: HTMLInputElement | null) => node?.focus(), []);
@@ -285,14 +285,14 @@ export function AgentDetailCard({
               <TooltipContent>Rename agent</TooltipContent>
             </Tooltip>
           ) : null}
-          <PinButton pinned={agent.metadata.pinned} onToggle={onTogglePinned} size="icon-sm" />
+          <PinButton pinned={agent.summary.pinned} onToggle={onTogglePinned} size="icon-sm" />
         </div>
       </div>
-      {agent.metadata.activity === undefined ? null : (
-        <p className="max-w-3xl text-sm">{agent.metadata.activity}</p>
+      {agent.summary.activity === undefined ? null : (
+        <p className="max-w-3xl text-sm">{agent.summary.activity}</p>
       )}
-      {agent.metadata.summary === undefined ? null : (
-        <p className="max-w-3xl text-sm text-muted-foreground">{agent.metadata.summary}</p>
+      {agent.summary.summary === undefined ? null : (
+        <p className="max-w-3xl text-sm text-muted-foreground">{agent.summary.summary}</p>
       )}
       <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1">
@@ -336,7 +336,7 @@ export function AgentCommandPresentation({
 }) {
   const displayState = agentNodeDisplayState(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const activity = node.agent.metadata.activity;
+  const activity = node.agent.summary.activity;
   const childCount = node.aggregateAgentCount - 1;
   const hasChildren = node.children.length > 0;
   return (
@@ -378,11 +378,11 @@ export function AgentCommandPresentation({
       <span
         data-agent-pin
         className="-m-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted"
-        title={node.agent.metadata.pinned ? "Unpin agent (Shift+P)" : "Pin agent (Shift+P)"}
+        title={node.agent.summary.pinned ? "Unpin agent (Shift+P)" : "Pin agent (Shift+P)"}
         aria-hidden
       >
         <Star
-          className={cn("size-3.5", node.agent.metadata.pinned && "fill-amber-400 text-amber-500")}
+          className={cn("size-3.5", node.agent.summary.pinned && "fill-amber-400 text-amber-500")}
         />
       </span>
     </>
@@ -464,7 +464,7 @@ function DetailTimestamps({
   const entries = [
     ["Created", timestamps.createdAt],
     ["Last work", timestamps.lastWorkAt],
-    ["Metadata updated", timestamps.metadataUpdatedAt],
+    ["Summary updated", timestamps.summaryUpdatedAt],
     ["Activity updated", timestamps.activityUpdatedAt],
     ["Runtime updated", timestamps.runtimeUpdatedAt],
   ].filter((entry): entry is [string, string] => entry[1] !== undefined);

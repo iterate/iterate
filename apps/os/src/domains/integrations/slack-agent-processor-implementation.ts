@@ -11,13 +11,13 @@
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
 //   activity is repainted once per at-head pass (`processEvent` under
-//   `delivery.caughtUp`) from current metadata/runtime instead of once per
+//   `delivery.caughtUp`) from the current summary/runtime instead of once per
 //   event.
 //
 // Slack's "is thinking..." status is intentionally transient. Non-zero
-// projected runtime paints metadata.activity (or a factual fallback); the
+// projected runtime paints summary.activity (or a factual fallback); the
 // debounced zero snapshot clears both status and 👀 even when semantic
-// metadata says the agent is waiting for a user, timer, or external event.
+// summary says the agent is waiting for a user, timer, or external event.
 
 import {
   isAgentRuntimeZero,
@@ -87,9 +87,9 @@ export class SlackAgentProcessor extends StreamProcessor<
           channel: event.payload.config.channel,
           threadTs: event.payload.config.threadTs,
         };
-      case "events.iterate.com/agent/metadata-changed": {
-        const metadata = applyAgentMetadataPatch(state.metadata, event.payload);
-        return metadata === state.metadata ? state : { ...state, metadata };
+      case AGENT_SUMMARY_UPDATED_EVENT_TYPE: {
+        const summary = applyAgentSummaryUpdate(state.summary, event.payload);
+        return summary === state.summary ? state : { ...state, summary };
       }
       case "events.iterate.com/slack/thread-route-configured":
         return {
@@ -152,8 +152,7 @@ export class SlackAgentProcessor extends StreamProcessor<
       }
       if (
         event.type === "events.iterate.com/stream/processor-revived" ||
-        (event.type === "events.iterate.com/agent/metadata-changed" &&
-          Object.hasOwn(event.payload, "title"))
+        (event.type === AGENT_SUMMARY_UPDATED_EVENT_TYPE && Object.hasOwn(event.payload, "title"))
       ) {
         this.#unpaintedTitleReconcile = true;
       }
@@ -174,7 +173,7 @@ export class SlackAgentProcessor extends StreamProcessor<
       case "events.iterate.com/slack/thread-route-configured": {
         // Route context is captured in reduce(). The integration contributes
         // only the typed external fact; title, activity, and summary belong to
-        // the agent/human-authored metadata API.
+        // the agent/human-authored summary event.
         const channel = event.payload.channel;
         const connection = birthCertificate.config.connection;
         blockProcessorWhile(async () => {
@@ -517,7 +516,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (latest == null) return;
     if (args.state.birthCertificate === null) return;
     const connection = args.state.birthCertificate.config.connection;
-    const { channel, channelType, eyesReactionMessageTs, metadata, threadTs } = args.state;
+    const { channel, channelType, eyesReactionMessageTs, summary, threadTs } = args.state;
     if (channel == null || threadTs == null) return;
     const fresh = webhookAckIsFresh(latest, (this.deps.now ?? Date.now)());
     const hasAssistantThreadUi = slackConversationHasAssistantThreadUi({ channel, channelType });
@@ -527,7 +526,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // patches and revival. The painted-title record is written after the
     // processor classifies the Slack outcome; an unexpected cosmetic failure
     // is reported once rather than retried forever.
-    const title = metadata.title;
+    const title = summary.title;
     const slackTitle = title ?? "";
     if (
       hasAssistantThreadUi &&
@@ -556,7 +555,7 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     if (fallbackActivity !== undefined) {
       if (!fresh || !hasAssistantThreadUi) return;
-      const text = metadata.activity ?? fallbackActivity;
+      const text = summary.activity ?? fallbackActivity;
       const paintedText = `${text}…`;
       if (paintedText === this.#paintedActivityText) return;
       await this.#callSlackApi(connection, "assistant.threads.setStatus", {

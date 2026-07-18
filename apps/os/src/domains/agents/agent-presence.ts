@@ -34,16 +34,16 @@ export type AgentPath = z.infer<typeof AgentPath>;
 const AgentWaitingFor = z.enum(["user_input", "external_event", "timer"]);
 type AgentWaitingFor = z.infer<typeof AgentWaitingFor>;
 
-export const AgentMetadata = z.strictObject({
+export const AgentSummary = z.strictObject({
   title: boundedText(AGENT_TITLE_MAX_LENGTH).optional(),
   summary: boundedText(AGENT_SUMMARY_MAX_LENGTH).optional(),
   activity: boundedText(AGENT_ACTIVITY_MAX_LENGTH).optional(),
   waitingFor: AgentWaitingFor.optional(),
   pinned: z.boolean().default(false),
 });
-export type AgentMetadata = z.infer<typeof AgentMetadata>;
+export type AgentSummary = z.infer<typeof AgentSummary>;
 
-export const AgentMetadataPatch = z
+export const AgentSummaryUpdate = z
   .strictObject({
     title: boundedText(AGENT_TITLE_MAX_LENGTH).nullable().optional(),
     summary: boundedText(AGENT_SUMMARY_MAX_LENGTH).nullable().optional(),
@@ -51,11 +51,11 @@ export const AgentMetadataPatch = z
     waitingFor: AgentWaitingFor.nullable().optional(),
     pinned: z.boolean().optional(),
   })
-  .refine((patch) => Object.keys(patch).length > 0, {
-    message: "agent metadata patch must contain at least one property",
+  .refine((update) => Object.keys(update).length > 0, {
+    message: "agent summary update must contain at least one property",
   });
-/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
-export type AgentMetadataPatch = z.infer<typeof AgentMetadataPatch>;
+/** A partial agent-summary update; null clears an optional field and omission preserves it. */
+export type AgentSummaryUpdate = z.infer<typeof AgentSummaryUpdate>;
 
 /** Processor-authored metadata clear guarded by the source input which woke
  * the agent. Keeping this on metadata-changed lets every metadata projection
@@ -127,7 +127,7 @@ export type AgentBinding = z.infer<typeof AgentBinding>;
 const AgentCatalogTimestamps = z.strictObject({
   createdAt: z.iso.datetime(),
   lastWorkAt: z.iso.datetime(),
-  metadataUpdatedAt: z.iso.datetime().optional(),
+  summaryUpdatedAt: z.iso.datetime().optional(),
   activityUpdatedAt: z.iso.datetime().optional(),
 });
 type AgentCatalogTimestamps = z.infer<typeof AgentCatalogTimestamps>;
@@ -176,15 +176,15 @@ export type AgentDisplayState =
   | "waiting_for_timer"
   | "idle";
 
-export function applyAgentMetadataPatch(
-  metadata: AgentMetadata,
-  patch: AgentMetadataPatch,
-): AgentMetadata {
-  const next = { ...metadata };
+export function applyAgentSummaryUpdate(
+  summary: AgentSummary,
+  update: AgentSummaryUpdate,
+): AgentSummary {
+  const next = { ...summary };
   let changed = false;
 
   for (const key of ["title", "summary", "activity", "waitingFor"] as const) {
-    const value = patch[key];
+    const value = update[key];
     if (value === undefined) continue;
     if (value === null) {
       if (next[key] !== undefined) {
@@ -199,12 +199,12 @@ export function applyAgentMetadataPatch(
     }
   }
 
-  if (patch.pinned !== undefined && next.pinned !== patch.pinned) {
-    next.pinned = patch.pinned;
+  if (update.pinned !== undefined && next.pinned !== update.pinned) {
+    next.pinned = update.pinned;
     changed = true;
   }
 
-  return changed ? next : metadata;
+  return changed ? next : summary;
 }
 
 type AgentRuntimeSource = {
