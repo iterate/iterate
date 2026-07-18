@@ -96,9 +96,9 @@ describe("workerBuildKey", () => {
     // The toolchain version participates in every build key; the constant and
     // the workspace override backing apps/os's wrangler devDependency (what
     // the host/dev runner and the deploy seeder execute) must agree or two
-    // runners build different bytes under one key. The container lane needs
-    // no third pin: build-backend.ts installs wrangler@WRANGLER_VERSION from
-    // this same constant.
+    // runners build different bytes under one key. The container adapter
+    // imports these same constants; nub's internal pin has no workspace
+    // counterpart and is carried directly in BUILD_TOOLCHAIN_VERSION.
     const workspaceYaml = readFileSync(
       new URL("../../../../../pnpm-workspace.yaml", import.meta.url),
       "utf8",

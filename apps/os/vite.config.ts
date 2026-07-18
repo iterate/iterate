@@ -5,6 +5,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
+import posthog from "@posthog/rollup-plugin";
 import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
 import { canonicalizeOutputWranglerConfig } from "./scripts/canonicalize-output-wrangler-config.ts";
@@ -105,6 +106,7 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     tailwindcss(),
+    ...posthogSourceMaps(),
     canonicalizeOutputWranglerConfig(),
     devServerDiscoveryFile(),
     workerBuildDevEndpoint(),
@@ -119,6 +121,32 @@ export default defineConfig({
       : []),
   ],
 });
+
+/** Upload both browser and Worker maps only during a real deploy build. */
+function posthogSourceMaps(): Plugin[] {
+  if (!process.env.CLOUDFLARE_ENV) return [];
+
+  return [
+    // This is the official Rollup/Vite plugin. Its runtime hooks are compatible;
+    // Rollup and Vite 8 only disagree structurally on their resolveId contexts.
+    posthog({
+      personalApiKey: requiredBuildSecret("POSTHOG_PERSONAL_API_KEY"),
+      projectId: requiredBuildSecret("POSTHOG_PROJECT_ID"),
+      host: "https://eu.posthog.com",
+      sourcemaps: {
+        enabled: true,
+        releaseName: "iterate-os",
+        deleteAfterUpload: true,
+      },
+    }) as unknown as Plugin,
+  ];
+}
+
+function requiredBuildSecret(name: string) {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required for deployed OS builds`);
+  return value;
+}
 
 /**
  * Publishes this worktree's dev server (pid, port, url) to

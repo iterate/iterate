@@ -32,20 +32,20 @@ afterEach(() => {
 });
 
 describe("shouldKeepAppRequestLog", () => {
-  it("drops successful posthog-proxy traffic including 304 Not Modified", () => {
+  it("drops successful PostHog proxy traffic including 304 Not Modified", () => {
     expect(
       shouldKeepAppRequestLog({
-        path: "/posthog-proxy/static/web-vitals.js",
+        path: "/e/static/web-vitals.js",
         status: 304,
         hasError: false,
       }),
     ).toBe(false);
   });
 
-  it("keeps posthog-proxy responses that are not covered by the drop rule", () => {
+  it("keeps PostHog proxy responses that are not covered by the drop rule", () => {
     expect(
       shouldKeepAppRequestLog({
-        path: "/posthog-proxy/e",
+        path: "/e/e",
         status: 500,
         hasError: false,
       }),

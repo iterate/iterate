@@ -81,6 +81,20 @@ export function assertPreviewPetshopIntegrationConfigured(
   }
 }
 
+/** Build-only PostHog credentials: available to Vite, never shipped as Worker bindings. */
+export function posthogBuildEnv(secrets: Record<string, string | undefined>) {
+  return {
+    POSTHOG_PERSONAL_API_KEY: requiredBuildSecret(secrets, "POSTHOG_PERSONAL_API_KEY"),
+    POSTHOG_PROJECT_ID: requiredBuildSecret(secrets, "POSTHOG_PROJECT_ID"),
+  };
+}
+
+function requiredBuildSecret(secrets: Record<string, string | undefined>, name: string) {
+  const value = secrets[name]?.trim();
+  if (!value) throw new Error(`${name} is required to upload OS source maps`);
+  return value;
+}
+
 function osSmokes(env: DeployedEnv) {
   return [
     {
@@ -162,6 +176,7 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
+    buildEnv: (ctx) => posthogBuildEnv(ctx.secrets),
     prepare: async (ctx, secretValues, _credentials) => {
       // These are permanent fail-closed invariants, not a migration path.
       // Omitted Wrangler secrets survive code uploads, so check the current

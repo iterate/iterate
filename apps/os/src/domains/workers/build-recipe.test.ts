@@ -31,18 +31,19 @@ describe("workerBuildRecipe", () => {
     expect(recipe.outputDir).toBe(".iterate-build.out");
   });
 
-  it("uses pinned pnpm by default and always bundles via wrangler dry-run", () => {
+  it("uses nub then pinned pnpm for lockless installs and always bundles", () => {
     const withPackage = workerBuildRecipe({
       files: templateFiles,
       options: { entryPoint: "worker.ts" },
     });
-    expect(withPackage.commands.map((step) => step.command.split(" ")[0])).toEqual([
-      "if",
-      "WRANGLER_SEND_METRICS=false",
-    ]);
-    expect(withPackage.commands[0]!.command).toContain("--ignore-scripts");
-    expect(withPackage.commands[0]!.command).toContain("pnpm install --prod");
-    expect(withPackage.commands[0]!.command).toContain("--prefer-offline");
+    expect(withPackage.commands).toHaveLength(2);
+    expect(withPackage.commands[1]!.command).toContain("WRANGLER_SEND_METRICS=false wrangler");
+    // Lockless installs use nub's fast path and pinned pnpm fallback. Both
+    // keep the no-lifecycle-scripts security property and skip dev deps.
+    const install = withPackage.commands[0]!.command;
+    expect(install).toContain("nub install --ignore-scripts --prod");
+    expect(install).toContain("|| pnpm install --prod --ignore-scripts");
+    expect(install).toContain("--prefer-offline");
 
     const withoutPackage = workerBuildRecipe({
       files: { "worker.ts": "export default {};" },
@@ -68,6 +69,28 @@ describe("workerBuildRecipe", () => {
     expect(npmLocked).toContain("[ -f package-lock.json ]");
     expect(npmLocked).toContain("npm install --ignore-scripts");
     expect(npmLocked).toContain("--omit=dev");
+  });
+
+  it("strips dev dependencies only for the lockless nub fast path", () => {
+    const packageJson = JSON.stringify({
+      dependencies: { runtime: "1.0.0" },
+      devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate@head" },
+    });
+    const lockless = workerBuildRecipe({
+      files: { ...templateFiles, "package.json": packageJson },
+      options: { entryPoint: "worker.ts" },
+    });
+    expect(JSON.parse(lockless.files["package.json"]!)).toEqual({
+      dependencies: { runtime: "1.0.0" },
+    });
+
+    for (const lockfile of ["pnpm-lock.yaml", "package-lock.json"] as const) {
+      const locked = workerBuildRecipe({
+        files: { ...templateFiles, "package.json": packageJson, [lockfile]: "lock" },
+        options: { entryPoint: "worker.ts" },
+      });
+      expect(locked.files["package.json"]).toBe(packageJson);
+    }
   });
 
   it("materializes virtual modules as files aliased in the wrangler config", () => {

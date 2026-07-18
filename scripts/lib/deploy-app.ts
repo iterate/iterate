@@ -144,6 +144,10 @@ export async function deployApp<E extends DeployableEnv>(input: {
     CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
   };
   const secretValues = collectSecrets(ctx, input.requiredSecrets ?? [], input.optionalSecrets);
+  // Resolve build-only inputs before app-specific preparation mutates any
+  // deployed resource. A missing upload/build credential must fail the whole
+  // deploy before sidecars, queues, buckets, or migrations advance.
+  const buildEnv = input.buildEnv?.(ctx);
 
   const prepare = input.prepare;
   if (prepare) {
@@ -171,7 +175,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
         rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
         run("pnpm", ["exec", "vite", "build"], {
           cwd: input.appRoot,
-          env: { CLOUDFLARE_ENV: ctx.name, ...input.buildEnv?.(ctx) },
+          env: { CLOUDFLARE_ENV: ctx.name, ...buildEnv },
         });
       }),
       uploadPreparation,

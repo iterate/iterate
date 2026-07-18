@@ -18,6 +18,7 @@ import {
 } from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../config.ts";
 import appCss from "../styles.css?url";
+import { PosthogContextSync } from "~/components/posthog-context.tsx";
 import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
 import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
 import { vitePreloadRecoveryScript } from "~/lib/vite-preload-recovery.ts";
@@ -75,7 +76,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 const EVENT_DOCS_RESERVED_ROOT_SEGMENTS = new Set([
   "admin",
   "api",
-  "posthog-proxy",
+  "e",
   "projects",
   "sign-in",
   "sign-up",
@@ -109,6 +110,11 @@ function RootComponent() {
   return (
     <AppProviders
       config={config}
+      posthog={{
+        appStage: config?.cloudflare?.workerName,
+        capturePageviews: false,
+        proxyUrl: "/e",
+      }}
       devtools={
         OSDevtools ? (
           <Suspense fallback={null}>
@@ -119,6 +125,7 @@ function RootComponent() {
       forcedTheme="light"
     >
       <AuthClientProvider initialSession={authSession}>
+        <PosthogContextSync />
         <Outlet />
       </AuthClientProvider>
     </AppProviders>

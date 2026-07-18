@@ -94,6 +94,18 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeTanstackTodoWorkspace(): WorkspaceConfig {
+  return {
+    entry: ["vite.config.ts", "playwright.config.ts", "src/worker.ts!", "e2e/**/*.ts"],
+    project: ["src/**/*.{ts,tsx}!", "e2e/**/*.ts", "!dist/**!"],
+    vite: false,
+    // wrangler backs the @cloudflare/vite-plugin at runtime; nothing imports
+    // it directly in this minimal app.
+    ignoreDependencies: ["cloudflare", "wrangler"],
+    ignoreBinaries: ["playwright"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["vite.config.ts", "scripts/router.ts", "scripts/**/*.ts", "src/worker.ts!"],
@@ -179,6 +191,7 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
+    "!apps/tanstack",
     "packages/*",
     "!packages/shared",
     "!packages/ui",
@@ -195,11 +208,13 @@ const config: KnipConfig = {
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
+    "apps/tanstack/src/router.tsx": ["exports"],
   },
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
+    "apps/tanstack": makeTanstackTodoWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),

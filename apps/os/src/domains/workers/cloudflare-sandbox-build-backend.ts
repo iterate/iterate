@@ -3,6 +3,7 @@ import { builderPoolMember, WORKER_BUILDER_POOL_SIZE } from "./builder-pool.ts";
 import { getBuilderSandbox, type WorkerBuilderDurableObject } from "./builder-pool-sandbox.ts";
 import {
   collectRecipeOutputs,
+  NUB_VERSION,
   PNPM_VERSION,
   workerBuildRecipe,
   WRANGLER_VERSION,
@@ -15,11 +16,12 @@ import type {
   WorkerBuildRequest,
 } from "./worker-build-contract.ts";
 
-const TOOLCHAIN_ROOT = `/build/.toolchain/wrangler-${WRANGLER_VERSION}-pnpm-${PNPM_VERSION}`;
+const TOOLCHAIN_ROOT = `/build/.toolchain/wrangler-${WRANGLER_VERSION}-pnpm-${PNPM_VERSION}-nub-${NUB_VERSION}`;
 const TOOLCHAIN_BIN = `${TOOLCHAIN_ROOT}/bin`;
 const WRANGLER_BIN = `${TOOLCHAIN_BIN}/wrangler`;
 const PNPM_BIN = `${TOOLCHAIN_BIN}/pnpm`;
-const TOOLCHAIN_LOCK = `/tmp/.worker-build-toolchain-${WRANGLER_VERSION}-${PNPM_VERSION}.lock`;
+const NUB_BIN = `${TOOLCHAIN_BIN}/nub`;
+const TOOLCHAIN_LOCK = `/tmp/.worker-build-toolchain-${WRANGLER_VERSION}-${PNPM_VERSION}-${NUB_VERSION}.lock`;
 const EXEC_ENV = {
   BUN_INSTALL_BIN: TOOLCHAIN_BIN,
   BUN_INSTALL_CACHE_DIR: "/build/.bun-cache",
@@ -30,7 +32,7 @@ const EXEC_ENV = {
 };
 
 /** Bun installed the Wrangler pin in 1.9s in a live stock preview container;
- * the exact two-pin layout is covered by a local stock-toolchain probe. Sixty
+ * the exact three-pin layout is covered by a local toolchain probe. Sixty
  * seconds leaves ample registry headroom while keeping a sick member bounded
  * tightly enough for the one-hop failover to help CI. */
 const TOOLCHAIN_TIMEOUT_MS = 60_000;
@@ -129,12 +131,12 @@ async function buildOnPoolMember(
     | { status: "built"; output: WorkerBuildOutput }
     | { status: "failed"; error: unknown };
   try {
-    // The stock image includes Bun but neither pnpm nor Corepack. Bun installs
-    // the two fixed platform tools into a versioned shared directory; flock
+    // The stock image includes Bun but none of the three platform tools. Bun
+    // installs them into a versioned shared directory; flock
     // makes a cold burst pay that bootstrap exactly once per container.
     const toolchain = await sandbox.exec(
       withCommandTimeout(
-        `test -x '${WRANGLER_BIN}' -a -x '${PNPM_BIN}' || flock '${TOOLCHAIN_LOCK}' sh -c "test -x '${WRANGLER_BIN}' -a -x '${PNPM_BIN}' || bun install -g 'wrangler@${WRANGLER_VERSION}' 'pnpm@${PNPM_VERSION}' --no-progress --no-summary"`,
+        `test -x '${WRANGLER_BIN}' -a -x '${PNPM_BIN}' -a -x '${NUB_BIN}' || flock '${TOOLCHAIN_LOCK}' sh -c "test -x '${WRANGLER_BIN}' -a -x '${PNPM_BIN}' -a -x '${NUB_BIN}' || bun install -g 'wrangler@${WRANGLER_VERSION}' 'pnpm@${PNPM_VERSION}' '@nubjs/nub@${NUB_VERSION}' --trust @nubjs/nub --no-progress --no-summary"`,
         TOOLCHAIN_TIMEOUT_MS,
       ),
       { env: EXEC_ENV, timeout: TOOLCHAIN_TIMEOUT_MS + 15_000 },

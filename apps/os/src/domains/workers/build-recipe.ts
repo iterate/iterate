@@ -59,9 +59,10 @@ export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 /**
  * The fixed platform toolchain. These pins participate in every build key:
- * pnpm is the default package installer and wrangler owns the production-
- * shaped bundle. The stock container backend installs both with Bun into a
- * shared versioned directory on first use; neither is baked into the image.
+ * nub is the lockless fast path, pnpm is its fixed fallback/default for pnpm
+ * projects, and wrangler owns the production-shaped bundle. The stock
+ * container backend installs all three with Bun into a shared versioned
+ * directory on first use; none is baked into the image.
  *
  * The wrangler pin must agree with apps/os's own `wrangler` devDependency
  * (the host/dev runner and deploy seeder — asserted by build-key.test.ts).
@@ -69,7 +70,19 @@ export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
  */
 export const WRANGLER_VERSION = "4.107.0";
 export const PNPM_VERSION = "10.24.0";
-export const BUILD_TOOLCHAIN_VERSION = `wrangler@${WRANGLER_VERSION};pnpm@${PNPM_VERSION}`;
+
+/**
+ * The nub pin (https://github.com/nubjs/nub): a Rust package manager whose
+ * `install` is an order of magnitude faster than npm's for the trees it can
+ * resolve. The install command below runs nub first and falls back to pnpm on
+ * any nonzero exit or when nub is absent — nub's resolver is stricter than
+ * pnpm's, and the host/dev/seeder lanes may not have nub installed at all.
+ * Pinned pnpm reconciles whatever a failed nub attempt left behind. An
+ * explicit npm lockfile still selects npm so its package-manager semantics
+ * remain intact. The container adapter installs all three fixed tool pins.
+ */
+export const NUB_VERSION = "0.4.13";
+export const BUILD_TOOLCHAIN_VERSION = `wrangler@${WRANGLER_VERSION};pnpm@${PNPM_VERSION};nub@${NUB_VERSION}`;
 
 /**
  * Everything the recipe generates lives under this reserved name prefix in
@@ -107,10 +120,10 @@ export type WorkerBuildRecipe = {
  * Build a worker source snapshot into loader-ready modules:
  *
  * 1. Install production dependencies only when the snapshot has a
- *    `package.json`. pnpm is the default and reuses the builder member's
- *    content-addressed store. A committed npm lockfile deliberately selects
- *    npm so the source's package-manager semantics remain intact. Both lanes
- *    ignore lifecycle scripts: build INPUTS never execute code on the
+ *    `package.json`. Lockless sources try nub then pinned pnpm; pnpm projects
+ *    reuse the builder member's content-addressed store. A committed npm
+ *    lockfile deliberately selects npm so its semantics remain intact. Every
+ *    lane ignores lifecycle scripts: build INPUTS never execute code on the
  *    platform's behalf.
  * 2. `wrangler deploy --dry-run` — wrangler's bundling is the canonical
  *    nodejs_compat pipeline (node-builtin externalization, CJS require
@@ -180,12 +193,14 @@ export function workerBuildRecipe(input: {
       ...("package.json" in input.files
         ? [
             {
-              // A pnpm lockfile is strict; an npm lockfile preserves npm
-              // semantics; lockless sources use pinned pnpm without inventing
-              // a committed lock. --prefer-offline makes warm pool members
-              // reuse their shared stores without registry freshness checks.
+              // Honor explicit lockfile semantics. Lockless sources try nub's
+              // fast lane first, then pinned pnpm. The inner nub timeout keeps
+              // a hung fast path from consuming the whole dependency budget;
+              // on hosts without nub/coreutils (including macOS dev), the
+              // group simply falls through to pnpm. Every lane ignores source
+              // lifecycle scripts and installs production dependencies only.
               command:
-                "if [ -f pnpm-lock.yaml ]; then pnpm install --prod --ignore-scripts --prefer-offline --frozen-lockfile; elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline; else pnpm install --prod --ignore-scripts --prefer-offline --no-frozen-lockfile; fi",
+                "if [ -f pnpm-lock.yaml ]; then pnpm install --prod --ignore-scripts --prefer-offline --frozen-lockfile; elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline; else { command -v nub >/dev/null && timeout -k 5 30 nub install --ignore-scripts --prod --prefer-offline --node-linker hoisted; } || pnpm install --prod --ignore-scripts --prefer-offline --no-frozen-lockfile; fi",
               timeoutMs: DEPENDENCY_INSTALL_TIMEOUT_MS,
             },
           ]
@@ -199,6 +214,9 @@ export function workerBuildRecipe(input: {
     ],
     files: {
       ...input.files,
+      ...("package.json" in input.files && !hasDependencyLockfile(input.files)
+        ? { "package.json": withoutDevDependencies(input.files["package.json"]!) }
+        : {}),
       ...entryShim,
       [CONFIG_FILE]: JSON.stringify(config, null, 2),
       ...Object.fromEntries(
@@ -211,6 +229,30 @@ export function workerBuildRecipe(input: {
     mainModule: entryEmitName(ENTRY_SHIM_FILE),
     outputDir: OUTPUT_DIR,
   };
+}
+
+/**
+ * The lockless fast path's package.json, with devDependencies removed. They
+ * are dead weight in a production-only install and can make nub resolve a
+ * pkg.pr.new dev entry even under --prod. Locked projects retain their exact
+ * manifest so frozen pnpm/npm lockfile validation keeps its normal semantics.
+ * Malformed JSON passes through for the installer to classify clearly.
+ */
+function withoutDevDependencies(packageJson: string): string {
+  try {
+    const parsed = JSON.parse(packageJson) as Record<string, unknown>;
+    if (typeof parsed !== "object" || parsed === null) return packageJson;
+    delete parsed.devDependencies;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return packageJson;
+  }
+}
+
+function hasDependencyLockfile(files: Record<string, string>): boolean {
+  return (
+    "pnpm-lock.yaml" in files || "package-lock.json" in files || "npm-shrinkwrap.json" in files
+  );
 }
 
 /**
