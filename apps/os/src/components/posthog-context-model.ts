@@ -5,12 +5,6 @@ import type {
   PosthogProperties,
 } from "@iterate-com/ui/components/posthog";
 
-type RouteProject = {
-  id: string;
-  organizationId: string | null;
-  slug: string;
-};
-
 /**
  * The authenticated user is a PostHog person. Organization and project are
  * group types; modelling the user as a third group would duplicate identity
@@ -18,7 +12,7 @@ type RouteProject = {
  */
 export function osPosthogContext(
   session: PublicSessionResponse | null,
-  project: RouteProject | null,
+  project: { id: string; organizationId: string | null; slug: string } | null,
 ): {
   groups: PosthogGroup[];
   person: PosthogPerson;
