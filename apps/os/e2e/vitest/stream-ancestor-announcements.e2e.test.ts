@@ -62,9 +62,8 @@ test("a lost ancestor announcement heals on the stream's next wake", async () =>
       type: "events.iterate.test/announce-probe",
       payload: { marker },
     });
-    // Give the (background) birth announcement time to fail against the
-    // paused root before resuming; the heal below must come from the re-wake,
-    // not from a slow first attempt landing after the resume.
+    // Give the durable push attempt time to fail against the paused root before
+    // resuming. Its source cursor must remain behind the request fact.
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     const lost = await root.getEvent({ idempotencyKey: announcementKey("/", childPath) });
     expect(lost).toBeUndefined();
@@ -72,9 +71,9 @@ test("a lost ancestor announcement heals on the stream's next wake", async () =>
     await root.append({ type: "events.iterate.com/stream/resumed", payload: {} });
   }
 
-  // Next incarnation: `woken` re-announces. Without the re-announce-on-wake
-  // behavior the stream stays orphaned forever (the prd incident). kill()
-  // aborts its own incarnation, so the RPC itself always rejects.
+  // Next incarnation: the persisted subscription row and unacked request
+  // redeliver. kill() proves the recovery does not live in the old isolate;
+  // it aborts its own incarnation, so the RPC itself always rejects.
   await child.kill().catch(() => undefined);
   await child.getEvents({ limit: 1 });
 
@@ -98,8 +97,8 @@ test("a lost ancestor announcement heals on the stream's next wake", async () =>
 // 1. A newborn stream announces itself to EVERY ancestor, root included.
 // 2. An announcement lost in flight — the 2026-07-09 prd incident: a deploy
 //    rollover recycled the isolate mid birth turn, orphaning a Telegram
-//    connection stream and its chat stream — heals on the stream's next wake,
-//    because every `woken` fact re-announces with idempotent appends.
+//    connection stream and its chat stream — survives as an unacked durable
+//    delivery and redelivers after the source stream itself is restarted.
 
 const announcementKey = (ancestorPath: string, childPath: string) =>
   `child-stream-created:${ancestorPath}:${childPath}`;

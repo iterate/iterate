@@ -19,6 +19,12 @@ import {
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import {
+  ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY,
+  ancestorAnnouncementSetupEvents,
+  ancestorAnnouncementSubscriptionPayload,
+  buildAncestorAnnouncementAppends,
+} from "./ancestor-announcements.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
@@ -180,8 +186,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#coreProcessorState = this.#readCoreProcessorState();
 
     // The first boot appends the stream's birth certificate; every wake
-    // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
-    // also what re-establishes durable deliveries after hibernation.
+    // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out
+    // re-establishes durable deliveries after hibernation.
     //
     // Project streams are born with their ordinary platform feeds. Declaring
     // both here means there is no asynchronous wiring window before the first
@@ -215,6 +221,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
+    // This is also a deploy-time migration for streams born before durable
+    // ancestor delivery existed. It installs one journaled obligation after
+    // the subscription cursor, rather than relying on a droppable closure.
+    this.#ensureAncestorAnnouncementSubscription();
     this.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: crypto.randomUUID() },
@@ -824,19 +834,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
         return;
       }
-      case "events.iterate.com/stream/woken":
-        // Every incarnation re-announces this stream to its ancestors, not
-        // just the birth one. The appends are idempotent (stable key per
-        // ancestor/path pair, deduped in the ancestor's log), so re-announcing
-        // is a cheap no-op once landed — and an announcement lost in flight
-        // (isolate recycled by a deploy mid birth turn, transient ancestor
-        // failure) heals on the next wake instead of orphaning the stream:
-        // ancestors would otherwise never fold `child-stream-created`, leaving
-        // listings blind and birth reactions unarmed forever. Fire-and-forget
-        // by design — a newborn must never block its own boot on ancestor
-        // health (the parent's processor may be mid-append INTO this stream,
-        // so waiting on the parent's ack here is a reentrant deadlock).
-        this.#announceToAncestors(args);
+      case "events.iterate.com/stream/resumed":
+        // A paused pre-migration stream could not install its internal config
+        // in the constructor. Repair it in the first unpaused commit turn.
+        this.#ensureAncestorAnnouncementSubscription();
         return;
       default:
         return;
@@ -889,28 +890,48 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Tell every ancestor stream (up to the root) that this stream exists. */
-  #announceToAncestors(args: ReducedCoreEvent): void {
-    const path = args.state.path;
-    if (path === undefined || path === "/") return;
+  /** Install, repair, or explicitly resume the stream's durable topology obligation. */
+  #ensureAncestorAnnouncementSubscription(): void {
+    const state = this.#coreProcessorState;
+    if (state.path === undefined || state.path === "/" || state.paused) return;
 
-    const pathSegments = path.split("/").filter(Boolean);
-    const ancestorPaths = ["/"];
-    for (let index = 1; index < pathSegments.length; index += 1) {
-      ancestorPaths.push(`/${pathSegments.slice(0, index).join("/")}`);
+    const expected = ancestorAnnouncementSubscriptionPayload();
+    const existing = state.configuredSubscribersByKey[ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY];
+    if (
+      existing !== undefined &&
+      jsonValuesEqual(existing.latestConfiguredEvent.payload, expected)
+    ) {
+      if (existing.parkedAtOffset !== undefined) {
+        this.append({
+          type: "events.iterate.com/stream/subscription-resumed",
+          payload: { subscriptionKey: ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY },
+        });
+      }
+      return;
     }
 
-    this.#runInBackground(async () => {
-      await Promise.all(
-        ancestorPaths.map((ancestorPath) =>
-          this.#appendToStreamPath(ancestorPath, {
-            type: "events.iterate.com/stream/child-stream-created",
-            idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
-            payload: { childPath: path },
-          }),
-        ),
-      );
-    });
+    this.append(...ancestorAnnouncementSetupEvents());
+  }
+
+  /**
+   * Internal push receiver on the project root. The source spine owns the
+   * cursor and awaits this whole fan-out; partial success is safe because
+   * every ancestor append has a stable idempotency key.
+   */
+  async acceptAncestorAnnouncements(batch: StreamPushEventBatch): Promise<void> {
+    if (this.name.path !== "/") {
+      throw new Error("ancestor announcements must be delivered to the project root stream");
+    }
+    const appends = buildAncestorAnnouncementAppends(batch);
+    await Promise.all(
+      appends.map(async ({ path, event }) => {
+        if (path === "/") {
+          this.append(event);
+          return;
+        }
+        await this.#appendToStreamPath(path, event);
+      }),
+    );
   }
 
   /**

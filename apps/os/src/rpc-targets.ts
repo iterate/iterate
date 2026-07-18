@@ -83,6 +83,7 @@ import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
 import { AgentMetadataPatch } from "./domains/agents/agent-presence.ts";
+import { isAncestorAnnouncementPlatformEvent } from "./domains/streams/ancestor-announcements.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -552,6 +553,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    if (
+      this.props.auth.principal !== "trusted-internal" &&
+      events.some(isAncestorAnnouncementPlatformEvent)
+    ) {
+      throw new Error("ancestor-announcement delivery state is platform-owned");
+    }
     const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
@@ -819,6 +826,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
     return Promise.resolve(this.durableObjectStub.acceptCrossPost(batch));
+  }
+
+  /** @internal Durable topology receiver used only by the stream push spine. */
+  acceptAncestorAnnouncements(batch: StreamPushEventBatch): Promise<void> {
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("acceptAncestorAnnouncements is dialed by stream push subscriptions");
+    }
+    return Promise.resolve(this.durableObjectStub.acceptAncestorAnnouncements(batch));
   }
 
   /**
