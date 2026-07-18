@@ -1546,10 +1546,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // integration e2e talks to the slot's deployed dummy Petshop. Both must
     // finish deploying before OS starts.
     previewDependencies: ["auth", "dummy-petshop"],
-    // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
-    // ~60s as of 2026-07-02). Crossing them warns, never fails.
-    previewDeployBudgetMs: 55_000,
-    previewTestBudgetMs: 80_000,
+    // Budgets sit ~25% above the observed green floor after the TUI, Vitest,
+    // and Playwright lanes became sequential to cap deployed-slot load
+    // (deploy 89–92s, e2e 431–441s as of 2026-07-18). Crossing them warns,
+    // never fails.
+    previewDeployBudgetMs: 115_000,
+    previewTestBudgetMs: 560_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
