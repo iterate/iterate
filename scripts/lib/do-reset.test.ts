@@ -152,7 +152,7 @@ describe("resetWorkerDurableObjects", () => {
         durable_objects: { namespace_id: "retired-builder-namespace" },
       },
     ];
-    let deployedMetadata: Record<string, unknown> | undefined;
+    let deployedMetadata: unknown;
     const cf = vi.fn(async (path: string, init?: RequestInit) => {
       if (path === "/workers/scripts") return [{ id: "os-preview-4" }];
       if (path.startsWith("/workers/durable_objects/namespaces?")) {
@@ -185,7 +185,8 @@ describe("resetWorkerDurableObjects", () => {
         if (!(body instanceof FormData)) throw new Error("expected a FormData worker upload");
         const metadata = body.get("metadata");
         expect(typeof metadata).toBe("string");
-        deployedMetadata = JSON.parse(metadata as string) as Record<string, unknown>;
+        if (typeof metadata !== "string") throw new Error("expected string worker metadata");
+        deployedMetadata = JSON.parse(metadata);
         return undefined;
       }
       throw new Error(`unexpected Cloudflare request: ${path}`);

@@ -264,9 +264,8 @@ export async function resetWorkerDurableObjects(input: {
     await input.ctx.cf<{ id: string; name: string; durable_objects?: { namespace_id?: string } }[]>(
       `/containers/applications`,
     );
-  const namespaceById = new Map(
-    namespaces.map((namespace) => [namespace.namespaceId, namespace] as const),
-  );
+  const namespaceById = new Map<string, (typeof namespaces)[number]>();
+  for (const namespace of namespaces) namespaceById.set(namespace.namespaceId, namespace);
   const currentContainerClasses = new Set(input.containerClassNames);
   const retiredApplications = applications.filter((application) => {
     const namespaceId = application.durable_objects?.namespace_id;
