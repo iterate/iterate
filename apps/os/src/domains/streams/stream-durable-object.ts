@@ -456,6 +456,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#coreProcessorState.maxOffset;
   }
 
+  /**
+   * Both heads in one read, for exact-offset CAS appends that also need a
+   * fold barrier: `maxOffset` is the raw assignable head (ephemeral rows hold
+   * offsets too — the CAS target), while `maxDurableOffset` is the tail a
+   * default catch-up can actually fold through — the only head a
+   * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
+   * ephemeral suffix that processor reads never see.
+   */
+  getHeadOffsets(): { maxDurableOffset: number; maxOffset: number } {
+    return {
+      maxDurableOffset: this.#log.highestDurableOffset(),
+      maxOffset: this.#coreProcessorState.maxOffset,
+    };
+  }
+
   // ===========================================================================
   // The core processor.
   //

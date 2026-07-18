@@ -356,6 +356,36 @@ describe("triggering", () => {
     await waitForCompletion(harness);
   });
 
+  it("a foreign event occupying an occurrence key is surfaced loudly, never passed off as the trigger", async () => {
+    const harness = makeHarness();
+    const { clock, deliver, processor, state, stream } = harness;
+    await stream.append(setEvent("report"));
+    await deliver();
+
+    // Poison the predictable occurrence key with an unrelated raw append —
+    // the collision strict-append would have exposed.
+    const entry = state().schedules["report"]!;
+    await stream.append({
+      type: "events.iterate.com/example/noise",
+      idempotencyKey: `scheduler/trigger-requested:report:${entry.definedAtOffset}:${entry.nextTriggerAt}`,
+      payload: {},
+    });
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      clock.now = T0 + 61_000;
+      await processor.triggerDue();
+      // The occurrence cannot commit under its burned key — no silent
+      // "deduplicated" pretence, and a LOUD classified error instead.
+      expect(stream.events.filter((e) => e.type === REQUESTED_TYPE)).toHaveLength(0);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringMatching(/occupied by a foreign event/),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("a re-set one-shot with the same instant triggers again (incarnation in the idempotency key)", async () => {
     const harness = makeHarness();
     const { clock, deliver, processor, state, stream } = harness;

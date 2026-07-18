@@ -237,10 +237,34 @@ export class SchedulerProcessor extends StreamProcessor<
       // executionId, wall-clock requestedAt), and the stream REJECTS a
       // same-key append with a different body — so OBSERVE the committed
       // requests (independent point reads, in parallel) and skip them
-      // instead of re-appending; catch-up folds them.
+      // instead of re-appending; catch-up folds them. An event occupying the
+      // key that is NOT this occurrence's trigger request (a raw append, a
+      // past producer bug) means the occurrence can never commit under its
+      // key — surface that LOUDLY instead of passing it off as deduplicated
+      // work: strict append would have exposed exactly this collision.
       const committed = await Promise.all(
         keyed.map(({ idempotencyKey }) => this.stream.getEvent({ idempotencyKey })),
       );
+      for (const [index, event] of committed.entries()) {
+        if (event === undefined) continue;
+        const { entry, idempotencyKey, key } = keyed[index]!;
+        const payload: unknown = event.payload;
+        const matches =
+          event.type === "events.iterate.com/scheduler/trigger-requested" &&
+          typeof payload === "object" &&
+          payload !== null &&
+          "key" in payload &&
+          payload.key === key &&
+          "scheduledFor" in payload &&
+          payload.scheduledFor === new Date(entry.nextTriggerAt!).toISOString();
+        if (!matches) {
+          console.error(
+            `scheduler occurrence key "${idempotencyKey}" is occupied by a foreign event ` +
+              `(type ${event.type} at offset ${event.offset}) — the due trigger for schedule ` +
+              `"${key}" cannot commit under its occurrence key and is NOT being requested`,
+          );
+        }
+      }
       const requests = keyed
         .filter((_, index) => committed[index] === undefined)
         .map(({ entry, idempotencyKey, key }) => ({

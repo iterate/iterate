@@ -174,6 +174,30 @@ describe("registry + runner drive (the workspace DO's wiring)", () => {
 });
 
 describe("fold safety (thermo regressions)", () => {
+  test("a SECOND created event is skipped — the first certificate wins, the fold never wedges", async () => {
+    const driver = subject();
+    await driver.deliver({
+      events: [
+        event(1, "events.iterate.com/workspace/created", {
+          config: { mounts: { "/": configMount } },
+        }),
+        // Raw append under a different idempotency key: schema-valid, must
+        // fold as a no-op rather than throwing the cursor into a wedge.
+        event(2, "events.iterate.com/workspace/created", {
+          config: { mounts: { "/other": iterateMount } },
+        }),
+      ],
+      streamMaxOffset: 2,
+    });
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      offset: 2,
+      state: {
+        birthCertificate: { config: { mounts: { "/": configMount } } },
+        config: { mounts: { "/": configMount } },
+      },
+    });
+  });
+
   test("a patch adding an INCOMPLETE mount folds without wedging — the entry is dropped", async () => {
     const driver = subject();
     await driver.deliver({

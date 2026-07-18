@@ -38,8 +38,13 @@ const AGENT_BOOT_CONTEXT_REVISION = "2";
 export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "1";
 export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "1";
 export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "1";
-export const MCP_AGENT_SYSTEM_PROMPT_REVISION = "1";
-export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = "1";
+// The MCP and onboarding prompts EMBED the default prompt, so their event
+// bodies change whenever it does — their occurrence identity must move with
+// every constituent revision, or an existing stream rejects the re-append as
+// a different body under a reused key. The own component still covers their
+// own extension text (onboarding: also PROJECT_REPO_ONBOARDING_MD).
+export const MCP_AGENT_SYSTEM_PROMPT_REVISION = `1.${DEFAULT_AGENT_SYSTEM_PROMPT_REVISION}`;
+export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = `1.${DEFAULT_AGENT_SYSTEM_PROMPT_REVISION}`;
 
 type AgentSystemPromptPolicy = {
   content: string;
