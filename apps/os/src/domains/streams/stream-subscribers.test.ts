@@ -156,6 +156,7 @@ function makeHarness() {
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
   let runtimeChanges = 0;
+  const pendingDeliveryStates: boolean[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
 
   const pokes: StreamSubscriberWakeRequest[] = [];
@@ -201,7 +202,8 @@ function makeHarness() {
   };
 
   let storageReads = 0;
-  const subscribers = new StreamSubscribers({
+  let subscribers!: StreamSubscribers;
+  subscribers = new StreamSubscribers({
     idleTeardownMs: 60_000,
     hooks: {
       readEvents: ({ afterOffset, limit }) => {
@@ -234,6 +236,11 @@ function makeHarness() {
       recordEgress: (count, bytes) => egress.push({ count, bytes }),
       runtimeChanged: () => {
         runtimeChanges += 1;
+        pendingDeliveryStates.push(
+          Object.values(subscribers.connectionRuntimeState()).some(
+            (connection) => connection.hasPendingDelivery,
+          ),
+        );
       },
       now: () => now,
       random: () => 0.5,
@@ -259,6 +266,7 @@ function makeHarness() {
     armedAlarms,
     egress,
     runtimeChanges: () => runtimeChanges,
+    pendingDeliveryStates: () => pendingDeliveryStates,
     pokes,
     pushes,
     pushOutcomes,
@@ -1660,6 +1668,7 @@ describe("StreamSubscribers runtime metrics", () => {
     await h.settle();
     expect(settleBatch).toBeDefined();
     expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toBeUndefined();
+    expect(h.pendingDeliveryStates().slice(-2)).toEqual([false, true]);
     const runtimeChangesBeforeSettle = h.runtimeChanges();
 
     h.advanceTo(600);
@@ -1670,6 +1679,7 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 598,
       samples: 1,
     });
+    expect(h.pendingDeliveryStates().slice(-3)).toEqual([false, true, false]);
     expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforeSettle);
   });
 

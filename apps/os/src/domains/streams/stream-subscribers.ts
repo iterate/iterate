@@ -1141,6 +1141,10 @@ export class StreamSubscribers {
               },
             },
           );
+          // The durable wrapper increments its pending count synchronously;
+          // publish that transition before its eventual settle callback
+          // publishes the return to idle.
+          this.#hooks.runtimeChanged();
           await Promise.resolve();
         }
       } finally {

@@ -279,11 +279,9 @@ export function useIterateSessionQuery<T>({
  */
 type ItxEffectSignal = { readonly disposed: boolean };
 
-type RootConnection<Root> = {
-  key: unknown;
-  connect?: () => Promise<Root>;
-  missingMessage: string;
-};
+type RootConnection<Root> =
+  | { key: unknown; connect: () => Promise<Root> }
+  | { key: unknown; connect?: undefined; missingMessage: string };
 
 /**
  * Set up a live itx subscription (or any mount-scoped async itx work) and tear
@@ -302,7 +300,6 @@ type RootConnection<Root> = {
  *   }, []);
  *
  * A late cleanup (setup resolved after this run was superseded) still executes.
- * `itx` resolves from `opts.slug`, else the ambient <ProjectScope>.
  * `enabled: false` renders it fully inert.
  */
 function useReconnectableEffect<Root>(
@@ -375,34 +372,7 @@ const SUBSCRIBE_TIMED_OUT = Symbol("itx-subscribe-timed-out");
 
 export type ItxSubscriptionStatus = "connecting" | "live" | "error";
 
-/**
- * Hold ONE live server-push subscription for as long as the component is
- * mounted, owning the whole recovery story so consumers never hand-roll it:
- *
- *   - reconnect → re-subscribes on the fresh generation (via
- *     the reconnectable effect's generation dep; a failed dial rides
- *     the same dep — the failing dial has already published a paced successor;
- *   - SILENT death — DO restart, dropped callback, half-open TCP — → the
- *     `watchItxSubscription` watchdog re-subscribes (and, on a ping
- *     timeout, reports transport suspicion);
- *   - a TRANSPORT-failed subscribe → status "error", retried on a
- *     watchdog-shaped delay. Any other subscribe failure (auth, validation, a
- *     programming error) stays in "error" — retrying a permanent failure every
- *     ten seconds forever is a silent RPC loop, not recovery; `refresh()` or a
- *     reconnect re-runs it.
- *
- * `subscribe` opens the subscription and returns its handle; pushes go wherever
- * the caller's callbacks put them. A re-subscription's first push is the
- * recovery, so consumers must be replay-tolerant (merge by offset, or let
- * last-write-wins absorb it). On teardown the handle is unsubscribed AND
- * disposed (see {@link ItxLiveSubscriptionHandle}). `status` reads "live" while
- * established — through the sub-second gap of an invisible transport reconnect
- * it may briefly overstate (the re-run flips it to "connecting"); that bias
- * matches the no-flicker reconnect model. `refresh()` force re-subscribes;
- * `enabled: false` is inert; `deps` re-subscribe on change. `opts.slug`
- * subscribes to a specific project (e.g. ⌘K reaching a project from the app
- * shell) without suspending the tree.
- */
+/** Shared reconnect and watchdog engine behind the public subscription hooks. */
 function useRecoveringSubscription<Root>(
   subscribe: (root: Root) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
@@ -521,6 +491,16 @@ function useRecoveringSubscription<Root>(
   return { ...state, refresh };
 }
 
+/**
+ * Hold one raw project subscription for the component's lifetime. Reconnects,
+ * silent subscription death, and transport-failed subscribe attempts recover
+ * through the shared watchdog; permanent failures remain in `"error"` until
+ * `refresh()` or a reconnect. Re-subscription replays the first push, so sinks
+ * must be replay-tolerant. Teardown unsubscribes and disposes the handle.
+ *
+ * `enabled: false` is inert; `deps` re-subscribe on change. `opts.slug` targets
+ * a project outside the ambient {@link ProjectScope} without suspending.
+ */
 export function useItxSubscription(
   subscribe: (itx: ProjectStub) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
@@ -533,9 +513,12 @@ export function useItxSubscription(
     deps,
     {
       key: slug,
-      ...(slug === undefined ? {} : { connect: () => connectItx(slug) }),
-      missingMessage:
-        "useItxSubscription needs a project: pass { slug } or render under <ProjectScope slug>.",
+      ...(slug === undefined
+        ? {
+            missingMessage:
+              "useItxSubscription needs a project: pass { slug } or render under <ProjectScope slug>.",
+          }
+        : { connect: () => connectItx(slug) }),
     },
     opts?.enabled,
   );
@@ -582,9 +565,12 @@ export function useLiveState<State, Selected = State>(
     deps,
     {
       key: slug,
-      ...(slug === undefined ? {} : { connect: () => connectItx(slug) }),
-      missingMessage:
-        "useLiveState needs a project: pass { slug } or render under <ProjectScope slug>.",
+      ...(slug === undefined
+        ? {
+            missingMessage:
+              "useLiveState needs a project: pass { slug } or render under <ProjectScope slug>.",
+          }
+        : { connect: () => connectItx(slug) }),
     },
     opts?.enabled,
   );
@@ -609,7 +595,6 @@ export function useIterateSessionLiveState<State, Selected = State>(
     {
       key: "session",
       connect: connectIterateSession,
-      missingMessage: "useIterateSessionLiveState could not resolve the session.",
     },
     opts?.enabled,
   );

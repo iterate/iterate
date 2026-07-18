@@ -3,7 +3,21 @@
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type {
+  AgentUiPresenceEntry,
+  AgentUiProcessorAnnouncement,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
+
+const liveStateMocks = vi.hoisted(() => ({
+  project: vi.fn(),
+  session: vi.fn(),
+}));
+
+vi.mock("iterate/react", () => ({
+  useLiveState: liveStateMocks.project,
+  useIterateSessionLiveState: liveStateMocks.session,
+}));
 
 vi.mock("@iterate-com/ui/components/sheet", () => ({
   Sheet: ({ children, open }: { children: ReactNode; open: boolean }) =>
@@ -18,7 +32,7 @@ vi.mock("@iterate-com/ui/components/serialized-object-code-block", () => ({
   ),
 }));
 
-import { StreamStatePanel, type StreamRuntimePanelState } from "./stream-state-panel.tsx";
+import { StreamStatePanel } from "./stream-state-panel.tsx";
 
 const mountedRoots: Array<ReturnType<typeof createRoot>> = [];
 const reactEnvironment = globalThis as typeof globalThis & {
@@ -37,24 +51,36 @@ afterEach(async () => {
 });
 
 test("a pushed runtime update does not reload or blank a focused processor snapshot", async () => {
+  const projectRuntime = {
+    value: streamRuntimeState(5),
+    status: "live" as const,
+    error: undefined,
+    refresh: vi.fn(),
+  };
+  liveStateMocks.project.mockReturnValue(projectRuntime);
+  liveStateMocks.session.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
   const getProcessorRuntimeState = vi.fn().mockResolvedValue({
     snapshot: { offset: 5, state: { stable: true } },
     runtime: null,
   });
   const { host, root } = mountPanel();
-  const render = (streamRuntime: StreamRuntimePanelState) =>
+  const render = () =>
     root.render(
       <StreamStatePanel
         {...panelProps({
           focusedKey: processorPresence.subscriptionKey,
           getProcessorRuntimeState,
           presence: [processorPresence],
-          streamRuntime,
         })}
       />,
     );
 
-  await act(async () => render(streamRuntimeState(5)));
+  await act(async () => render());
   await vi.waitFor(() => {
     expect(host.querySelector("[data-testid=serialized-state]")?.textContent).toBe(
       '{"stable":true}',
@@ -62,7 +88,8 @@ test("a pushed runtime update does not reload or blank a focused processor snaps
   });
   expect(getProcessorRuntimeState).toHaveBeenCalledTimes(1);
 
-  await act(async () => render(streamRuntimeState(6)));
+  projectRuntime.value = streamRuntimeState(6);
+  await act(async () => render());
 
   expect(getProcessorRuntimeState).toHaveBeenCalledTimes(1);
   expect(host.textContent).not.toContain("Loading reduced state");
@@ -93,26 +120,26 @@ function panelProps(
     onClose: () => {},
     onClearClientDatabase: async () => {},
     getProcessorRuntimeState: async () => null,
-    onRefreshStreamRuntime: () => {},
-    streamRuntime: streamRuntimeState(5),
-    streamRuntimeError: undefined,
-    streamRuntimeFetching: false,
+    projectId: "prj_test",
+    streamPath: "/test",
     ...overrides,
   };
 }
+
+const processorAnnouncement: AgentUiProcessorAnnouncement = {
+  slug: "test",
+  version: "1.0.0",
+  description: "Test processor",
+  consumes: [],
+  emits: [],
+  ownedEvents: [],
+};
 
 const processorPresence: AgentUiPresenceEntry = {
   subscriptionKey: "processor:test",
   direction: "outbound",
   connected: true,
-  processor: {
-    slug: "test",
-    version: "1.0.0",
-    description: "Test processor",
-    consumes: [],
-    emits: [],
-    ownedEvents: [],
-  },
+  processor: processorAnnouncement,
 };
 
 const emptyMetrics = {
@@ -121,14 +148,21 @@ const emptyMetrics = {
   subscriber: undefined,
 };
 
-function streamRuntimeState(maxOffset: number): StreamRuntimePanelState {
+function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
   return {
     coreProcessorState: { maxOffset },
     runtime: {
       connections: {
         [processorPresence.subscriptionKey]: {
           subscriptionType: "ephemeral",
-          subscriber: { processor: { announcement: processorPresence.processor } },
+          startedAt: "2026-07-18T00:00:00.000Z",
+          cursor: maxOffset,
+          lag: 0,
+          batchesSent: 1,
+          eventsSent: 1,
+          bytesSent: 1,
+          subscriber: { processor: { announcement: processorAnnouncement } },
+          hasPendingDelivery: false,
         },
       },
       subscriptions: {},
@@ -138,15 +172,17 @@ function streamRuntimeState(maxOffset: number): StreamRuntimePanelState {
         ingress: {
           bytesPerSecond5s: 0,
           perSecond5s: 0,
+          lastMinute: { count: 0, bytes: 0, perSecond: 0 },
           series: { counts: [], bytes: [] },
         },
         egress: {
           bytesPerSecond5s: 0,
           perSecond5s: 0,
+          lastMinute: { count: 0, bytes: 0, perSecond: 0 },
           series: { counts: [], bytes: [] },
         },
       },
       storageSizeBytes: 0,
     },
-  } as unknown as StreamRuntimePanelState;
+  };
 }

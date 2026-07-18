@@ -11,6 +11,7 @@ import type {
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { ageStreamThroughputMetrics, type ProcessorRuntimeState } from "iterate/processors";
+import { useIterateSessionLiveState, useLiveState } from "iterate/react";
 import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
 import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
@@ -73,8 +74,6 @@ export function PresenceAvatar({
  * the stream's runtime LiveState while this sheet is open. Clicking a
  * subscriber drills into its announced contract and self-reported metrics.
  */
-export type StreamRuntimePanelState = StreamRuntimeDebugState;
-
 /**
  * Desired-state slice of a durable subscription, lifted from the latest
  * `subscription-configured` fact. Enough for the panel to explain a cross-post
@@ -119,8 +118,8 @@ type ProcessorPanelEntry = {
   configuredAtOffset?: number;
   /** Full configured payload details when this entry is a durable subscription. */
   config?: ConfiguredSubscriberDetails;
-  runtimeSubscription?: StreamRuntimePanelState["runtime"]["subscriptions"][string];
-  runtimeConnection?: StreamRuntimePanelState["runtime"]["connections"][string];
+  runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
+  runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
 };
 
 const CORE_PROCESSOR_KEY = "__stream-core__";
@@ -162,10 +161,8 @@ export function StreamStatePanel({
   onClose,
   onClearClientDatabase,
   getProcessorRuntimeState,
-  onRefreshStreamRuntime,
-  streamRuntime,
-  streamRuntimeError,
-  streamRuntimeFetching,
+  projectId,
+  streamPath,
   tokenUsage = null,
 }: {
   open: boolean;
@@ -181,13 +178,31 @@ export function StreamStatePanel({
   onClose: () => void;
   onClearClientDatabase: () => Promise<void>;
   getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeState | null>;
-  onRefreshStreamRuntime: () => void;
-  streamRuntime: StreamRuntimePanelState | undefined;
-  streamRuntimeError: string | undefined;
-  streamRuntimeFetching: boolean;
+  projectId: string | null;
+  streamPath: string;
   /** Agent context fullness + lifetime totals; shown in vitals when present. */
   tokenUsage?: AgentUiTokenUsage | null;
 }) {
+  const projectStreamRuntime = useLiveState(
+    (itx) => itx.streams.get(streamPath).liveState,
+    (state) => state,
+    [streamPath],
+    {
+      enabled: open && projectId !== null,
+      ...(projectId === null ? {} : { slug: projectId }),
+    },
+  );
+  const deploymentStreamRuntime = useIterateSessionLiveState(
+    (session) => session.streams.get(streamPath).liveState,
+    (state) => state,
+    [streamPath],
+    { enabled: open && projectId === null },
+  );
+  const streamRuntimeSubscription =
+    projectId === null ? deploymentStreamRuntime : projectStreamRuntime;
+  const streamRuntime = streamRuntimeSubscription.value;
+  const streamRuntimeError = streamRuntimeSubscription.error;
+  const streamRuntimeFetching = streamRuntimeSubscription.status === "connecting";
   const streamMaxOffset = readNumber(streamRuntime?.coreProcessorState, "maxOffset");
   const entries = useMemo(
     () => buildProcessorPanelEntries(presence, streamRuntime),
@@ -305,7 +320,7 @@ export function StreamStatePanel({
             onFocus={onFocus}
             onClose={onClose}
             onClearClientDatabase={onClearClientDatabase}
-            onRefreshStreamRuntime={onRefreshStreamRuntime}
+            onRefreshStreamRuntime={streamRuntimeSubscription.refresh}
             streamRuntimeFetching={streamRuntimeFetching}
             streamRuntimeError={streamRuntimeError}
             streamRuntime={streamRuntime}
@@ -319,7 +334,7 @@ export function StreamStatePanel({
             streamMaxOffset={streamMaxOffset}
             onRefreshRuntimeState={() => {
               if (focused.kind === "core") {
-                onRefreshStreamRuntime();
+                streamRuntimeSubscription.refresh();
               } else {
                 setRefreshKey((key) => key + 1);
               }
@@ -369,7 +384,7 @@ function ProcessorsOverview({
   onRefreshStreamRuntime: () => void;
   streamRuntimeFetching: boolean;
   streamRuntimeError: string | undefined;
-  streamRuntime: StreamRuntimePanelState | undefined;
+  streamRuntime: StreamRuntimeDebugState | undefined;
   tokenUsage: AgentUiTokenUsage | null;
 }) {
   const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
@@ -742,7 +757,7 @@ function ProcessorEntryButton({
 
 function buildProcessorPanelEntries(
   presence: readonly AgentUiPresenceEntry[],
-  streamRuntime: StreamRuntimePanelState | undefined,
+  streamRuntime: StreamRuntimeDebugState | undefined,
 ): ProcessorPanelEntry[] {
   const entries = new Map<string, ProcessorPanelEntry>();
   const coreConnections = readCoreConnections(streamRuntime?.coreProcessorState);

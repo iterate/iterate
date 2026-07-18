@@ -15,7 +15,6 @@ import {
   connectItx,
   connectIterateSession,
   reportTransportSuspicion,
-  useIterateSessionLiveState,
   useLiveState,
 } from "iterate/react";
 import type { Stream } from "../itx-api.generated.ts";
@@ -193,22 +192,6 @@ function MirroredProjectStreamView({
 
   const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
-  const projectStreamRuntime = useLiveState(
-    (itx) => itx.streams.get(streamPath).liveState,
-    (state) => state,
-    [streamPath],
-    {
-      enabled: panels.processorsPanelOpen && projectId !== null,
-      ...(projectId === null ? {} : { slug: projectId }),
-    },
-  );
-  const deploymentStreamRuntime = useIterateSessionLiveState(
-    (session) => session.streams.get(streamPath).liveState,
-    (state) => state,
-    [streamPath],
-    { enabled: panels.processorsPanelOpen && projectId === null },
-  );
-  const streamRuntime = projectId === null ? deploymentStreamRuntime : projectStreamRuntime;
   const activeMode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
   // Trimmed: a whitespace-only query must read as "no filter", not a LIKE
@@ -388,10 +371,8 @@ function MirroredProjectStreamView({
       onClose={panels.closeProcessorsPanel}
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
-      onRefreshStreamRuntime={streamRuntime.refresh}
-      streamRuntime={streamRuntime.value}
-      streamRuntimeError={streamRuntime.error}
-      streamRuntimeFetching={streamRuntime.status === "connecting"}
+      projectId={projectId}
+      streamPath={streamPath}
       tokenUsage={caps.agentFeed ? (presentedAgentUiState?.tokenUsage ?? null) : null}
     />
   );

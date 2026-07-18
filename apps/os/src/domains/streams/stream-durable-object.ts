@@ -102,6 +102,7 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  */
 export class StreamDurableObject extends DurableObject<Env> {
   #liveState!: LiveState<StreamRuntimeDebugState>;
+  #liveStateRefreshScheduled = false;
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
@@ -1320,9 +1321,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Materialize runtime state only while a live subscriber can observe it. */
+  /** Materialize at most once per mutation burst, and only while observed. */
   #refreshLiveState(): void {
-    if (this.#liveState?.observed === true) this.#liveState.setState(this.#readRuntimeState());
+    // Cursor reconciliation can reach this before the constructor assigns
+    // #liveState; the optional read is therefore intentional.
+    const liveState = this.#liveState;
+    if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
+    this.#liveStateRefreshScheduled = true;
+    queueMicrotask(() => {
+      this.#liveStateRefreshScheduled = false;
+      if (liveState.observed) liveState.setState(this.#readRuntimeState());
+    });
   }
 
   #readRuntimeState(): StreamRuntimeDebugState {
