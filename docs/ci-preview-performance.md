@@ -21,8 +21,8 @@ and cost.
 
 The OS deploy and the OS e2e lane are the long poles; the other apps finish in
 seconds and run alongside OS. The 15-minute workflow watchdog is an outer
-backstop, not the expected duration: each remote OS sub-lane retains its own
-360-second watchdog.
+backstop, not the expected duration: the onboarding, TUI, Vitest, and
+Playwright lanes retain their dedicated 180–480-second watchdogs.
 
 ## The optimizations (and why each one is load-bearing)
 

@@ -94,9 +94,10 @@ jobs:
     # Hard backstop on ONE attempt. After the TUI, Vitest, and Playwright
     # lanes were deliberately serialized to cap slot load, measured green
     # runs take ~9m30 end to end (OS e2e alone is 431–441s). Fifteen minutes
-    # leaves room above the measured phase budgets while each remote lane's
-    # own 360s watchdog still fails a wedge first. The outer bound continues
-    # to prevent the historical 31m and ~90m runaway attempts.
+    # leaves room above the measured phase budgets. Each remote lane retains
+    # its own 180–480s watchdog; this outer bound also catches combined lane,
+    # setup, or deploy degeneration and prevents the historical 31m and ~90m
+    # runaway attempts.
     timeout-minutes: 15
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
