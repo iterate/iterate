@@ -1,6 +1,6 @@
 ---
 state: todo
-priority: low
+priority: medium
 size: medium
 tags: [os, workspaces, architecture, durability]
 ---
@@ -25,6 +25,13 @@ updated while the overlay still carries the committed state.
   touches the workspace again, leaving the old shadow pinning old content —
   is the ordinary overlay-pins-a-path semantics, escapable via
   `revert`/`reset`.
+- The sharpest replay case (ambiguous commit retried AFTER another writer
+  advanced the same path re-asserts the old shadow) is real but is the SAME
+  outcome the platform's commit lane already permits for every caller:
+  `commitFiles` is last-writer-wins with no optimistic concurrency anywhere
+  (a late direct commit of the same bytes behaves identically). Receipts
+  change the DURABILITY of the RPC result, not the concurrency model — which
+  is why this is a follow-up rather than a blocker.
 
 ## What the receipt design adds (when worth it)
 

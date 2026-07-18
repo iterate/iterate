@@ -53,7 +53,9 @@ function fakeKv() {
   };
 }
 
-/** One fake repo: HEAD tree as a path→content map, commits recorded. */
+/** One fake repo: HEAD tree as a path→content map. FAITHFUL commits: changes
+ * APPLY to the tree (content and deletions) exactly like production main, so
+ * post-commit fall-through assertions test the real read-your-write shape. */
 function fakeRepo(tree: Record<string, string>) {
   const commits: { changes: unknown[]; message: string }[] = [];
   const repo: MountRepoAccess = {
@@ -69,6 +71,11 @@ function fakeRepo(tree: Record<string, string>) {
     listFiles: async () => ({ commitOid: "head-oid", paths: Object.keys(tree).sort() }),
     commitFiles: async (input) => {
       commits.push({ changes: input.changes, message: input.message });
+      for (const change of input.changes) {
+        if ("delete" in change && change.delete) delete tree[change.path];
+        else if ("content" in change) tree[change.path] = change.content;
+        else if ("contentBase64" in change) tree[change.path] = atob(change.contentBase64);
+      }
       return {
         branch: "main",
         changedPaths: input.changes.map((change) => change.path),
@@ -209,11 +216,13 @@ describe("git status, commit, and log", () => {
       message: "update worker",
     });
 
-    // The mount subtree cleared (worker.ts falls through to the repo again,
-    // the whiteout is gone) while the unmounted scratch survives.
-    await expect(core.readFile("/config/worker.ts")).resolves.toBe("export default {}");
-    await expect(core.readFile("/config/tasks/one.md")).resolves.toBe("# one");
+    // The mount subtree cleared: reads fall through to the NEW main — the
+    // committed content and the applied deletion — while scratch survives.
+    await expect(core.readFile("/config/worker.ts")).resolves.toBe("changed");
+    await expect(core.readFile("/config/tasks/one.md")).resolves.toBeNull();
     await expect(core.readFile("/scratch/notes.txt")).resolves.toBe("survives");
+    const statusAfter = await core.gitStatus();
+    expect(statusAfter.mounts.find((mount) => mount.path === "/config")?.changes).toEqual([]);
   });
 
   test("commit refuses to span mounts and names the scope choices", async () => {
