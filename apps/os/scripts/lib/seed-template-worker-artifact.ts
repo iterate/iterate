@@ -37,6 +37,97 @@ import {
 } from "../../src/domains/workers/build-recipe.ts";
 import { runWorkerBuildRecipeOnHost } from "./worker-build-host-runner.ts";
 
+const PACKAGE_READINESS_TIMEOUT_MS = 60_000;
+const PACKAGE_READINESS_POLL_INTERVAL_MS = 1_000;
+const PACKAGE_READINESS_REQUEST_TIMEOUT_MS = 5_000;
+
+/**
+ * Wait for pkg.pr.new's immutable commit tarball to become readable.
+ *
+ * Preview deploy and package publication are independent workflows. The URL
+ * is therefore the authoritative synchronization point: a completed GitHub
+ * job can still precede CDN visibility, while a 200 here is exactly what the
+ * following npm install needs. Only publication-shaped outcomes retry, and
+ * the wait is bounded so a failed publisher cannot stall a deploy forever.
+ */
+export async function waitForPublishedPackage(input: {
+  packageSpec: string;
+  fetch?: typeof fetch;
+  log?: (message: string) => void;
+  now?: () => number;
+  pollIntervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+}): Promise<void> {
+  const fetchPackage = input.fetch ?? fetch;
+  const log = input.log ?? console.log;
+  const now = input.now ?? Date.now;
+  const sleep =
+    input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const timeoutMs = input.timeoutMs ?? PACKAGE_READINESS_TIMEOUT_MS;
+  const pollIntervalMs = input.pollIntervalMs ?? PACKAGE_READINESS_POLL_INTERVAL_MS;
+  const startedAt = now();
+  const deadline = startedAt + timeoutMs;
+  let attempts = 0;
+  let lastOutcome = "not checked";
+  let announcedWait = false;
+
+  while (true) {
+    const remainingBeforeAttempt = deadline - now();
+    if (attempts > 0 && remainingBeforeAttempt <= 0) {
+      throw new Error(
+        `Package ${input.packageSpec} was not published within ${timeoutMs}ms (${lastOutcome}).`,
+      );
+    }
+
+    attempts += 1;
+    let response: Response | undefined;
+    try {
+      response = await fetchPackage(input.packageSpec, {
+        method: "HEAD",
+        redirect: "follow",
+        signal: AbortSignal.timeout(
+          Math.max(1, Math.min(PACKAGE_READINESS_REQUEST_TIMEOUT_MS, remainingBeforeAttempt)),
+        ),
+      });
+    } catch (error) {
+      lastOutcome = `request failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    if (response?.ok) {
+      if (announcedWait) {
+        log(
+          `package artifact available after ${((now() - startedAt) / 1_000).toFixed(1)}s ` +
+            `(${attempts} attempts): ${input.packageSpec}`,
+        );
+      }
+      return;
+    }
+
+    if (response) {
+      lastOutcome = `HTTP ${response.status}`;
+      if (response.status !== 404 && response.status !== 429 && response.status < 500) {
+        throw new Error(`Package readiness check failed for ${input.packageSpec}: ${lastOutcome}.`);
+      }
+    }
+
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      throw new Error(
+        `Package ${input.packageSpec} was not published within ${timeoutMs}ms (${lastOutcome}).`,
+      );
+    }
+    if (!announcedWait) {
+      announcedWait = true;
+      log(
+        `package artifact is not published yet (${lastOutcome}); waiting up to ` +
+          `${timeoutMs}ms: ${input.packageSpec}`,
+      );
+    }
+    await sleep(Math.min(pollIntervalMs, remaining));
+  }
+}
+
 export async function seedTemplateWorkerArtifact(input: {
   accountId: string;
   apiToken: string;
@@ -90,6 +181,16 @@ export async function seedTemplateWorkerArtifact(input: {
     await store.put(existing);
     log(`template worker artifact already seeded (${buildKey.slice(0, 12)}…) — TTL refreshed`);
     return { buildKey, seeded: false };
+  }
+
+  // pkg.pr.new publishes in a separate workflow from preview deploys. Do not
+  // turn its normal few-second visibility lag into a failed npm install; wait
+  // on the immutable URL itself. Cached seeds skip this synchronization.
+  if (input.iterateSdkPackageSpec?.startsWith("https://pkg.pr.new/")) {
+    await waitForPublishedPackage({
+      packageSpec: input.iterateSdkPackageSpec,
+      log,
+    });
   }
 
   log(`building template worker artifact ${buildKey.slice(0, 12)}… on the host toolchain`);
