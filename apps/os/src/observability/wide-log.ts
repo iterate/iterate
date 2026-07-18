@@ -68,6 +68,7 @@ export type WideLogger = {
   id(): string;
   set(fields: WideLogFields): void;
   setOutcome(outcome: string): void;
+  setOutcomeIfUnknown(outcome: string): void;
   info(message: string, fields?: WideLogFields): void;
   warn(message: string, fields?: WideLogFields): void;
 };
@@ -131,6 +132,12 @@ export const wideLogger: WideLogger = {
   setOutcome: (outcome) => {
     const store = mutableStore("setOutcome");
     if (store) store.event.outcome = safeSemanticValue(outcome, "unknown");
+  },
+  setOutcomeIfUnknown: (outcome) => {
+    const store = mutableStore("setOutcomeIfUnknown");
+    if (store?.event.outcome === "unknown") {
+      store.event.outcome = safeSemanticValue(outcome, "unknown");
+    }
   },
   info: (message, fields) => appendMessage("info", message, fields),
   warn: (message, fields) => appendMessage("warn", message, fields),

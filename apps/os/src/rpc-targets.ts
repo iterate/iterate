@@ -34,13 +34,10 @@ import {
   AGENT_RUNTIME_CHANGED_EVENT_TYPE,
   AGENT_WAITING_CLEARED_EVENT_TYPE,
 } from "@iterate-com/shared/agent-events";
-import type { LiveUpdate } from "iterate/live-state";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
-  LiveStateRpc,
-  LiveStateSubscriptionHandle,
   ProcessEventBatch,
   StreamPushEventBatch,
   ProcessorRuntimeState,
@@ -55,8 +52,14 @@ import type {
 } from "iterate/processors";
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
-import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
-import { disposeIgnoredRpcResult, LiveState, type LiveStateSubscription } from "iterate/live-state";
+import {
+  disposeIgnoredRpcResult,
+  LiveState,
+  LiveStateRpcTarget,
+  type LiveStateRpc,
+  type LiveStateSubscriptionHandle,
+  type LiveUpdate,
+} from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -93,11 +96,8 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import {
-  CONFIG_REPO_PATH,
-  defaultProjectWorkerRef,
-  isRepoNotSeededError,
-} from "./domains/repos/utils.ts";
+import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
+import { defaultProjectWorkerRef, isRepoNotSeededError } from "./domains/repos/utils.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
@@ -115,7 +115,7 @@ import {
   type SandboxProcessorState,
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import { isRootWorkspacePath, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
+import { normalizeWorkspaceMountKeys, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
@@ -301,9 +301,12 @@ import type {
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
 import {
+  authenticateProjectRequest,
   handleProjectAuthFetch,
   parseProjectAuthPolicy,
   projectAuthRequestFromRpc,
+  type ProjectAuthActor,
+  type ProjectAuthCredentials,
   type ProjectAuthPolicy,
   type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
@@ -348,11 +351,18 @@ import {
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
-  WorkspaceChange,
-  WorkspaceFileInfo,
+  WorkspaceCommitInput,
+  WorkspaceCommitResult,
   WorkspaceGitLogEntry,
-  WorkspacePublishResult,
+  WorkspaceGitLogInput,
+  WorkspaceStatus,
 } from "./domains/workspaces/types.ts";
+import type {
+  WorkspaceConfig,
+  WorkspaceConfigPatch,
+  WorkspaceMount,
+  WorkspaceProcessorState,
+} from "./domains/workspaces/workspace-processor-contract.ts";
 import {
   DynamicWorkerRunner,
   type DynamicWorkerTraceRole,
@@ -1738,25 +1748,30 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
 }
 
 /**
- * Catalog of durable workspaces within one project.
+ * Catalog of durable workspaces within one project: EVENT-SOURCED,
+ * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
+ * always warm). Every workspace is addressed by its FULL path under
+ * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
+ * `/repos/...`: an agent's workspace is the agent path under the prefix
+ * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
+ * scope), and standalone workspaces live under `/workspaces/<anything>`.
  *
- * `get("/")` is the project's ROOT workspace: a read-only, always-fresh
- * materialization of the config repo's main branch. Every other workspace is
- * addressed by its FULL path under `/workspaces/` — the same domain-prefix
- * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is
- * the agent path under the prefix (`/workspaces/agents/...`, exposed as
- * `itx.workspace` in that agent's scope), and standalone workspaces live
- * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the
- * root: writes stay local, missing reads fall through to latest main — no
- * clone, usable instantly.
+ * A workspace's identity + configuration are stream facts: `create({ path,
+ * mounts })` appends the `workspace/created` birth certificate to the
+ * workspace's own stream; `workspace/configured` patches the mount table. A
+ * workspace touched without an explicit create births itself with the default
+ * table (the config repo mounted at "/", committable) — so `get(path)` is
+ * always usable and behaves like the old single-parent overlay by default.
  */
 class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Durable workspace filesystems (Durable-Object-hosted, no container, always warm). get(\"/\") is the project's read-only ROOT workspace — always the latest main of the config repo. Other paths live under /workspaces/ and are instant copy-on-write overlays over the root: an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/", committable — the classic overlay); create({ path, mounts }) additionally converges a custom mount table (mount path → { repoPath, policy }) via one workspace/configured patch — the birth certificate itself is always the default table. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
       children: {
-        get: 'The workspace at a path — "/" for the read-only root (latest main), /workspaces/<name> for a private overlay.',
+        create:
+          "Ensure the workspace at a path and converge its mount table ({ path, mounts? }); idempotent — birth always carries the default table, custom tables land as one configured patch.",
+        get: "The workspace at a path (first touch births it with the default mount table).",
       },
       parent: "a project itx (itx.workspaces)",
     });
@@ -1767,7 +1782,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
+  /** The workspace at a path (first touch births it with the default mount table). */
   get(path: string): WorkspaceRpcTarget {
     return new WorkspaceRpcTarget({
       auth: this.props.auth,
@@ -1775,52 +1790,66 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
       projectId: this.props.projectId,
     });
   }
+
+  /**
+   * Create a workspace. Runs entirely inside the workspace Durable Object's
+   * serialized authority: birth is ensured (the certificate is ALWAYS the
+   * default table — identical body, so the idempotency key can never hit the
+   * stream's different-body rejection), then a custom `mounts` table
+   * converges via one validated `workspace/configured` patch. Idempotent.
+   */
+  async create(input: {
+    mounts?: Record<string, WorkspaceMount>;
+    path: string;
+  }): Promise<WorkspaceRpcTarget> {
+    const path = normalizeWorkspacePath(input.path);
+    const workspace = new WorkspaceRpcTarget({
+      auth: this.props.auth,
+      path,
+      projectId: this.props.projectId,
+    });
+    // The whole lane runs inside the workspace Durable Object under its
+    // serialized authority (birth is idempotent; a custom table converges via
+    // one configured patch) — concurrent creators cannot interleave.
+    await workspace.durableObjectStub.ensureCreatedWith({
+      mounts: input.mounts === undefined ? undefined : normalizeWorkspaceMountKeys(input.mounts),
+    });
+    return workspace;
+  }
 }
 
 /**
- * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm). The root workspace (`"/"`) is the
- * read-only, always-fresh materialization of the config repo's main branch.
- * Every other workspace is an OVERLAY over the root: reads see latest main
- * until a local write shadows a path, writes and deletes stay private, and
- * there is no clone — a new workspace is usable instantly. `git.commit`
- * commits the overlay's changes straight to the config repo's MAIN branch
- * (the same lane as `itx.repo.commitFiles`, so the project worker/website
- * redeploys automatically), then the overlay resets to mirror the new main.
- *
- * Constraints: the `.git` name is reserved (platform-managed). Large files
- * are fine (past ~1.5MB they are stored in R2 transparently).
+ * One durable workspace: an event-sourced, mount-routed private filesystem.
+ * Its mount table (getConfig/configure) maps repos into the tree: reads under
+ * a mount fall through to that repo's main at HEAD, writes land in a private
+ * copy-on-write local layer (large files spill to R2 transparently), and
+ * `git.commit({ scope })` turns ONE mount's changes into one commit on that
+ * repo's main (honoring the mount's policy). Paths outside every mount are
+ * private scratch. The `.git` name is reserved (platform-managed).
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
-    const isRoot = isRootWorkspacePath(this.props.path);
     return describeNode({
-      instructions: isRoot
-        ? "The project's ROOT workspace (\"/\"): a read-only, always-fresh checkout of the config repo's main branch — reads always see the latest commit on main. Writes are rejected (write in your own workspace, or commit to main via itx.repo). Every other workspace overlays this one."
-        : `A durable workspace at "${this.props.path}": an instant copy-on-write overlay over the config repo's latest main (no clone — reads fall through to main until a local write shadows a path; writes and deletes stay private until committed). Paths are absolute with "/" as the repo root. ` +
-          "workspace.git.commit({ message }) commits your changes to the config repo's MAIN branch — the project worker/website redeploys automatically; no branches, no push, no extra steps.",
+      instructions: `A workspace at "${this.props.path}" (event-sourced, mount-routed). Its mount table (getConfig/configure) maps repos into the tree — by default the config repo is mounted at "/", so reads see the repo's latest main until a local write shadows a path. Writes stay in a private overlay; git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is optional when one mount is dirty). Paths outside every mount are private scratch.`,
       children: {
-        appendFile: "Append to a file (copies a fallen-through file up first).",
-        cp: "Copy a file or directory ({ recursive } for trees).",
-        deleteFile: "Delete one file (false when it did not exist).",
-        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Private until committed via git.",
-        exists: "Whether a path exists.",
-        git: "Commit surface: status (changes vs main), commit (changes → the config repo's main), log (main's history).",
-        glob: "Files matching a glob pattern.",
+        configure:
+          "Patch configuration ({ config: { mounts } }) — deep-merged per mount point: unknown keys add mounts, partial values edit one mount, null removes one. Appends workspace/configured.",
+        deleteFile: "Delete one file (whiteouts a mount copy; false when it did not exist).",
+        edit: "Replace an exact string in one file (copies a mount file up first); private until committed.",
+        exists: "Whether a path exists in the merged view.",
+        getConfig: "The folded configuration (birth certificate + configured patches).",
+        git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
+        glob: "Merged file paths matching a glob pattern.",
         kill: "Restart the workspace's server-side object; the next request boots it fresh.",
-        listAllFiles: "Every file path in the merged view (sorted).",
-        mkdir: "Create a directory ({ recursive } for parents).",
-        mv: "Move/rename a file or directory.",
-        readDir: "List a directory (defaults to the root).",
-        readFile: "One file's contents ({ path }); null when missing.",
+        listAllFiles: "Every file path in the merged view (local layer + every mount, sorted).",
+        processor: "The workspace stream processor (snapshot/state).",
+        readFile: "One file's contents; null when missing.",
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
         reset:
-          "Wipe the local layer and deletions — back to a pristine view of main. Unpublished work is LOST.",
-        revert: "Un-pin ONE path: drop the local copy/deletion so it follows latest main again.",
-        rm: "Remove a path ({ recursive, force }).",
-        stat: "Metadata for one path; null when missing.",
+          "Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST.",
+        revert: "Un-pin ONE path: drop the local copy/deletion so it follows its mount again.",
         whoami: "Workspace identity string (debug).",
-        writeFile: "Write one file (creates parent directories).",
+        writeFile: "Write one file into the private overlay.",
         writeFileBytes: "Write raw bytes to one file.",
       },
       parent: "workspaces.get(path); an agent's own workspace is itx.workspace",
@@ -1834,7 +1863,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** @internal */
   get durableObjectStub() {
-    return env.WORKSPACE.getByName(
+    return env.WORKSPACE_V2.getByName(
       DurableObjectNameCodec.stringify({
         path: this.props.path,
         projectId: this.props.projectId,
@@ -1842,9 +1871,8 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     );
   }
 
-  /** Workspace identity string (debug). */
   whoami(): Promise<string> {
-    return this.durableObjectStub.whoami();
+    return Promise.resolve(this.durableObjectStub.whoami());
   }
 
   /** Restart the workspace's server-side object; the next request boots it fresh. */
@@ -1852,123 +1880,102 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
 
-  /** File contents, or null when the path does not exist. */
+  /** The workspace stream processor (snapshot/state). */
+  get processor(): WakeableStreamProcessorRpc<WorkspaceProcessorState> {
+    return new ProcessorRelayRpcTarget<WorkspaceProcessorState>({
+      auth: this.props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** The folded configuration (birth certificate + configured patches). */
+  getConfig(): Promise<WorkspaceConfig> {
+    return this.durableObjectStub.getConfig();
+  }
+
+  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
+  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig> {
+    return this.durableObjectStub.configure(input);
+  }
+
+  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null> {
     return this.durableObjectStub.readFile(path);
   }
 
-  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
+  /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null> {
     return this.durableObjectStub.readFileBytes(path);
   }
 
-  /**
-   * Wipe the workspace back to pristine: the local layer and every deletion
-   * vanish, leaving a clean view of latest main (on the root, the next read
-   * re-materializes). Uncommitted work is LOST (committed changes live on
-   * main).
-   */
-  reset(): Promise<void> {
-    return this.durableObjectStub.reset();
-  }
-
-  /**
-   * Un-pin one path: drop the local copy (file or subtree) and any deletion
-   * of it, so the path follows latest main again — the surgical sibling of
-   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
-   * masks it until that ancestor is reverted too.
-   */
-  revert(path: string): Promise<void> {
-    return this.durableObjectStub.revert(path);
-  }
-
-  /** Every file path in the merged view (local layer over latest main), sorted. */
-  listAllFiles(): Promise<string[]> {
-    return this.durableObjectStub.listAllFiles();
-  }
-
-  writeFile(path: string, content: string): Promise<void> {
-    return this.durableObjectStub.writeFile(path, content);
-  }
-
-  writeFileBytes(path: string, data: Uint8Array): Promise<void> {
-    return this.durableObjectStub.writeFileBytes(path, data);
-  }
-
-  appendFile(path: string, content: string): Promise<void> {
-    return this.durableObjectStub.appendFile(path, content);
-  }
-
-  /** Delete one file. Returns false when the path did not exist. */
-  deleteFile(path: string): Promise<boolean> {
-    return this.durableObjectStub.deleteFile(path);
-  }
-
-  /**
-   * Safely replace text in one file (uncommitted — use `git` to publish).
-   * The `oldString` must match exactly once unless `replaceAll` is true.
-   */
-  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
-    return this.durableObjectStub.edit(input);
-  }
-
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.mkdir(path, opts);
-  }
-
-  readDir(dir?: string): Promise<WorkspaceFileInfo[]> {
-    return this.durableObjectStub.readDir(dir);
-  }
-
-  glob(pattern: string): Promise<WorkspaceFileInfo[]> {
-    return this.durableObjectStub.glob(pattern);
-  }
-
-  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.rm(path, opts);
-  }
-
-  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.cp(src, dest, opts);
-  }
-
-  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void> {
-    return this.durableObjectStub.mv(src, dest, opts);
-  }
-
-  /** File metadata, or null when the path does not exist. */
-  stat(path: string): Promise<WorkspaceFileInfo | null> {
-    return this.durableObjectStub.stat(path);
-  }
-
+  /** Whether a path exists in the merged view. */
   exists(path: string): Promise<boolean> {
     return this.durableObjectStub.exists(path);
   }
 
-  /** Git over this workspace's checkout. */
+  /** Write one file into the private overlay. */
+  writeFile(path: string, content: string): Promise<void> {
+    return this.durableObjectStub.writeFile(path, content);
+  }
+
+  /** Write raw bytes to one file in the private overlay. */
+  writeFileBytes(path: string, data: Uint8Array): Promise<void> {
+    return this.durableObjectStub.writeFileBytes(path, data);
+  }
+
+  /** Replace an exact string in one file (copies a mount file up first). */
+  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
+    return this.durableObjectStub.edit(input);
+  }
+
+  /** Delete one file (whiteouts a mount copy; false when it did not exist). */
+  deleteFile(path: string): Promise<boolean> {
+    return this.durableObjectStub.deleteFile(path);
+  }
+
+  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
+  listAllFiles(): Promise<string[]> {
+    return this.durableObjectStub.listAllFiles();
+  }
+
+  /** Merged file paths matching a glob pattern. */
+  glob(pattern: string): Promise<string[]> {
+    return this.durableObjectStub.glob(pattern);
+  }
+
+  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
+  reset(): Promise<void> {
+    return this.durableObjectStub.reset();
+  }
+
+  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */
+  revert(path: string): Promise<void> {
+    return this.durableObjectStub.revert(path);
+  }
+
+  /** Per-mount git surface. */
   get git(): WorkspaceGitRpcTarget {
     return new WorkspaceGitRpcTarget(this.props);
   }
 }
 
 /**
- * The commit surface of an overlay workspace. There is no staging area, no
- * branch, and no separate push: `commit({ message })` turns the workspace's
- * changes (local files minus `.gitignore`d paths, plus deletions) into ONE
- * ordinary commit on the config repo's MAIN branch — the same lane as
- * `itx.repo.commitFiles`, so the project worker/website redeploys
- * automatically. Credentials are internal; no token rides this surface.
+ * The per-mount git surface of a workspace. `status()` groups the overlay's
+ * changes by owning mount (plus the never-committable unmounted scratch);
+ * `commit({ message, scope? })` turns ONE mount's changes into one ordinary
+ * commit on that repo's main via its own `commitFiles` lane — scope may be
+ * omitted when exactly one mount is dirty, and commits never span mounts.
+ * Read-only mounts reject commits. No branches, no push: commit = live on
+ * that repo's main.
  */
 class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions:
-        `Commit surface of the workspace at "${this.props.path}". commit({ message }) commits this workspace's changes to the config repo's MAIN branch — changes go live immediately (the project worker/website rebuilds from main automatically). ` +
-        "No add, no push, no branches: every local file not .gitignored is included, deletions apply, and afterwards the workspace mirrors the new main.",
+      instructions: `Per-mount git surface of the workspace at "${this.props.path}". status() groups changes by owning mount; commit({ message, scope? }) commits ONE mount's changes to that repo's main (scope optional when exactly one mount is dirty; read-only mounts reject); log({ scope? }) reads a mount's repo history. No branches, no push: commit = live on that repo's main.`,
       children: {
-        commit: "Commit the workspace's changes to the config repo's main ({ message, author? }).",
-        log: "The config repo's main-branch history, newest first ({ limit? }).",
-        status: "Changes vs latest main: added / modified (shadowed) / deleted paths.",
+        commit: "Commit one mount's changes to its repo's main ({ message, scope?, author? }).",
+        log: "One mount's repo history, newest first ({ scope?, limit? }).",
+        status: "Changes grouped by owning mount, plus the unmounted local scratch.",
       },
       parent: "a workspace (workspace.git)",
     });
@@ -1981,7 +1988,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** @internal */
   get durableObjectStub() {
-    return env.WORKSPACE.getByName(
+    return env.WORKSPACE_V2.getByName(
       DurableObjectNameCodec.stringify({
         path: this.props.path,
         projectId: this.props.projectId,
@@ -1989,21 +1996,18 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     );
   }
 
-  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
-  status(): Promise<WorkspaceChange[]> {
+  /** Changes grouped by owning mount, plus the unmounted local scratch. */
+  status(): Promise<WorkspaceStatus> {
     return this.durableObjectStub.gitStatus();
   }
 
-  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
-  commit(input: {
-    author?: { email: string; name: string };
-    message: string;
-  }): Promise<WorkspacePublishResult> {
+  /** Commit one mount's changes to its repo's main branch. */
+  commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
     return this.durableObjectStub.gitCommit(input);
   }
 
-  /** The config repo's main-branch history, newest first. */
-  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]> {
+  /** One mount's repo history, newest first. */
+  log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]> {
     return this.durableObjectStub.gitLog(input);
   }
 }
@@ -5366,10 +5370,28 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** Bind a project-member gate to this itx's project. */
+  /** Select the project-member policy for this project's auth gate. */
   get(policy: ProjectAuthPolicy): ProjectAuthRpcTarget {
     parseProjectAuthPolicy(policy);
     return this;
+  }
+
+  /**
+   * Exchange an exact-origin app cookie for its authenticated actor. An app's
+   * unauthenticated Cap'n Web root uses this to construct its own session
+   * RpcTarget; the browser never receives the project's itx.
+   */
+  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
+  async authenticate(
+    request: ProjectAuthRpcMetadata | Request,
+    credentials: ProjectAuthCredentials,
+  ): Promise<ProjectAuthActor> {
+    return await authenticateProjectRequest({
+      credentials,
+      projectId: this.props.projectId,
+      request: projectAuthRequestFromRpc(request),
+      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+    });
   }
 
   /**
@@ -5395,7 +5417,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
   ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
-  auth: 'Project-member web auth: auth.get({ policy: "project-member" }).fetch(request).',
+  auth: "Project web auth: get(policy).fetch(request), or .authenticate(request, credentials) to construct an app RPC session.",
   browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
@@ -5434,7 +5456,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    'Durable workspace filesystems by path: get("/") is the read-only root (always latest main of the project repo); get("/workspaces/<name>") is an instant private overlay over it (read/write/edit + git publish). An agent\'s own workspace is itx.workspace.',
+    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/" — the classic instant overlay); create({ path, mounts }) converges a custom mount table via one configured patch; git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
 };
 
 type ProjectRpcTargetProps = {
@@ -5888,7 +5910,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
+  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */
   get workspaces(): WorkspaceCollectionRpcTarget {
     return new WorkspaceCollectionRpcTarget({
       auth: this.#props.auth,
@@ -6173,9 +6195,10 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
 }
 
 // ---------------------------------------------------------------------------
-// Every RpcTarget class lives in this module (design rule): ownership handles,
-// built-in capability targets, and read-only facades included. Durable Object
-// and entrypoint classes stay in their domain folders.
+// Every OS-owned RpcTarget that defines or relays an itx contract lives in this
+// module. Transport primitives shared with userspace, such as the read-only
+// target from `iterate/live-state`, stay in that package; the local relay below
+// only bridges that target across the Durable Object hop.
 // ---------------------------------------------------------------------------
 
 type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
@@ -7020,60 +7043,6 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 }
 
-/**
- * DO-side RpcTarget over a registry's live-state engine — the surface a
- * `.liveState` node exposes: `get()`/`subscribe()` — read-only over the wire
- * (see LiveStateRpc: the DO derives this state from its fold, so writes go
- * through the node's own verbs). `get`/`subscribe` first seed the engine from
- * committed state so the first paint is never stale after a DO restart.
- */
-export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
-  extends IterateRpcRelay<"LiveStateRpc">
-  implements LiveStateRpc<State>
-{
-  readonly #host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">;
-
-  constructor(host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">) {
-    super();
-    this.#host = host;
-  }
-
-  async get(): Promise<State> {
-    await this.#host.loadAndRefreshLive();
-    return this.#host.live.getState();
-  }
-
-  async subscribe(
-    onUpdate: (update: LiveUpdate<State>) => unknown,
-  ): Promise<LiveStateSubscriptionHandle> {
-    await this.#host.loadAndRefreshLive();
-    const handle = this.#host.live.subscribe(onUpdate);
-    return new LiveStateSubscriptionRpcTarget(handle);
-  }
-}
-
-/** RPC ownership handle for one live-state subscription — the `.liveState` twin of {@link StreamSubscriptionRpcTarget}. */
-class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscriptionHandle"> {
-  readonly #handle: LiveStateSubscription;
-
-  constructor(handle: LiveStateSubscription) {
-    super();
-    this.#handle = handle;
-  }
-
-  ping() {
-    return this.#handle.ping();
-  }
-
-  unsubscribe() {
-    this.#handle.unsubscribe();
-  }
-
-  [Symbol.dispose](): void {
-    this.#handle.unsubscribe();
-  }
-}
-
 /** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
 type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
 
@@ -7134,27 +7103,31 @@ class LiveDemoTickerRpcTarget
       tick: 0,
       startedAt: this.#startedAt,
     });
-    const inner = engine.subscribe(onUpdate);
-    // The engine drops a subscriber itself when a delivery rejects (dead
-    // client), and it exposes no drop hook to the owner — so a driving loop
-    // like this one must check `ping()` and stop itself, or the timer outlives
-    // the subscription. This IS the template for the poll-an-API pattern.
-    const interval = setInterval(() => {
-      if (!inner.ping()) {
-        stop();
-        return;
-      }
-      engine.assign({ tick: engine.getState().tick + 1 });
-    }, LIVE_DEMO_TICK_MS);
-    const stop = () => {
-      clearInterval(interval);
-      inner.unsubscribe();
-    };
-    return new LiveStateSubscriptionRpcTarget({
-      ping: () => inner.ping(),
-      unsubscribe: stop,
-      [Symbol.dispose]: stop,
-    });
+    return await new LiveStateRpcTarget({
+      getState: () => engine.getState(),
+      subscribe: (sink) => {
+        const inner = engine.subscribe(sink);
+        // The engine drops a subscriber itself when a delivery rejects (dead
+        // client), and it exposes no drop hook to the owner — so a driving
+        // loop must check `ping()` or its timer would outlive the subscriber.
+        const interval = setInterval(() => {
+          if (!inner.ping()) {
+            stop();
+            return;
+          }
+          engine.assign({ tick: engine.getState().tick + 1 });
+        }, LIVE_DEMO_TICK_MS);
+        const stop = () => {
+          clearInterval(interval);
+          inner.unsubscribe();
+        };
+        return {
+          ping: () => inner.ping(),
+          unsubscribe: stop,
+          [Symbol.dispose]: stop,
+        };
+      },
+    }).subscribe(onUpdate);
   }
 }
 

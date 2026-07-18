@@ -28,6 +28,11 @@ test("project auth is a body-safe partial fetch in the embedded worker runtime",
   const requests: (Request | ProjectAuthMetadata)[] = [];
   const dispose = vi.fn();
   const remoteAuth = {
+    async authenticate(request: ProjectAuthMetadata, credentials: { type: "from-server-cookie" }) {
+      requests.push(request);
+      expect(credentials).toEqual({ type: "from-server-cookie" });
+      return { userId: "usr_one" };
+    },
     async fetch(request: Request | ProjectAuthMetadata): Promise<Response | null> {
       requests.push(request);
       if (!(request instanceof Request)) return null;
@@ -99,13 +104,29 @@ test("project auth is a body-safe partial fetch in the embedded worker runtime",
   expect(appRequest.bodyUsed).toBe(false);
   await expect(appRequest.text()).resolves.toBe("app-owned-body");
 
+  const rpcHandshake = new Request("https://internal--demo.iterate.app/api", {
+    headers: {
+      cookie: "iterate-project-auth=signed-token",
+      origin: "https://internal--demo.iterate.app",
+    },
+  });
+  await expect(
+    itx.auth
+      .get({ policy: "project-member" })
+      .authenticate(rpcHandshake, { type: "from-server-cookie" }),
+  ).resolves.toEqual({ userId: "usr_one" });
+  expect(requests[1]).not.toBeInstanceOf(Request);
+  expect(new Headers((requests[1] as ProjectAuthMetadata).headers).get("origin")).toBe(
+    "https://internal--demo.iterate.app",
+  );
+
   const callback = new Request("https://internal--demo.iterate.app/_iterate/auth/callback", {
     body: "callback-token",
     method: "POST",
   });
   const callbackResponse = await itx.auth.get({ policy: "project-member" }).fetch(callback);
   expect(await callbackResponse?.text()).toBe("auth-owned");
-  expect(requests[1]).toBe(callback);
+  expect(requests[2]).toBe(callback);
   expect(callback.bodyUsed).toBe(true);
 
   await expect(itx.__describe()).resolves.toEqual({ projectId: "prj_demo" });
@@ -124,6 +145,10 @@ type ProjectAuthMetadata = {
 };
 
 type TestProjectAuth = {
+  authenticate(
+    request: Request,
+    credentials: { type: "from-server-cookie" },
+  ): Promise<{ userId: string }>;
   get(policy: { policy: "project-member" }): TestProjectAuth;
   fetch(request: Request): Promise<Response | null>;
 };

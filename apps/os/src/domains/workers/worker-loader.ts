@@ -10,6 +10,7 @@ import {
   type WorkerLastGoodBuild,
 } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
+import { ITERATE_LIVE_STATE_VIRTUAL_MODULE } from "./iterate-live-state-virtual-module.generated.ts";
 import { ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE } from "./iterate-processors-cloudflare-virtual-module.generated.ts";
 import { ITERATE_PROCESSORS_VIRTUAL_MODULE } from "./iterate-processors-virtual-module.generated.ts";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
@@ -137,18 +138,20 @@ async function withBuildBudget(
 }
 
 /**
- * Every bundled dynamic worker build can `import ... from "iterate/sdk"`: the
- * platform supplies the sdk runtime as a virtual module, because resolving it
- * by install cannot work — the bundler's npm installer is registry-semver-only
- * and the seeded devDependency is a pkg.pr.new URL. Injection happens BEFORE
- * the build key is computed, and `options` is hashed into the key wholesale,
- * so an sdk change invalidates cached artifacts instead of serving stale
- * builds. A source that supplies its own `iterate/sdk` virtual module wins.
+ * Every bundled dynamic worker build gets the platform-owned `iterate/*`
+ * runtimes as virtual modules. `iterate/sdk` cannot be resolved by install —
+ * the bundler's npm installer is registry-semver-only and the seeded
+ * devDependency is a pkg.pr.new URL — and the other entries share its source
+ * and release cadence. Injection happens BEFORE the build key is computed,
+ * and `options` is hashed into the key wholesale, so a runtime change
+ * invalidates cached artifacts instead of serving stale builds. A source that
+ * supplies one of these virtual modules itself wins.
  */
-function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
+function withIterateVirtualModules(options: WorkerBuildOptions): WorkerBuildOptions {
   return {
     ...options,
     virtualModules: {
+      "iterate/live-state": ITERATE_LIVE_STATE_VIRTUAL_MODULE,
       "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE,
       "iterate/processors": ITERATE_PROCESSORS_VIRTUAL_MODULE,
       "iterate/processors/cloudflare": ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE,
@@ -179,7 +182,7 @@ async function resolveThroughBuilder(input: {
   source: DynamicWorkerSource;
   waitUntil: (promise: Promise<unknown>) => void;
 }): Promise<ServedWorkerSource> {
-  const options = withIterateSdkVirtualModule(input.options);
+  const options = withIterateVirtualModules(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
   const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,

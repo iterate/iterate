@@ -181,7 +181,7 @@ export interface Project {
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
-  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
+  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
    * Platform dispatch point: streams deliver committed event batches here
@@ -321,8 +321,14 @@ export interface Ai {
 
 /** A partial fetch: return its response, or continue the app when it returns null. */
 export interface ProjectAuth {
-  /** Bind a project-member gate to this itx's project. */
+  /** Select the project-member policy for this project's auth gate. */
   get(policy: ProjectAuthPolicy): ProjectAuth;
+  /**
+   * Exchange an exact-origin app cookie for its authenticated actor. An app's
+   * unauthenticated Cap'n Web root uses this to construct its own session
+   * RpcTarget; the browser never receives the project's itx.
+   */
+  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
   /**
    * Own login, callback, logout, and the host-only cookie. Returns null only
    * when this request belongs to a current project member. Like any partial
@@ -1267,22 +1273,33 @@ export interface DynamicWorkerCollection {
 }
 
 /**
- * Catalog of durable workspaces within one project.
+ * Catalog of durable workspaces within one project: EVENT-SOURCED,
+ * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
+ * always warm). Every workspace is addressed by its FULL path under
+ * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
+ * `/repos/...`: an agent's workspace is the agent path under the prefix
+ * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
+ * scope), and standalone workspaces live under `/workspaces/<anything>`.
  *
- * `get("/")` is the project's ROOT workspace: a read-only, always-fresh
- * materialization of the config repo's main branch. Every other workspace is
- * addressed by its FULL path under `/workspaces/` — the same domain-prefix
- * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is
- * the agent path under the prefix (`/workspaces/agents/...`, exposed as
- * `itx.workspace` in that agent's scope), and standalone workspaces live
- * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the
- * root: writes stay local, missing reads fall through to latest main — no
- * clone, usable instantly.
+ * A workspace's identity + configuration are stream facts: `create({ path,
+ * mounts })` appends the `workspace/created` birth certificate to the
+ * workspace's own stream; `workspace/configured` patches the mount table. A
+ * workspace touched without an explicit create births itself with the default
+ * table (the config repo mounted at "/", committable) — so `get(path)` is
+ * always usable and behaves like the old single-parent overlay by default.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
+  /** The workspace at a path (first touch births it with the default mount table). */
   get(path: string): Workspace;
+  /**
+   * Create a workspace. Runs entirely inside the workspace Durable Object's
+   * serialized authority: birth is ensured (the certificate is ALWAYS the
+   * default table — identical body, so the idempotency key can never hit the
+   * stream's different-body rejection), then a custom `mounts` table
+   * converges via one validated `workspace/configured` patch. Idempotent.
+   */
+  create(input: { mounts?: Record<string, WorkspaceMount>; path: string }): Promise<Workspace>;
 }
 
 /**
@@ -1553,65 +1570,48 @@ export interface Secret {
 }
 
 /**
- * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm). The root workspace (`"/"`) is the
- * read-only, always-fresh materialization of the config repo's main branch.
- * Every other workspace is an OVERLAY over the root: reads see latest main
- * until a local write shadows a path, writes and deletes stay private, and
- * there is no clone — a new workspace is usable instantly. `git.commit`
- * commits the overlay's changes straight to the config repo's MAIN branch
- * (the same lane as `itx.repo.commitFiles`, so the project worker/website
- * redeploys automatically), then the overlay resets to mirror the new main.
- *
- * Constraints: the `.git` name is reserved (platform-managed). Large files
- * are fine (past ~1.5MB they are stored in R2 transparently).
+ * One durable workspace: an event-sourced, mount-routed private filesystem.
+ * Its mount table (getConfig/configure) maps repos into the tree: reads under
+ * a mount fall through to that repo's main at HEAD, writes land in a private
+ * copy-on-write local layer (large files spill to R2 transparently), and
+ * `git.commit({ scope })` turns ONE mount's changes into one commit on that
+ * repo's main (honoring the mount's policy). Paths outside every mount are
+ * private scratch. The `.git` name is reserved (platform-managed).
  */
 export interface Workspace {
   __describe(): Promise<Description>;
-  /** Workspace identity string (debug). */
   whoami(): Promise<string>;
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** File contents, or null when the path does not exist. */
+  /** The workspace stream processor (snapshot/state). */
+  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;
+  /** The folded configuration (birth certificate + configured patches). */
+  getConfig(): Promise<WorkspaceConfig>;
+  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
+  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;
+  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null>;
-  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
+  /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null>;
-  /**
-   * Wipe the workspace back to pristine: the local layer and every deletion
-   * vanish, leaving a clean view of latest main (on the root, the next read
-   * re-materializes). Uncommitted work is LOST (committed changes live on
-   * main).
-   */
-  reset(): Promise<void>;
-  /**
-   * Un-pin one path: drop the local copy (file or subtree) and any deletion
-   * of it, so the path follows latest main again — the surgical sibling of
-   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
-   * masks it until that ancestor is reverted too.
-   */
-  revert(path: string): Promise<void>;
-  /** Every file path in the merged view (local layer over latest main), sorted. */
-  listAllFiles(): Promise<string[]>;
-  writeFile(path: string, content: string): Promise<void>;
-  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
-  appendFile(path: string, content: string): Promise<void>;
-  /** Delete one file. Returns false when the path did not exist. */
-  deleteFile(path: string): Promise<boolean>;
-  /**
-   * Safely replace text in one file (uncommitted — use `git` to publish).
-   * The `oldString` must match exactly once unless `replaceAll` is true.
-   */
-  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
-  readDir(dir?: string): Promise<WorkspaceFileInfo[]>;
-  glob(pattern: string): Promise<WorkspaceFileInfo[]>;
-  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void>;
-  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
-  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
-  /** File metadata, or null when the path does not exist. */
-  stat(path: string): Promise<WorkspaceFileInfo | null>;
+  /** Whether a path exists in the merged view. */
   exists(path: string): Promise<boolean>;
-  /** Git over this workspace's checkout. */
+  /** Write one file into the private overlay. */
+  writeFile(path: string, content: string): Promise<void>;
+  /** Write raw bytes to one file in the private overlay. */
+  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
+  /** Replace an exact string in one file (copies a mount file up first). */
+  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
+  /** Delete one file (whiteouts a mount copy; false when it did not exist). */
+  deleteFile(path: string): Promise<boolean>;
+  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
+  listAllFiles(): Promise<string[]>;
+  /** Merged file paths matching a glob pattern. */
+  glob(pattern: string): Promise<string[]>;
+  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
+  reset(): Promise<void>;
+  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */
+  revert(path: string): Promise<void>;
+  /** Per-mount git surface. */
   git: WorkspaceGit;
 }
 
@@ -1647,24 +1647,22 @@ export interface CfVideosCapability {
 }
 
 /**
- * The commit surface of an overlay workspace. There is no staging area, no
- * branch, and no separate push: `commit({ message })` turns the workspace's
- * changes (local files minus `.gitignore`d paths, plus deletions) into ONE
- * ordinary commit on the config repo's MAIN branch — the same lane as
- * `itx.repo.commitFiles`, so the project worker/website redeploys
- * automatically. Credentials are internal; no token rides this surface.
+ * The per-mount git surface of a workspace. `status()` groups the overlay's
+ * changes by owning mount (plus the never-committable unmounted scratch);
+ * `commit({ message, scope? })` turns ONE mount's changes into one ordinary
+ * commit on that repo's main via its own `commitFiles` lane — scope may be
+ * omitted when exactly one mount is dirty, and commits never span mounts.
+ * Read-only mounts reject commits. No branches, no push: commit = live on
+ * that repo's main.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
-  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
-  status(): Promise<WorkspaceChange[]>;
-  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
-  commit(input: {
-    author?: { email: string; name: string };
-    message: string;
-  }): Promise<WorkspacePublishResult>;
-  /** The config repo's main-branch history, newest first. */
-  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
+  /** Changes grouped by owning mount, plus the unmounted local scratch. */
+  status(): Promise<WorkspaceStatus>;
+  /** Commit one mount's changes to its repo's main branch. */
+  commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult>;
+  /** One mount's repo history, newest first. */
+  log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -2233,6 +2231,12 @@ export type CfMarkdownConversionResult = {
 
 /** A declarative access rule for a project-host web app. */
 export type ProjectAuthPolicy = { policy: "project-member" };
+
+/** Browser credentials accepted by a project app's unauthenticated RPC root. */
+export type ProjectAuthCredentials = { type: "from-server-cookie" };
+
+/** Identity proven by the app-origin session, safe for app-defined authorization. */
+export type ProjectAuthActor = { userId: string };
 
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,
@@ -3519,6 +3523,9 @@ export type DynamicWorkerDispatchOptions = {
   flattenNestedPaths?: boolean;
 };
 
+/** One repo mount: the repo a workspace subtree reads from and its commit policy. */
+export type WorkspaceMount = { policy: "commit-to-main" | "read-only"; repoPath: string };
+
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
 
@@ -3999,6 +4006,34 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   updatePolicy?: "block" | "stale-while-rebuild";
 };
 
+/** The workspace processor's reduced state: birth certificate plus folded config. */
+export type WorkspaceProcessorState = {
+  birthCertificate: {
+    config: {
+      mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
+    };
+  } | null;
+  config: { mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }> };
+};
+
+/** A workspace's complete configuration: the mount table, keyed by mount path. */
+export type WorkspaceConfig = {
+  mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
+};
+
+/** A configuration patch: deep-merged per mount point; null unmounts. */
+export type WorkspaceConfigPatch = {
+  mounts?:
+    | Record<
+        string,
+        {
+          policy?: "commit-to-main" | "read-only" | undefined;
+          repoPath?: string | undefined;
+        } | null
+      >
+    | undefined;
+};
+
 /** Input to `Workspace.edit` — a safe single-occurrence string replacement. */
 export type EditWorkspaceFileInput = {
   newString: string;
@@ -4011,22 +4046,6 @@ export type EditWorkspaceFileInput = {
 export type EditWorkspaceFileResult = {
   occurrenceCount: number;
   path: string;
-};
-
-/**
- * Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`'s
- * `FileInfo`, the shape `readDir`/`glob`/`stat` return.
- */
-export type WorkspaceFileInfo = {
-  createdAt: number;
-  mimeType: string;
-  name: string;
-  path: string;
-  size: number;
-  /** Symlink target, present only on symlinks. */
-  target?: string;
-  type: "directory" | "file" | "symlink";
-  updatedAt: number;
 };
 
 /** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
@@ -4204,27 +4223,44 @@ export type DynamicWorkerRefBase = {
   source: DynamicWorkerSource;
 };
 
-/**
- * One overlay change returned by `WorkspaceGit.status`: a local file that
- * shadows a parent file ("modified"), one the parent does not have ("added"),
- * or a parent file hidden by a local delete ("deleted"). "modified" means
- * shadowed, not necessarily different — the overlay never diffs content.
- */
-export type WorkspaceChange = {
-  change: "added" | "deleted" | "modified";
-  path: string;
+/** Per-mount changes plus the unmounted local scratch (never committable). */
+export type WorkspaceStatus = {
+  mounts: {
+    changes: WorkspaceChange[];
+    path: string;
+    policy: "commit-to-main" | "read-only";
+    repoPath: string;
+  }[];
+  unmounted: WorkspaceChange[];
 };
 
-/** Result of `WorkspaceGit.commit` — the commit landed on the config repo's main. */
-export type WorkspacePublishResult = {
-  /** The repo branch the commit landed on — the config repo's default (main). */
+/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
+export type WorkspaceCommitInput = {
+  author?: { email: string; name: string };
+  message: string;
+  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
+  scope?: string;
+};
+
+/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
+export type WorkspaceCommitResult = {
   branch: string;
-  /** Paths committed (after .gitignore filtering) plus deletions applied. */
+  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
   changedPaths: string[];
   commitOid: string;
+  /** The mount the commit was scoped to (its workspace path). */
+  mount: string;
+  repoPath: string;
 };
 
-/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */
+/** Input to `WorkspaceGit.log` — one mount's repo history. */
+export type WorkspaceGitLogInput = {
+  limit?: number;
+  /** The mount to read (its mount path). Optional when the table has exactly one mount. */
+  scope?: string;
+};
+
+/** One commit returned by `WorkspaceGit.log` (a mounted repo's main history). */
 export type WorkspaceGitLogEntry = {
   author: { email: string; name: string };
   message: string;
@@ -4292,6 +4328,16 @@ export type PlatformCredsRef = { platform: string };
 export type DynamicWorkerSource = {
   files: WorkerFileSource;
   options?: WorkerBuildOptions;
+};
+
+/**
+ * One overlay change: a local file that shadows a mount file ("modified" —
+ * shadowed, not content-diffed), one the mount does not have ("added"), or a
+ * mount file hidden by a local delete ("deleted").
+ */
+export type WorkspaceChange = {
+  change: "added" | "deleted" | "modified";
+  path: string;
 };
 
 /**
