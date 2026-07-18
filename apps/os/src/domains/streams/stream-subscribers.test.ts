@@ -370,6 +370,7 @@ function makeHarness() {
         entry.parkedAtOffset = payload.atOffset;
         entry.parkedReason = payload.reason;
       }
+      subscribers.onSubscriptionParked(payload.subscriptionKey);
     }
   };
   const hooks: ConstructorParameters<typeof StreamSubscribers>[0]["hooks"] = {
@@ -457,6 +458,7 @@ function makeHarness() {
     configured,
     log,
     settle,
+    appendFact: applyFact,
     append: (...events: StreamEvent[]) => {
       assignedMaxOffset = Math.max(assignedMaxOffset, ...events.map((event) => event.offset));
       return log.push(...events);
@@ -867,6 +869,7 @@ describe("StreamSubscribers", () => {
     };
     for (let attempt = 0; attempt < 3; attempt += 1) {
       h.failNextAlarmArmWith(new Error("alarm projection unavailable"));
+      h.failNextAlarmRepointWith(new Error("exact alarm projection unavailable"));
     }
 
     h.subscribers.wake();
@@ -902,6 +905,9 @@ describe("StreamSubscribers", () => {
     expect(h.platformAlarm()).not.toBeNull();
 
     h.failNextAlarmRepointWith(new Error("final native projection failed"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
+    }
     await h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 });
 
     const parked = h.factsOfType(PARKED);
@@ -972,6 +978,7 @@ describe("StreamSubscribers", () => {
     h.append(evt(1, "a"), evt(2, "a"));
     for (let attempt = 0; attempt < 3; attempt += 1) {
       h.failNextAlarmArmWith(new Error("setAlarm failed"));
+      h.failNextAlarmRepointWith(new Error("exact setAlarm failed"));
     }
 
     h.subscribers.wake();
@@ -1005,6 +1012,8 @@ describe("StreamSubscribers", () => {
     h.failRequiredFactsWith(new Error("park fact append failed"));
     for (let attempt = 0; attempt < 3; attempt += 1) {
       h.failNextAlarmArmWith(new Error("watchdog projection failed"));
+    }
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
     }
 
@@ -1020,7 +1029,7 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(PARKED)).toHaveLength(0);
     expect(h.row("k")!.watchdogAt).not.toBeNull();
     expect(h.platformAlarm()).toBeNull();
-    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeWake + 3);
+    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeWake + 6);
     expect(h.abortedIncarnations).toEqual([]);
   });
 
@@ -1030,6 +1039,7 @@ describe("StreamSubscribers", () => {
     h.append(evt(1, "a"));
     for (let attempt = 0; attempt < 3; attempt += 1) {
       h.failNextAlarmArmWith(new Error("setAlarm failed"));
+      h.failNextAlarmRepointWith(new Error("exact setAlarm failed"));
     }
 
     h.subscribers.wake();
@@ -1058,6 +1068,8 @@ describe("StreamSubscribers", () => {
     h.failRequiredFactsWith(new Error("park fact append failed"));
     for (let attempt = 0; attempt < 3; attempt += 1) {
       h.failNextAlarmArmWith(new Error("watchdog projection failed"));
+    }
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
     }
 
@@ -1073,7 +1085,7 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(PARKED)).toHaveLength(0);
     expect(h.row("k")!.watchdogAt).not.toBeNull();
     expect(h.platformAlarm()).toBeNull();
-    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeWake + 3);
+    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeWake + 6);
     expect(h.abortedIncarnations).toEqual([]);
   });
 
@@ -1110,6 +1122,9 @@ describe("StreamSubscribers", () => {
       error: "infrastructure retry owed",
     });
     h.failNextAlarmRepointWith(new Error("repoint still failing"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
+    }
 
     await expect(
       h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 }),
@@ -1136,8 +1151,11 @@ describe("StreamSubscribers", () => {
     });
     h.failNextAlarmRepointWith(new Error("final native projection failed"));
     h.failRequiredFactsWith(new Error("park fact append failed"));
-    h.failNextAlarmRepointWith(new Error("recovery projection failed once"));
-    h.failNextAlarmRepointWith(new Error("recovery projection failed twice"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmRepointWith(new Error("pre-park recovery projection failed"));
+    }
+    h.failNextAlarmRepointWith(new Error("post-park recovery projection failed once"));
+    h.failNextAlarmRepointWith(new Error("post-park recovery projection failed twice"));
 
     await expect(
       h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 }),
@@ -1161,9 +1179,9 @@ describe("StreamSubscribers", () => {
     });
     h.failRequiredFactsWith(new Error("park fact append failed"));
     h.failNextAlarmRepointWith(new Error("final native projection failed"));
-    h.failNextAlarmRepointWith(new Error("recovery projection failed once"));
-    h.failNextAlarmRepointWith(new Error("recovery projection failed twice"));
-    h.failNextAlarmRepointWith(new Error("recovery projection failed three times"));
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      h.failNextAlarmRepointWith(new Error("recovery projection failed"));
+    }
 
     await expect(
       h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 }),
@@ -1194,6 +1212,9 @@ describe("StreamSubscribers", () => {
       error: "infrastructure retry owed",
     });
     h.failNextAlarmRepointWith(new Error("final native projection failed"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
+    }
 
     await h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 });
     await h.settle();
@@ -1206,6 +1227,40 @@ describe("StreamSubscribers", () => {
     });
   });
 
+  it("a8e. an authoritative externally appended park closes a live configured connection", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const returned = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: returned.sink });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    h.appendFact({
+      type: PARKED,
+      payload: {
+        subscriptionKey: "k",
+        atOffset: 0,
+        attempts: 1,
+        reason: "receiver-failure",
+        error: "operator parked through typed append",
+      },
+    });
+    await h.settle();
+
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.factsOfType(DISCONNECTED).at(-1)?.payload).toMatchObject({
+      subscriptionKey: "k",
+      reason: "delivery-failed",
+    });
+    const pokesAfterPark = h.pokes.length;
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pokes).toHaveLength(pokesAfterPark);
+  });
+
   it("a9. boot-time alarm recovery failure becomes explicit parked state without another activation", async () => {
     const h = makeHarness();
     await h.settle();
@@ -1216,7 +1271,7 @@ describe("StreamSubscribers", () => {
       nextAttemptAt: 10_000,
       error: "infrastructure retry owed",
     });
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       h.failNextAlarmRepointWith(new Error("repoint unavailable"));
     }
 
@@ -2289,7 +2344,7 @@ describe("StreamSubscribers", () => {
       cleanupLog.mockRestore();
     }
 
-    expect(disposals).toEqual(["ping", "sink", "runtime"]);
+    expect(disposals).toEqual(["ping", "runtime", "sink"]);
     expect(h.pushes.at(-1)?.events.map((event) => event.offset)).toEqual([1, 2, 3]);
     expect(h.row("k")?.ackedOffset).toBe(3);
   });
@@ -2417,7 +2472,7 @@ describe("StreamSubscribers", () => {
         ping,
       }),
     ).toThrow("ping retain failed");
-    expect(disposals).toEqual(["sink", "runtime"]);
+    expect(disposals).toEqual(["runtime", "sink"]);
     expect(h.subscribers.hasConnection("watcher")).toBe(false);
   });
 
@@ -2459,7 +2514,7 @@ describe("StreamSubscribers", () => {
         ping: replacementPing,
       }),
     ).toThrow("replacement ping retain failed");
-    expect(replacementDisposals).toEqual(["sink", "runtime"]);
+    expect(replacementDisposals).toEqual(["runtime", "sink"]);
     expect(h.subscribers.hasConnection("watcher")).toBe(true);
     expect(h.factsOfType(DISCONNECTED)).toHaveLength(0);
 
@@ -2679,7 +2734,7 @@ describe("StreamSubscribers", () => {
       cleanupLog.mockRestore();
     }
 
-    expect(disposals).toEqual(["ping", "sink", "runtime"]);
+    expect(disposals).toEqual(["ping", "runtime", "sink"]);
     expect(h.row("k")).toMatchObject({ attempt: 1, lastError: "receiver failed" });
   });
 
@@ -2717,6 +2772,8 @@ describe("StreamSubscribers", () => {
     h.failRequiredFactsWith(new Error("park fact append failed"));
     for (let attempt = 0; attempt < 3; attempt += 1) {
       h.failNextAlarmArmWith(new Error("receiver retry projection failed"));
+    }
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       h.failNextAlarmRepointWith(new Error("exact recovery projection failed"));
     }
     const projectionCountBeforeFailure = h.repointedAlarms.length;
@@ -2732,9 +2789,9 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(PARKED)).toHaveLength(0);
     expect(h.row("k")!.nextAttemptAt).not.toBeNull();
     expect(h.platformAlarm()).toBeNull();
-    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeFailure + 3);
+    expect(h.repointedAlarms).toHaveLength(projectionCountBeforeFailure + 6);
     expect(h.abortedIncarnations).toEqual([]);
-    expect(disposals).toEqual(["ping", "sink", "runtime"]);
+    expect(disposals).toEqual(["ping", "runtime", "sink"]);
   });
 
   it("classifies a Durable Object lifecycle reset as availability, not a delivery error", async () => {

@@ -58,7 +58,6 @@ function makeHarness() {
   const armFailures: Error[] = [];
   const repointFailures: Error[] = [];
   const kept: Promise<unknown>[] = [];
-  const parked: string[] = [];
   let inFlight = false;
   let requiredFactFailure: Error | undefined;
   let armHook: (() => void) | undefined;
@@ -96,7 +95,6 @@ function makeHarness() {
     },
     keepAlive: (promise) => kept.push(promise),
     isInFlight: () => inFlight,
-    onParked: (subscriptionKey) => parked.push(subscriptionKey),
   });
   const attempt = { subscriptionKey: "k", configOffset: 1, epoch: store.get("k")!.epoch };
 
@@ -111,7 +109,6 @@ function makeHarness() {
     armFailures,
     repointFailures,
     kept,
-    parked,
     setNow: (value: number) => {
       now = value;
     },
@@ -174,6 +171,25 @@ describe("DurableDeliveryCoordinator", () => {
     expect(h.facts).toEqual([]);
   });
 
+  it("exactly reprojects a live watchdog before terminally parking it", async () => {
+    const h = makeHarness();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.armFailures.push(
+      new Error("alarm unavailable"),
+      new Error("still unavailable"),
+      new Error("temporarily down"),
+    );
+
+    await expect(h.coordinator.begin(h.attempt)).resolves.toBe("ready");
+    expect(h.repointed).toEqual([1_000 + DELIVERY_TIMEOUT_MS + 5_000]);
+    expect(h.facts).toEqual([]);
+    expect(h.store.get("k")).toMatchObject({
+      attempt: 0,
+      watchdogAt: 1_000 + DELIVERY_TIMEOUT_MS + 5_000,
+      retryAt: null,
+    });
+  });
+
   it("turns exhausted alarm projection into an explicit infrastructure park", async () => {
     const h = makeHarness();
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -182,6 +198,7 @@ describe("DurableDeliveryCoordinator", () => {
       new Error("still unavailable"),
       new Error("down"),
     );
+    h.repointFailures.push(new Error("four"), new Error("five"), new Error("six"));
 
     await expect(h.coordinator.begin(h.attempt)).resolves.toBe("parked");
     expect(h.facts).toEqual([
@@ -201,7 +218,6 @@ describe("DurableDeliveryCoordinator", () => {
       watchdogAt: null,
       retryAt: null,
     });
-    expect(h.parked).toEqual(["k"]);
   });
 
   it("reports a replacement fence as stale when alarm projection fails during replacement", async () => {
@@ -257,7 +273,14 @@ describe("DurableDeliveryCoordinator", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     h.failRequiredFactsWith(new Error("park append unavailable"));
     h.armFailures.push(new Error("one"), new Error("two"), new Error("three"));
-    h.repointFailures.push(new Error("four"), new Error("five"), new Error("six"));
+    h.repointFailures.push(
+      new Error("four"),
+      new Error("five"),
+      new Error("six"),
+      new Error("seven"),
+      new Error("eight"),
+      new Error("nine"),
+    );
 
     await expect(h.coordinator.begin(h.attempt)).rejects.toBeInstanceOf(
       StreamDeliveryFatalInvariantError,
@@ -280,12 +303,19 @@ describe("DurableDeliveryCoordinator", () => {
       nextAttemptAt: 4_000,
       error: "receiver unavailable",
     });
-    h.repointFailures.push(new Error("one"), new Error("two"), new Error("three"));
+    h.repointFailures.push(
+      new Error("one"),
+      new Error("two"),
+      new Error("three"),
+      new Error("four"),
+      new Error("five"),
+      new Error("six"),
+    );
 
     h.coordinator.recoverAlarmAfterBoot();
     await Promise.all(h.kept);
 
-    expect(h.repointed).toEqual([4_000, 4_000, 4_000]);
+    expect(h.repointed).toEqual([4_000, 4_000, 4_000, 4_000, 4_000, 4_000]);
     expect(h.facts.at(-1)).toMatchObject({
       type: "events.iterate.com/stream/subscription-parked",
       payload: { reason: "infrastructure-failure", attempts: 3, error: "three" },
@@ -309,6 +339,9 @@ describe("DurableDeliveryCoordinator", () => {
       new Error("four"),
       new Error("five"),
       new Error("six"),
+      new Error("seven"),
+      new Error("eight"),
+      new Error("nine"),
     );
 
     h.coordinator.recoverAlarmAfterBoot();
@@ -324,7 +357,14 @@ describe("DurableDeliveryCoordinator", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     h.failRequiredFactsWith(new Error("park append unavailable"));
     h.armFailures.push(new Error("one"), new Error("two"), new Error("three"));
-    h.repointFailures.push(new Error("four"), new Error("five"), new Error("six"));
+    h.repointFailures.push(
+      new Error("four"),
+      new Error("five"),
+      new Error("six"),
+      new Error("seven"),
+      new Error("eight"),
+      new Error("nine"),
+    );
 
     h.coordinator.recoverReconcile({
       subscriptionKey: "k",
@@ -380,7 +420,6 @@ describe("DurableDeliveryCoordinator", () => {
     expect(
       h.facts.map((fact) => (fact.payload as { subscriptionKey: string }).subscriptionKey),
     ).toEqual(["k", "j"]);
-    expect(h.parked).toEqual(["k", "j"]);
   });
 
   it("rejects stale attempts without writing or arming a successor", async () => {

@@ -840,6 +840,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#subscribers.onSubscriptionRemoved(event.payload.subscriptionKey);
         return;
       }
+      case "events.iterate.com/stream/subscription-parked": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscription-parked",
+          args.event,
+        );
+        this.#subscribers.onSubscriptionParked(event.payload.subscriptionKey);
+        return;
+      }
       case "events.iterate.com/stream/subscription-resumed": {
         const event = CoreProcessorContract.parseEvent(
           "events.iterate.com/stream/subscription-resumed",

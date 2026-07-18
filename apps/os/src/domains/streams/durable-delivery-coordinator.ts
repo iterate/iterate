@@ -48,7 +48,6 @@ type DurableDeliveryCoordinatorHooks = {
   repointAlarm(atMs: number | null): Promise<void>;
   keepAlive(promise: Promise<unknown>): void;
   isInFlight(subscriptionKey: string): boolean;
-  onParked(subscriptionKey: string): void;
 };
 
 /**
@@ -375,7 +374,6 @@ export class DurableDeliveryCoordinator {
         error: cleanupError,
       });
     }
-    this.#hooks.onParked(attempt.subscriptionKey);
     return "parked";
   }
 
@@ -439,16 +437,26 @@ export class DurableDeliveryCoordinator {
 
   /**
    * Finish one failed alarm projection through one of its two durable exits.
-   * Parking is retried first because it is the bounded terminal policy;
-   * otherwise an exact alarm projection retains automatic ownership. Only a
-   * compound failure of both routes is fatal, and neither route's failure is
-   * mistaken for an incarnation restart.
+   * Exact projection gets a fresh bounded attempt before parking because a
+   * momentary platform failure must not turn healthy automatic delivery into
+   * operator-owned terminal state. Parking is the bounded fallback. If that
+   * transition fails or its fence becomes stale, one final exact projection
+   * covers current intent before a compound failure becomes fatal. Neither
+   * route's failure is mistaken for an incarnation restart.
    */
   async #parkOrReproject(args: {
     error: unknown;
     park(): Promise<"parked" | "stale">;
     purpose: string;
   }): Promise<"no-intent" | "parked" | "reprojected"> {
+    const projectionFailures: unknown[] = [];
+    try {
+      await this.repointAlarmWithRetries(`${args.purpose} recovery projection`);
+      return "reprojected";
+    } catch (error) {
+      projectionFailures.push(error);
+    }
+
     const parkFailures: unknown[] = [];
     for (let attempt = 1; attempt <= ALARM_PROJECTION_ATTEMPTS; attempt += 1) {
       try {
@@ -478,14 +486,15 @@ export class DurableDeliveryCoordinator {
       await this.repointAlarmWithRetries(`${args.purpose} recovery projection`);
       return "reprojected";
     } catch (projectionError) {
+      projectionFailures.push(projectionError);
       let currentIntentAt: number | null;
       try {
         currentIntentAt = this.#nextAlarmAt();
       } catch (intentInspectionError) {
         throw new StreamDeliveryFatalInvariantError(args.purpose, [
           args.error,
+          ...projectionFailures,
           parkError,
-          projectionError,
           intentInspectionError,
         ]);
       }
@@ -503,8 +512,8 @@ export class DurableDeliveryCoordinator {
       }
       throw new StreamDeliveryFatalInvariantError(args.purpose, [
         args.error,
+        ...projectionFailures,
         parkError,
-        projectionError,
       ]);
     }
   }
@@ -735,7 +744,6 @@ export class DurableDeliveryCoordinator {
         error: errorMessage(args.error),
       },
     });
-    this.#hooks.onParked(args.subscriptionKey);
     return "parked";
   }
 

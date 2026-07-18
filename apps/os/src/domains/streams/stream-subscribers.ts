@@ -384,20 +384,6 @@ export class StreamSubscribers {
       keepAlive: args.hooks.keepAlive,
       isInFlight: (subscriptionKey) =>
         this.#pushDrains.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey),
-      onParked: (subscriptionKey) => {
-        this.#batchLimits.delete(subscriptionKey);
-        const connection = this.#connections.get(subscriptionKey);
-        if (connection?.subscriptionType === "configured") {
-          try {
-            connection.close("delivery-failed");
-          } catch (error) {
-            console.error("stream parked connection cleanup failed", {
-              subscriptionKey,
-              error,
-            });
-          }
-        }
-      },
     });
   }
 
@@ -1288,6 +1274,39 @@ export class StreamSubscribers {
     this.#subscriptionMetrics.delete(subscriptionKey);
   }
 
+  /** A `subscription-parked` fact committed: make the folded terminal state real. */
+  onSubscriptionParked(subscriptionKey: string): void {
+    const configured = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+    // Post-commit fan-out observes the batch's final fold. A later config or
+    // removal in the same append batch supersedes this older parked fact.
+    if (configured?.parkedReason === undefined) return;
+    this.#idleSuppressedWakeKeys.delete(subscriptionKey);
+    this.#delivery.forgetReconcile(subscriptionKey);
+    this.#batchLimits.delete(subscriptionKey);
+    try {
+      const row = this.#hooks.store.get(subscriptionKey);
+      if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
+    } catch (error) {
+      // The fact is already authoritative and #nextAlarmAt ignores parked
+      // rows. A failed cursor cleanup may cause one inert alarm activation,
+      // but must not interrupt post-commit fan-out or live-session teardown.
+      console.error("stream parked cursor cleanup failed after authoritative park", {
+        subscriptionKey,
+        error,
+      });
+    }
+    const connection = this.#connections.get(subscriptionKey);
+    if (connection?.subscriptionType !== "configured") return;
+    try {
+      connection.close("delivery-failed");
+    } catch (error) {
+      console.error("stream parked connection cleanup failed", {
+        subscriptionKey,
+        error,
+      });
+    }
+  }
+
   #subscriptionMetricsFor(subscriptionKey: string) {
     let metrics = this.#subscriptionMetrics.get(subscriptionKey);
     if (metrics === undefined) {
@@ -1343,8 +1362,8 @@ export class StreamSubscribers {
     const failures: { capability: string; error: unknown }[] = [];
     for (const [capability, retained] of [
       ["ping", args.ping],
-      ["sink", args.sink],
       ["getProcessorRuntimeState", args.getProcessorRuntimeState],
+      ["sink", args.sink],
     ] as const) {
       if (retained === undefined) continue;
       try {
@@ -1587,8 +1606,9 @@ export class StreamSubscribers {
         }
         // One throwing RPC disposer must not leak its sibling capabilities or
         // interrupt already-committed config/cursor side effects. The order is
-        // deliberate: the ping stub proxies through the chain the wake sink
-        // retains, so it releases before the sink tears that chain down.
+        // deliberate: the ping and runtime-state sidecars proxy through the
+        // chain the wake sink retains, so both release before the sink tears
+        // that chain down.
         this.#disposeConnectionCapabilities({
           subscriptionKey,
           ping: connection.ping,
