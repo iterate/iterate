@@ -1,9 +1,8 @@
 import {
   createIterateAuth,
-  type AccessTokenClaims,
+  type AuthenticatedIdentity,
   type AuthenticatedSession,
 } from "@iterate-com/auth/server";
-import { ITERATE_IS_ADMIN_CLAIM, ITERATE_ROLE_CLAIM } from "@iterate-com/shared/auth-claims";
 import type { AppConfig } from "~/config.ts";
 
 /**
@@ -48,29 +47,7 @@ export function createSemaphoreIterateAuth(
 }
 
 /** The authenticated caller behind a request — from a session cookie or a bearer access token. */
-export type SemaphorePrincipal = {
-  userId: string;
-  email?: string;
-  isAdmin: boolean;
-};
-
-function principalFromSession(session: AuthenticatedSession): SemaphorePrincipal {
-  return {
-    userId: session.user.id,
-    email: session.user.email,
-    isAdmin: session.user.isAdmin === true || session.user.role === "admin",
-  };
-}
-
-function principalFromAccessToken(accessToken: AccessTokenClaims): SemaphorePrincipal {
-  const email = accessToken.email;
-  return {
-    userId: accessToken.sub,
-    email: typeof email === "string" ? email : undefined,
-    isAdmin:
-      accessToken[ITERATE_IS_ADMIN_CLAIM] === true || accessToken[ITERATE_ROLE_CLAIM] === "admin",
-  };
-}
+export type SemaphorePrincipal = AuthenticatedIdentity;
 
 /**
  * Resolve the request's principal: the session cookie wins (the browser
@@ -85,22 +62,20 @@ export async function resolveRequestPrincipal(input: {
   session: AuthenticatedSession | null;
   responseHeaders: Headers;
 }> {
-  const result = await input.auth.authenticate({
+  const authentication = await input.auth.authenticate({
     headers: input.headers,
     includeUserInfo: false,
   });
-  if (result.session) {
+  if (authentication.credential === null) {
     return {
-      principal: principalFromSession(result.session),
-      session: result.session,
-      responseHeaders: result.responseHeaders,
+      principal: null,
+      session: null,
+      responseHeaders: authentication.responseHeaders,
     };
   }
-
-  const accessToken = await input.auth.authenticateBearer({ headers: input.headers });
   return {
-    principal: accessToken ? principalFromAccessToken(accessToken) : null,
-    session: null,
-    responseHeaders: result.responseHeaders,
+    principal: authentication.identity,
+    session: authentication.credential === "session" ? authentication.session : null,
+    responseHeaders: authentication.responseHeaders,
   };
 }

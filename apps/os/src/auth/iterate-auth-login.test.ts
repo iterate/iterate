@@ -222,6 +222,48 @@ describe("iterate auth login", () => {
     });
   });
 
+  test("does not rotate a still-valid session when refresh is disabled", async () => {
+    const signed = await signedTokenSet({
+      accessTokenExpiresAt: Date.now() + 15 * 1000,
+    });
+    const doRefresh = vi.fn(async (current: TokenSet) => current);
+    const auth = testAuthMiddleware(config, {
+      doRefresh,
+      jwks: signed.jwks as never,
+    });
+
+    const result = await auth.authenticate({
+      headers: new Headers({ cookie: sessionCookie(signed.tokenSet) }),
+      includeUserInfo: false,
+      refresh: "never",
+    });
+
+    expect(result.session?.user.id).toBe("usr_session");
+    expect(result.responseHeaders.get("set-cookie")).toBeNull();
+    expect(doRefresh).not.toHaveBeenCalled();
+  });
+
+  test("rejects an expired session without spending its refresh token when refresh is disabled", async () => {
+    const signed = await signedTokenSet({
+      accessTokenExpiresAt: Date.now() - 60 * 1000,
+    });
+    const doRefresh = vi.fn(async (current: TokenSet) => current);
+    const auth = testAuthMiddleware(config, {
+      doRefresh,
+      jwks: signed.jwks as never,
+    });
+
+    const result = await auth.authenticate({
+      headers: new Headers({ cookie: sessionCookie(signed.tokenSet) }),
+      includeUserInfo: false,
+      refresh: "never",
+    });
+
+    expect(result.session).toBeNull();
+    expect(result.responseHeaders.get("set-cookie")).toBeNull();
+    expect(doRefresh).not.toHaveBeenCalled();
+  });
+
   test("reports session verification failures to the auth caller", async () => {
     const auth = testAuthMiddleware(config);
     const onError = vi.fn();
@@ -263,6 +305,26 @@ describe("iterate auth login", () => {
     expect(result.session?.user.id).toBe("usr_session");
     expect(result.responseHeaders.get("set-cookie")).toContain("iterate_session=");
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  test("returns a rotated cookie when refreshed token verification fails", async () => {
+    const oldSigned = await signedTokenSet();
+    const refreshedButUnverified = await signedTokenSet();
+    const trusted = await signedTokenSet();
+    const doRefresh = vi.fn(async () => refreshedButUnverified.tokenSet);
+    const auth = testAuthMiddleware(config, {
+      doRefresh,
+      jwks: trusted.jwks as never,
+    });
+
+    const result = await auth.authenticate({
+      headers: new Headers({ cookie: sessionCookie(oldSigned.tokenSet) }),
+      includeUserInfo: false,
+    });
+
+    expect(doRefresh).toHaveBeenCalledOnce();
+    expect(result.session).toBeNull();
+    expect(result.responseHeaders.get("set-cookie")).toContain("iterate_session=");
   });
 
   test("refreshes once from the session endpoint when cookie token verification fails", async () => {

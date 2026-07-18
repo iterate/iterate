@@ -59,11 +59,12 @@ import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
   isStreamDeliveryAuth,
-  resolveItxAuth,
   resolveOrganizationSlugForCreate,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
+import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
+import { resolveOsRequestAuth } from "./auth/request-auth.ts";
 import { itxEnv as env } from "./env.ts";
 import {
   listProjectDirectory,
@@ -6181,8 +6182,7 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
     readonly props: {
       config: AppConfig;
       ctx: CfExecutionContext;
-      headers: Headers;
-      requestUrl: string;
+      request: Request;
     },
   ) {
     super();
@@ -6200,13 +6200,17 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
 
   /** Exchange credentials for a {@link Session}; rejects when they prove nothing. */
   async authenticate(input: ItxAuthCredentials): Promise<SessionRpcTarget> {
-    const auth = await resolveItxAuth({
+    const resolution = await resolveOsRequestAuth({
       config: this.props.config,
       credentials: input,
-      headers: this.props.headers,
-      requestUrl: this.props.requestUrl,
+      iterateAuth: createOsIterateAuth(this.props.config, this.props.request.url),
+      request: this.props.request,
     });
-    return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
+    return new SessionRpcTarget({
+      auth: resolution.itxAuth,
+      config: this.props.config,
+      ctx: this.props.ctx,
+    });
   }
 }
 

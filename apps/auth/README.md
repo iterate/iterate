@@ -68,8 +68,10 @@ Relying parties consume it through **`@iterate-com/auth/server`**
 It runs _inside the relying party's worker_ (apps/os, apps/auth-example), does
 the authorization-code + PKCE dance, verifies JWTs, refreshes tokens
 (single-flighted so a rotated refresh token is never presented twice), and
-manages the session cookie. See "How it fits with apps/os" and "The auth
-example app" below.
+manages the session cookie. Its partial-fetch, authentication-result, TanStack,
+Cap'n Web, and project-worker composition patterns are documented in
+[`docs/relying-party-auth.md`](docs/relying-party-auth.md). See "How it fits
+with apps/os" and "The auth example app" below.
 
 ### 2. UI — everything else
 
@@ -327,9 +329,12 @@ OS revision.
 
 ## The auth example app
 
-`apps/auth-example` is a ~30-line reference relying party (`src/worker.ts`): a
-Hono worker that mounts `@iterate-com/auth/server`'s handler at
-`/api/iterate-auth/*` and a `/api/protected` route that calls `.authenticate()`.
+`apps/auth-example` is a small reference relying party (`src/worker.ts`): a
+Hono worker that composes `@iterate-com/auth/server` through the same
+`auth.fetch(request)` partial-fetch method used by first-party request
+middleware, then protects `/api/protected` with the discriminated result from
+`.authenticate()`. It applies `authentication.responseHeaders` to the final
+response so refresh-token rotation is atomic from the browser's perspective.
 It exercises the exact same OIDC surface OS uses, so it's the cheapest end-to-end
 check that a change to the auth worker didn't break relying parties. It talks
 _only_ to surface 1 (the public OIDC provider) — nothing in it depends on the

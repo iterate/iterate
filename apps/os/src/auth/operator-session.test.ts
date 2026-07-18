@@ -8,7 +8,7 @@ import {
   publicSessionForOperator,
   verifyOperatorGrant,
 } from "./operator-session.ts";
-import { resolveItxAuth } from "~/auth.ts";
+import { resolveOsRequestAuth } from "~/auth/request-auth.ts";
 import { AppConfig } from "~/config.ts";
 import type { ProjectDirectoryRecord } from "~/project-directory.ts";
 
@@ -279,14 +279,16 @@ describe("operator sessions", () => {
     ).json()) as { token: string };
 
     await expect(
-      resolveItxAuth({
+      resolveOsRequestAuth({
         config: config(),
         credentials: { type: "from-server-cookie" },
-        headers: new Headers({
-          cookie: `${OPERATOR_SESSION_COOKIE}=${issued.token}`,
-          origin: "https://attacker.example",
+        iterateAuth: null,
+        request: new Request(`${ORIGIN}/api`, {
+          headers: {
+            cookie: `${OPERATOR_SESSION_COOKIE}=${issued.token}`,
+            origin: "https://attacker.example",
+          },
         }),
-        requestUrl: `${ORIGIN}/api`,
       }),
     ).rejects.toThrow("missing or invalid auth");
     expect(
@@ -307,15 +309,17 @@ describe("operator sessions", () => {
     const issued = (await (
       await issue({ kind: "project", operatorId: "support-engineer", project: project.id })
     ).json()) as { token: string };
-    const auth = await resolveItxAuth({
+    const resolution = await resolveOsRequestAuth({
       config: config(),
       credentials: { type: "operator-session", token: issued.token },
-      headers: new Headers({ origin: "https://vitest.example" }),
-      requestUrl: `${ORIGIN}/api`,
+      iterateAuth: null,
+      request: new Request(`${ORIGIN}/api`, {
+        headers: { origin: "https://vitest.example" },
+      }),
     });
 
-    expect(auth.isAdmin()).toBe(false);
-    expect(auth.canAccessProject(project.id)).toBe(true);
-    expect(auth.canAccessProject("prj_other")).toBe(false);
+    expect(resolution.itxAuth.isAdmin()).toBe(false);
+    expect(resolution.itxAuth.canAccessProject(project.id)).toBe(true);
+    expect(resolution.itxAuth.canAccessProject("prj_other")).toBe(false);
   });
 });

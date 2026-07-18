@@ -35,6 +35,13 @@ difference between the dashboard and the chat TUI's data layer.
 | Validation           | **Zod**                                                                     |
 | Auth (identity)      | `@iterate-com/auth` client, seeded SSR-side                                 |
 
+Server-side auth routing and credential resolution use the shared
+`auth.fetch(request)` partial-fetch contract and one explicit authentication
+result; project workers use the same composition shape for their stronger
+project-policy gate. The complete comparison, including refresh-cookie and
+Cap'n Web constraints, is in
+[`apps/auth/docs/relying-party-auth.md`](../apps/auth/docs/relying-party-auth.md).
+
 The backend surface (`itx`) is the project's one API — see
 [`apps/os/src/README.md`](../apps/os/src/README.md) (the "four nouns") and the
 generated contract [`apps/os/src/itx-api.generated.ts`](../apps/os/src/itx-api.generated.ts).

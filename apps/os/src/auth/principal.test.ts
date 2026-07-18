@@ -1,32 +1,38 @@
 import { describe, expect, it } from "vitest";
-import type { AccessTokenClaims, AuthenticatedSession } from "@iterate-com/auth/server";
+import {
+  identityFromSession,
+  type AccessTokenClaims,
+  type AuthenticatedSession,
+} from "@iterate-com/auth/server";
 import { ITERATE_IS_ADMIN_CLAIM, ITERATE_ROLE_CLAIM } from "@iterate-com/shared/auth-claims";
 import {
   createUserPrincipal,
   principalFromAccessToken,
-  principalFromSession,
+  principalFromIdentity,
   principalIsAdmin,
 } from "./principal.ts";
 
 describe("auth principal admin access", () => {
   it("identifies Better Auth admin browser sessions as admin", () => {
-    const principal = principalFromSession({
-      session: {
-        activeOrganizationId: null,
-        expiresAt: 4_102_444_800,
-        organizations: [],
-        projects: [],
-        scope: "openid profile",
-        sessionId: "sess_1",
-      },
-      tokenClaims: {} as AuthenticatedSession["tokenClaims"],
-      user: {
-        email: "jonas@nustom.com",
-        id: "usr_jonas",
-        isAdmin: true,
-        role: "admin",
-      },
-    });
+    const principal = principalFromIdentity(
+      identityFromSession({
+        session: {
+          activeOrganizationId: null,
+          expiresAt: 4_102_444_800,
+          organizations: [],
+          projects: [],
+          scope: "openid profile",
+          sessionId: "sess_1",
+        },
+        tokenClaims: {} as AuthenticatedSession["tokenClaims"],
+        user: {
+          email: "jonas@nustom.com",
+          id: "usr_jonas",
+          isAdmin: true,
+          role: "admin",
+        },
+      }),
+    );
 
     expect(principal.isAdmin).toBe(true);
     expect(principalIsAdmin(principal)).toBe(true);

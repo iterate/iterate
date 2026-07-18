@@ -270,8 +270,7 @@ async function apiFetch(
   const unauthenticated = new UnauthenticatedOsRpcTarget({
     config,
     ctx,
-    headers: request.headers,
-    requestUrl: request.url,
+    request,
   });
   const itxObservability = (transport: "http" | "websocket") => {
     const sessionId = `itx_session_${crypto.randomUUID().replaceAll("-", "")}`;

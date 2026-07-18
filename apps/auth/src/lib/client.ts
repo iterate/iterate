@@ -9,7 +9,8 @@ import {
 } from "react";
 import type { SessionResponse } from "./server.ts";
 export type {
-  AuthenticateResult,
+  Authentication,
+  AuthenticatedIdentity,
   AuthenticatedSession,
   AuthSession,
   AuthUser,

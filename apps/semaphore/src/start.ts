@@ -1,4 +1,4 @@
-import { isAuthHandlerRequest } from "@iterate-com/auth/server";
+import { isAuthHandlerRequest, withAuthenticationResponseHeaders } from "@iterate-com/auth/server";
 import { createMiddleware, createStart } from "@tanstack/react-start";
 import { createSemaphoreIterateAuth, resolveRequestPrincipal } from "~/auth.ts";
 
@@ -12,7 +12,7 @@ const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
 
     // The relying-party handler (login/callback/logout/session/…) is served
     // straight from the middleware, before routing.
-    const authHandlerResponse = auth?.handleRequest(request) ?? null;
+    const authHandlerResponse = (await auth?.fetch(request)) ?? null;
     if (authHandlerResponse) {
       return authHandlerResponse;
     }
@@ -31,14 +31,8 @@ const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
       },
     });
 
-    // authenticate() may have refreshed the session; hand the rotated cookie
-    // back to the browser or the refresh-token family gets revoked as reuse.
-    const setCookie = resolved.responseHeaders.get("set-cookie");
-    if (setCookie) {
-      result.response.headers.append("set-cookie", setCookie);
-    }
-
-    return result;
+    const response = withAuthenticationResponseHeaders(result.response, resolved.responseHeaders);
+    return response === result.response ? result : { ...result, response };
   },
 );
 

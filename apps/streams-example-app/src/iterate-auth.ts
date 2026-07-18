@@ -1,5 +1,4 @@
 import { createIterateAuth } from "@iterate-com/auth/server";
-import { ITERATE_IS_ADMIN_CLAIM, ITERATE_ROLE_CLAIM } from "@iterate-com/shared/auth-claims";
 import type { AppConfig } from "./config.ts";
 
 /**
@@ -63,30 +62,21 @@ export async function resolveRequestAdmin(input: {
   email?: string;
   responseHeaders: Headers;
 }> {
-  const result = await input.auth.authenticate({
+  const authentication = await input.auth.authenticate({
     headers: input.headers,
     includeUserInfo: false,
   });
-  if (result.session) {
+  if (authentication.credential === null) {
     return {
-      authenticated: true,
-      isAdmin: result.session.user.isAdmin === true || result.session.user.role === "admin",
-      email: result.session.user.email,
-      responseHeaders: result.responseHeaders,
+      authenticated: false,
+      isAdmin: false,
+      responseHeaders: authentication.responseHeaders,
     };
   }
-
-  const accessToken = await input.auth.authenticateBearer({ headers: input.headers });
-  if (accessToken) {
-    const email = accessToken.email;
-    return {
-      authenticated: true,
-      isAdmin:
-        accessToken[ITERATE_IS_ADMIN_CLAIM] === true || accessToken[ITERATE_ROLE_CLAIM] === "admin",
-      email: typeof email === "string" ? email : undefined,
-      responseHeaders: result.responseHeaders,
-    };
-  }
-
-  return { authenticated: false, isAdmin: false, responseHeaders: result.responseHeaders };
+  return {
+    authenticated: true,
+    isAdmin: authentication.identity.isAdmin,
+    email: authentication.identity.email,
+    responseHeaders: authentication.responseHeaders,
+  };
 }

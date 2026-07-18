@@ -326,8 +326,13 @@ async function resolveOAuthAccessToken(input: {
   | { status: "invalid" }
   | { status: "unavailable" }
 > {
-  const jwtAccessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
-  if (jwtAccessToken) return { status: "authenticated", accessToken: jwtAccessToken };
+  const authentication = await input.auth.authenticate({
+    accept: "bearer",
+    headers: input.request.headers,
+  });
+  if (authentication.credential === "bearer") {
+    return { status: "authenticated", accessToken: authentication.accessToken };
+  }
 
   const bearerToken = readBearerToken(input.request.headers.get("authorization"));
   if (!bearerToken) return { status: "invalid" };

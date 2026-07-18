@@ -1,23 +1,12 @@
 import {
   isAuthHandlerRequest,
-  type AuthenticatedSession,
   type AuthenticateErrorEvent,
+  withAuthenticationResponseHeaders,
 } from "@iterate-com/auth/server";
 import { createMiddleware } from "@tanstack/react-start";
 import type { RequestContext } from "~/request-context.ts";
-import { authenticateAdminApiSecret } from "~/auth/admin.ts";
-import type { SignInAuthError } from "~/auth/errors.ts";
 import { createOsIterateAuth } from "~/auth/iterate-auth-client.ts";
-import type { OsIterateAuth } from "~/auth/iterate-auth-client.ts";
-import {
-  authenticateOperatorSession,
-  type AuthenticatedOperatorSession,
-} from "~/auth/operator-session.ts";
-import {
-  principalFromAccessToken,
-  principalFromSession,
-  type Principal,
-} from "~/auth/principal.ts";
+import { resolveOsRequestAuth } from "~/auth/request-auth.ts";
 
 // Registered as requestMiddleware in src/start.ts — `type: "request"` makes
 // early `Response` returns part of the contract (and the context it passes to
@@ -26,10 +15,8 @@ import {
 export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {
     const auth = createOsIterateAuth(context.config, request.url);
-    const authHandlerResponse = auth?.handleRequest(request) ?? null;
-    if (authHandlerResponse) {
-      return authHandlerResponse;
-    }
+    const authHandlerResponse = (await auth?.fetch(request)) ?? null;
+    if (authHandlerResponse) return authHandlerResponse;
     if (!auth && isAuthHandlerRequest(request)) {
       return new Response("Iterate auth is not configured.", { status: 503 });
     }
@@ -54,24 +41,34 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
       });
     }
 
-    const resolvedAuth = await resolveRequestAuth({ auth, context, request });
+    const resolvedAuth = await resolveOsRequestAuth({
+      config: context.config,
+      credentials: { type: "from-request" },
+      iterateAuth: auth,
+      request,
+    });
+    if (resolvedAuth.sessionVerificationFailure) {
+      logAuthSessionVerificationFailure({
+        context,
+        error: resolvedAuth.sessionVerificationFailure,
+      });
+    }
 
     const result = await next({
       context: {
         principal: resolvedAuth.principal,
         operatorSession: resolvedAuth.operatorSession,
-        iterateAuthSession: resolvedAuth.session,
+        iterateAuthSession: resolvedAuth.iterateAuthSession,
         iterateAuthError: resolvedAuth.error,
         rawRequest: request,
       },
     });
 
-    const setCookie = resolvedAuth.responseHeaders.get("set-cookie");
-    if (setCookie) {
-      result.response.headers.append("set-cookie", setCookie);
-    }
-
-    return result;
+    const response = withAuthenticationResponseHeaders(
+      result.response,
+      resolvedAuth.responseHeaders,
+    );
+    return response === result.response ? result : { ...result, response };
   },
 );
 
@@ -79,121 +76,6 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
 export function isPublicAssetRequest(request: Request): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   return new URL(request.url).pathname.startsWith("/assets/");
-}
-
-async function resolveRequestAuth(input: {
-  auth: OsIterateAuth | null;
-  context: Pick<RequestContext, "config" | "log">;
-  request: Request;
-}): Promise<{
-  principal: Principal | null;
-  session: AuthenticatedSession | null;
-  error?: SignInAuthError;
-  operatorSession: AuthenticatedOperatorSession | null;
-  responseHeaders: Headers;
-}> {
-  const adminApiPrincipal = authenticateAdminApiSecret(input.context, input.request);
-  if (adminApiPrincipal) {
-    return {
-      principal: adminApiPrincipal,
-      session: null,
-      error: undefined,
-      operatorSession: null,
-      responseHeaders: new Headers(),
-    };
-  }
-
-  const operatorSession = await authenticateOperatorSession({
-    config: input.context.config,
-    request: input.request,
-  });
-  if (operatorSession) {
-    return {
-      principal: operatorSession.principal,
-      session: null,
-      error: undefined,
-      operatorSession,
-      responseHeaders: new Headers(),
-    };
-  }
-
-  const sessionAuth = await authenticateSession({
-    auth: input.auth,
-    context: input.context,
-    headers: input.request.headers,
-    request: input.request,
-  });
-  if (sessionAuth.principal) {
-    return { ...sessionAuth, operatorSession: null };
-  }
-
-  const bearerPrincipal = await authenticateBearerPrincipal({
-    auth: input.auth,
-    headers: input.request.headers,
-  });
-  return {
-    principal: bearerPrincipal,
-    session: sessionAuth.session,
-    error: sessionAuth.error,
-    operatorSession: null,
-    responseHeaders: sessionAuth.responseHeaders,
-  };
-}
-
-async function authenticateSession(input: {
-  auth: OsIterateAuth | null;
-  context: Pick<RequestContext, "config" | "log">;
-  headers: Headers;
-  request: Request;
-}): Promise<{
-  principal: Principal | null;
-  session: AuthenticatedSession | null;
-  error?: SignInAuthError;
-  responseHeaders: Headers;
-}> {
-  if (!input.auth) {
-    return {
-      principal: null,
-      session: null,
-      error: undefined,
-      responseHeaders: new Headers(),
-    };
-  }
-
-  let authError: AuthenticateErrorEvent | null = null;
-  const result = await input.auth.authenticate({
-    headers: input.headers,
-    includeUserInfo: false,
-    onError: (event) => {
-      authError = event;
-    },
-  });
-  const hasSessionCookie = /(?:^|;\s*)iterate_session=/u.test(input.headers.get("cookie") ?? "");
-  const error =
-    !result.session && authError && hasSessionCookie ? "session_verification_failed" : undefined;
-  if (authError && error) {
-    logAuthSessionVerificationFailure({
-      context: input.context,
-      error: authError,
-    });
-  }
-
-  return {
-    principal: result.session ? principalFromSession(result.session) : null,
-    session: result.session,
-    error,
-    responseHeaders: result.responseHeaders,
-  };
-}
-
-async function authenticateBearerPrincipal(input: {
-  auth: OsIterateAuth | null;
-  headers: Headers;
-}): Promise<Principal | null> {
-  if (!input.auth) return null;
-
-  const accessToken = await input.auth.authenticateBearer({ headers: input.headers });
-  return accessToken ? principalFromAccessToken(accessToken) : null;
 }
 
 function logAuthSessionVerificationFailure(input: {
