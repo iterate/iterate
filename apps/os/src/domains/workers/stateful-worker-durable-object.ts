@@ -7,7 +7,7 @@ import {
   isMissingInvokeCapabilityError,
   replayPath,
 } from "../capability-host/live-capability.ts";
-import { takeWorkerFetchDispatch, workerBuildStatusResponse } from "./worker-fetch-dispatch.ts";
+import { takeWorkerFetchDispatch, workerBuildStatus } from "./worker-fetch-dispatch.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
@@ -69,8 +69,8 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       // Answer the building/failed cases HERE rather than relying on the
       // error name surviving the Durable Object fetch hop back to the
       // dispatching entrypoint — same pages every fetch-lane hop serves.
-      const buildStatus = workerBuildStatusResponse(error);
-      if (buildStatus !== null) return buildStatus;
+      const buildStatus = workerBuildStatus(error);
+      if (buildStatus !== null) return buildStatus.response;
       throw error;
     }
     return await (facet as Fetcher).fetch(taken.request);

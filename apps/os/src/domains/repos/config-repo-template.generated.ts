@@ -31,9 +31,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "installed at build time. The platform's capability types and worker base\n" +
       "classes come from the `iterate` package — `import { IterateWorkerEntrypoint,\n" +
       "IterateDurableObject, type StreamEvent } from \"iterate/sdk\"`. It's a\n" +
-      "devDependency here: the platform supplies `iterate/sdk` to every worker build\n" +
-      "as a virtual module, so the build never installs it; run `npm install` to get\n" +
-      "typechecking and editor support.\n" +
+      "devDependency here: the platform supplies the runtime `iterate/*` subpaths to\n" +
+      "every worker build as virtual modules, so the build never installs them; run\n" +
+      "`npm install` to get typechecking and editor support. Shared external runtimes\n" +
+      "used by those modules, such as `@iterate-com/capnweb`, remain ordinary\n" +
+      "dependencies so app code and the platform module share one implementation.\n" +
       "\n" +
       "Every worker class — the root project worker AND the apps — extends one of\n" +
       "the two sdk base classes: `IterateWorkerEntrypoint` (stateless) or\n" +
@@ -45,9 +47,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "The example apps are named exports of the same `worker.ts`, routed by the\n" +
       "default export's `fetch`: `HelloApp` (stateless, extends\n" +
-      "`IterateWorkerEntrypoint`), `InternalApp` (stateless and protected by\n" +
-      "`itx.auth.get({ policy: \"project-member\" }).fetch(request)`), and\n" +
-      "`CounterApp` (stateful, extends\n" +
+      "`IterateWorkerEntrypoint`), `InternalApp` (stateless, with authenticated HTML\n" +
+      "and a Cap'n Web API), and `CounterApp` (stateful, extends\n" +
       "`IterateDurableObject` — a mini client-side app whose count updates live over\n" +
       "a WebSocket at `/ws`).\n" +
       "The router dispatches every app request through `this.fetchDynamicWorker(req,\n" +
@@ -70,6 +71,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "shape for anything real-time. Method calls on apps\n" +
       "(`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP\n" +
       "rides the fetch lane.\n" +
+      "\n" +
+      "`InternalApp` is the canonical authenticated userspace-app shape: partial-fetch\n" +
+      "HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an\n" +
+      "app-defined, attenuated session. `README.md` explains the complete flow.\n" +
       "\n" +
       "To give agents a new capability surface, add a getter or method to the\n" +
       "default-export worker class: the platform dispatches dotted\n" +
@@ -131,7 +136,57 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "The project worker entrypoint is `worker.ts` (TypeScript). The worker build\n" +
       "pipeline bundles it — together with any files it imports and the npm\n" +
       "dependencies in `package.json` — into a loader-ready worker on first use, so\n" +
-      "committing a change here changes the running worker on its next use.\n",
+      "committing a change here changes the running worker on its next use.\n" +
+      "\n" +
+      "## Authenticated web apps\n" +
+      "\n" +
+      "`InternalApp` in `worker.ts` is a complete project-member-only app. Its normal\n" +
+      "HTTP routes use auth as a partial fetch:\n" +
+      "\n" +
+      "```ts\n" +
+      "using itx = await this.env.ITX.get();\n" +
+      "const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(request);\n" +
+      "if (authResponse) return authResponse;\n" +
+      "\n" +
+      "// Auth inspected headers only. The original request body is still available.\n" +
+      "```\n" +
+      "\n" +
+      "The same app owns an unauthenticated Cap'n Web endpoint at `/api`. Its public\n" +
+      "target exposes one method, `authenticate()`, which exchanges the exact-origin\n" +
+      "HTTP-only cookie for an actor and returns an app-specific session capability:\n" +
+      "\n" +
+      "```ts\n" +
+      "class PublicApi extends RpcTarget {\n" +
+      "  constructor(\n" +
+      "    private readonly itxBinding: ItxBinding,\n" +
+      "    private readonly request: Request,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
+      "  async authenticate(credentials: ProjectAuthCredentials) {\n" +
+      "    using itx = await this.itxBinding.get();\n" +
+      "    const actor = await itx.auth\n" +
+      "      .get({ policy: \"project-member\" })\n" +
+      "      .authenticate(this.request, credentials);\n" +
+      "    return new AppSession(actor);\n" +
+      "  }\n" +
+      "}\n" +
+      "```\n" +
+      "\n" +
+      "The browser calls\n" +
+      "`publicApi.authenticate({ type: \"from-server-cookie\" })` over that WebSocket.\n" +
+      "It receives only `AppSession`, never the project-wide `itx` capability. Add RPC\n" +
+      "methods and getters to `AppSession` to define exactly what the browser may do.\n" +
+      "\n" +
+      "`LiveState` and its read-only `LiveStateRpcTarget` come from the same\n" +
+      "`iterate/live-state` module first-party apps use, while Cap'n Web's `RpcTarget`\n" +
+      "and `newWorkersWebSocketRpcResponse` come directly from\n" +
+      "`@iterate-com/capnweb`. `InternalApp` uses them to push its event projection\n" +
+      "with the same snapshot-and-patch implementation. The explicit classes are\n" +
+      "intentional: there is no\n" +
+      "`authenticatedApp` wrapper hiding where authentication happens or which\n" +
+      "authority crosses the wire.\n",
   },
   {
     path: "guestbook.ts",
@@ -337,8 +392,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"private\": true,\n" +
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports runtime code from iterate/sdk: the platform supplies that module to every worker build as a virtual module, so the build pipeline never installs it — the devDependency is for typechecking and editor support after `npm install`.\",\n" +
+      "  \"description\": \"Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports its runtime subpaths: the platform supplies those modules to every worker build, so the devDependency is only for typechecking and editor support after `npm install`.\",\n" +
       "  \"dependencies\": {\n" +
+      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
       "    \"zod\": \"4.3.6\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
@@ -373,10 +429,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  IterateDurableObject,\n" +
       "  IterateWorkerEntrypoint,\n" +
       "  itxProjectStream,\n" +
+      "  type ItxBinding,\n" +
       "  type Project,\n" +
+      "  type ProjectAuthActor,\n" +
+      "  type ProjectAuthCredentials,\n" +
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
+      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
+      "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
       "import {\n" +
       "  type StreamSubscriberWakeRequest,\n" +
       "  type StreamSubscriberWakeResponse,\n" +
@@ -794,38 +855,158 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "}\n" +
       "\n" +
-      "// A project-member-only app. Auth is a partial fetch: return its response when\n" +
-      "// non-null, and continue the app only when it returns null.\n" +
+      "type InternalAppState = { events: StreamEvent[] };\n" +
+      "\n" +
+      "// The unauthenticated capability at /api. It has one door: turn the app's\n" +
+      "// exact-origin HttpOnly cookie into an actor, then let userspace decide which\n" +
+      "// authority that actor receives. The project itx never reaches the browser.\n" +
+      "class PublicInternalApi extends RpcTarget {\n" +
+      "  constructor(\n" +
+      "    private readonly app: InternalApp,\n" +
+      "    private readonly itxBinding: ItxBinding,\n" +
+      "    private readonly request: Request,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
+      "  async authenticate(credentials: ProjectAuthCredentials): Promise<InternalAppSession> {\n" +
+      "    using itx = await this.itxBinding.get();\n" +
+      "    const actor = await itx.auth\n" +
+      "      .get({ policy: \"project-member\" })\n" +
+      "      .authenticate(this.request, credentials);\n" +
+      "    const session = new InternalAppSession(this.app, actor);\n" +
+      "    await session.refresh();\n" +
+      "    return session;\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "// This is the authority the app chooses to give an authenticated browser.\n" +
+      "// It can identify itself, refresh the event projection, and subscribe to that\n" +
+      "// projection. It cannot access arbitrary project ITX methods.\n" +
+      "class InternalAppSession extends RpcTarget {\n" +
+      "  readonly #state = new LiveState<InternalAppState>({ events: [] });\n" +
+      "  readonly #liveState = new LiveStateRpcTarget(this.#state);\n" +
+      "\n" +
+      "  constructor(\n" +
+      "    private readonly app: InternalApp,\n" +
+      "    private readonly actor: ProjectAuthActor,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
+      "  get me(): ProjectAuthActor {\n" +
+      "    return this.actor;\n" +
+      "  }\n" +
+      "\n" +
+      "  get liveState(): LiveStateRpcTarget<InternalAppState> {\n" +
+      "    return this.#liveState;\n" +
+      "  }\n" +
+      "\n" +
+      "  async refresh(): Promise<void> {\n" +
+      "    this.#state.setState({ events: await this.app.readLatestEvents() });\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "// A project-member-only app. Ordinary pages use auth as a partial fetch.\n" +
+      "// /api stays an unauthenticated Cap'n Web root and authenticates explicitly\n" +
+      "// in-band, exactly like the first-party OS API.\n" +
       "export class InternalApp extends IterateWorkerEntrypoint {\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
+      "    const url = new URL(request.url);\n" +
+      "    if (url.pathname === \"/api\") {\n" +
+      "      return newWorkersWebSocketRpcResponse(\n" +
+      "        request,\n" +
+      "        new PublicInternalApi(this, this.env.ITX, request),\n" +
+      "      );\n" +
+      "    }\n" +
+      "\n" +
       "    using itx = await this.env.ITX.get();\n" +
-      "    const auth = await itx.auth.get({ policy: \"project-member\" }).fetch(request);\n" +
-      "    if (auth) return auth;\n" +
+      "    const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(request);\n" +
+      "    if (authResponse) return authResponse;\n" +
       "\n" +
       "    // A null auth result leaves the original request untouched, so normal app\n" +
       "    // routes can still read its body. This echo route makes that contract easy\n" +
       "    // to exercise in the seeded browser proof.\n" +
-      "    const url = new URL(request.url);\n" +
       "    if (request.method === \"POST\" && url.pathname === \"/echo\") {\n" +
       "      return new Response(await request.text(), {\n" +
       "        headers: { \"cache-control\": \"no-store\", \"content-type\": \"text/plain\" },\n" +
       "      });\n" +
       "    }\n" +
       "\n" +
-      "    const snapshot = await itx.processor.snapshot();\n" +
-      "    const events = await itx.streams.get(\"/\").getEvents({\n" +
-      "      afterOffset: Math.max(0, snapshot.offset - 25),\n" +
-      "      limit: 25,\n" +
-      "    });\n" +
+      "    const nonce = crypto.randomUUID().replaceAll(\"-\", \"\");\n" +
+      "    const prefix = request.headers.get(\"x-iterate-url-prefix\") ?? \"\";\n" +
+      "    const apiPath = JSON.stringify(`${prefix}/api`);\n" +
       "    return new Response(\n" +
-      "      `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Project events</title></head><body><main><h1>Latest project root events</h1><form action=\"/_iterate/auth/logout\" method=\"post\"><button>Sign out</button></form><pre>${escapeHtml(JSON.stringify(events.slice().reverse(), null, 2))}</pre></main></body></html>`,\n" +
+      "      `<!doctype html>\n" +
+      "        <html>\n" +
+      "          <head>\n" +
+      "            <meta charset=\"utf-8\">\n" +
+      "            <meta name=\"viewport\" content=\"width=device-width\">\n" +
+      "            <title>Project events</title>\n" +
+      "          </head>\n" +
+      "          <body>\n" +
+      "            <main>\n" +
+      "              <h1>Latest project root events</h1>\n" +
+      "              <p id=\"identity\">authenticating API…</p>\n" +
+      "              <button id=\"refresh\" disabled>refresh over Cap'n Web</button>\n" +
+      "              <form action=\"${escapeHtml(`${prefix}/_iterate/auth/logout`)}\" method=\"post\"><button>Sign out</button></form>\n" +
+      "              <pre id=\"events\">loading…</pre>\n" +
+      "            </main>\n" +
+      "            <script type=\"module\" nonce=\"${nonce}\">\n" +
+      "              import { newWebSocketRpcSession } from \"https://cdn.jsdelivr.net/npm/@iterate-com/capnweb@0.10.0/dist/index.js\";\n" +
+      "\n" +
+      "              const identity = document.getElementById(\"identity\");\n" +
+      "              const refresh = document.getElementById(\"refresh\");\n" +
+      "              const events = document.getElementById(\"events\");\n" +
+      "              const endpoint = new URL(${apiPath}, location.href);\n" +
+      "              endpoint.protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
+      "              const publicApi = newWebSocketRpcSession(endpoint.toString());\n" +
+      "              addEventListener(\"pagehide\", () => publicApi[Symbol.dispose](), { once: true });\n" +
+      "\n" +
+      "              const showError = (error) => {\n" +
+      "                identity.textContent = error instanceof Error ? error.message : String(error);\n" +
+      "              };\n" +
+      "              try {\n" +
+      "                const session = await publicApi.authenticate({ type: \"from-server-cookie\" });\n" +
+      "                const me = await session.me;\n" +
+      "                identity.textContent = \"authenticated as \" + me.userId;\n" +
+      "                const render = async () => {\n" +
+      "                  events.textContent = JSON.stringify(await session.liveState.get(), null, 2);\n" +
+      "                };\n" +
+      "                const subscription = await session.liveState.subscribe(() => {\n" +
+      "                  void render().catch(showError);\n" +
+      "                });\n" +
+      "                refresh.disabled = false;\n" +
+      "                refresh.onclick = () => {\n" +
+      "                  void session.refresh().catch(showError);\n" +
+      "                };\n" +
+      "                addEventListener(\"pagehide\", () => {\n" +
+      "                  subscription[Symbol.dispose]();\n" +
+      "                  session[Symbol.dispose]();\n" +
+      "                }, { once: true });\n" +
+      "              } catch (error) { showError(error); }\n" +
+      "            </script>\n" +
+      "          </body>\n" +
+      "        </html>`,\n" +
       "      {\n" +
       "        headers: {\n" +
       "          \"cache-control\": \"no-store\",\n" +
+      "          \"content-security-policy\": `default-src 'none'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,\n" +
       "          \"content-type\": \"text/html; charset=utf-8\",\n" +
+      "          \"x-content-type-options\": \"nosniff\",\n" +
       "        },\n" +
       "      },\n" +
       "    );\n" +
+      "  }\n" +
+      "\n" +
+      "  async readLatestEvents(): Promise<StreamEvent[]> {\n" +
+      "    using itx = await this.env.ITX.get();\n" +
+      "    const snapshot = await itx.processor.snapshot();\n" +
+      "    const events = await itx.streams.get(\"/\").getEvents({\n" +
+      "      afterOffset: Math.max(0, snapshot.offset - 25),\n" +
+      "      limit: 500,\n" +
+      "    });\n" +
+      "    return events.slice(-25).reverse();\n" +
       "  }\n" +
       "}\n" +
       "\n" +

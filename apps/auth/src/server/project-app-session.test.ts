@@ -23,6 +23,7 @@ describe("project app sessions", () => {
       { audience, projectId, token: issued.token },
       { secret, userCanAccessProject },
     );
+    assert.equal(valid?.userId, "usr_one");
     assert.ok(valid?.expiresAt && valid.expiresAt > Date.now() / 1000);
 
     canAccess = false;

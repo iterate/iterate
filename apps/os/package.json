@@ -93,6 +93,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
+    "@iterate-com/capnweb": "0.10.0",
     "@microsoft/tui-test": "0.0.4",
     "@octokit/webhooks": "^14.2.0",
     "@tailwindcss/vite": "^4.3.2",
