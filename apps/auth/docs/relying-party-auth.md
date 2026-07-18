@@ -8,7 +8,8 @@ const authResponse = await auth.fetch(request);
 if (authResponse) return authResponse;
 ```
 
-A response means auth owns the request (login, callback, logout, or session).
+A response means auth owns the request (login, callback, logout, session, or
+session-from-token).
 `null` only means the request is not one of those routes; it does **not** mean
 the application request is authenticated. The null path does not read the
 request body.
@@ -45,8 +46,9 @@ export default {
         ? Response.redirect(new URL(`${auth.authHandlerBasePath}/login`, request.url))
         : Response.json({ user: authentication.identity });
 
-    // Session verification may rotate the refresh cookie. Apply these headers
-    // even when the application response is a redirect or an error.
+    // Session verification may rotate the refresh token inside the session
+    // cookie. Apply these headers even when the application response is a
+    // redirect or an error.
     return withAuthenticationResponseHeaders(response, authentication.responseHeaders);
   },
 };
@@ -62,7 +64,7 @@ Use the narrow methods when the route accepts exactly one credential kind:
 - `authenticate()` tries the session first, then bearer, and returns one
   normalized identity.
 
-First-party OS, Semaphore, the streams app, and
+First-party OS, Semaphore, `apps/streams-example-app`, and
 [`apps/auth-example`](../../auth-example/src/worker.ts) all execute this same
 `createIterateAuth()` implementation. TanStack middleware uses the same two
 calls around `next()` and applies the emitted headers to `result.response`; see

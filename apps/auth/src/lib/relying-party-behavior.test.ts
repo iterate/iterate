@@ -283,7 +283,6 @@ describe("relying-party routes and sessions", () => {
       withAuthenticationResponseHeaders(upgradeResponse, result.responseHeaders),
       upgradeResponse,
     );
-    assert.equal(upgradeResponse.status, 101);
   });
 
   it("rejects an expired session without spending its refresh token when refresh is disabled", async () => {

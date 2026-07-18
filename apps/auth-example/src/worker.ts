@@ -18,13 +18,10 @@ app.get("/api/protected", async (c) => {
   const { session, responseHeaders } = await authFromEnv(c.env).authenticateSession({
     headers: c.req.raw.headers,
   });
-  if (!session) {
-    return c.text("Unauthorized", 401);
-  }
-  return withAuthenticationResponseHeaders(
-    new Response(`Protected route accessed by ${session.user.email}`),
-    responseHeaders,
-  );
+  const response = session
+    ? new Response(`Protected route accessed by ${session.user.email}`)
+    : c.text("Unauthorized", 401);
+  return withAuthenticationResponseHeaders(response, responseHeaders);
 });
 
 export default {

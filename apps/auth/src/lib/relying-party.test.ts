@@ -80,24 +80,24 @@ describe("relying-party credential resolution", () => {
 });
 
 describe("authentication response headers", () => {
-  it("preserves every rotated cookie and the downstream response", async () => {
+  it("preserves every rotated cookie and the downstream error response", async () => {
     const authenticationHeaders = new Headers({ "x-auth-version": "2" });
     authenticationHeaders.append("set-cookie", "session=new; Path=/; HttpOnly");
     authenticationHeaders.append("set-cookie", "csrf=new; Path=/; SameSite=Lax");
-    const downstream = new Response("hello", {
+    const downstream = new Response("unauthorized", {
       headers: {
         "set-cookie": "downstream=kept; Path=/",
         "x-downstream": "yes",
       },
-      status: 202,
-      statusText: "Accepted",
+      status: 401,
+      statusText: "Unauthorized",
     });
 
     const response = withAuthenticationResponseHeaders(downstream, authenticationHeaders);
 
     assert.notEqual(response, downstream);
-    assert.equal(response.status, 202);
-    assert.equal(response.statusText, "Accepted");
+    assert.equal(response.status, 401);
+    assert.equal(response.statusText, "Unauthorized");
     assert.equal(response.headers.get("x-auth-version"), "2");
     assert.equal(response.headers.get("x-downstream"), "yes");
     assert.deepEqual(response.headers.getSetCookie(), [
@@ -105,7 +105,7 @@ describe("authentication response headers", () => {
       "session=new; Path=/; HttpOnly",
       "csrf=new; Path=/; SameSite=Lax",
     ]);
-    assert.equal(await response.text(), "hello");
+    assert.equal(await response.text(), "unauthorized");
   });
 
   it("returns the original response when authentication emitted no headers", () => {
