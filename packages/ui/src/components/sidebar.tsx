@@ -342,7 +342,10 @@ function SidebarSeparator({ className, ...props }: React.ComponentProps<typeof S
     <Separator
       data-slot="sidebar-separator"
       data-sidebar="separator"
-      className={cn("mx-2 w-auto bg-sidebar-border", className)}
+      // data-horizontal:w-auto outranks the base Separator's
+      // data-horizontal:w-full (a bare w-auto loses that specificity fight),
+      // so mx-2 insets the rule instead of pushing it past the rail edge.
+      className={cn("mx-2 w-auto bg-sidebar-border data-horizontal:w-auto", className)}
       {...props}
     />
   );

@@ -5,6 +5,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "iterate/processors";
+import { sameIdempotentEvent } from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
@@ -429,6 +430,21 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** The committed head used to pin a recoverable public wait's replay cursor. */
   getMaxOffset(): number {
     return this.#coreProcessorState.maxOffset;
+  }
+
+  /**
+   * Both heads in one read, for exact-offset CAS appends that also need a
+   * fold barrier: `maxOffset` is the raw assignable head (ephemeral rows hold
+   * offsets too — the CAS target), while `maxDurableOffset` is the tail a
+   * default catch-up can actually fold through — the only head a
+   * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
+   * ephemeral suffix that processor reads never see.
+   */
+  getHeadOffsets(): { maxDurableOffset: number; maxOffset: number } {
+    return {
+      maxDurableOffset: this.#log.highestDurableOffset(),
+      maxOffset: this.#coreProcessorState.maxOffset,
+    };
   }
 
   // ===========================================================================
@@ -1334,39 +1350,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 /** Idempotency deduplicates one logical event, not arbitrary writes sharing a
  * key. Provenance is deliberately excluded: a processor may retry the same
  * logical output after a deploy changes its source-version stamp. */
-function sameIdempotentEvent(existing: StreamEvent, requested: StreamEventInput): boolean {
-  return (
-    existing.type === requested.type &&
-    jsonValuesEqual(existing.payload, requested.payload) &&
-    jsonValuesEqual(existing.metadata, requested.metadata) &&
-    existing.ephemeral === requested.ephemeral
-  );
-}
-
-function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonValuesEqual(value, right[index]))
-    );
-  }
-  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
-    return false;
-  }
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord);
-  return (
-    leftKeys.length === Object.keys(rightRecord).length &&
-    leftKeys.every(
-      (key) =>
-        Object.hasOwn(rightRecord, key) && jsonValuesEqual(leftRecord[key], rightRecord[key]),
-    )
-  );
-}
 
 /**
  * What `append` accepts over the wire: a public event input plus the optional

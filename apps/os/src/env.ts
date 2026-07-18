@@ -190,8 +190,8 @@ export interface Env {
   WORKER: DurableObjectNamespace<
     import("./domains/workers/stateful-worker-durable-object.ts").StatefulWorkerDurableObject
   >;
-  WORKSPACE: DurableObjectNamespace<
-    import("./domains/workspaces/workspace-durable-object.ts").WorkspaceDurableObject
+  WORKSPACE_V2: DurableObjectNamespace<
+    import("./domains/workspaces/workspace-durable-object.ts").WorkspaceV2DurableObject
   >;
 }
 
