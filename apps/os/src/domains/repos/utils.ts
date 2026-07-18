@@ -11,10 +11,6 @@ const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 
 import { CONFIG_REPO_PATH } from "./paths.ts";
 
-// Home of CONFIG_REPO_PATH: ./paths.ts (dependency-light on purpose — see its
-// module doc). Re-exported here so repo-domain callers keep one import.
-export { CONFIG_REPO_PATH };
-
 /**
  * The default project worker's build entry point. This shared filename keeps
  * the public `project.worker` alias and the seeded repo template pointed at

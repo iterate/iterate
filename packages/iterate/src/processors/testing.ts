@@ -6,6 +6,7 @@
 // cell, crash-as-eviction) live inline in the suites that need them
 // (stream-processor-registry.test.ts, the per-domain *-recovery tests).
 
+import { sameIdempotentEvent } from "./idempotency.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { StreamEventReadInput } from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
@@ -85,15 +86,10 @@ export class MemoryStream implements ProcessorStream {
               (event) => event.idempotencyKey === input.idempotencyKey,
             );
       if (existing !== undefined) {
-        // Mirror the Stream DO's `sameIdempotentEvent`: a same-key append with
-        // a DIFFERENT body is REJECTED, not deduplicated. Key-only dedup here
+        // The Stream DO's predicate, SHARED: a same-key append with a
+        // DIFFERENT body is REJECTED, not deduplicated. Key-only dedup here
         // once masked exactly that production rejection from a test.
-        const same =
-          existing.type === input.type &&
-          jsonValuesEqual(existing.payload, input.payload) &&
-          jsonValuesEqual(existing.metadata, input.metadata) &&
-          existing.ephemeral === input.ephemeral;
-        if (!same) {
+        if (!sameIdempotentEvent(existing, input)) {
           throw new Error(
             `idempotency key "${input.idempotencyKey}" already names a different event at offset ${existing.offset}`,
           );
@@ -270,31 +266,4 @@ export function driveProcessor<Contract extends StreamProcessorContract, Deps ex
 export function eventsOfType(source: MemoryStream | StreamEvent[], type: string): StreamEvent[] {
   const events = Array.isArray(source) ? source : source.events;
   return events.filter((event) => event.type === type);
-}
-
-/** Structural JSON equality (key-order-insensitive) — the Stream DO's idempotency compare. */
-function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonValuesEqual(value, right[index]))
-    );
-  }
-  if (typeof left === "object" && typeof right === "object" && left !== null && right !== null) {
-    const leftKeys = Object.keys(left).sort();
-    const rightKeys = Object.keys(right).sort();
-    if (leftKeys.length !== rightKeys.length) return false;
-    return leftKeys.every(
-      (key, index) =>
-        key === rightKeys[index] &&
-        jsonValuesEqual(
-          (left as Record<string, unknown>)[key],
-          (right as Record<string, unknown>)[key],
-        ),
-    );
-  }
-  return false;
 }

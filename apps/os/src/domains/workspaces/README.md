@@ -17,8 +17,11 @@ filesystems for agents and tooling.
   workspace behave exactly like the classic single-parent overlay. Existing
   agent workspaces heal onto this system the same way (their persisted
   `["workspaces", ["get", path]]` capability expressions keep working).
-  `itx.workspaces.create({ path, mounts })` births with a custom table and is
-  idempotent (re-creating converges the table via one `configured` patch).
+  `itx.workspaces.create({ path, mounts })` is idempotent and runs entirely
+  inside the workspace DO's serialized authority: the birth certificate is
+  ALWAYS the default table (an identical body on every append, so the
+  idempotency key can never hit the stream's different-body rejection), and a
+  custom table lands as one `configured` patch on top.
 - **The mount table routes everything.** `mounts` is a map of mount path →
   `{ repoPath, policy }`. Reads try the private local layer (DO-SQLite via
   `@cloudflare/shell`, R2 spill past ~1.5MB under the `workspace-v2/` bucket

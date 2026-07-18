@@ -85,11 +85,8 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import {
-  CONFIG_REPO_PATH,
-  defaultProjectWorkerRef,
-  isRepoNotSeededError,
-} from "./domains/repos/utils.ts";
+import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
+import { defaultProjectWorkerRef, isRepoNotSeededError } from "./domains/repos/utils.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
@@ -1733,10 +1730,10 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/", committable — the classic overlay); create({ path, mounts }) births one with a custom mount table (mount path → { repoPath, policy }). An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/", committable — the classic overlay); create({ path, mounts }) additionally converges a custom mount table (mount path → { repoPath, policy }) via one workspace/configured patch — the birth certificate itself is always the default table. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
       children: {
         create:
-          "Create the workspace at a path with a custom mount table ({ path, mounts? }); idempotent — re-creating converges the table.",
+          "Ensure the workspace at a path and converge its mount table ({ path, mounts? }); idempotent — birth always carries the default table, custom tables land as one configured patch.",
         get: "The workspace at a path (first touch births it with the default mount table).",
       },
       parent: "a project itx (itx.workspaces)",
@@ -1758,12 +1755,11 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   }
 
   /**
-   * Create a workspace: append its `workspace/created` birth certificate
-   * (carrying the initial mount table) plus the processor subscription to the
-   * workspace's own stream, then wait until the fold has processed the birth.
-   * Idempotent: the certificate dedups, and when the workspace already exists
-   * with a different table (an earlier create, or first-touch auto-birth),
-   * one `configured` patch converges it to the requested table.
+   * Create a workspace. Runs entirely inside the workspace Durable Object's
+   * serialized authority: birth is ensured (the certificate is ALWAYS the
+   * default table — identical body, so the idempotency key can never hit the
+   * stream's different-body rejection), then a custom `mounts` table
+   * converges via one validated `workspace/configured` patch. Idempotent.
    */
   async create(input: {
     mounts?: Record<string, WorkspaceMount>;
@@ -5444,7 +5440,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/" — the classic instant overlay); create({ path, mounts }) births one with a custom mount table; git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
+    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/" — the classic instant overlay); create({ path, mounts }) converges a custom mount table via one configured patch; git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
 };
 
 type ProjectRpcTargetProps = {

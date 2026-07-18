@@ -221,21 +221,28 @@ export class SchedulerProcessor extends StreamProcessor<
     const now = this.deps.now();
     const due = dueSchedules(state.schedules, now);
     if (due.length > 0) {
-      const requests = [];
-      for (const [key, entry] of due) {
-        // One request per (schedule incarnation, occurrence): a later re-set
-        // of the same key/occurrence (definedAtOffset differs) can never
-        // dedupe against a spent request from a past life.
-        const idempotencyKey = this.idempotencyKey(
+      // One request per (schedule incarnation, occurrence): a later re-set
+      // of the same key/occurrence (definedAtOffset differs) can never
+      // dedupe against a spent request from a past life.
+      const keyed = due.map(([key, entry]) => ({
+        entry,
+        idempotencyKey: this.idempotencyKey(
           `trigger-requested:${key}:${entry.definedAtOffset}:${entry.nextTriggerAt}`,
-        );
-        // A wake that crashed after appending re-runs against an un-advanced
-        // fold. Its retry body can never match the committed one (fresh
-        // executionId, wall-clock requestedAt), and the stream REJECTS a
-        // same-key append with a different body — so OBSERVE the committed
-        // request and skip it instead of re-appending; catch-up folds it.
-        if ((await this.stream.getEvent({ idempotencyKey })) !== undefined) continue;
-        requests.push({
+        ),
+        key,
+      }));
+      // A wake that crashed after appending re-runs against an un-advanced
+      // fold. Its retry body can never match the committed one (fresh
+      // executionId, wall-clock requestedAt), and the stream REJECTS a
+      // same-key append with a different body — so OBSERVE the committed
+      // requests (independent point reads, in parallel) and skip them
+      // instead of re-appending; catch-up folds them.
+      const committed = await Promise.all(
+        keyed.map(({ idempotencyKey }) => this.stream.getEvent({ idempotencyKey })),
+      );
+      const requests = keyed
+        .filter((_, index) => committed[index] === undefined)
+        .map(({ entry, idempotencyKey, key }) => ({
           type: "events.iterate.com/scheduler/trigger-requested" as const,
           idempotencyKey,
           payload: {
@@ -245,8 +252,7 @@ export class SchedulerProcessor extends StreamProcessor<
             runCount: entry.runCount + 1,
             scheduledFor: new Date(entry.nextTriggerAt!).toISOString(),
           },
-        });
-      }
+        }));
       if (requests.length > 0) await this.append(...requests);
     }
     // Restart recovery: anything pending that no live execution owns was

@@ -17,6 +17,7 @@ import type { WorkspaceMount } from "./workspace-processor-contract.ts";
 import { encodeRepoContent } from "./utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
 import { filterPublishablePaths } from "./overlay-ignore.ts";
+import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 
 // Overlay whiteouts: mount paths hidden by a local delete, kept as ONE kv
 // record (a path -> true map) so status can enumerate deletions without a kv
@@ -28,46 +29,6 @@ const DEFAULT_COMMIT_AUTHOR = {
   email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
   name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
 };
-
-// shell's Workspace.readDir has a silent default page limit, so every
-// directory read here PAGES until a short page — no directory size silently
-// truncates a listing, a status, or a wipe.
-const READ_DIR_PAGE = 1_000;
-
-/** One directory's complete entries, paged (shell truncates silently otherwise). */
-async function readDirComplete(
-  workspace: Workspace,
-  dir?: string,
-): Promise<{ name: string; path: string; type: string }[]> {
-  const entries: { name: string; path: string; type: string }[] = [];
-  for (let offset = 0; ; offset += READ_DIR_PAGE) {
-    const page = await workspace.readDir(dir, { limit: READ_DIR_PAGE, offset });
-    entries.push(...page);
-    if (page.length < READ_DIR_PAGE) return entries;
-  }
-}
-
-/** Every file path under `dir` (absolute, no directories), fully paged. */
-export async function walkWorkspaceFiles(workspace: Workspace, dir = "/"): Promise<string[]> {
-  const paths: string[] = [];
-  for (const entry of await readDirComplete(workspace, dir)) {
-    if (entry.type === "directory")
-      paths.push(...(await walkWorkspaceFiles(workspace, entry.path)));
-    else if (entry.type === "file") paths.push(entry.path);
-  }
-  return paths;
-}
-
-/** Remove every entry of `dir`: destructive wipes consume page zero until empty. */
-export async function wipeWorkspace(workspace: Workspace, dir = "/"): Promise<void> {
-  for (;;) {
-    const page = await workspace.readDir(dir, { limit: READ_DIR_PAGE });
-    if (page.length === 0) return;
-    for (const entry of page) {
-      await workspace.rm(entry.path, { force: true, recursive: true });
-    }
-  }
-}
 
 /**
  * The repo surface one mount falls through to — satisfied by the Repo Durable
@@ -185,15 +146,15 @@ export class WorkspaceCore {
     this.#kv.put(WHITEOUTS_KEY, whiteouts);
   }
 
-  /** Whether a path is hidden from its mount: whiteouted itself or via an ancestor. */
+  /**
+   * Whether a path is hidden from its mount. EXACT-MATCH ONLY: the delete API
+   * tombstones individual FILES, so treating a tombstone as recursive would
+   * let a file deletion in one repo mask (and mass-delete) a repo later
+   * mounted beneath that path — cross-repository data loss. A directory
+   * tombstone type can exist only if a directory-delete API ever does.
+   */
   #isMaskedFromMount(path: string): boolean {
-    const whiteouts = this.#whiteouts();
-    let current = resolveAbsolutePath(path);
-    while (true) {
-      if (whiteouts[current]) return true;
-      if (current === "/") return false;
-      current = current.slice(0, current.lastIndexOf("/")) || "/";
-    }
+    return this.#whiteouts()[resolveAbsolutePath(path)] === true;
   }
 
   // -- write discipline ---------------------------------------------------------
@@ -277,8 +238,10 @@ export class WorkspaceCore {
 
   async writeFile(path: string, content: string): Promise<void> {
     this.#assertWritablePath(path);
-    await this.#assertNotMountPoint(path);
     return this.#serializeWrite(async () => {
+      // Inside the chain: a queued configure cannot slip a mount point under
+      // this write between guard and mutation.
+      await this.#assertNotMountPoint(path);
       await this.#workspace.writeFile(path, content);
       this.#clearWhiteout(path);
     });
@@ -286,8 +249,8 @@ export class WorkspaceCore {
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
     this.#assertWritablePath(path);
-    await this.#assertNotMountPoint(path);
     return this.#serializeWrite(async () => {
+      await this.#assertNotMountPoint(path);
       await this.#workspace.writeFileBytes(path, data);
       this.#clearWhiteout(path);
     });
@@ -355,12 +318,18 @@ export class WorkspaceCore {
         (await this.#repo(resolved.mount.repoPath).readFile({
           path: resolved.repoRelativePath,
         })) !== null;
-      // Whiteout before the local delete (both now infallible-cheap), so an
-      // unserialized read arriving between them can never fall through and
-      // resurrect the mount copy mid-delete.
+      // Whiteout before the local delete, so an unserialized read arriving
+      // between them can never fall through and resurrect the mount copy
+      // mid-delete. The local delete CAN fail (R2 + SQL); retract the
+      // whiteout this call installed so a failed RPC hides nothing.
       if (mountHas) this.#addWhiteout(path);
-      const localDeleted = await this.#workspace.deleteFile(path);
-      return localDeleted || mountHas;
+      try {
+        const localDeleted = await this.#workspace.deleteFile(path);
+        return localDeleted || mountHas;
+      } catch (error) {
+        if (mountHas) this.#clearWhiteout(path);
+        throw error;
+      }
     });
   }
 
@@ -541,14 +510,17 @@ export class WorkspaceCore {
     // the repo write and cleanup must not need another commit attempt to
     // stop masking a future re-add of the file.
     const stale = classified.flatMap((mount) => mount.staleWhiteouts);
-    if (stale.length > 0) await this.#healStaleWhiteouts(snapshot, stale);
+    if (stale.length > 0) await this.#healStaleWhiteouts(stale);
     return { mounts: classified.map((mount) => mount.entry), unmounted: grouped.unmounted };
   }
 
-  /** Serialized whiteout removal with an in-lock re-probe: only keys that
-   * STILL mask nothing at HEAD (one point read each; rare path) are dropped. */
-  #healStaleWhiteouts(snapshot: MountSnapshot, candidates: string[]): Promise<void> {
+  /** Serialized whiteout removal with an in-lock re-probe against a FRESH
+   * mount snapshot: only keys that STILL mask nothing at HEAD (one point read
+   * each; rare path) are dropped — a remount between classification and this
+   * lock re-routes rather than probing the old repo. */
+  #healStaleWhiteouts(candidates: string[]): Promise<void> {
     return this.#serializeWrite(async () => {
+      const snapshot = await this.#mountSnapshot();
       const whiteouts = this.#whiteouts();
       let changed = false;
       for (const key of candidates) {

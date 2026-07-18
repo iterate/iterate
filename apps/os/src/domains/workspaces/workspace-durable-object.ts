@@ -1,6 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type {
+  StreamEventInput,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "iterate/processors";
+import { isStreamOffsetConflictError } from "iterate/processors";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -17,8 +22,8 @@ import type {
 } from "./types.ts";
 import {
   foldWorkspaceConfig,
+  WorkspaceConfig,
   WorkspaceProcessorContract,
-  type WorkspaceConfig,
   type WorkspaceConfigPatch,
   type WorkspaceMount,
 } from "./workspace-processor-contract.ts";
@@ -27,6 +32,10 @@ import { WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
 import { normalizeWorkspaceMountKeys, workspaceCreationEvents } from "./utils.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
+// Configuration appends assert their exact stream offset (no interleaved
+// append can invalidate the validated plan); a conflict re-plans against the
+// fresh fold. Bounded: past this, something is genuinely storming the stream.
+const MAX_CONFIGURE_ATTEMPTS = 5;
 // Workspace folds are pure and normally complete during catchUp; if ingestion
 // is broken, fail the command instead of retaining its RPC forever.
 const INGEST_WAIT_TIMEOUT_MS = 15_000;
@@ -140,6 +149,43 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   }
 
   /**
+   * The ONE validated configuration transition: plan against the freshest
+   * fold, append with an exact-offset assertion (an interleaved raw append
+   * conflicts instead of silently invalidating the plan), re-plan on
+   * conflict, and return only after the fold provably includes the change.
+   * Runs inside the core's serialized chain via its callers.
+   */
+  async #applyConfigTransition(
+    plan: (current: WorkspaceConfig) => WorkspaceConfigPatch | null,
+  ): Promise<WorkspaceConfig> {
+    for (let attempt = 1; attempt <= MAX_CONFIGURE_ATTEMPTS; attempt++) {
+      await this.#registry.catchUp(PROCESSOR_SLUG);
+      const { offset } = await this.#reads.snapshot();
+      const current = this.#currentConfig();
+      const patch = plan(current);
+      if (patch === null) return current;
+      try {
+        const [event] = await this.#stream.append({
+          ...WorkspaceProcessorContract.buildEvent({
+            type: "events.iterate.com/workspace/configured",
+            payload: { config: patch },
+          }),
+          offset: offset + 1,
+        } as StreamEventInput);
+        await this.#registry.catchUp(PROCESSOR_SLUG);
+        await this.#reads.waitUntilEvent({
+          offset: event!.offset,
+          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+        });
+        return this.#currentConfig();
+      } catch (error) {
+        if (!isStreamOffsetConflictError(error) || attempt === MAX_CONFIGURE_ATTEMPTS) throw error;
+      }
+    }
+    throw new Error("unreachable configuration transition retry state");
+  }
+
+  /**
    * Ensure birth, then converge the mount table to `mounts` (when given) —
    * the whole `itx.workspaces.create` lane under ONE serialized authority, so
    * concurrent creators cannot interleave stale table diffs. The birth
@@ -150,37 +196,32 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async ensureCreatedWith(input: {
     mounts?: Record<string, WorkspaceMount>;
   }): Promise<WorkspaceConfig> {
+    // Validate the REQUESTED table before anything becomes durable: an
+    // invalid create must not leave a freshly born default workspace behind.
+    const desired =
+      input.mounts === undefined
+        ? undefined
+        : WorkspaceConfig.parse({ mounts: normalizeWorkspaceMountKeys(input.mounts) }).mounts;
     await this.#ensureCreated();
-    const desired = input.mounts;
     if (desired === undefined) return this.#currentConfig();
-    return this.#core.runExclusive(async () => {
-      await this.#registry.catchUp(PROCESSOR_SLUG);
-      const current = this.#currentConfig().mounts;
-      const sameTable =
-        Object.keys(current).length === Object.keys(desired).length &&
-        Object.entries(desired).every(
-          ([key, mount]) =>
-            current[key]?.policy === mount.policy && current[key]?.repoPath === mount.repoPath,
+    return this.#core.runExclusive(() =>
+      this.#applyConfigTransition((current) => {
+        const sameTable =
+          Object.keys(current.mounts).length === Object.keys(desired).length &&
+          Object.entries(desired).every(
+            ([key, mount]) =>
+              current.mounts[key]?.policy === mount.policy &&
+              current.mounts[key]?.repoPath === mount.repoPath,
+          );
+        if (sameTable) return null;
+        const removals = Object.fromEntries(
+          Object.keys(current.mounts)
+            .filter((key) => !(key in desired))
+            .map((key) => [key, null]),
         );
-      if (sameTable) return this.#currentConfig();
-      const removals = Object.fromEntries(
-        Object.keys(current)
-          .filter((key) => !(key in desired))
-          .map((key) => [key, null]),
-      );
-      const [event] = await this.#stream.append(
-        WorkspaceProcessorContract.buildEvent({
-          type: "events.iterate.com/workspace/configured",
-          payload: { config: { mounts: { ...removals, ...desired } } },
-        }),
-      );
-      await this.#registry.catchUp(PROCESSOR_SLUG);
-      await this.#reads.waitUntilEvent({
-        offset: event!.offset,
-        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-      });
-      return this.#currentConfig();
-    });
+        return { mounts: { ...removals, ...desired } };
+      }),
+    );
   }
 
   whoami(): string {
@@ -217,32 +258,24 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // Serialized with the core's mutations and commits: an unmount or repo
     // swap must never interleave a commit that already classified against the
     // old table.
-    return this.#core.runExclusive(async () => {
-      // The fold is deliberately TOLERANT (a committed event must never wedge
-      // the reducer), so the door supplies the loudness: every non-null patch
-      // entry must survive into a complete mount, or the caller made a
-      // mistake (usually a new mount missing repoPath).
-      const folded = foldWorkspaceConfig(this.#currentConfig(), config);
-      for (const [key, value] of Object.entries(config.mounts ?? {})) {
-        if (value !== null && !(key in folded.mounts)) {
-          throw new Error(
-            `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
-          );
+    return this.#core.runExclusive(() =>
+      this.#applyConfigTransition((current) => {
+        // The fold is deliberately TOLERANT (a committed event must never
+        // wedge the reducer), so the door supplies the loudness — validated
+        // against the exact fold this append will land on (the offset
+        // assertion makes an interleaved append a retry, not a silent drop):
+        // every non-null patch entry must survive into a complete mount.
+        const folded = foldWorkspaceConfig(current, config);
+        for (const [key, value] of Object.entries(config.mounts ?? {})) {
+          if (value !== null && !(key in folded.mounts)) {
+            throw new Error(
+              `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
+            );
+          }
         }
-      }
-      const [event] = await this.#stream.append(
-        WorkspaceProcessorContract.buildEvent({
-          type: "events.iterate.com/workspace/configured",
-          payload: { config },
-        }),
-      );
-      await this.#registry.catchUp(PROCESSOR_SLUG);
-      await this.#reads.waitUntilEvent({
-        offset: event!.offset,
-        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-      });
-      return this.#currentConfig();
-    });
+        return config;
+      }),
+    );
   }
 
   // -- filesystem ----------------------------------------------------------------

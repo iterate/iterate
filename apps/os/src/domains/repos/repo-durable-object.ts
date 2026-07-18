@@ -10,7 +10,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
-import { walkWorkspaceFiles, wipeWorkspace } from "../workspaces/workspace-core.ts";
+import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
@@ -416,34 +416,75 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   #withHeadTree<T>(read: (commitOid: string) => Promise<T>): Promise<T> {
     const run = async () => {
-      const head = await this.getHead();
+      // The durable cursor is consulted directly — when it and the tree agree
+      // there is NO clone anywhere on this path. When either is missing or
+      // stale, ONE materialization (one checkout) refreshes both.
+      const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(REPO_DEFAULT_BRANCH));
       const cached = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
-      const commitOid = cached === head.commitOid ? cached : await this.#materializeHeadTree();
-      return read(commitOid);
+      if (isRepoHeadRecord(record) && cached === record.commitOid) return read(cached);
+      return read(await this.#materializeHeadTree());
     };
     const result = this.#headTreeChain.then(run, run);
     this.#headTreeChain = result.catch(() => {});
     return result;
   }
 
+  /**
+   * ONE checkout fills everything: the byte tree, and — when the durable head
+   * record is absent — the head record itself (text snapshot + contentHash),
+   * with the same raced-authority and behind-push guards `getHead` applies.
+   * An external push therefore costs one clone, not getHead's plus this one.
+   */
   async #materializeHeadTree(): Promise<string> {
     // The key comes off BEFORE the wipe: if the write below dies, reads must
     // find "no cache" and re-materialize — never an empty tree labeled main.
     this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     await wipeWorkspace(this.#headTreeCache);
     const { filesystem, head } = await this.#checkout({});
+    const files: Record<string, string> = {};
     for (const path of await walkCheckoutPaths(filesystem, REPO_DIR)) {
       const bytes = await readCheckoutFileBytes(filesystem, `${REPO_DIR}/${path}`);
       await this.#headTreeCache.writeFileBytes(`/${path}`, bytes);
+      // Text view for the contentHash — same lossy decode as the snapshot
+      // lane, so both derivations of a head record hash identically.
+      files[path] = await readCheckoutTextFile(filesystem, `${REPO_DIR}/${path}`);
     }
-    // Never RECORD a tree that trails the last observed push (the bounded
+    const branch = REPO_DEFAULT_BRANCH;
+    // Never RECORD state that trails the last observed push (the bounded
     // clone retries can exhaust): serve it once, and let the next read's
     // cursor comparison drive another materialization toward the pushed head.
-    const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(REPO_DEFAULT_BRANCH));
-    if (typeof pushed !== "string" || pushed === head.oid) {
-      this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, head.oid);
+    const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+    const behindPush = typeof pushed === "string" && pushed !== head.oid;
+    // A head record that appeared while this clone ran came from the write
+    // authorities and may be NEWER — never overwrite it (getHead's rule).
+    const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+    if (!behindPush && !isRepoHeadRecord(raced)) {
+      this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+        commitOid: head.oid,
+        contentHash: await repoContentHash(files),
+      });
     }
+    if (!behindPush) this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, head.oid);
     return head.oid;
+  }
+
+  /**
+   * Verified cache read: shell serves EMPTY content when a spilled R2 body is
+   * gone (preview buckets expire objects while the SQLite row and sentinel
+   * survive), so a size mismatch against the row's metadata is cache
+   * corruption — thrown, which invalidates the tree and falls back to the
+   * authoritative clone lane. Never serve emptiness as truth.
+   */
+  async #readHeadTreeBytesVerified(path: string): Promise<Uint8Array | null> {
+    const stat = await this.#headTreeCache.stat(`/${path}`);
+    if (stat === null || stat.type === "directory") return null;
+    const bytes = await this.#headTreeCache.readFileBytes(`/${path}`);
+    if (bytes === null || bytes.byteLength !== stat.size) {
+      throw new Error(
+        `head-tree cache lost the bytes of "${path}" (stat ${stat.size}, read ${bytes?.byteLength ?? "null"})`,
+      );
+    }
+    return bytes;
   }
 
   #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
@@ -558,7 +599,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (input.afterCommitOid === null) {
       this.#headFilesSnapshot.clear();
     } else {
-      this.#recordPushedHead({ branch: input.branch, commitOid: input.afterCommitOid });
+      this.#observeExternalPush(input.branch, input.beforeCommitOid, input.afterCommitOid);
     }
     const previous =
       input.beforeCommitOid === null
@@ -582,6 +623,28 @@ export class RepoDurableObject extends DurableObject<Env> {
    * treats any DIFFERENT head as possibly-newer only after exhausting its
    * attempts.
    */
+  /**
+   * Queue-delivered push observation. Cloudflare Queues does not guarantee
+   * publication-order delivery, so only COHERENT transitions apply: a
+   * duplicate is a no-op, and an event whose `before` does not match the
+   * recorded cursor is out-of-order or superseded — applying it would REGRESS
+   * the cursor and put every read into a clone-retry loop against a remote
+   * that is already past it. Cursor movement (never regression) is what
+   * invalidates the head caches here; the DO's own write lanes stay on
+   * {@link #recordPushedHead} (their pushes are serialized and authoritative).
+   */
+  #observeExternalPush(branch: string, beforeCommitOid: string | null, afterCommitOid: string) {
+    const current = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+    if (current === afterCommitOid) return;
+    if (current !== undefined && beforeCommitOid !== null && current !== beforeCommitOid) {
+      console.warn(
+        `ignoring out-of-order push observation ${beforeCommitOid} -> ${afterCommitOid} on ${branch} (cursor at ${current})`,
+      );
+      return;
+    }
+    this.#recordPushedHead({ branch, commitOid: afterCommitOid });
+  }
+
   #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
     if (result.noChanges) return;
     if (result.branch === REPO_DEFAULT_BRANCH) {
@@ -630,12 +693,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       // read) and falls back to the authoritative clone lane, loudly.
       try {
         return await this.#withHeadTree(async (commitOid) => {
-          if (input.encoding === "base64") {
-            const bytes = await this.#headTreeCache.readFileBytes(`/${path}`);
-            return bytes === null ? null : { commitOid, content: bytesToBase64(bytes), path };
-          }
-          const content = await this.#headTreeCache.readFile(`/${path}`);
-          return content === null ? null : { commitOid, content, path };
+          const bytes = await this.#readHeadTreeBytesVerified(path);
+          if (bytes === null) return null;
+          const content =
+            input.encoding === "base64" ? bytesToBase64(bytes) : new TextDecoder().decode(bytes);
+          return { commitOid, content, path };
         });
       } catch (error) {
         this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
@@ -682,11 +744,11 @@ export class RepoDurableObject extends DurableObject<Env> {
         const selected = filterWorkerSnapshotPaths(paths, { include: TASK_FILE_INCLUDE_PATTERNS });
         const files: Record<string, string> = {};
         for (const path of selected) {
-          const content = await this.#headTreeCache.readFile(`/${path}`);
-          // A listed path with no content is cache corruption, never truth —
-          // fail to the clone lane instead of serving an empty task.
-          if (content === null) throw new Error(`head-tree cache is missing "${path}"`);
-          files[path] = content;
+          const bytes = await this.#readHeadTreeBytesVerified(path);
+          // A listed path with no verified content is cache corruption, never
+          // truth — fail to the clone lane instead of serving an empty task.
+          if (bytes === null) throw new Error(`head-tree cache is missing "${path}"`);
+          files[path] = new TextDecoder().decode(bytes);
         }
         return { commitOid, files };
       });

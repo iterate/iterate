@@ -98,11 +98,11 @@ export function normalizeWorkspaceMountKeys<
 
 /**
  * The two events that birth a workspace: the `workspace/created` birth
- * certificate (carrying the complete initial config) plus the processor
- * subscription that wires the workspace's Durable Object to its stream.
- * Shared by the explicit door (`itx.workspaces.create`) and the Durable
- * Object's own first-touch auto-birth, so the two can race safely — the
- * certificate's idempotencyKey collapses duplicates.
+ * certificate plus the processor subscription that wires the workspace's
+ * Durable Object to its stream. Every birth path (first touch and the
+ * explicit create door, which both run inside the DO) appends this SAME
+ * certificate, so races collapse on the idempotencyKey; custom mount tables
+ * are `workspace/configured` patches on top, never certificate variants.
  */
 export function workspaceCreationEvents(input: { path: string; projectId: string }) {
   return [

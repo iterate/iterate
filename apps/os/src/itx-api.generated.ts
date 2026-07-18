@@ -1305,12 +1305,11 @@ export interface WorkspaceCollection {
   /** The workspace at a path (first touch births it with the default mount table). */
   get(path: string): Workspace;
   /**
-   * Create a workspace: append its `workspace/created` birth certificate
-   * (carrying the initial mount table) plus the processor subscription to the
-   * workspace's own stream, then wait until the fold has processed the birth.
-   * Idempotent: the certificate dedups, and when the workspace already exists
-   * with a different table (an earlier create, or first-touch auto-birth),
-   * one `configured` patch converges it to the requested table.
+   * Create a workspace. Runs entirely inside the workspace Durable Object's
+   * serialized authority: birth is ensured (the certificate is ALWAYS the
+   * default table — identical body, so the idempotency key can never hit the
+   * stream's different-body rejection), then a custom `mounts` table
+   * converges via one validated `workspace/configured` patch. Idempotent.
    */
   create(input: { mounts?: Record<string, WorkspaceMount>; path: string }): Promise<Workspace>;
 }

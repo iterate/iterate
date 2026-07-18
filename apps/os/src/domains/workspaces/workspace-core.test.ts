@@ -492,3 +492,53 @@ describe("thermo round-two regressions", () => {
     await expect(core.readFile("/config/only.md")).resolves.toBe("re-added");
   });
 });
+
+describe("thermo round-three regressions", () => {
+  test("a file tombstone can NEVER mask a repo mounted beneath that path", async () => {
+    const config = fakeRepo({ vendor: "a file named vendor", "worker.ts": "x" });
+    const vendorRepo = fakeRepo({ "readme.md": "vendor repo truth" });
+    const { workspace } = fakeLocalLayer();
+    const table: Record<string, WorkspaceMount> = {
+      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+    };
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => table,
+      repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
+      workspace,
+    });
+    // Delete the FILE /vendor from the root repo...
+    await expect(core.deleteFile("/vendor")).resolves.toBe(true);
+    // ...then mount a repo at /vendor. Its files must be fully visible —
+    // the file tombstone is exact-match, never recursive.
+    table["/vendor"] = { policy: "read-only", repoPath: "/repos/vendor" };
+    await expect(core.readFile("/vendor/readme.md")).resolves.toBe("vendor repo truth");
+    const status = await core.gitStatus();
+    const vendorMount = status.mounts.find((mount) => mount.path === "/vendor")!;
+    expect(vendorMount.changes).toEqual([]);
+    // And a scoped commit of /vendor has nothing to delete.
+    await expect(core.gitCommit({ message: "nope", scope: "/vendor" })).rejects.toThrow(
+      /read-only|Nothing to commit/,
+    );
+  });
+
+  test("a failed LOCAL delete leaves no whiteout behind", async () => {
+    const config = fakeRepo({ "worker.ts": "repo version" });
+    const { workspace } = fakeLocalLayer();
+    const failing = {
+      ...workspace,
+      deleteFile: async () => {
+        throw new Error("injected local storage failure");
+      },
+    } as unknown as typeof workspace;
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
+      repo: () => config.repo,
+      workspace: failing,
+    });
+    await expect(core.deleteFile("/config/worker.ts")).rejects.toThrow(/injected local/);
+    // The mount file is still visible — no orphaned whiteout hides it.
+    await expect(core.readFile("/config/worker.ts")).resolves.toBe("repo version");
+  });
+});
