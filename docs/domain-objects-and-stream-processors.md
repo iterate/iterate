@@ -153,7 +153,7 @@ An agent creation batch is the reference shape:
 6. `waitUntilProcessed({ offset: finalBatchOffset })` on both processors.
 
 Agent `create()` deliberately takes no arguments. It establishes only the
-platform-authored defaults and machinery above; caller-selected context, model
+shipped defaults and machinery above; caller-selected context, model
 configuration, and tasks are ordinary events appended afterwards through
 `agent.append(...)` or a higher-level helper. This keeps an agent's birth independent of
 the caller that happened to win the creation race. The default model and base
@@ -169,7 +169,7 @@ prompt and kickoff facts, so retries and concurrent callers converge. A keyed
 context item composes with every differently keyed item; it supersedes only
 the prior item with the same key. `agent/system-prompt` is the well-known
 readiness and execution-policy slot, not a separate authorization mechanism:
-any actor with authority to append to that stream can intentionally update it.
+any project member with access to that stream can intentionally update it.
 Additional instructions should normally use their own key so they compose.
 
 Transport routers use the same batch shape when they create routed agents,
@@ -207,12 +207,15 @@ rows. Call the raw stream door for events outside that processor's vocabulary
 or for intentionally ephemeral events.
 
 This derived union proves durable shape and processor vocabulary, not that an
-event is a valid next state transition or has particular provenance. Possession
-of the domain handle is the append authority in this trust model. `create()`
-remains the normal birth path, and higher-level methods remain responsible for
-coordinated lifecycle invariants; a trusted low-level caller can still append a
-second birth or an unmatched completion and make the reducer reject the
-journal. Do not misdescribe `ConsumedInput` as a command-state validator.
+event is a valid next state transition or has particular provenance. It does
+not create a privileged append lane: anyone with access to the containing
+project can append any event type through the raw stream API, and a valid
+matching event has the same reducer meaning whichever append API wrote it.
+`create()` remains the normal birth path, and higher-level methods remain
+responsible for coordinated lifecycle invariants; a low-level caller can still
+append a second birth or an unmatched completion and make the reducer reject
+the journal. Do not misdescribe `ConsumedInput` as a command-state validator
+or an authorization boundary.
 
 Do not add `configure()`, `rename()`, `setFoo()`, or one method per event when
 the implementation would only wrap `stream.append({ type, payload })`. Those

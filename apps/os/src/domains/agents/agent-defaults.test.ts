@@ -97,11 +97,11 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("lets a platform router choose one initial prompt without changing birth", () => {
+  test("lets a routed agent choose one initial prompt without changing birth", () => {
     const creation = agentCreationForPath({
       agentPath: "/agents/slack/test",
       projectId: PROJECT_ID,
-      platformSystemPrompt: {
+      systemPromptPolicy: {
         content: "Slack execution contract",
         id: "slack",
         revision: "7",
@@ -126,7 +126,7 @@ describe("agentCreationForPath", () => {
       agentCreationForPath({
         agentPath: "/agents/routed/test",
         projectId: PROJECT_ID,
-        platformSystemPrompt: { content, id: "routed", revision },
+        systemPromptPolicy: { content, id: "routed", revision },
       }).events.find(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&

@@ -28,8 +28,8 @@ const CHARS_PER_TOKEN = 4;
 // capabilities were the two key bits the diet had cut too deep to keep).
 // Still an order of magnitude under the 33k it replaced — the next raise
 // should be argued in a PR, not absorbed.
-// 3500 → 3600 (2026-07-14): the agent-status teach (setTitle alongside the
-// first message, shortStatus freshness, blocked) was an explicit product ask
+// 3500 → 3600 (2026-07-14): the agent-metadata teach (title alongside the
+// first message, activity freshness, semantic waiting) was an explicit product ask
 // and did not fit the previous ceiling's ~15-token headroom.
 const DEFAULT_PROMPT_TOKEN_CEILING = 3_600;
 

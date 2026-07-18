@@ -50,14 +50,13 @@ export function formatLiveActivityLabel(
   nowMs: number = Date.now(),
 ): string {
   const running = activity.steps.filter((step) => step.status === "running");
-  const code = running.find((step) => step.kind === "code");
-  if (code != null || activity.phase === "script") {
-    const startedAtMs = code?.startedAtMs ?? activity.phaseStartedAtMs ?? activity.startedAtMs;
+  const code = running.findLast((step) => step.kind === "code");
+  if (code != null) {
+    const startedAtMs = code.startedAtMs;
     return `Running code ${formatSeconds(Math.max(0, nowMs - startedAtMs))}`;
   }
   const llm = running.findLast((step) => step.kind === "llm");
   if (llm == null || llm.kind !== "llm") {
-    if (activity.phase === "llm") return "Waiting for a response";
     if (summarizeAgentUiActivity(activity).restartPending) {
       return "Restarted — continuing…";
     }
