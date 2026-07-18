@@ -157,6 +157,16 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
     changes: [{ path: "side.md", content: "side repo truth" }],
   });
 
+  // Regression (thermo round five): an EPHEMERAL event on the workspace
+  // stream holds a raw offset the processor fold can never reach — configure
+  // must pin its fold barrier to the DURABLE head (the CAS still targets the
+  // raw head), or it wedges on this trailing suffix and times out.
+  await project.streams.get(workspacePath).append({
+    type: "events.iterate.com/e2e/ephemeral-noise",
+    payload: { note: "trailing ephemeral suffix" },
+    ephemeral: true,
+  });
+
   // configure deep-merges per mount point: this patch ADDS /side read-only
   // without restating the "/" mount.
   const patched = await workspace.configure({
