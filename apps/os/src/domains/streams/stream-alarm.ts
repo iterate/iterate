@@ -37,7 +37,10 @@ export class StreamAlarm {
   /** The platform consumed the alarm which entered the current handler. */
   async fired(): Promise<void> {
     await this.#chain;
-    this.#knownAtMs = null;
+    // Consumption tells us only that the firing deadline is gone. Invalidate
+    // rather than asserting `null`: another arm may already have landed at the
+    // storage boundary before this handler projects the cursor rows again.
+    this.#knownAtMs = undefined;
   }
 
   #enqueue(desired: (current: number | null) => number | null): Promise<void> {

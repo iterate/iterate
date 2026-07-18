@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { settleStreamCoreBackgroundWork } from "./stream-durable-object.ts";
+import { CoreProcessorContract } from "./core-processor-contract.ts";
+import {
+  assertSubscriptionCursorSetAllowed,
+  settleStreamCoreBackgroundWork,
+} from "./stream-durable-object.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -48,5 +52,53 @@ describe("settleStreamCoreBackgroundWork", () => {
 
     expect(error).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith("stream core background work failed", failure);
+  });
+});
+
+describe("assertSubscriptionCursorSetAllowed", () => {
+  const cursorSet = {
+    type: "events.iterate.com/stream/subscription-cursor-set",
+    payload: { subscriptionKey: "k", afterOffset: 0 },
+  } as const;
+
+  function stateFor(mode: "wake" | "push") {
+    return CoreProcessorContract.stateSchema.parse({
+      configuredSubscribersByKey: {
+        k: {
+          latestConfiguredEvent: {
+            offset: 1,
+            createdAt: "2026-07-17T00:00:00.000Z",
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: "k",
+              delivery:
+                mode === "wake"
+                  ? {
+                      mode,
+                      expression: ["agents", ["get", "/a"], "processor", "wakeStreamSubscriber"],
+                    }
+                  : { mode, expression: ["processEventBatch"] },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  it("rejects seeks for wake subscriptions because their processor checkpoint owns replay", () => {
+    expect(() => assertSubscriptionCursorSetAllowed(stateFor("wake"), cursorSet)).toThrow(
+      'subscription-cursor-set does not apply to wake subscription "k"',
+    );
+  });
+
+  it("allows seeks for stream-cursor-owned push subscriptions", () => {
+    expect(() => assertSubscriptionCursorSetAllowed(stateFor("push"), cursorSet)).not.toThrow();
+  });
+
+  it("rejects seeks for unknown subscriptions", () => {
+    const state = CoreProcessorContract.stateSchema.parse({});
+    expect(() => assertSubscriptionCursorSetAllowed(state, cursorSet)).toThrow(
+      'unknown subscription "k"',
+    );
   });
 });

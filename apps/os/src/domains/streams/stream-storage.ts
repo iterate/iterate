@@ -248,15 +248,31 @@ export type SubscriptionCursorRow = {
   ackedOffset: number;
   /** Consecutive delivery/poke failures since the last success. */
   attempt: number;
-  /** Wall-clock ms before which the spine must not retry; null when not backing off. */
+  /** Successor wake for an in-flight remote attempt; null outside an attempt. */
+  watchdogAt: number | null;
+  /** Policy backoff deadline after a receiver failure; null when not backing off. */
+  retryAt: number | null;
+  /** Earliest durable successor wake across `watchdogAt` and `retryAt`. */
   nextAttemptAt: number | null;
   lastError: string | null;
+  /** Offset currently being confirmed as poison; null outside poison isolation. */
+  poisonOffset: number | null;
+  /** Durable singleton rejections observed for `poisonOffset`. */
+  poisonConfirmations: number;
+  /** Poison events skipped since the receiver last accepted a delivery. */
+  consecutivePoisonSkips: number;
   /**
    * Seek fence. Bumped by every explicit cursor move (`setCursor`) and fresh
    * on every row creation, so an ack fenced on the epoch a drain READ cannot
    * clobber a seek (or a remove+recreate) that landed while its delivery was
    * in flight — `ack`'s monotonic max alone would silently swallow the seek.
    */
+  epoch: number;
+};
+
+/** Cursor incarnation captured before an attempt crosses a remote boundary. */
+export type SubscriptionCursorFence = {
+  subscriptionKey: string;
   epoch: number;
 };
 
@@ -270,13 +286,16 @@ export type SubscriptionCursorStore = {
   list(): SubscriptionCursorRow[];
   /** Create the row if absent (configure); never resets an existing cursor. */
   ensure(subscriptionKey: string, ackedOffset: number): void;
+  /** Administrative/configuration ack: advance and clear all attempt state. */
+  ack(subscriptionKey: string, ackedOffset: number): void;
+  /** Attempt-owned ack, fenced against seek/removal/recreation. */
+  ackAttempt(fence: SubscriptionCursorFence, ackedOffset: number): void;
   /**
-   * Successful delivery: advance the cursor (monotonic), clear failure state.
-   * With `epoch`, the ack is FENCED: it no-ops unless the row's epoch still
-   * matches the one the caller read before dialing — a seek that landed while
-   * the delivery was in flight wins over the delivery's ack.
+   * Advance over a locally empty/filtered range without claiming receiver
+   * success. Clears the current failure/poison candidate, but preserves the
+   * durable consecutive-skip guard until a receiver actually accepts work.
    */
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
+  advanceWithoutDelivery(fence: SubscriptionCursorFence, ackedOffset: number): void;
   /**
    * Advance the wake lane's observational watermark (monotonic) after a poke
    * whose checkpoint did NOT progress. Clears the retry schedule (the poke
@@ -285,19 +304,40 @@ export type SubscriptionCursorStore = {
    * that deliveries succeed, and resetting the counter here is what let a
    * deterministically failing subscriber spin forever without ever parking.
    */
-  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
+  advanceWatermark(fence: SubscriptionCursorFence, ackedOffset: number): void;
   /**
-   * Before yielding to a remote push, persist its crash watchdog without
-   * changing the failure count/error. Fenced to the row epoch captured by the
-   * delivery so a seek or same-key recreation wins.
+   * Begin a remote attempt: consume any due retry and persist its crash
+   * watchdog without changing the failure count/error.
    */
-  armWatchdog(subscriptionKey: string, nextAttemptAt: number, epoch: number): void;
+  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): void;
+  /** Consume only the in-flight watchdog (for an immediate local transition). */
+  clearWatchdog(fence: SubscriptionCursorFence): void;
+  /**
+   * Local infrastructure failure: schedule a successor without charging or
+   * clearing receiver/poison policy state.
+   */
+  deferInfrastructure(
+    fence: SubscriptionCursorFence,
+    args: { nextAttemptAt: number; error: string },
+  ): void;
   /** Failed delivery: record the consecutive attempt count and when to retry. */
   nack(
-    subscriptionKey: string,
+    fence: SubscriptionCursorFence,
     args: { attempt: number; nextAttemptAt: number; error: string },
-    epoch?: number,
   ): void;
+  /** Failed singleton poison confirmation, independently of outage attempts. */
+  nackPoison(
+    fence: SubscriptionCursorFence,
+    args: {
+      attempt: number;
+      nextAttemptAt: number;
+      error: string;
+      poisonOffset: number;
+      poisonConfirmations: number;
+    },
+  ): void;
+  /** Irreversibly step over one confirmed poison event and persist the skip streak. */
+  skipPoison(fence: SubscriptionCursorFence, ackedOffset: number): void;
   /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
   setCursor(subscriptionKey: string, ackedOffset: number): void;
   delete(subscriptionKey: string): void;
@@ -314,57 +354,36 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         subscription_key text primary key,
         acked_offset integer not null,
         attempt integer not null default 0,
-        next_attempt_at integer,
+        watchdog_at integer,
+        retry_at integer,
         last_error text,
+        poison_offset integer,
+        poison_confirmations integer not null default 0,
+        consecutive_poison_skips integer not null default 0,
         epoch integer not null default 0,
         updated_at text not null
       );
     `,
     migrations: [
       {
-        // The #1784 table, verbatim. `if not exists` is load-bearing: live DOs
-        // created their table from raw constructor DDL before sqlfu owned it,
-        // so this migration adopts an existing pre-epoch table as readily as
-        // it creates a fresh one.
-        name: "20260709000001_create_subscriptions",
+        // Production is recreated for this breaking schema. This is the one
+        // supported shape; a stale database must fail loudly and be erased,
+        // never be mistaken for a compatible current-schema database.
+        name: "20260718000001_create_subscriptions",
         content: sql`
-          create table if not exists subscriptions (
-            subscription_key text primary key,
-            acked_offset integer not null,
-            attempt integer not null default 0,
-            next_attempt_at integer,
-            last_error text,
-            updated_at text not null
-          );
-        `,
-      },
-      {
-        // `epoch` postdates the table (#1784 shipped without it, #1792 queries
-        // it). This is a rebuild rather than `alter table add column` because
-        // the migration meets THREE live shapes with empty sqlfu history: no
-        // table (migration 1 just created it), the pre-epoch #1784 table, and
-        // the with-epoch table #1792-era constructors created — a plain ALTER
-        // would throw "duplicate column name" on the last one. Rows and
-        // cursor progress are preserved; epoch restarts at 0 (the fence value
-        // fresh #1784 rows had). Resetting a with-epoch table's fences is
-        // safe here: this runs in the DO constructor, and no in-flight
-        // delivery (the only reader of a stale epoch) survives a DO restart.
-        name: "20260709000002_add_epoch",
-        content: sql`
-          alter table subscriptions rename to subscriptions_pre_epoch;
           create table subscriptions (
             subscription_key text primary key,
             acked_offset integer not null,
             attempt integer not null default 0,
-            next_attempt_at integer,
+            watchdog_at integer,
+            retry_at integer,
             last_error text,
+            poison_offset integer,
+            poison_confirmations integer not null default 0,
+            consecutive_poison_skips integer not null default 0,
             epoch integer not null default 0,
             updated_at text not null
           );
-          insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at)
-          select subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at
-          from subscriptions_pre_epoch;
-          drop table subscriptions_pre_epoch;
         `,
       },
     ],
@@ -373,12 +392,14 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { subscriptionKey: string };
         result: SubscriptionCursorRowRecord;
       }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
+        select subscription_key, acked_offset, attempt, watchdog_at, retry_at, last_error,
+          poison_offset, poison_confirmations, consecutive_poison_skips, epoch
         from subscriptions
         where subscription_key = :subscriptionKey
       `,
       list: sql.many<{ result: SubscriptionCursorRowRecord }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
+        select subscription_key, acked_offset, attempt, watchdog_at, retry_at, last_error,
+          poison_offset, poison_confirmations, consecutive_poison_skips, epoch
         from subscriptions
       `,
       ensure: sql.run<{
@@ -397,10 +418,13 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { subscriptionKey: string; ackedOffset: number; updatedAt: string };
       }>`
         update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
+        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0,
+          watchdog_at = null, retry_at = null, last_error = null,
+          poison_offset = null, poison_confirmations = 0, consecutive_poison_skips = 0,
+          updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
-      ackFenced: sql.run<{
+      ackAttempt: sql.run<{
         parameters: {
           subscriptionKey: string;
           ackedOffset: number;
@@ -409,17 +433,27 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
+        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0,
+          watchdog_at = null, retry_at = null, last_error = null,
+          poison_offset = null, poison_confirmations = 0, consecutive_poison_skips = 0,
+          updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      advanceWithoutDelivery: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          ackedOffset: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0,
+          watchdog_at = null, retry_at = null, last_error = null,
+          poison_offset = null, poison_confirmations = 0, updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       advanceWatermark: sql.run<{
-        parameters: { subscriptionKey: string; ackedOffset: number; updatedAt: string };
-      }>`
-        update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null, updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
-      `,
-      advanceWatermarkFenced: sql.run<{
         parameters: {
           subscriptionKey: string;
           ackedOffset: number;
@@ -428,19 +462,44 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null, updated_at = :updatedAt
+        set acked_offset = max(acked_offset, :ackedOffset), watchdog_at = null, retry_at = null, updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
-      armWatchdog: sql.run<{
+      beginAttempt: sql.run<{
         parameters: {
           subscriptionKey: string;
-          nextAttemptAt: number;
+          watchdogAt: number;
           epoch: number;
           updatedAt: string;
         };
       }>`
         update subscriptions
-        set next_attempt_at = :nextAttemptAt, updated_at = :updatedAt
+        set watchdog_at = :watchdogAt, retry_at = null, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      clearWatchdog: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set watchdog_at = null, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      deferInfrastructure: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          nextAttemptAt: number;
+          error: string;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set watchdog_at = null, retry_at = :nextAttemptAt, last_error = :error,
+          updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       nack: sql.run<{
@@ -449,25 +508,48 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
           attempt: number;
           nextAttemptAt: number;
           error: string;
-          updatedAt: string;
-        };
-      }>`
-        update subscriptions
-        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
-        where subscription_key = :subscriptionKey
-      `,
-      nackFenced: sql.run<{
-        parameters: {
-          subscriptionKey: string;
-          attempt: number;
-          nextAttemptAt: number;
-          error: string;
           epoch: number;
           updatedAt: string;
         };
       }>`
         update subscriptions
-        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
+        set attempt = :attempt, watchdog_at = null, retry_at = :nextAttemptAt,
+          last_error = :error, poison_offset = null, poison_confirmations = 0,
+          updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      nackPoison: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          attempt: number;
+          nextAttemptAt: number;
+          error: string;
+          poisonOffset: number;
+          poisonConfirmations: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set attempt = :attempt, watchdog_at = null, retry_at = :nextAttemptAt,
+          last_error = :error, poison_offset = :poisonOffset,
+          poison_confirmations = :poisonConfirmations, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      skipPoison: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          ackedOffset: number;
+          epoch: number;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0,
+          watchdog_at = null, retry_at = null, last_error = null,
+          poison_offset = null, poison_confirmations = 0,
+          consecutive_poison_skips = consecutive_poison_skips + 1,
+          updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       setCursor: sql.run<{
@@ -479,14 +561,22 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null, epoch = :epoch, updated_at = :updatedAt
+        set acked_offset = :ackedOffset, attempt = 0, watchdog_at = null,
+          retry_at = null, last_error = null, poison_offset = null,
+          poison_confirmations = 0, consecutive_poison_skips = 0,
+          epoch = :epoch, updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
       delete: sql.run<{ parameters: { subscriptionKey: string } }>`
         delete from subscriptions where subscription_key = :subscriptionKey
       `,
       minNextAttemptAt: sql.one<{ result: { next: number | null } }>`
-        select min(next_attempt_at) as next from subscriptions where next_attempt_at is not null
+        select min(deadline) as next
+        from (
+          select watchdog_at as deadline from subscriptions where watchdog_at is not null
+          union all
+          select retry_at as deadline from subscriptions where retry_at is not null
+        )
       `,
     },
   });
@@ -499,11 +589,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   >;
 
   constructor(sql: SqlStorage) {
-    // {sql} without transactionSync: this store only holds SqlStorage. That
-    // forgoes sqlfu's per-migration transaction, which is fine here — the
-    // constructor is await-free, and Durable Object SQLite commits all writes
-    // in one event-loop task atomically, so a crash mid-migration cannot
-    // persist a half-applied state.
+    // This store has one current-schema creation migration. There is
+    // intentionally no live-shape adoption: production is recreated for
+    // breaking stream-storage changes, and stale databases fail loudly.
     this.#db = SqliteSubscriptionCursorStore.db(createDurableObjectClient({ sql }));
     this.#db.migrate();
   }
@@ -534,45 +622,85 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     });
   }
 
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
-    const params = { subscriptionKey, ackedOffset, updatedAt: new Date().toISOString() };
-    if (epoch === undefined) {
-      this.#db.ack(params);
-    } else {
-      this.#db.ackFenced({ ...params, epoch });
-    }
+  ack(subscriptionKey: string, ackedOffset: number): void {
+    this.#db.ack({ subscriptionKey, ackedOffset, updatedAt: new Date().toISOString() });
   }
 
-  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
-    const params = { subscriptionKey, ackedOffset, updatedAt: new Date().toISOString() };
-    if (epoch === undefined) this.#db.advanceWatermark(params);
-    else this.#db.advanceWatermarkFenced({ ...params, epoch });
+  ackAttempt(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    this.#db.ackAttempt({ ...fence, ackedOffset, updatedAt: new Date().toISOString() });
   }
 
-  armWatchdog(subscriptionKey: string, nextAttemptAt: number, epoch: number): void {
-    this.#db.armWatchdog({
-      subscriptionKey,
-      nextAttemptAt,
-      epoch,
+  advanceWithoutDelivery(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    this.#db.advanceWithoutDelivery({
+      ...fence,
+      ackedOffset,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  advanceWatermark(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    this.#db.advanceWatermark({ ...fence, ackedOffset, updatedAt: new Date().toISOString() });
+  }
+
+  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): void {
+    this.#db.beginAttempt({
+      ...fence,
+      watchdogAt,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  clearWatchdog(fence: SubscriptionCursorFence): void {
+    this.#db.clearWatchdog({ ...fence, updatedAt: new Date().toISOString() });
+  }
+
+  deferInfrastructure(
+    fence: SubscriptionCursorFence,
+    args: { nextAttemptAt: number; error: string },
+  ): void {
+    this.#db.deferInfrastructure({
+      ...fence,
+      nextAttemptAt: args.nextAttemptAt,
+      error: args.error.slice(0, 2_000),
       updatedAt: new Date().toISOString(),
     });
   }
 
   nack(
-    subscriptionKey: string,
+    fence: SubscriptionCursorFence,
     args: { attempt: number; nextAttemptAt: number; error: string },
-    epoch?: number,
   ): void {
     const params = {
-      subscriptionKey,
+      ...fence,
       attempt: args.attempt,
       nextAttemptAt: args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
       error: args.error.slice(0, 2_000),
       updatedAt: new Date().toISOString(),
     };
-    if (epoch === undefined) this.#db.nack(params);
-    else this.#db.nackFenced({ ...params, epoch });
+    this.#db.nack(params);
+  }
+
+  nackPoison(
+    fence: SubscriptionCursorFence,
+    args: {
+      attempt: number;
+      nextAttemptAt: number;
+      error: string;
+      poisonOffset: number;
+      poisonConfirmations: number;
+    },
+  ): void {
+    this.#db.nackPoison({
+      ...fence,
+      ...args,
+      error: args.error.slice(0, 2_000),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  skipPoison(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    this.#db.skipPoison({ ...fence, ackedOffset, updatedAt: new Date().toISOString() });
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
@@ -598,7 +726,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
  * (core state version mismatch). Rows are storage and survive the KV state,
  * so after a rebuild they can describe a world the new fold no longer
  * derives: a row whose config event no longer parses is orphaned (its
- * `next_attempt_at` would arm alarms forever), and a surviving row's backoff
+ * deadlines would arm alarms forever), and a surviving row's backoff
  * may blame code the new version replaced. Progress is kept — `ackedOffset`
  * is monotonic truth about the same immutable log — while failure state is
  * cleared so every survivor gets an immediate fresh try under the new fold.
@@ -610,7 +738,14 @@ export function reconcileSubscriptionCursorRows(
   for (const row of store.list()) {
     if (!configuredKeys.has(row.subscriptionKey)) {
       store.delete(row.subscriptionKey);
-    } else if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
+    } else if (
+      row.attempt !== 0 ||
+      row.nextAttemptAt !== null ||
+      row.lastError !== null ||
+      row.poisonOffset !== null ||
+      row.poisonConfirmations !== 0 ||
+      row.consecutivePoisonSkips !== 0
+    ) {
       // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
       store.ack(row.subscriptionKey, row.ackedOffset);
     }
@@ -621,20 +756,38 @@ type SubscriptionCursorRowRecord = {
   subscription_key: string;
   acked_offset: number;
   attempt: number;
-  next_attempt_at: number | null;
+  watchdog_at: number | null;
+  retry_at: number | null;
   last_error: string | null;
+  poison_offset: number | null;
+  poison_confirmations: number;
+  consecutive_poison_skips: number;
   epoch: number;
 };
 
 function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
+  const nextAttemptAt = earliestDeadline(record.watchdog_at, record.retry_at);
   return {
     subscriptionKey: record.subscription_key,
     ackedOffset: record.acked_offset,
     attempt: record.attempt,
-    nextAttemptAt: record.next_attempt_at,
+    watchdogAt: record.watchdog_at,
+    retryAt: record.retry_at,
+    nextAttemptAt,
     lastError: record.last_error,
+    poisonOffset: record.poison_offset,
+    poisonConfirmations: record.poison_confirmations,
+    consecutivePoisonSkips: record.consecutive_poison_skips,
     epoch: record.epoch,
   };
+}
+
+function earliestDeadline(...deadlines: Array<number | null>): number | null {
+  let earliest: number | null = null;
+  for (const deadline of deadlines) {
+    if (deadline !== null && (earliest === null || deadline < earliest)) earliest = deadline;
+  }
+  return earliest;
 }
 
 function addLegacyEventPath(value: unknown, path: string): unknown {

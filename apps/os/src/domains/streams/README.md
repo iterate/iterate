@@ -196,14 +196,22 @@ All durable-subscription bookkeeping lives in one place
 log):
 
 ```
-            delivery/poke ok                     attempt ≥ 15 (~3.5h of outage)
-  active ──────────────────▶ active     retrying ──────────────────────────▶ parked
-    │  failure                              ▲ │ backoff min(30m, 1s·2^n) ±20% jitter,
-    └───────────▶ retrying ─────────────────┘ │ one DO alarm = MIN(next_attempt_at)
+ active ── persist watchdog + arm alarm ──▶ delivering ── receiver ok ──▶ active
+                                              │ receiver failure
                                               ▼
-                              parked ── subscription-resumed ──▶ active
-                              (a redrive appends cursor-set first — resume is a pure un-park)
+                                           retrying ── alarm ──▶ active
+                                              │ 15 failures
+                                              ▼
+                                            parked ── subscription-resumed ──▶ active
+                                            (redrive appends cursor-set first for push/webhook)
 ```
+
+The cursor row stores `watchdog_at` and `retry_at` separately. A watchdog is
+the durable successor for a receiver call currently in flight; a retry is the
+successor after an observed failure. Runtime/UI surfaces must preserve that
+distinction. Local storage, metrics, and alarm-projection failures do not
+increment receiver attempts; after bounded projection failure they produce an
+explicit infrastructure-classified parked fact instead of orphaning work.
 
 Doctrine, worth memorizing:
 

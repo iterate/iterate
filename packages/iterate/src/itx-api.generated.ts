@@ -3626,9 +3626,15 @@ export type SubscriptionRuntimeState = {
   /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
   lag: number;
   attempt: number;
+  /** In-flight delivery watchdog; reaching it means the receiver call never settled. */
+  watchdogAt: number | null;
+  /** Scheduled retry after an observed receiver or local-infrastructure failure. */
+  retryAt: number | null;
+  /** Earliest of `watchdogAt` and `retryAt`, retained for alarm/debug consumers. */
   nextAttemptAt: number | null;
   lastError: string | null;
   parkedAtOffset: number | null;
+  parkedReason: "receiver-failure" | "infrastructure-failure" | null;
   /** Whether a live delivery connection currently exists (wake mode). */
   connected: boolean;
   /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */

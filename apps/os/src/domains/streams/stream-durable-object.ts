@@ -68,6 +68,26 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
   }
 }
 
+/** Pure pre-commit policy for the stream-owned cursor seek fact. */
+export function assertSubscriptionCursorSetAllowed(
+  state: CoreProcessorState,
+  input: StreamEventInput,
+): void {
+  const event = CoreProcessorContract.parseEventInput(
+    "events.iterate.com/stream/subscription-cursor-set",
+    input,
+  );
+  const configured = state.configuredSubscribersByKey[event.payload.subscriptionKey];
+  if (configured === undefined) {
+    throw new Error(`unknown subscription "${event.payload.subscriptionKey}"`);
+  }
+  if (configured.latestConfiguredEvent.payload.delivery.mode === "wake") {
+    throw new Error(
+      `subscription-cursor-set does not apply to wake subscription "${event.payload.subscriptionKey}"; its processor checkpoint owns replay`,
+    );
+  }
+}
+
 /**
  * The subscription key of the birth-certificate worker feed every
  * project-scoped stream configures on itself (see the constructor). Userspace
@@ -192,6 +212,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+    // Cursor rows are the durable retry/watchdog intent; the platform alarm
+    // is only their projection. Re-establish that projection on every fresh
+    // incarnation before relying on an earlier setAlarm call having landed.
+    this.#subscribers.recoverAlarmAfterBoot();
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
@@ -236,12 +260,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
-  async alarm(): Promise<void> {
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     await this.#alarm.fired();
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
-    await this.#subscribers.onAlarm();
+    await this.#subscribers.onAlarm(alarmInfo);
     this.#flushCoreProcessorState();
   }
 
@@ -485,6 +509,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       compileEventSelector(event.payload.selector);
     }
 
+    if (isFirstHand && args.event.type === "events.iterate.com/stream/subscription-cursor-set") {
+      assertSubscriptionCursorSetAllowed(args.state, args.event);
+    }
+
     if (!args.state.paused) return;
 
     // Presence and park facts pass through the pause door alongside
@@ -713,6 +741,7 @@ export class StreamDurableObject extends DurableObject<Env> {
               [event.payload.subscriptionKey]: {
                 ...existing,
                 parkedAtOffset: event.payload.atOffset,
+                parkedReason: event.payload.reason,
               },
             },
           },
@@ -725,7 +754,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         if (existing === undefined) {
           return this.#reduceCircuitBreaker({ event: args.event, state: next });
         }
-        const { parkedAtOffset: _cleared, ...resumed } = existing;
+        const { parkedAtOffset: _cleared, parkedReason: _reason, ...resumed } = existing;
         return this.#reduceCircuitBreaker({
           event: args.event,
           state: {

@@ -410,10 +410,12 @@ export class SchedulerProcessor extends StreamProcessor<
           } finally {
             try {
               disposeIgnoredRpcResult(rpcResult);
+              span.setAttribute("iterate.scheduler.rpc_result_disposal", "succeeded");
             } catch (error) {
-              // The action already ran; turning cleanup failure into a script
-              // failure would invite an unsafe retry. Keep the outcome and
-              // surface the ownership defect independently.
+              // Invocation and JSON detachment have already determined the
+              // action outcome. Cleanup is an orthogonal RPC-ownership defect:
+              // retain the primary outcome and expose cleanup independently.
+              span.setAttribute("iterate.scheduler.rpc_result_disposal", "failed");
               console.error("scheduler action RPC result disposal failed", {
                 executionId,
                 error,

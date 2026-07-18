@@ -234,17 +234,21 @@ describe("reconcileSubscriptionCursorRows", () => {
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
     store.ensure("survivor-clean", 5);
     store.ensure("survivor-backing-off", 3);
-    store.nack("survivor-backing-off", {
+    store.nack(store.get("survivor-backing-off")!, {
       attempt: 7,
       nextAttemptAt: 99_999,
       error: "old-code bug",
     });
     store.ensure("orphan", 2);
-    store.nack("orphan", { attempt: 14, nextAttemptAt: 88_888, error: "config no longer folds" });
+    store.nack(store.get("orphan")!, {
+      attempt: 14,
+      nextAttemptAt: 88_888,
+      error: "config no longer folds",
+    });
 
     reconcileSubscriptionCursorRows(store, new Set(["survivor-clean", "survivor-backing-off"]));
 
-    // The orphan is gone entirely — its next_attempt_at must not arm alarms forever.
+    // The orphan is gone entirely — its deadlines must not arm alarms forever.
     expect(store.get("orphan")).toBeUndefined();
     expect(store.minNextAttemptAt()).toBeNull();
     // Progress survives (ackedOffset is monotonic truth about the same log)...
@@ -259,66 +263,20 @@ describe("reconcileSubscriptionCursorRows", () => {
   });
 });
 
-describe("SqliteSubscriptionCursorStore schema migration", () => {
-  it("adds the epoch column to a pre-epoch subscriptions table without losing rows", () => {
-    // A live DO that created the table under #1784 (no epoch column) and then
-    // received #1792 code: construction must upgrade the table in place
-    // instead of leaving every subsequent select throwing "no such column".
-    const db = new DatabaseSync(":memory:");
-    db.exec(`
-      create table subscriptions (
-        subscription_key text primary key,
-        acked_offset integer not null,
-        attempt integer not null default 0,
-        next_attempt_at integer,
-        last_error text,
-        updated_at text not null
-      )
-    `);
-    db.prepare(
-      "insert into subscriptions (subscription_key, acked_offset, updated_at) values (?, ?, ?)",
-    ).run("pre-existing", 7, new Date(0).toISOString());
+describe("SqliteSubscriptionCursorStore schema", () => {
+  it("creates the current schema with explicit delivery-policy state", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("k", 3);
 
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-
-    // The old row reads back with the fence value fresh #1784 rows had.
-    expect(store.get("pre-existing")).toMatchObject({ ackedOffset: 7, epoch: 0 });
-    expect(store.list()).toHaveLength(1);
-    // Post-migration writes behave like any other row.
-    store.ensure("fresh", 0);
-    expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
-  });
-
-  it("adopts a with-epoch table that predates sqlfu ownership (post-#1792 constructor DDL)", () => {
-    // DOs created between #1792 and this fix got the epoch column from raw
-    // constructor DDL, so they have the current shape but an empty
-    // sqlfu_migrations table. The migration chain must pass over them without
-    // throwing (a bare `alter table add column epoch` would die with
-    // "duplicate column name") and without losing rows. Epochs reset to 0 —
-    // acceptable because no in-flight delivery survives the DO restart that
-    // reruns the constructor.
-    const db = new DatabaseSync(":memory:");
-    db.exec(`
-      create table subscriptions (
-        subscription_key text primary key,
-        acked_offset integer not null,
-        attempt integer not null default 0,
-        next_attempt_at integer,
-        last_error text,
-        epoch integer not null default 0,
-        updated_at text not null
-      )
-    `);
-    db.prepare(
-      "insert into subscriptions (subscription_key, acked_offset, epoch, updated_at) values (?, ?, ?, ?)",
-    ).run("pre-existing", 7, Date.now(), new Date(0).toISOString());
-
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-
-    expect(store.get("pre-existing")).toMatchObject({ ackedOffset: 7, epoch: 0 });
-    expect(store.list()).toHaveLength(1);
-    store.ensure("fresh", 0);
-    expect(store.get("fresh")!.epoch).toBeGreaterThan(0);
+    expect(store.get("k")).toMatchObject({
+      ackedOffset: 3,
+      attempt: 0,
+      watchdogAt: null,
+      retryAt: null,
+      poisonOffset: null,
+      poisonConfirmations: 0,
+      consecutivePoisonSkips: 0,
+    });
   });
 
   it("is idempotent on an already-current table", () => {
@@ -338,50 +296,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     return new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
   }
 
-  it("migrates existing subscription tables that predate epoch fencing", () => {
-    const sql = wrapSqlStorage(new DatabaseSync(":memory:"));
-    sql.exec(`
-      create table subscriptions (
-        subscription_key text primary key,
-        acked_offset integer not null,
-        attempt integer not null default 0,
-        next_attempt_at integer,
-        last_error text,
-        updated_at text not null
-      )
-    `);
-    sql.exec(
-      "insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at) values (?, ?, ?, ?, ?, ?)",
-      "legacy",
-      4,
-      2,
-      123,
-      "old failure",
-      new Date(0).toISOString(),
-    );
-
-    const store = new SqliteSubscriptionCursorStore(sql);
-
-    expect(store.get("legacy")).toMatchObject({
-      ackedOffset: 4,
-      attempt: 2,
-      epoch: 0,
-      lastError: "old failure",
-      nextAttemptAt: 123,
-    });
-
-    store.setCursor("legacy", 7);
-
-    expect(store.get("legacy")).toMatchObject({
-      ackedOffset: 7,
-      attempt: 0,
-      lastError: null,
-      nextAttemptAt: null,
-    });
-    expect(store.get("legacy")!.epoch).toBeGreaterThan(0);
-  });
-
-  it("acks fenced on a stale epoch no-op; unfenced acks still land", () => {
+  it("attempt-owned acks fence on the epoch while administrative acks still land", () => {
     const store = makeStore();
     store.ensure("k", 0);
     const before = store.get("k")!;
@@ -392,32 +307,37 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
 
     // The in-flight delivery captured the PRE-seek epoch: its ack must not
     // clobber the seek.
-    store.ack("k", 100, before.epoch);
+    store.ackAttempt(before, 100);
     expect(store.get("k")!.ackedOffset).toBe(2);
 
     // A delivery that read the post-seek row acks normally.
-    store.ack("k", 5, after.epoch);
+    store.ackAttempt(after, 5);
     expect(store.get("k")!.ackedOffset).toBe(5);
+
+    // Configuration/runtime administration is deliberately not attempt-owned.
+    store.ack("k", 7);
+    expect(store.get("k")!.ackedOffset).toBe(7);
   });
 
   it("remove+recreate mints a fresh epoch, so a dead subscription's ack cannot land", () => {
     const store = makeStore();
     store.ensure("k", 0);
-    const oldEpoch = store.get("k")!.epoch;
+    const removed = store.get("k")!;
     store.delete("k");
     store.ensure("k", 0); // recreate with deliver:"all" semantics
-    expect(store.get("k")!.epoch).toBeGreaterThan(oldEpoch);
+    expect(store.get("k")!.epoch).toBeGreaterThan(removed.epoch);
 
-    store.ack("k", 100, oldEpoch); // the removed receiver's in-flight ack
+    store.ackAttempt(removed, 100); // the removed receiver's in-flight ack
     expect(store.get("k")!.ackedOffset).toBe(0); // full history still owed
   });
 
   it("advanceWatermark keeps the failure streak but clears the retry schedule", () => {
     const store = makeStore();
     store.ensure("k", 0);
-    store.nack("k", { attempt: 3, nextAttemptAt: 12345, error: "ingest failing" });
+    const attempt = store.get("k")!;
+    store.nack(attempt, { attempt: 3, nextAttemptAt: 12345, error: "ingest failing" });
 
-    store.advanceWatermark("k", 7);
+    store.advanceWatermark(attempt, 7);
     const row = store.get("k")!;
     expect(row.ackedOffset).toBe(7);
     expect(row.attempt).toBe(3); // a reachable host is not a healthy one
@@ -425,18 +345,86 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
   });
 
+  it("keeps poison confirmation separate from generic receiver failures", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const fence = store.get("k")!;
+
+    store.nackPoison(fence, {
+      attempt: 1,
+      nextAttemptAt: 100,
+      error: "application rejected offset 4",
+      poisonOffset: 4,
+      poisonConfirmations: 1,
+    });
+    expect(store.get("k")).toMatchObject({
+      attempt: 1,
+      poisonOffset: 4,
+      poisonConfirmations: 1,
+    });
+
+    store.nack(fence, { attempt: 2, nextAttemptAt: 200, error: "receiver unavailable" });
+    expect(store.get("k")).toMatchObject({
+      attempt: 2,
+      poisonOffset: null,
+      poisonConfirmations: 0,
+    });
+  });
+
+  it("persists consecutive poison skips until a receiver success", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const fence = store.get("k")!;
+
+    store.skipPoison(fence, 1);
+    expect(store.get("k")).toMatchObject({ ackedOffset: 1, consecutivePoisonSkips: 1 });
+
+    store.advanceWithoutDelivery(fence, 2);
+    expect(store.get("k")).toMatchObject({ ackedOffset: 2, consecutivePoisonSkips: 1 });
+
+    store.ackAttempt(fence, 3);
+    expect(store.get("k")).toMatchObject({ ackedOffset: 3, consecutivePoisonSkips: 0 });
+  });
+
   it("fences watchdog, nack, and wake watermark writes against a replaced row", () => {
     const store = makeStore();
     store.ensure("k", 0);
-    const oldEpoch = store.get("k")!.epoch;
+    const removed = store.get("k")!;
     store.delete("k");
     store.ensure("k", 0);
     const replacement = store.get("k")!;
 
-    store.armWatchdog("k", 100, oldEpoch);
-    store.nack("k", { attempt: 7, nextAttemptAt: 200, error: "old failure" }, oldEpoch);
-    store.advanceWatermark("k", 99, oldEpoch);
+    store.beginAttempt(removed, 100);
+    store.nack(removed, { attempt: 7, nextAttemptAt: 200, error: "old failure" });
+    store.advanceWatermark(removed, 99);
 
     expect(store.get("k")).toEqual(replacement);
+  });
+
+  it("tracks watchdog and receiver backoff separately and can consume only the watchdog", () => {
+    const store = makeStore();
+    store.ensure("k", 0);
+    const attempt = store.get("k")!;
+
+    store.beginAttempt(attempt, 100);
+    expect(store.get("k")).toMatchObject({
+      watchdogAt: 100,
+      retryAt: null,
+      nextAttemptAt: 100,
+    });
+
+    store.clearWatchdog(attempt);
+    expect(store.get("k")).toMatchObject({
+      watchdogAt: null,
+      retryAt: null,
+      nextAttemptAt: null,
+    });
+
+    store.nack(attempt, { attempt: 1, nextAttemptAt: 200, error: "receiver failed" });
+    expect(store.get("k")).toMatchObject({
+      watchdogAt: null,
+      retryAt: 200,
+      nextAttemptAt: 200,
+    });
   });
 });

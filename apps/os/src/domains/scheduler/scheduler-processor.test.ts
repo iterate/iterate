@@ -454,6 +454,49 @@ describe("triggering", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it("records disposal failure separately without replacing a successful action", async () => {
+    resetRecordedSpans();
+    const cleanupError = new Error("dispose failed");
+    const result = Object.assign(
+      { made: "cat-image" },
+      {
+        [Symbol.dispose]() {
+          throw cleanupError;
+        },
+      },
+    );
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const harness = makeHarness({ invokeCapability: async () => result });
+      const { clock, deliver, processor, stream } = harness;
+      await stream.append(setEvent("report"));
+      await deliver();
+      clock.now = T0 + 61_000;
+      await processor.triggerDue();
+      await deliver();
+      await waitForCompletion(harness);
+
+      expect(stream.events.find((event) => event.type === COMPLETED_TYPE)!.payload).toMatchObject({
+        outcome: "succeeded",
+        result: { made: "cat-image" },
+      });
+      expect(
+        recordedSpans.find((span) => span.name === "scheduler action invocation"),
+      ).toMatchObject({
+        attributes: {
+          "iterate.scheduler.action_outcome": "succeeded",
+          "iterate.scheduler.rpc_result_disposal": "failed",
+        },
+      });
+      expect(errorLog).toHaveBeenCalledWith("scheduler action RPC result disposal failed", {
+        executionId: expect.any(String),
+        error: cleanupError,
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("disposes an RPC action result even when JSON detachment fails", async () => {
     const dispose = vi.fn();
     const result: Record<string | symbol, unknown> = { [Symbol.dispose]: dispose };

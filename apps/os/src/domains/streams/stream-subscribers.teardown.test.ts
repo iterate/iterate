@@ -16,7 +16,11 @@ import {
 } from "./core-processor-contract.ts";
 import { StreamSubscribers } from "./stream-subscribers.ts";
 import type { RetainedProcessEventBatch } from "./subscriber-sinks.ts";
-import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
+import type {
+  SubscriptionCursorFence,
+  SubscriptionCursorRow,
+  SubscriptionCursorStore,
+} from "./stream-storage.ts";
 
 type PokeImpl = (request: { subscriptionKey: string }) => Promise<{
   checkpointOffset: number;
@@ -26,12 +30,29 @@ type PokeImpl = (request: { subscriptionKey: string }) => Promise<{
 function makeFaithfulHarness(pokeImpl?: PokeImpl) {
   const log: StreamEvent[] = [];
   const rows = new Map<string, SubscriptionCursorRow>();
-  const configured: Record<string, { latestConfiguredEvent: any; parkedAtOffset?: number }> = {};
+  const configured: Record<
+    string,
+    {
+      latestConfiguredEvent: any;
+      parkedAtOffset?: number;
+      parkedReason?: "receiver-failure" | "infrastructure-failure";
+    }
+  > = {};
   const pokes: string[] = [];
   const kept: Promise<unknown>[] = [];
   let sinkAlive = true;
 
   let lastEpoch = 0;
+  const refreshDeadline = (row: SubscriptionCursorRow): void => {
+    const deadlines = [row.watchdogAt, row.retryAt].filter(
+      (value): value is number => value !== null,
+    );
+    row.nextAttemptAt = deadlines.length === 0 ? null : Math.min(...deadlines);
+  };
+  const fenced = (fence: SubscriptionCursorFence): SubscriptionCursorRow | undefined => {
+    const row = rows.get(fence.subscriptionKey);
+    return row?.epoch === fence.epoch ? row : undefined;
+  };
   const store: SubscriptionCursorStore = {
     get: (k) => rows.get(k),
     list: () => [...rows.values()],
@@ -42,39 +63,128 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           subscriptionKey: k,
           ackedOffset: acked,
           attempt: 0,
+          watchdogAt: null,
+          retryAt: null,
           nextAttemptAt: null,
           lastError: null,
+          poisonOffset: null,
+          poisonConfirmations: 0,
+          consecutivePoisonSkips: 0,
           epoch: lastEpoch,
         });
       }
     },
-    ack: (k, acked, epoch) => {
+    ack: (k, acked) => {
       const row = rows.get(k);
       if (!row) return;
-      if (epoch !== undefined && row.epoch !== epoch) return;
       row.ackedOffset = Math.max(row.ackedOffset, acked);
       row.attempt = 0;
-      row.nextAttemptAt = null;
+      row.watchdogAt = null;
+      row.retryAt = null;
       row.lastError = null;
+      row.poisonOffset = null;
+      row.poisonConfirmations = 0;
+      row.consecutivePoisonSkips = 0;
+      refreshDeadline(row);
     },
-    advanceWatermark: (k, acked, epoch) => {
-      const row = rows.get(k);
-      if (!row || (epoch !== undefined && row.epoch !== epoch)) return;
+    ackAttempt: (fence, acked) => {
+      const row = fenced(fence);
+      if (!row) return;
       row.ackedOffset = Math.max(row.ackedOffset, acked);
-      row.nextAttemptAt = null;
+      row.attempt = 0;
+      row.watchdogAt = null;
+      row.retryAt = null;
+      row.lastError = null;
+      row.poisonOffset = null;
+      row.poisonConfirmations = 0;
+      row.consecutivePoisonSkips = 0;
+      refreshDeadline(row);
     },
-    armWatchdog: (k, nextAttemptAt, epoch) => {
-      const row = rows.get(k);
-      if (row !== undefined && row.epoch === epoch) row.nextAttemptAt = nextAttemptAt;
-    },
-    nack: (k, args, epoch) => {
-      const row = rows.get(k);
-      if (!row || (epoch !== undefined && row.epoch !== epoch)) return;
+    advanceWithoutDelivery: (fence, acked) => {
+      const row = fenced(fence);
+      if (!row) return;
       Object.assign(row, {
-        attempt: args.attempt,
-        nextAttemptAt: args.nextAttemptAt,
+        ackedOffset: Math.max(row.ackedOffset, acked),
+        attempt: 0,
+        watchdogAt: null,
+        retryAt: null,
+        lastError: null,
+        poisonOffset: null,
+        poisonConfirmations: 0,
+      });
+      refreshDeadline(row);
+    },
+    advanceWatermark: (fence, acked) => {
+      const row = fenced(fence);
+      if (!row) return;
+      row.ackedOffset = Math.max(row.ackedOffset, acked);
+      row.watchdogAt = null;
+      row.retryAt = null;
+      refreshDeadline(row);
+    },
+    beginAttempt: (fence, watchdogAt) => {
+      const row = fenced(fence);
+      if (!row) return;
+      row.watchdogAt = watchdogAt;
+      row.retryAt = null;
+      refreshDeadline(row);
+    },
+    clearWatchdog: (fence) => {
+      const row = fenced(fence);
+      if (!row) return;
+      row.watchdogAt = null;
+      refreshDeadline(row);
+    },
+    deferInfrastructure: (fence, args) => {
+      const row = fenced(fence);
+      if (!row) return;
+      Object.assign(row, {
+        watchdogAt: null,
+        retryAt: args.nextAttemptAt,
         lastError: args.error,
       });
+      refreshDeadline(row);
+    },
+    nack: (fence, args) => {
+      const row = fenced(fence);
+      if (!row) return;
+      Object.assign(row, {
+        attempt: args.attempt,
+        watchdogAt: null,
+        retryAt: args.nextAttemptAt,
+        lastError: args.error,
+        poisonOffset: null,
+        poisonConfirmations: 0,
+      });
+      refreshDeadline(row);
+    },
+    nackPoison: (fence, args) => {
+      const row = fenced(fence);
+      if (!row) return;
+      Object.assign(row, {
+        attempt: args.attempt,
+        watchdogAt: null,
+        retryAt: args.nextAttemptAt,
+        lastError: args.error,
+        poisonOffset: args.poisonOffset,
+        poisonConfirmations: args.poisonConfirmations,
+      });
+      refreshDeadline(row);
+    },
+    skipPoison: (fence, acked) => {
+      const row = fenced(fence);
+      if (!row) return;
+      Object.assign(row, {
+        ackedOffset: Math.max(row.ackedOffset, acked),
+        attempt: 0,
+        watchdogAt: null,
+        retryAt: null,
+        lastError: null,
+        poisonOffset: null,
+        poisonConfirmations: 0,
+        consecutivePoisonSkips: row.consecutivePoisonSkips + 1,
+      });
+      refreshDeadline(row);
     },
     setCursor: (k, acked) => {
       const row = rows.get(k);
@@ -83,10 +193,15 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       Object.assign(row, {
         ackedOffset: acked,
         attempt: 0,
-        nextAttemptAt: null,
+        watchdogAt: null,
+        retryAt: null,
         lastError: null,
+        poisonOffset: null,
+        poisonConfirmations: 0,
+        consecutivePoisonSkips: 0,
         epoch: lastEpoch,
       });
+      refreshDeadline(row);
     },
     delete: (k) => void rows.delete(k),
     minNextAttemptAt: () => {
@@ -109,9 +224,17 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     } as StreamEvent;
     log.push(event);
     if (event.type === "events.iterate.com/stream/subscription-parked") {
-      const key = (event.payload as { subscriptionKey: string }).subscriptionKey;
+      const payload = event.payload as {
+        subscriptionKey: string;
+        atOffset: number;
+        reason: "receiver-failure" | "infrastructure-failure";
+      };
+      const key = payload.subscriptionKey;
       const entry = configured[key];
-      if (entry) entry.parkedAtOffset = (event.payload as { atOffset: number }).atOffset;
+      if (entry) {
+        entry.parkedAtOffset = payload.atOffset;
+        entry.parkedReason = payload.reason;
+      }
     }
     subscribers.wake();
   };

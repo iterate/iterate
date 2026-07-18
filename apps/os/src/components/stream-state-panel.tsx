@@ -946,8 +946,8 @@ function compareProcessorEntries(a: ProcessorPanelEntry, b: ProcessorPanelEntry)
  * subscriptions are desired state from a `subscription-configured` fact, and
  * a missing live connection is a NORMAL spine state, not a vague sleep —
  * wake mode gets re-poked when the watermark lags, push/webhook cursors are
- * either acked to head, mid-drain, or in retry backoff, and `parked` is the
- * spine's own give-up fact.
+ * either acked to head, mid-drain, awaiting an in-flight watchdog, or in retry
+ * backoff, and `parked` is the spine's own classified give-up fact.
  */
 function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string {
   if (entry.kind === "core") return "running";
@@ -957,13 +957,22 @@ function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string
   }
   const subscription = entry.runtimeSubscription;
   if (subscription?.parkedAtOffset != null) {
-    return `subscription-parked at #${subscription.parkedAtOffset}`;
+    const reason =
+      subscription.parkedReason === "infrastructure-failure"
+        ? "infrastructure failure"
+        : subscription.parkedReason === "receiver-failure"
+          ? "receiver failure"
+          : "unclassified failure";
+    return `subscription-parked (${reason}) at #${subscription.parkedAtOffset}`;
   }
   if (entry.subscriptionType === "configured") {
     const configured =
       entry.configuredAtOffset == null ? "configured" : `configured #${entry.configuredAtOffset}`;
-    if (subscription != null && subscription.nextAttemptAt !== null) {
-      return `${configured} · retry backoff (attempt ${subscription.attempt})`;
+    if (subscription?.retryAt != null) {
+      return `${configured} · retry scheduled (attempt ${subscription.attempt})`;
+    }
+    if (subscription?.watchdogAt != null) {
+      return `${configured} · delivery in flight (watchdog armed)`;
     }
     if (entry.deliveryMode === "wake") {
       return `${configured} · poked on next append`;
@@ -1745,14 +1754,27 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
       {entry.configuredAtOffset == null &&
       runtime?.lastError == null &&
       runtime?.parkedAtOffset == null &&
-      runtime?.nextAttemptAt == null ? null : (
+      runtime?.watchdogAt == null &&
+      runtime?.retryAt == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
             <div>configured at #{entry.configuredAtOffset}</div>
           )}
-          {runtime?.parkedAtOffset == null ? null : <div>parked at #{runtime.parkedAtOffset}</div>}
-          {runtime?.nextAttemptAt == null ? null : (
-            <div>next attempt {new Date(runtime.nextAttemptAt).toLocaleString()}</div>
+          {runtime?.parkedAtOffset == null ? null : (
+            <div>
+              parked at #{runtime.parkedAtOffset} ·{" "}
+              {runtime.parkedReason === "infrastructure-failure"
+                ? "infrastructure failure"
+                : runtime.parkedReason === "receiver-failure"
+                  ? "receiver failure"
+                  : "unclassified failure"}
+            </div>
+          )}
+          {runtime?.watchdogAt == null ? null : (
+            <div>delivery watchdog {new Date(runtime.watchdogAt).toLocaleString()}</div>
+          )}
+          {runtime?.retryAt == null ? null : (
+            <div>next retry {new Date(runtime.retryAt).toLocaleString()}</div>
           )}
           {runtime?.lastError == null ? null : (
             <div className="mt-1 text-destructive">{runtime.lastError}</div>

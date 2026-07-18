@@ -71,13 +71,14 @@ describe("StreamAlarm", () => {
 
   it("repoints exactly and records a consumed alarm", async () => {
     let persisted: number | null = 50;
+    const getAlarm = vi.fn(async () => persisted);
     const deleteAlarm = vi.fn(async () => {
       persisted = null;
     });
     const alarm = new StreamAlarm({
       storage: {
         deleteAlarm,
-        getAlarm: async () => persisted,
+        getAlarm,
         setAlarm: async (atMs) => {
           persisted = typeof atMs === "number" ? atMs : atMs.getTime();
         },
@@ -89,6 +90,41 @@ describe("StreamAlarm", () => {
     expect(deleteAlarm).toHaveBeenCalledOnce();
     await alarm.fired();
     await alarm.armNoLaterThan(75);
+    expect(getAlarm).toHaveBeenCalledTimes(2);
     expect(persisted).toBe(75);
+  });
+
+  it("re-reads a successor arm that landed before fired invalidated the cache", async () => {
+    const successorWrite = deferred<void>();
+    let persisted: number | null = null;
+    const getAlarm = vi.fn(async () => persisted);
+    const setAlarm = vi.fn(async (atMs: number) => {
+      await successorWrite.promise;
+      persisted = atMs;
+    });
+    const alarm = new StreamAlarm({
+      storage: {
+        deleteAlarm: async () => {
+          persisted = null;
+        },
+        getAlarm,
+        setAlarm,
+      } as Pick<DurableObjectStorage, "deleteAlarm" | "getAlarm" | "setAlarm">,
+      keepAlive: () => undefined,
+    });
+
+    const successor = alarm.armNoLaterThan(100);
+    const fired = alarm.fired();
+    await vi.waitFor(() => expect(setAlarm).toHaveBeenCalledOnce());
+    successorWrite.resolve();
+    await Promise.all([successor, fired]);
+
+    // fired() invalidated its in-memory view after the successor write. The
+    // later request must read storage and preserve 100, not overwrite it with
+    // the later 200 deadline.
+    await alarm.armNoLaterThan(200);
+    expect(getAlarm).toHaveBeenCalledTimes(2);
+    expect(setAlarm).toHaveBeenCalledTimes(1);
+    expect(persisted).toBe(100);
   });
 });

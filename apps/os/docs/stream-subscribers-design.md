@@ -105,9 +105,11 @@ payload: {
 
 Latest-config-wins per `subscriptionKey` (existing replacement semantics — also the worker-feed
 override story, R5). `subscription-removed` deletes the row. New facts:
-`subscription-parked {subscriptionKey, atOffset, attempts, error}` (idempotency
-`parked:{key}:{atOffset}`), `subscription-resumed {subscriptionKey, deliver?}`,
-`subscription-cursor-set {subscriptionKey, ackedOffset}`.
+`subscription-parked {subscriptionKey, atOffset, attempts, reason, error}`,
+`subscription-resumed {subscriptionKey}`, and
+`subscription-cursor-set {subscriptionKey, afterOffset}`. Cursor-set applies
+only to stream-cursor-owned push/webhook subscriptions; a wake processor owns
+replay through its own checkpoint.
 
 **EventSelector is THE filter type across all three lanes** — `subscribe()` args, wake mode
 (derived from `contract.consumes`, which already flows into the filter at
@@ -119,15 +121,25 @@ everywhere: cursors advance past non-matching events.
 
 ```sql
 -- stream-storage.ts, beside events/event_chunks; transactional with the log
-CREATE TABLE IF NOT EXISTS subscriptions (
+CREATE TABLE subscriptions (
   subscription_key TEXT PRIMARY KEY,
   acked_offset     INTEGER NOT NULL,  -- push: authoritative cursor. wake: observational watermark
   attempt          INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at  INTEGER,           -- epoch ms; alarm target when backing off
+  watchdog_at      INTEGER,           -- successor for a receiver call that never settles
+  retry_at         INTEGER,           -- successor after an observed failure
   last_error       TEXT,
+  poison_offset    INTEGER,
+  poison_confirmations INTEGER NOT NULL DEFAULT 0,
+  consecutive_poison_skips INTEGER NOT NULL DEFAULT 0,
+  epoch            INTEGER NOT NULL DEFAULT 0, -- fences stale attempts after a seek/config change
   updated_at       TEXT NOT NULL
 );
 ```
+
+There is one current-schema migration and deliberately no adoption chain:
+production is recreated for this breaking shape, so a stale database fails
+loudly. The one shared platform alarm projects the minimum non-null
+`watchdog_at`/`retry_at` across rows.
 
 Rows are projections of config events (created on configure, deleted on remove); config itself is
 read from folded core state, never duplicated into rows. Parked status lives in the **fold** (it
@@ -136,12 +148,13 @@ is a fact), not the row.
 State machine (diagram goes in the README):
 
 ```
-            deliver/poke ok                    attempt > N (or wall-clock cap)
-  active ──────────────────▶ active     retrying ────────────────────────────▶ parked
-    │  failure                              ▲ │ backoff: min(30m, 1s·2^attempt) ±20% jitter,
-    └───────────▶ retrying ─────────────────┘ │ durable alarm = MIN(next_attempt_at)
+ active ── persist watchdog + arm alarm ──▶ delivering ── receiver ok ──▶ active
+                                              │ receiver failure
                                               ▼
-                              parked ── subscription-resumed {deliver?} ──▶ active
+                                           retrying ── alarm ──▶ active
+                                              │ 15 failures
+                                              ▼
+                                            parked ── subscription-resumed ──▶ active
 ```
 
 - **Triggers:** post-commit fan-out (same slot as today's `#connections.wake()`,
@@ -311,8 +324,8 @@ the re-wake-trigger event-type carve-out (`:218-225`); stringly `#`-parsed subsc
 | Knob               | Default                                                               |
 | ------------------ | --------------------------------------------------------------------- |
 | Backoff            | `min(30min, 1s·2^attempt)` ± 20% jitter                               |
-| Park threshold     | 10 consecutive failures (≈24h with backoff)                           |
-| Batch caps         | 100 events / 1 MiB per delivery                                       |
+| Park threshold     | 15 consecutive receiver failures (≈3.5h with backoff)                 |
+| Batch caps         | 1000 events / 1 MiB per delivery                                      |
 | Poke in flight     | 1 per subscription; drains serial per subscription, concurrent across |
 | Idle teardown      | unchanged (5 min, in-memory timer — correct for retained stubs)       |
 | `deliver` default  | `"new"` (worker feed explicitly sets `"all"`)                         |
@@ -367,8 +380,9 @@ into the spine rather than adding a second mechanism.
   idempotency-keyed with the cursor already advanced — appended facts can re-wake the pump but
   never re-produce work.
 - **KV checkpoint (`project-worker-delivery:checkpoint`)** → a `subscriptions` row, so cursor,
-  attempt, and next_attempt_at live in one scannable table (`MIN(next_attempt_at)` alarm, lag
-  queries).
+  receiver attempt, in-flight watchdog, and scheduled retry live in one scannable table (one
+  alarm projects the minimum deadline; runtime state exposes the two deadline meanings
+  separately).
 
 **Reconciliation decision (RESOLVED with Jonas):** #1761 made the worker feed **derived**
 ("nothing to drift"); the design wanted it **configured** (override story, one registry). Neither

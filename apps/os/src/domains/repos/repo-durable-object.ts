@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { disposeIgnoredRpcResult } from "iterate/live-state";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
@@ -38,6 +37,7 @@ import type {
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { replaceArtifactWithEmptyRepo } from "./artifact-replacement.ts";
+import { createArtifactWriteToken, disposeArtifactRepoResult } from "./artifact-repo-rpc.ts";
 import {
   readCheckoutBytes,
   readCheckoutFileBytes,
@@ -1313,7 +1313,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (lastPushAt !== null) return { artifactName, defaultBranch, remote };
 
     const token = await timedStep("create-timing", timing, "artifact-token", () =>
-      artifactToken(this.requireArtifacts(), artifactName),
+      createArtifactWriteToken(this.requireArtifacts(), artifactName, REPO_WRITE_TOKEN_TTL_SECONDS),
     );
 
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
@@ -1355,14 +1355,16 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }> {
     const artifactName = this.artifactName();
-    this.#artifactTokenPromise ??= artifactToken(this.requireArtifacts(), artifactName).catch(
-      (error: unknown) => {
-        this.#artifactTokenPromise = undefined;
-        // A missing Artifacts repo is the pre-seed window (createArtifactRepo
-        // hasn't run), the same "not ready yet" every unseeded clone signals.
-        throw classifyRepoAccessError(error);
-      },
-    );
+    this.#artifactTokenPromise ??= createArtifactWriteToken(
+      this.requireArtifacts(),
+      artifactName,
+      REPO_WRITE_TOKEN_TTL_SECONDS,
+    ).catch((error: unknown) => {
+      this.#artifactTokenPromise = undefined;
+      // A missing Artifacts repo is the pre-seed window (createArtifactRepo
+      // hasn't run), the same "not ready yet" every unseeded clone signals.
+      throw classifyRepoAccessError(error);
+    });
     return {
       defaultBranch: REPO_DEFAULT_BRANCH,
       remote: this.artifactRemote(artifactName),
@@ -1387,7 +1389,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       try {
         return { created: false, lastPushAt: existing.lastPushAt };
       } finally {
-        disposeIgnoredRpcResult(existing);
+        disposeArtifactRepoResult(existing, "read existing repository metadata");
       }
     }
   }
@@ -1405,16 +1407,6 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   private artifactRemote(artifactName: string) {
     return `https://${this.env.ARTIFACTS_ACCOUNT_ID}.artifacts.cloudflare.net/git/${this.env.ARTIFACTS_NAMESPACE}/${artifactName}.git`;
-  }
-}
-
-async function artifactToken(artifacts: Artifacts, name: string) {
-  const repo = await artifacts.get(name);
-  try {
-    const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-    return plaintext.split("?expires=")[0] ?? plaintext;
-  } finally {
-    disposeIgnoredRpcResult(repo);
   }
 }
 

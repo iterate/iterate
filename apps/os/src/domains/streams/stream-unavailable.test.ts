@@ -40,6 +40,19 @@ describe("isDurableObjectLifecycleError", () => {
 
     expect(isDurableObjectLifecycleError(first)).toBe(false);
   });
+
+  it("returns false when inspecting an exotic rejection throws", () => {
+    const error = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("property access denied");
+        },
+      },
+    );
+
+    expect(isDurableObjectLifecycleError(error)).toBe(false);
+  });
 });
 
 describe("rethrowStreamUnavailable", () => {

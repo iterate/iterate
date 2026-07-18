@@ -1,4 +1,4 @@
-import { disposeIgnoredRpcResult } from "iterate/live-state";
+import { disposeArtifactRepoResult } from "./artifact-repo-rpc.ts";
 
 const DELETE_POLL_INTERVAL_MS = 500;
 const DELETE_POLL_ATTEMPTS = 60;
@@ -32,14 +32,18 @@ export async function replaceArtifactWithEmptyRepo(
     let deletionApplied = false;
 
     for (let attempt = 0; attempt < pollAttempts; attempt++) {
+      let repo: Awaited<ReturnType<Artifacts["get"]>>;
       try {
-        const repo = await artifacts.get(name);
-        disposeIgnoredRpcResult(repo);
+        repo = await artifacts.get(name);
       } catch (error) {
         if ((error as { code?: unknown })?.code !== "NOT_FOUND") throw error;
         deletionApplied = true;
         break;
       }
+      // Disposal is outside the read classification boundary: a cleanup
+      // error carrying code=NOT_FOUND must never masquerade as proof that the
+      // repository itself disappeared.
+      disposeArtifactRepoResult(repo, "poll repository deletion");
       await sleep(pollIntervalMs);
     }
 

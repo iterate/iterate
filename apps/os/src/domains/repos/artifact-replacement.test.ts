@@ -70,6 +70,39 @@ describe("replaceArtifactWithEmptyRepo", () => {
     expect(artifacts.create).not.toHaveBeenCalled();
   });
 
+  it("does not mistake a NOT_FOUND disposal error for the deletion barrier", async () => {
+    const cleanupError = artifactsError("NOT_FOUND");
+    const disposeRepo = vi.fn(() => {
+      throw cleanupError;
+    });
+    const artifacts = {
+      create: vi.fn(async () => ({}) as ArtifactsCreateRepoResult),
+      delete: vi.fn(async () => true),
+      get: vi
+        .fn<Artifacts["get"]>()
+        .mockResolvedValueOnce({ [Symbol.dispose]: disposeRepo } as unknown as ArtifactsRepo)
+        .mockRejectedValueOnce(artifactsError("NOT_FOUND")),
+    };
+    const sleep = vi.fn(async () => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await replaceArtifactWithEmptyRepo(artifacts, "repo", {
+        pollIntervalMs: 17,
+        sleep,
+      });
+
+      expect(artifacts.get).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledWith(17);
+      expect(artifacts.create).toHaveBeenCalledOnce();
+      expect(errorLog).toHaveBeenCalledWith("Artifacts repository RPC result disposal failed", {
+        operation: "poll repository deletion",
+        error: cleanupError,
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it("retries creation when the read plane sees deletion before the create plane releases the name", async () => {
     const sleep = vi.fn(async () => {});
     const artifacts = {

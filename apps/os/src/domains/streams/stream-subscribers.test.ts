@@ -20,8 +20,13 @@ import type {
   SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
+import { DELIVERY_TIMEOUT_MS } from "./durable-delivery-coordinator.ts";
 import { compileEventSelector } from "./event-selector.ts";
-import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
+import type {
+  SubscriptionCursorFence,
+  SubscriptionCursorRow,
+  SubscriptionCursorStore,
+} from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {
   MAX_DELIVERY_ATTEMPTS,
@@ -72,45 +77,142 @@ class FakeCursorStore implements SubscriptionCursorStore {
       subscriptionKey,
       ackedOffset,
       attempt: 0,
+      watchdogAt: null,
+      retryAt: null,
       nextAttemptAt: null,
       lastError: null,
+      poisonOffset: null,
+      poisonConfirmations: 0,
+      consecutivePoisonSkips: 0,
       epoch: this.#lastEpoch,
     });
   }
 
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
+  ack(subscriptionKey: string, ackedOffset: number): void {
     const row = this.rows.get(subscriptionKey);
     if (row === undefined) return;
-    if (epoch !== undefined && row.epoch !== epoch) return;
     row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
     row.attempt = 0;
-    row.nextAttemptAt = null;
+    row.watchdogAt = null;
+    row.retryAt = null;
     row.lastError = null;
+    row.poisonOffset = null;
+    row.poisonConfirmations = 0;
+    row.consecutivePoisonSkips = 0;
+    this.#refreshDeadline(row);
   }
 
-  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
-    const row = this.rows.get(subscriptionKey);
-    if (row === undefined || (epoch !== undefined && row.epoch !== epoch)) return;
+  ackAttempt(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
     row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
-    row.nextAttemptAt = null;
+    row.attempt = 0;
+    row.watchdogAt = null;
+    row.retryAt = null;
+    row.lastError = null;
+    row.poisonOffset = null;
+    row.poisonConfirmations = 0;
+    row.consecutivePoisonSkips = 0;
+    this.#refreshDeadline(row);
   }
 
-  armWatchdog(subscriptionKey: string, nextAttemptAt: number, epoch: number): void {
-    const row = this.rows.get(subscriptionKey);
-    if (row === undefined || row.epoch !== epoch) return;
-    row.nextAttemptAt = nextAttemptAt;
+  advanceWithoutDelivery(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
+    row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
+    row.attempt = 0;
+    row.watchdogAt = null;
+    row.retryAt = null;
+    row.lastError = null;
+    row.poisonOffset = null;
+    row.poisonConfirmations = 0;
+    this.#refreshDeadline(row);
+  }
+
+  advanceWatermark(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
+    row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
+    row.watchdogAt = null;
+    row.retryAt = null;
+    this.#refreshDeadline(row);
+  }
+
+  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
+    row.watchdogAt = watchdogAt;
+    row.retryAt = null;
+    this.#refreshDeadline(row);
+  }
+
+  clearWatchdog(fence: SubscriptionCursorFence): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
+    row.watchdogAt = null;
+    this.#refreshDeadline(row);
+  }
+
+  deferInfrastructure(
+    fence: SubscriptionCursorFence,
+    args: { nextAttemptAt: number; error: string },
+  ): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
+    row.watchdogAt = null;
+    row.retryAt = args.nextAttemptAt;
+    row.lastError = args.error.slice(0, 2_000);
+    this.#refreshDeadline(row);
   }
 
   nack(
-    subscriptionKey: string,
+    fence: SubscriptionCursorFence,
     args: { attempt: number; nextAttemptAt: number; error: string },
-    epoch?: number,
   ): void {
-    const row = this.rows.get(subscriptionKey);
-    if (row === undefined || (epoch !== undefined && row.epoch !== epoch)) return;
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
     row.attempt = args.attempt;
-    row.nextAttemptAt = args.nextAttemptAt;
+    row.watchdogAt = null;
+    row.retryAt = args.nextAttemptAt;
     row.lastError = args.error.slice(0, 2_000);
+    row.poisonOffset = null;
+    row.poisonConfirmations = 0;
+    this.#refreshDeadline(row);
+  }
+
+  nackPoison(
+    fence: SubscriptionCursorFence,
+    args: {
+      attempt: number;
+      nextAttemptAt: number;
+      error: string;
+      poisonOffset: number;
+      poisonConfirmations: number;
+    },
+  ): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
+    row.attempt = args.attempt;
+    row.watchdogAt = null;
+    row.retryAt = args.nextAttemptAt;
+    row.lastError = args.error.slice(0, 2_000);
+    row.poisonOffset = args.poisonOffset;
+    row.poisonConfirmations = args.poisonConfirmations;
+    this.#refreshDeadline(row);
+  }
+
+  skipPoison(fence: SubscriptionCursorFence, ackedOffset: number): void {
+    const row = this.#fenced(fence);
+    if (row === undefined) return;
+    row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
+    row.attempt = 0;
+    row.watchdogAt = null;
+    row.retryAt = null;
+    row.lastError = null;
+    row.poisonOffset = null;
+    row.poisonConfirmations = 0;
+    row.consecutivePoisonSkips += 1;
+    this.#refreshDeadline(row);
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
@@ -119,9 +221,14 @@ class FakeCursorStore implements SubscriptionCursorStore {
     this.#lastEpoch += 1;
     row.ackedOffset = ackedOffset;
     row.attempt = 0;
-    row.nextAttemptAt = null;
+    row.watchdogAt = null;
+    row.retryAt = null;
     row.lastError = null;
+    row.poisonOffset = null;
+    row.poisonConfirmations = 0;
+    row.consecutivePoisonSkips = 0;
     row.epoch = this.#lastEpoch;
+    this.#refreshDeadline(row);
   }
 
   delete(subscriptionKey: string): void {
@@ -137,6 +244,18 @@ class FakeCursorStore implements SubscriptionCursorStore {
     }
     return min;
   }
+
+  #fenced(fence: SubscriptionCursorFence): SubscriptionCursorRow | undefined {
+    const row = this.rows.get(fence.subscriptionKey);
+    return row?.epoch === fence.epoch ? row : undefined;
+  }
+
+  #refreshDeadline(row: SubscriptionCursorRow): void {
+    const deadlines = [row.watchdogAt, row.retryAt].filter(
+      (value): value is number => value !== null,
+    );
+    row.nextAttemptAt = deadlines.length === 0 ? null : Math.min(...deadlines);
+  }
 }
 
 type PokeResult = Awaited<ReturnType<SubscriberDial["poke"]>>;
@@ -150,6 +269,7 @@ type ConfiguredEntry = {
     createdAt: string;
   };
   parkedAtOffset?: number;
+  parkedReason?: "receiver-failure" | "infrastructure-failure";
 };
 
 function makeHarness() {
@@ -162,6 +282,8 @@ function makeHarness() {
   const armedAlarms: number[] = [];
   const repointedAlarms: (number | null)[] = [];
   let platformAlarmAtMs: number | null = null;
+  const alarmArmFailures: Error[] = [];
+  const alarmRepointFailures: Error[] = [];
   let requiredFactFailure: Error | undefined;
   const abortedIncarnations: string[] = [];
   const kept: Promise<unknown>[] = [];
@@ -216,9 +338,16 @@ function makeHarness() {
     // Mimic the core reducer: a parked fact folds into desired state, and
     // the spine reads parked-ness from coreState().
     if (event.type === PARKED) {
-      const payload = event.payload as { subscriptionKey: string; atOffset: number };
+      const payload = event.payload as {
+        subscriptionKey: string;
+        atOffset: number;
+        reason: "receiver-failure" | "infrastructure-failure";
+      };
       const entry = configured[payload.subscriptionKey];
-      if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
+      if (entry !== undefined) {
+        entry.parkedAtOffset = payload.atOffset;
+        entry.parkedReason = payload.reason;
+      }
     }
   };
   const hooks: ConstructorParameters<typeof StreamSubscribers>[0]["hooks"] = {
@@ -249,10 +378,14 @@ function makeHarness() {
     random: () => 0.5,
     armAlarm: async (atMs: number) => {
       armedAlarms.push(atMs);
+      const failure = alarmArmFailures.shift();
+      if (failure !== undefined) throw failure;
       if (platformAlarmAtMs === null || atMs < platformAlarmAtMs) platformAlarmAtMs = atMs;
     },
     repointAlarm: async (atMs: number | null) => {
       repointedAlarms.push(atMs);
+      const failure = alarmRepointFailures.shift();
+      if (failure !== undefined) throw failure;
       platformAlarmAtMs = atMs;
     },
     keepAlive: (promise) => kept.push(promise),
@@ -261,6 +394,7 @@ function makeHarness() {
   let subscribers: StreamSubscribers;
   const restart = () => {
     subscribers = new StreamSubscribers({ idleTeardownMs: 60_000, hooks });
+    subscribers.recoverAlarmAfterBoot();
   };
   restart();
 
@@ -314,6 +448,12 @@ function makeHarness() {
     },
     failRequiredFactsWith: (error: Error | undefined) => {
       requiredFactFailure = error;
+    },
+    failNextAlarmArmWith: (error: Error) => {
+      alarmArmFailures.push(error);
+    },
+    failNextAlarmRepointWith: (error: Error) => {
+      alarmRepointFailures.push(error);
     },
     configure: (payload: SubscriptionConfiguredPayload, offset = 0) => {
       configured[payload.subscriptionKey] = {
@@ -426,14 +566,14 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(5);
   });
 
-  it("a2. a lifecycle reset during the cursor ack aborts the stale incarnation", async () => {
+  it("a2. a post-success cursor failure schedules infrastructure replay without charging the receiver", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"));
 
-    const ack = h.store.ack.bind(h.store);
+    const ackAttempt = h.store.ackAttempt.bind(h.store);
     let resetPending = true;
-    h.store.ack = (...args) => {
+    h.store.ackAttempt = (...args) => {
       if (resetPending) {
         resetPending = false;
         throw new Error("cursor ack failed", {
@@ -443,59 +583,94 @@ describe("StreamSubscribers", () => {
           }),
         });
       }
-      ack(...args);
+      ackAttempt(...args);
     };
 
     h.subscribers.wake();
     await h.settle();
 
     expect(h.pushes).toHaveLength(1);
-    expect(h.row("k")?.ackedOffset).toBe(0);
-    expect(h.abortedIncarnations).toEqual([
-      "stream push drain interrupted by Durable Object lifecycle",
-    ]);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 0, attempt: 0 });
+    expect(h.abortedIncarnations).toEqual(["stream push drain local processing failed"]);
 
-    // The persisted watchdog is the replacement incarnation's successor wake:
+    // The persisted infrastructure deadline is the replacement incarnation's successor wake:
     // no append or manual wake is needed on this otherwise quiet stream.
-    const watchdogAt = h.row("k")!.nextAttemptAt!;
-    expect(h.platformAlarm()).toBe(watchdogAt);
+    const retryAt = h.row("k")!.nextAttemptAt!;
+    expect(h.platformAlarm()).toBe(retryAt);
     h.restart();
-    h.advanceTo(watchdogAt + 1);
+    h.advanceTo(retryAt + 1);
     await h.subscribers.onAlarm();
     await h.settle();
     expect(h.pushes).toHaveLength(2);
     expect(h.row("k")?.ackedOffset).toBe(1);
   });
 
-  it("a3. an internal drain failure enters bounded backoff instead of stranding the cursor", async () => {
+  it("a3. an internal drain failure gets a durable successor without receiver backoff", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"));
 
-    const ack = h.store.ack.bind(h.store);
+    const ackAttempt = h.store.ackAttempt.bind(h.store);
     let failurePending = true;
-    h.store.ack = (...args) => {
+    h.store.ackAttempt = (...args) => {
       if (failurePending) {
         failurePending = false;
         throw new Error("sqlite write failed");
       }
-      ack(...args);
+      ackAttempt(...args);
     };
 
     h.subscribers.wake();
     await h.settle();
 
     const failed = h.row("k");
-    expect(failed).toMatchObject({ ackedOffset: 0, attempt: 1, lastError: "sqlite write failed" });
+    expect(failed).toMatchObject({ ackedOffset: 0, attempt: 0, lastError: "sqlite write failed" });
     expect(failed?.nextAttemptAt).not.toBeNull();
     expect(h.armedAlarms).toContain(failed!.nextAttemptAt!);
-    expect(h.abortedIncarnations).toHaveLength(0);
+    expect(h.abortedIncarnations).toEqual(["stream push drain local processing failed"]);
 
+    h.restart();
     h.advanceTo(failed!.nextAttemptAt! + 1);
     await h.subscribers.onAlarm();
     await h.settle();
     expect(h.pushes).toHaveLength(2);
     expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
+  });
+
+  it("a3b. a pre-dispatch scan advance failure gets a successor without a receiver attempt", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ selector: { eventTypes: ["wanted"] } }), 0);
+    h.append(evt(1, "ignored"));
+
+    const advanceWithoutDelivery = h.store.advanceWithoutDelivery.bind(h.store);
+    let failurePending = true;
+    h.store.advanceWithoutDelivery = (...args) => {
+      if (failurePending) {
+        failurePending = false;
+        throw new Error("scan cursor write failed");
+      }
+      advanceWithoutDelivery(...args);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      lastError: "scan cursor write failed",
+    });
+    expect(h.row("k")!.nextAttemptAt).not.toBeNull();
+    expect(h.abortedIncarnations).toEqual(["stream push drain local processing failed"]);
+
+    const retryAt = h.row("k")!.nextAttemptAt!;
+    h.restart();
+    h.advanceTo(retryAt + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
+    expect(h.pushes).toHaveLength(0);
   });
 
   it("a4. a failed recovery write aborts the incarnation instead of losing the retry", async () => {
@@ -505,7 +680,7 @@ describe("StreamSubscribers", () => {
 
     const get = h.store.get.bind(h.store);
     let recoveryPending = false;
-    h.store.ack = () => {
+    h.store.ackAttempt = () => {
       recoveryPending = true;
       throw new Error("cursor ack failed");
     };
@@ -521,7 +696,137 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(0);
     expect(h.armedAlarms).toContain(h.row("k")!.nextAttemptAt);
     expect(h.platformAlarm()).toBe(h.row("k")!.nextAttemptAt);
-    expect(h.abortedIncarnations).toEqual(["stream push drain recovery failed"]);
+    expect(h.abortedIncarnations).toEqual(["stream delivery infrastructure recovery failed"]);
+  });
+
+  it("a5. exhausted watchdog projection parks explicitly before push dispatch", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"), evt(2, "a"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmArmWith(new Error("setAlarm failed"));
+    }
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.egress).toHaveLength(0);
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    expect(h.factsOfType(PARKED)).toHaveLength(1);
+    expect(h.factsOfType(PARKED)[0]!.payload).toMatchObject({
+      subscriptionKey: "k",
+      reason: "infrastructure-failure",
+    });
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      watchdogAt: null,
+      retryAt: null,
+      nextAttemptAt: null,
+    });
+    expect(h.abortedIncarnations).toHaveLength(0);
+    expect(h.configured["k"].parkedAtOffset).toBe(0);
+    expect(h.configured["k"].parkedReason).toBe("infrastructure-failure");
+  });
+
+  it("a6. exhausted watchdog projection parks explicitly before a wake poke", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmArmWith(new Error("setAlarm failed"));
+    }
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      watchdogAt: null,
+      retryAt: null,
+      nextAttemptAt: null,
+    });
+    expect(h.factsOfType(PARKED)[0]!.payload).toMatchObject({
+      subscriptionKey: "k",
+      reason: "infrastructure-failure",
+    });
+    expect(h.abortedIncarnations).toHaveLength(0);
+  });
+
+  it("a7. native alarm projection failure escapes and succeeds on Cloudflare retry", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(pushPayload(), 0);
+    h.store.ensure("k", 0);
+    const fence = h.row("k")!;
+    h.store.nack(fence, { attempt: 1, nextAttemptAt: 10_000, error: "receiver failed" });
+    h.failNextAlarmRepointWith(new Error("repoint failed"));
+
+    await expect(
+      h.subscribers.onAlarm({ isRetry: false, retryCount: 0, scheduledTime: 0 }),
+    ).rejects.toThrow("repoint failed");
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")!.nextAttemptAt).toBe(10_000);
+
+    await expect(
+      h.subscribers.onAlarm({ isRetry: true, retryCount: 1, scheduledTime: 0 }),
+    ).resolves.toBeUndefined();
+    expect(h.platformAlarm()).toBe(10_000);
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+  });
+
+  it("a8. the final native alarm retry parks outstanding work instead of swallowing projection failure", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(pushPayload(), 0);
+    h.store.ensure("k", 0);
+    h.store.nack(h.row("k")!, {
+      attempt: 0,
+      nextAttemptAt: 10_000,
+      error: "infrastructure retry owed",
+    });
+    h.failNextAlarmRepointWith(new Error("repoint still failing"));
+
+    await expect(
+      h.subscribers.onAlarm({ isRetry: true, retryCount: 6, scheduledTime: 0 }),
+    ).resolves.toBeUndefined();
+
+    expect(h.factsOfType(PARKED)).toHaveLength(1);
+    expect(h.factsOfType(PARKED)[0]!.payload).toMatchObject({
+      subscriptionKey: "k",
+      reason: "infrastructure-failure",
+    });
+    expect(h.row("k")!.nextAttemptAt).toBeNull();
+    expect(h.configured["k"].parkedAtOffset).toBe(0);
+  });
+
+  it("a9. boot-time alarm recovery failure becomes explicit parked state without another activation", async () => {
+    const h = makeHarness();
+    await h.settle();
+    h.configure(pushPayload(), 0);
+    h.store.ensure("k", 0);
+    h.store.nack(h.row("k")!, {
+      attempt: 0,
+      nextAttemptAt: 10_000,
+      error: "infrastructure retry owed",
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      h.failNextAlarmRepointWith(new Error("repoint unavailable"));
+    }
+
+    h.restart();
+    await h.settle();
+
+    expect(h.factsOfType(PARKED)).toHaveLength(1);
+    expect(h.factsOfType(PARKED)[0]!.payload).toMatchObject({
+      subscriptionKey: "k",
+      reason: "infrastructure-failure",
+    });
+    expect(h.row("k")!.nextAttemptAt).toBeNull();
+    expect(h.abortedIncarnations).toHaveLength(0);
   });
 
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {
@@ -623,9 +928,11 @@ describe("StreamSubscribers", () => {
       subscriptionKey: "k",
       atOffset: 0,
       attempts: MAX_DELIVERY_ATTEMPTS,
+      reason: "receiver-failure",
       error: "still down",
     });
     expect(h.configured["k"].parkedAtOffset).toBe(0);
+    expect(h.configured["k"].parkedReason).toBe("receiver-failure");
 
     // Parked means parked: further wakes make no dial calls.
     h.subscribers.wake();
@@ -636,6 +943,7 @@ describe("StreamSubscribers", () => {
     // Park-resume-park at the SAME cursor: the second park must land as a new
     // fact — the subscription turns red again instead of retrying forever.
     delete h.configured["k"].parkedAtOffset;
+    delete h.configured["k"].parkedReason;
     h.subscribers.onResumed("k");
     await driveUntilParked(h, 2);
     expect(h.factsOfType(PARKED)).toHaveLength(2);
@@ -694,6 +1002,7 @@ describe("StreamSubscribers", () => {
     // Receiver healed; the subscription-resumed fact folds (parked cleared)...
     h.dialImpl.push = async () => {};
     delete h.configured["k"].parkedAtOffset;
+    delete h.configured["k"].parkedReason;
     // ...and the spine side effect kicks delivery immediately — no alarm involved.
     h.subscribers.onResumed("k");
     await h.settle();
@@ -744,6 +1053,16 @@ describe("StreamSubscribers", () => {
 
     h.subscribers.wake();
     await h.settle();
+
+    // Every batch-halving transition is local and immediate. The watchdog
+    // protecting the rejected remote call is consumed before the loop
+    // continues, so the first real wait is the singleton confirmation
+    // backoff—not 65 seconds per halve.
+    expect(h.now()).toBe(0);
+    expect(h.pushes).toHaveLength(20);
+    expect(h.row("k")).toMatchObject({ watchdogAt: null });
+    expect(h.row("k")?.retryAt).not.toBeNull();
+
     for (let round = 0; round < 40 && h.row("k")?.ackedOffset !== 4; round += 1) {
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
@@ -793,6 +1112,47 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 4, attempt: 0, nextAttemptAt: null });
   });
 
+  it("g2. a failed required skip fact keeps the poison event unacknowledged", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.push = async () => {
+      throw new Error("cannot digest offset 1");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    while (h.row("k")!.attempt < SKIP_CONFIRM_ATTEMPTS - 1) {
+      h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+      await h.subscribers.onAlarm();
+      await h.settle();
+    }
+
+    h.failRequiredFactsWith(new Error("skip fact append failed"));
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: SKIP_CONFIRM_ATTEMPTS - 1,
+      poisonConfirmations: SKIP_CONFIRM_ATTEMPTS - 1,
+      lastError: "skip fact append failed",
+    });
+    expect(h.row("k")!.nextAttemptAt).not.toBeNull();
+    expect(h.platformAlarm()).toBe(h.row("k")!.nextAttemptAt);
+
+    h.failRequiredFactsWith(undefined);
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(1);
+    expect(h.factsOfType(ERROR_OCCURRED)[0]!.idempotencyKey).toBe("push-poison-skipped:k:1");
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
+  });
+
   it("h. skip mode parks when everything fails instead of mass-skipping the backlog", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
@@ -817,6 +1177,44 @@ describe("StreamSubscribers", () => {
     // NOT all events were skipped: offsets 3 and 4 are still owed delivery.
     expect(h.row("k")?.ackedOffset).toBe(2);
     expect(h.configured["k"].parkedAtOffset).toBe(2);
+  });
+
+  it("h2. consecutive poison skips survive subscriber reconstruction and the third parks", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+    h.dialImpl.push = async () => {
+      throw new Error("receiver rejects every event");
+    };
+
+    const driveUntil = async (predicate: () => boolean) => {
+      for (let round = 0; round < 100 && !predicate(); round += 1) {
+        const next = h.store.minNextAttemptAt();
+        if (next === null) {
+          h.subscribers.wake();
+        } else {
+          h.advanceTo(Math.max(h.now(), next) + 1);
+          await h.subscribers.onAlarm();
+        }
+        await h.settle();
+      }
+      expect(predicate()).toBe(true);
+    };
+
+    await driveUntil(() => (h.row("k")?.ackedOffset ?? 0) >= 1);
+    expect(h.row("k")!.consecutivePoisonSkips).toBe(1);
+    h.restart();
+
+    await driveUntil(() => (h.row("k")?.ackedOffset ?? 0) >= 2);
+    expect(h.row("k")!.consecutivePoisonSkips).toBe(2);
+    h.restart();
+
+    await driveUntil(() => h.factsOfType(PARKED).length === 1);
+    expect(h.factsOfType(ERROR_OCCURRED).map((fact) => fact.idempotencyKey)).toEqual([
+      "push-poison-skipped:k:1",
+      "push-poison-skipped:k:2",
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(2);
   });
 
   it("i. wake mode: pokes on lag, streams after the checkpoint, idle teardown advances the watermark", async () => {
@@ -879,6 +1277,67 @@ describe("StreamSubscribers", () => {
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
   });
 
+  it("i2. a local wake watermark failure preserves receiver policy and schedules a successor", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const returned = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: returned.sink });
+
+    const advanceWatermark = h.store.advanceWatermark.bind(h.store);
+    let failurePending = true;
+    h.store.advanceWatermark = (...args) => {
+      if (failurePending) {
+        failurePending = false;
+        throw new Error("watermark write failed");
+      }
+      advanceWatermark(...args);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      lastError: "watermark write failed",
+    });
+    expect(h.row("k")!.nextAttemptAt).not.toBeNull();
+    expect(h.abortedIncarnations).toEqual(["stream wake response processing failed"]);
+  });
+
+  it("i3. a wake response made stale by an epoch-changing seek is disposed before opening", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+
+    let resolvePoke!: (response: PokeResult) => void;
+    h.dialImpl.poke = () =>
+      new Promise<PokeResult>((resolve) => {
+        resolvePoke = resolve;
+      });
+    let disposed = 0;
+    const batches: StreamEventBatch[] = [];
+    const sink = Object.assign((batch: StreamEventBatch) => batches.push(batch), {
+      [Symbol.dispose]: () => {
+        disposed += 1;
+      },
+    }) as RetainedProcessEventBatch;
+
+    h.subscribers.wake();
+    await vi.waitFor(() => expect(h.pokes).toHaveLength(1));
+    h.subscribers.onCursorSet("k", 1);
+    resolvePoke({ checkpointOffset: 0, sink });
+    await h.settle();
+
+    expect(disposed).toBe(1);
+    expect(batches).toHaveLength(0);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+  });
+
   it("j. a poke failure lands in the same backoff rows as push failures", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
@@ -902,6 +1361,71 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake();
     await h.settle();
     expect(h.pokes).toHaveLength(1);
+  });
+
+  it("j2. a synchronously failing first sink batch cannot be erased by the poke watermark", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const failingSink = Object.assign(
+      () => h.subscribers.onDurableDeliveryError("k", new Error("sync ingest failure")),
+      { [Symbol.dispose]: () => undefined },
+    ) as RetainedProcessEventBatch;
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: failingSink });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 1,
+      watchdogAt: null,
+      lastError: "sync ingest failure",
+    });
+    const retryAt = h.row("k")!.retryAt!;
+    expect(retryAt).toBeGreaterThan(h.now());
+    expect(h.platformAlarm()).toBe(retryAt);
+
+    const healthy = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: healthy.sink });
+    h.advanceTo(retryAt + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pokes).toHaveLength(2);
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+  });
+
+  it("j3. synchronous onRpcBroken registration preserves the watchdog for a quiet retry", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const broken = makeSink().sink;
+    broken.onRpcBroken = (callback) => callback(new Error("already broken"));
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: broken });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      retryAt: null,
+      watchdogAt: 65_000,
+      lastError: null,
+    });
+    expect(h.platformAlarm()).toBe(65_000);
+
+    const healthy = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: healthy.sink });
+    h.advanceTo(65_001);
+    await h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pokes).toHaveLength(2);
+    expect(h.subscribers.hasConnection("k")).toBe(true);
   });
 
   it("k. coalescing: five wakes during one in-flight poke dial exactly once", async () => {
@@ -1263,6 +1787,7 @@ describe("StreamSubscribers", () => {
 
     // Recovery: resume, and a poke whose checkpoint PROGRESSED clears the streak.
     h.configured["k"]!.parkedAtOffset = undefined;
+    h.configured["k"]!.parkedReason = undefined;
     checkpoint = 1;
     h.subscribers.onResumed("k");
     await h.settle();
@@ -1510,6 +2035,60 @@ describe("StreamSubscribers", () => {
     expect(h.pushes.at(-1)!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
     expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
     expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+  });
+
+  it("x1. two unavailable attempts plus one singleton application rejection do not prove poison", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"));
+    let calls = 0;
+    h.dialImpl.push = async () => {
+      calls += 1;
+      if (calls <= 2) throw new StreamReceiverUnavailableError("not ready");
+      throw new Error("application rejected event");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    for (let retry = 0; retry < 2; retry += 1) {
+      h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+      await h.subscribers.onAlarm();
+      await h.settle();
+    }
+
+    expect(h.pushes).toHaveLength(3);
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 3,
+      poisonOffset: 1,
+      poisonConfirmations: 1,
+    });
+  });
+
+  it("x2. a push-side Durable Object reset backs off the whole batch instead of declaring poison", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+    const reset = Object.assign(new Error("receiver incarnation reset"), {
+      durableObjectReset: true,
+    });
+    h.dialImpl.push = async () => {
+      throw reset;
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1, 2, 3]]);
+    expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 1,
+      lastError: "receiver incarnation reset",
+    });
+    expect(h.row("k")!.nextAttemptAt).not.toBeNull();
   });
 
   it("y. sustained receiver unavailability parks loudly instead of mass-skipping the backlog", async () => {
@@ -1793,6 +2372,41 @@ describe("StreamSubscribers", () => {
 // ---------------------------------------------------------------------------
 
 describe("StreamSubscribers runtime metrics", () => {
+  it("exports watchdog and retry deadlines without collapsing their meanings", async () => {
+    const inFlight = makeHarness();
+    inFlight.configure(pushPayload(), 0);
+    inFlight.append(evt(1, "a"));
+    let settlePush!: () => void;
+    inFlight.dialImpl.push = () =>
+      new Promise<void>((resolve) => {
+        settlePush = resolve;
+      });
+
+    inFlight.subscribers.wake();
+    await vi.waitFor(() => expect(inFlight.pushes).toHaveLength(1));
+    expect(inFlight.subscribers.subscriptionRuntimeState()["k"]).toMatchObject({
+      attempt: 0,
+      watchdogAt: DELIVERY_TIMEOUT_MS + 5_000,
+      retryAt: null,
+      nextAttemptAt: DELIVERY_TIMEOUT_MS + 5_000,
+    });
+    settlePush();
+    await inFlight.settle();
+
+    const retrying = makeHarness();
+    retrying.configure(pushPayload(), 0);
+    retrying.append(evt(1, "a"));
+    retrying.dialImpl.push = () => Promise.reject(new Error("receiver rejected"));
+    retrying.subscribers.wake();
+    await retrying.settle();
+    expect(retrying.subscribers.subscriptionRuntimeState()["k"]).toMatchObject({
+      attempt: 1,
+      watchdogAt: null,
+      retryAt: 1_000,
+      nextAttemptAt: 1_000,
+    });
+  });
+
   it("connections report real lag, delivered events, and delivered bytes", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));

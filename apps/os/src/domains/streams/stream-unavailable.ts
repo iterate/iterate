@@ -52,14 +52,21 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
       retryable?: unknown;
       overloaded?: unknown;
     };
-    if (
-      flags.durableObjectReset === true ||
-      flags.retryable === true ||
-      flags.overloaded === true
-    ) {
-      return true;
+    try {
+      if (
+        flags.durableObjectReset === true ||
+        flags.retryable === true ||
+        flags.overloaded === true
+      ) {
+        return true;
+      }
+      current = flags.cause;
+    } catch {
+      // This classifier runs from error-handling paths. Exotic rejection
+      // values (for example a Proxy or a throwing getter) must remain an
+      // unclassified original error rather than creating a second failure.
+      return false;
     }
-    current = flags.cause;
   }
   return false;
 }

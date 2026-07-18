@@ -63,7 +63,9 @@ import { EventSelector } from "./event-selector.ts";
 //      Live ephemeral consumers are runtime state (the in-memory connection
 //      table); dead ones used to linger here forever when their disconnect
 //      fact was lost to an eviction or deploy rollover.
-export const CORE_STATE_VERSION = 14;
+// - 15: parked subscription state records whether receiver policy or local
+//      delivery infrastructure forced the terminal transition.
+export const CORE_STATE_VERSION = 15;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -336,6 +338,8 @@ export const CoreProcessorContract = defineProcessorContract({
            * not facts — see the streams README doctrine.
            */
           parkedAtOffset: z.number().int().min(0).optional(),
+          /** Durable classification of why delivery stopped. */
+          parkedReason: z.enum(["receiver-failure", "infrastructure-failure"]).optional(),
         }),
       )
       .default({}),
@@ -495,6 +499,8 @@ export const CoreProcessorContract = defineProcessorContract({
         /** The cursor at park time: delivery stopped without acking past this offset. */
         atOffset: z.number().int().min(0),
         attempts: z.number().int().positive(),
+        /** Whether receiver policy or delivery infrastructure forced the stop. */
+        reason: z.enum(["receiver-failure", "infrastructure-failure"]),
         error: z.string().trim().min(1).optional(),
       }),
       examples: [
@@ -505,6 +511,7 @@ export const CoreProcessorContract = defineProcessorContract({
             subscriptionKey: "ops-webhook",
             atOffset: 1874,
             attempts: 15,
+            reason: "receiver-failure",
             error:
               "webhook POST https://hooks.example.com/iterate/stream-events failed with status 503",
           },
