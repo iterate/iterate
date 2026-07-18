@@ -82,10 +82,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "and returns an app-defined `InternalAppSession` RpcTarget. Give that target only\n" +
       "the authority this UI needs; never return the project-wide `itx` capability to\n" +
       "the browser. Import the Cap'n Web host directly from `@iterate-com/capnweb`;\n" +
-      "import `LiveState` from the same `iterate/live-state` module first-party apps\n" +
-      "use. `iterate/app` owns only its concrete read-only `LiveStateRpcTarget`\n" +
-      "adapter, so dynamic apps use the same snapshot-and-patch protocol without\n" +
-      "hiding the capability graph behind a framework helper.\n" +
+      "import `LiveState` and `LiveStateRpcTarget` from the same\n" +
+      "`iterate/live-state` module first-party apps use. Dynamic apps therefore use\n" +
+      "the same snapshot-and-patch implementation without hiding the capability\n" +
+      "graph behind a framework helper.\n" +
       "\n" +
       "To give agents a new capability surface, add a getter or method to the\n" +
       "default-export worker class: the platform dispatches dotted\n" +
@@ -183,12 +183,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "It receives only `AppSession`, never the project-wide `itx` capability. Add RPC\n" +
       "methods and getters to `AppSession` to define exactly what the browser may do.\n" +
       "\n" +
-      "`LiveState` comes from the same `iterate/live-state` module first-party apps\n" +
-      "use. `iterate/app` owns only its concrete read-only `LiveStateRpcTarget`\n" +
-      "adapter, while Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`\n" +
-      "come directly from `@iterate-com/capnweb`. `InternalApp` uses them to push its\n" +
-      "event projection with the same snapshot-and-patch protocol. The explicit\n" +
-      "classes are intentional: there is no\n" +
+      "`LiveState` and its read-only `LiveStateRpcTarget` come from the same\n" +
+      "`iterate/live-state` module first-party apps use, while Cap'n Web's `RpcTarget`\n" +
+      "and `newWorkersWebSocketRpcResponse` come directly from\n" +
+      "`@iterate-com/capnweb`. `InternalApp` uses them to push its event projection\n" +
+      "with the same snapshot-and-patch implementation. The explicit classes are\n" +
+      "intentional: there is no\n" +
       "`authenticatedApp` wrapper hiding where authentication happens or which\n" +
       "authority crosses the wire.\n",
   },
@@ -441,8 +441,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveStateRpcTarget } from \"iterate/app\";\n" +
-      "import { LiveState } from \"iterate/live-state\";\n" +
+      "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
       "import {\n" +
       "  type StreamSubscriberWakeRequest,\n" +
       "  type StreamSubscriberWakeResponse,\n" +
@@ -889,12 +888,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// projection. It cannot access arbitrary project ITX methods.\n" +
       "class InternalAppSession extends RpcTarget {\n" +
       "  readonly #state = new LiveState<InternalAppState>({ events: [], refreshedAt: \"\" });\n" +
-      "  readonly #liveState = new LiveStateRpcTarget(this.#state, {\n" +
-      "    // A previously granted live sub-capability must not outlive the actor\n" +
-      "    // that authorized it. The target drops the subscriber before forwarding\n" +
-      "    // the first post-expiry update, while retaining the real remote callback.\n" +
-      "    authorize: () => this.#assertActive(),\n" +
-      "  });\n" +
+      "  readonly #liveState = new LiveStateRpcTarget(this.#state);\n" +
       "\n" +
       "  constructor(\n" +
       "    private readonly app: InternalApp,\n" +
@@ -904,27 +898,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  get me(): ProjectAuthActor {\n" +
-      "    this.#assertActive();\n" +
       "    return this.actor;\n" +
       "  }\n" +
       "\n" +
       "  get liveState(): LiveStateRpcTarget<InternalAppState> {\n" +
-      "    this.#assertActive();\n" +
       "    return this.#liveState;\n" +
       "  }\n" +
       "\n" +
       "  async refresh(): Promise<void> {\n" +
-      "    this.#assertActive();\n" +
       "    this.#state.setState({\n" +
       "      events: await this.app.readLatestEvents(),\n" +
       "      refreshedAt: new Date().toISOString(),\n" +
       "    });\n" +
-      "  }\n" +
-      "\n" +
-      "  #assertActive() {\n" +
-      "    if (this.actor.expiresAt <= Math.floor(Date.now() / 1000)) {\n" +
-      "      throw new Error(\"This app session has expired; reconnect to authenticate again.\");\n" +
-      "    }\n" +
       "  }\n" +
       "}\n" +
       "\n" +
@@ -954,7 +939,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "\n" +
-      "    const events = await this.readLatestEvents();\n" +
       "    let nonceBytes = \"\";\n" +
       "    for (const byte of crypto.getRandomValues(new Uint8Array(18))) {\n" +
       "      nonceBytes += String.fromCharCode(byte);\n" +
@@ -974,69 +958,42 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <h1>Latest project root events</h1>\n" +
       "              <p id=\"identity\">authenticating API…</p>\n" +
       "              <button id=\"refresh\" disabled>refresh over Cap'n Web</button>\n" +
-      "              <p id=\"refresh-status\" hidden></p>\n" +
       "              <form action=\"/_iterate/auth/logout\" method=\"post\"><button>Sign out</button></form>\n" +
-      "              <pre id=\"events\">${escapeHtml(JSON.stringify(events, null, 2))}</pre>\n" +
+      "              <pre id=\"events\">loading…</pre>\n" +
       "            </main>\n" +
       "            <script type=\"module\" nonce=\"${nonce}\">\n" +
       "              import { newWebSocketRpcSession } from \"https://cdn.jsdelivr.net/npm/@iterate-com/capnweb@0.10.0/dist/index.js\";\n" +
       "\n" +
       "              const identity = document.getElementById(\"identity\");\n" +
       "              const refresh = document.getElementById(\"refresh\");\n" +
-      "              const refreshStatus = document.getElementById(\"refresh-status\");\n" +
       "              const events = document.getElementById(\"events\");\n" +
       "              const endpoint = new URL(${apiPath}, location.href);\n" +
       "              endpoint.protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
       "              const publicApi = newWebSocketRpcSession(endpoint.toString());\n" +
       "\n" +
+      "              const showError = (error) => {\n" +
+      "                identity.textContent = error instanceof Error ? error.message : String(error);\n" +
+      "              };\n" +
       "              try {\n" +
       "                const session = await publicApi.authenticate({ type: \"from-server-cookie\" });\n" +
       "                const me = await session.me;\n" +
       "                identity.textContent = \"authenticated as \" + me.userId;\n" +
-      "                refresh.disabled = false;\n" +
-      "\n" +
-      "                const showError = (error) => {\n" +
-      "                  refresh.disabled = false;\n" +
-      "                  refreshStatus.hidden = false;\n" +
-      "                  refreshStatus.removeAttribute(\"data-spinner\");\n" +
-      "                  refreshStatus.dataset.type = \"error\";\n" +
-      "                  refreshStatus.textContent = error instanceof Error ? error.message : String(error);\n" +
+      "                const render = async () => {\n" +
+      "                  events.textContent = JSON.stringify(await session.liveState.get(), null, 2);\n" +
       "                };\n" +
-      "                const renderCurrent = async (update) => {\n" +
-      "                  try {\n" +
-      "                    const state = update.type === \"snapshot\" ? update.state : await session.liveState.get();\n" +
-      "                    events.textContent = JSON.stringify(state, null, 2);\n" +
-      "                    refresh.disabled = false;\n" +
-      "                    refreshStatus.hidden = true;\n" +
-      "                    refreshStatus.removeAttribute(\"data-spinner\");\n" +
-      "                    refreshStatus.removeAttribute(\"data-type\");\n" +
-      "                  } catch (error) {\n" +
-      "                    showError(error);\n" +
-      "                  }\n" +
-      "                };\n" +
-      "                const subscription = await session.liveState.subscribe((update) => {\n" +
-      "                  void renderCurrent(update);\n" +
+      "                const subscription = await session.liveState.subscribe(() => {\n" +
+      "                  void render().catch(showError);\n" +
       "                });\n" +
-      "                refresh.onclick = async () => {\n" +
-      "                  refresh.disabled = true;\n" +
-      "                  refreshStatus.hidden = false;\n" +
-      "                  refreshStatus.dataset.spinner = \"true\";\n" +
-      "                  refreshStatus.removeAttribute(\"data-type\");\n" +
-      "                  refreshStatus.textContent = \"refreshing…\";\n" +
-      "                  try {\n" +
-      "                    await session.refresh();\n" +
-      "                  } catch (error) {\n" +
-      "                    showError(error);\n" +
-      "                  }\n" +
+      "                refresh.disabled = false;\n" +
+      "                refresh.onclick = () => {\n" +
+      "                  void session.refresh().catch(showError);\n" +
       "                };\n" +
       "                addEventListener(\"pagehide\", () => {\n" +
       "                  subscription[Symbol.dispose]();\n" +
       "                  session[Symbol.dispose]();\n" +
       "                  publicApi[Symbol.dispose]();\n" +
       "                }, { once: true });\n" +
-      "              } catch (error) {\n" +
-      "                identity.textContent = error instanceof Error ? error.message : String(error);\n" +
-      "              }\n" +
+      "              } catch (error) { showError(error); }\n" +
       "            </script>\n" +
       "          </body>\n" +
       "        </html>`,\n" +

@@ -2235,7 +2235,7 @@ export type ProjectAuthPolicy = { policy: "project-member" };
 export type ProjectAuthCredentials = { type: "from-server-cookie" };
 
 /** Identity proven by the app-origin session, safe for app-defined authorization. */
-export type ProjectAuthActor = { expiresAt: number; userId: string };
+export type ProjectAuthActor = { userId: string };
 
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,

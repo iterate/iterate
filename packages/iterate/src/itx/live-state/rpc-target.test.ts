@@ -1,23 +1,18 @@
 import { newMessagePortRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LiveStateRpcTarget, type LiveStateRpc } from "../../app.ts";
+import { LiveStateRpcTarget, type LiveStateRpc } from "../../live-state.ts";
 import { LiveState } from "./engine.ts";
 import { createLiveStateStore } from "./store.ts";
 
 describe("LiveStateRpcTarget", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("retains remote callbacks through per-delivery authorization", async () => {
+  it("exposes the server engine as a read-only live capability", async () => {
     vi.useFakeTimers();
     const live = new LiveState({ count: 0 }, { debounceMs: 0 });
-    let active = true;
     class AppSession extends RpcTarget {
       get state(): LiveStateRpcTarget<{ count: number }> {
-        return new LiveStateRpcTarget(live, {
-          authorize: () => {
-            if (!active) throw new Error("session expired");
-          },
-        });
+        return new LiveStateRpcTarget(live);
       }
 
       increment(): void {
@@ -39,12 +34,6 @@ describe("LiveStateRpcTarget", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.waitFor(() => expect(store.getState()).toEqual({ count: 1 }));
     await expect(subscription.ping()).resolves.toBe(true);
-
-    active = false;
-    live.assign({ count: 2 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(store.getState()).toEqual({ count: 1 });
-    await expect(subscription.ping()).resolves.toBe(false);
 
     // Keep the generic stub type honest: app.state is a capability, not a
     // pass-by-value object that could expose LiveState's mutation methods.

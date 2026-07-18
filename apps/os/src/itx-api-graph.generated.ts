@@ -1236,7 +1236,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAuthActor",
     kind: "typeAlias",
     sourceText:
-      "/** Identity proven by the app-origin session, safe for app-defined authorization. */\nexport type ProjectAuthActor = { expiresAt: number; userId: string };",
+      "/** Identity proven by the app-origin session, safe for app-defined authorization. */\nexport type ProjectAuthActor = { userId: string };",
     summary: "Identity proven by the app-origin session, safe for app-defined authorization.",
     memberSummaries: {},
     referencedTypeNames: [],

@@ -18,6 +18,17 @@ const result = await esbuild.build({
   legalComments: "none",
   mainFields: ["module", "main"],
   platform: "neutral",
+  plugins: [
+    {
+      name: "externalize-capnweb-fork",
+      setup(build) {
+        build.onResolve({ filter: /^capnweb$/ }, () => ({
+          external: true,
+          path: "@iterate-com/capnweb",
+        }));
+      },
+    },
+  ],
   write: false,
 });
 

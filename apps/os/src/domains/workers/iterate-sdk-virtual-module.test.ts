@@ -31,7 +31,7 @@ test("project auth is a body-safe partial fetch in the embedded worker runtime",
     async authenticate(request: ProjectAuthMetadata, credentials: { type: "from-server-cookie" }) {
       requests.push(request);
       expect(credentials).toEqual({ type: "from-server-cookie" });
-      return { expiresAt: 4_102_444_800, userId: "usr_one" };
+      return { userId: "usr_one" };
     },
     async fetch(request: Request | ProjectAuthMetadata): Promise<Response | null> {
       requests.push(request);
@@ -114,7 +114,7 @@ test("project auth is a body-safe partial fetch in the embedded worker runtime",
     itx.auth
       .get({ policy: "project-member" })
       .authenticate(rpcHandshake, { type: "from-server-cookie" }),
-  ).resolves.toEqual({ expiresAt: 4_102_444_800, userId: "usr_one" });
+  ).resolves.toEqual({ userId: "usr_one" });
   expect(requests[1]).not.toBeInstanceOf(Request);
   expect(new Headers((requests[1] as ProjectAuthMetadata).headers).get("origin")).toBe(
     "https://internal--demo.iterate.app",
@@ -148,7 +148,7 @@ type TestProjectAuth = {
   authenticate(
     request: Request,
     credentials: { type: "from-server-cookie" },
-  ): Promise<{ expiresAt: number; userId: string }>;
+  ): Promise<{ userId: string }>;
   get(policy: { policy: "project-member" }): TestProjectAuth;
   fetch(request: Request): Promise<Response | null>;
 };

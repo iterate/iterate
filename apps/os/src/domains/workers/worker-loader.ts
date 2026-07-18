@@ -10,7 +10,6 @@ import {
   type WorkerLastGoodBuild,
 } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
-import { ITERATE_APP_VIRTUAL_MODULE } from "./iterate-app-virtual-module.generated.ts";
 import { ITERATE_LIVE_STATE_VIRTUAL_MODULE } from "./iterate-live-state-virtual-module.generated.ts";
 import { ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE } from "./iterate-processors-cloudflare-virtual-module.generated.ts";
 import { ITERATE_PROCESSORS_VIRTUAL_MODULE } from "./iterate-processors-virtual-module.generated.ts";
@@ -152,7 +151,6 @@ function withIterateVirtualModules(options: WorkerBuildOptions): WorkerBuildOpti
   return {
     ...options,
     virtualModules: {
-      "iterate/app": ITERATE_APP_VIRTUAL_MODULE,
       "iterate/live-state": ITERATE_LIVE_STATE_VIRTUAL_MODULE,
       "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE,
       "iterate/processors": ITERATE_PROCESSORS_VIRTUAL_MODULE,

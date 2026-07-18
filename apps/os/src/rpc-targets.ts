@@ -56,7 +56,11 @@ import type {
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
 import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
-import { disposeIgnoredRpcResult, LiveState, type LiveStateSubscription } from "iterate/live-state";
+import {
+  disposeIgnoredRpcResult,
+  LiveState,
+  LiveStateRpcTarget as SharedLiveStateRpcTarget,
+} from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -5346,17 +5350,15 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
 
 /** A partial fetch: return its response, or continue the app when it returns null. */
 class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
-  constructor(readonly props: { auth: ItxAuth; policy?: ProjectAuthPolicy; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
   /** Bind a project-member gate to this itx's project. */
   get(policy: ProjectAuthPolicy): ProjectAuthRpcTarget {
-    return new ProjectAuthRpcTarget({
-      ...this.props,
-      policy: parseProjectAuthPolicy(policy),
-    });
+    parseProjectAuthPolicy(policy);
+    return this;
   }
 
   /**
@@ -5369,7 +5371,6 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
     request: ProjectAuthRpcMetadata | Request,
     credentials: ProjectAuthCredentials,
   ): Promise<ProjectAuthActor> {
-    this.#assertConfigured();
     return await authenticateProjectRequest({
       credentials,
       projectId: this.props.projectId,
@@ -5385,19 +5386,12 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
    */
   fetch(request: Request): Promise<Response | null>;
   async fetch(request: ProjectAuthRpcMetadata | Request): Promise<Response | null> {
-    this.#assertConfigured();
     return await handleProjectAuthFetch({
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
       validateSession: (input) => env.AUTH.validateProjectAppSession(input),
     });
-  }
-
-  #assertConfigured() {
-    if (this.props.policy === undefined) {
-      throw new Error('Configure project auth with auth.get({ policy: "project-member" }) first.');
-    }
   }
 }
 /**
@@ -6185,9 +6179,10 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
 }
 
 // ---------------------------------------------------------------------------
-// Every RpcTarget class lives in this module (design rule): ownership handles,
-// built-in capability targets, and read-only facades included. Durable Object
-// and entrypoint classes stay in their domain folders.
+// Every OS-owned RpcTarget that defines or relays an itx contract lives in this
+// module. Transport primitives shared with userspace, such as the read-only
+// target from `iterate/live-state`, stay in that package; the local relay below
+// supplies OS-specific registry refresh and generated-contract ownership.
 // ---------------------------------------------------------------------------
 
 type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
@@ -7030,45 +7025,24 @@ export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
   implements LiveStateRpc<State>
 {
   readonly #host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">;
+  readonly #target: SharedLiveStateRpcTarget<State>;
 
   constructor(host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">) {
     super();
     this.#host = host;
+    this.#target = new SharedLiveStateRpcTarget(host.live);
   }
 
   async get(): Promise<State> {
     await this.#host.loadAndRefreshLive();
-    return this.#host.live.getState();
+    return await this.#target.get();
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
     await this.#host.loadAndRefreshLive();
-    const handle = this.#host.live.subscribe(onUpdate);
-    return new LiveStateSubscriptionRpcTarget(handle);
-  }
-}
-
-/** RPC ownership handle for one live-state subscription — the `.liveState` twin of {@link StreamSubscriptionRpcTarget}. */
-class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscriptionHandle"> {
-  readonly #handle: LiveStateSubscription;
-
-  constructor(handle: LiveStateSubscription) {
-    super();
-    this.#handle = handle;
-  }
-
-  ping() {
-    return this.#handle.ping();
-  }
-
-  unsubscribe() {
-    this.#handle.unsubscribe();
-  }
-
-  [Symbol.dispose](): void {
-    this.#handle.unsubscribe();
+    return await this.#target.subscribe(onUpdate);
   }
 }
 
@@ -7132,27 +7106,31 @@ class LiveDemoTickerRpcTarget
       tick: 0,
       startedAt: this.#startedAt,
     });
-    const inner = engine.subscribe(onUpdate);
-    // The engine drops a subscriber itself when a delivery rejects (dead
-    // client), and it exposes no drop hook to the owner — so a driving loop
-    // like this one must check `ping()` and stop itself, or the timer outlives
-    // the subscription. This IS the template for the poll-an-API pattern.
-    const interval = setInterval(() => {
-      if (!inner.ping()) {
-        stop();
-        return;
-      }
-      engine.assign({ tick: engine.getState().tick + 1 });
-    }, LIVE_DEMO_TICK_MS);
-    const stop = () => {
-      clearInterval(interval);
-      inner.unsubscribe();
-    };
-    return new LiveStateSubscriptionRpcTarget({
-      ping: () => inner.ping(),
-      unsubscribe: stop,
-      [Symbol.dispose]: stop,
-    });
+    return await new SharedLiveStateRpcTarget({
+      getState: () => engine.getState(),
+      subscribe: (sink) => {
+        const inner = engine.subscribe(sink);
+        // The engine drops a subscriber itself when a delivery rejects (dead
+        // client), and it exposes no drop hook to the owner — so a driving
+        // loop must check `ping()` or its timer would outlive the subscriber.
+        const interval = setInterval(() => {
+          if (!inner.ping()) {
+            stop();
+            return;
+          }
+          engine.assign({ tick: engine.getState().tick + 1 });
+        }, LIVE_DEMO_TICK_MS);
+        const stop = () => {
+          clearInterval(interval);
+          inner.unsubscribe();
+        };
+        return {
+          ping: () => inner.ping(),
+          unsubscribe: stop,
+          [Symbol.dispose]: stop,
+        };
+      },
+    }).subscribe(onUpdate);
   }
 }
 

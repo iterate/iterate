@@ -72,10 +72,10 @@ That method calls the same bound auth policy with the WebSocket upgrade Request
 and returns an app-defined `InternalAppSession` RpcTarget. Give that target only
 the authority this UI needs; never return the project-wide `itx` capability to
 the browser. Import the Cap'n Web host directly from `@iterate-com/capnweb`;
-import `LiveState` from the same `iterate/live-state` module first-party apps
-use. `iterate/app` owns only its concrete read-only `LiveStateRpcTarget`
-adapter, so dynamic apps use the same snapshot-and-patch protocol without
-hiding the capability graph behind a framework helper.
+import `LiveState` and `LiveStateRpcTarget` from the same
+`iterate/live-state` module first-party apps use. Dynamic apps therefore use
+the same snapshot-and-patch implementation without hiding the capability
+graph behind a framework helper.
 
 To give agents a new capability surface, add a getter or method to the
 default-export worker class: the platform dispatches dotted

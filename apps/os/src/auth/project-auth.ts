@@ -12,7 +12,7 @@ export type ProjectAuthPolicy = { policy: "project-member" };
 export type ProjectAuthCredentials = { type: "from-server-cookie" };
 
 /** Identity proven by the app-origin session, safe for app-defined authorization. */
-export type ProjectAuthActor = ValidatedProjectAppSession;
+export type ProjectAuthActor = Pick<ValidatedProjectAppSession, "userId">;
 
 /** A project-app RPC caller supplied no live session for this app origin. */
 class ProjectAuthenticationError extends Error {
@@ -96,13 +96,13 @@ export async function authenticateProjectRequest(input: {
 
   const token = readCookie(input.request.headers.get("cookie"), AUTH_COOKIE);
   if (!token) throw new ProjectAuthenticationError();
-  const actor = await input.validateSession({
+  const session = await input.validateSession({
     audience: new URL(input.request.url).origin,
     projectId: input.projectId,
     token,
   });
-  if (!actor) throw new ProjectAuthenticationError();
-  return actor;
+  if (!session) throw new ProjectAuthenticationError();
+  return { userId: session.userId };
 }
 
 /**

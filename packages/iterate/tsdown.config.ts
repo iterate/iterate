@@ -53,7 +53,6 @@ export default defineConfig([
     // entries (the shared live-state modules are stateless codecs), so a
     // separate config object is safe. No dts for the sdk reason above.
     entry: {
-      app: "src/app.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",
       "processors-testing": "src/processors/testing.ts",
