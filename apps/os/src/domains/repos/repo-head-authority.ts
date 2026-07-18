@@ -122,7 +122,7 @@ export function recordOwnPushTransition(
   authority: RepoHeadAuthority,
   push: { beforeCommitOid: string | null; commitOid: string },
 ): RepoHeadAuthority {
-  const pair: ObservedPush = {
+  const pair = {
     afterCommitOid: push.commitOid,
     beforeCommitOid: push.beforeCommitOid,
   };
