@@ -61,15 +61,10 @@ export function ancestorAnnouncementSetupEvents(): [StreamEventInput, StreamEven
   ];
 }
 
-export type AncestorAnnouncementAppend = {
-  path: string;
-  event: StreamEventInput;
-};
-
 /** Validate one internal delivery and construct its idempotent ancestor appends. */
 export function buildAncestorAnnouncementAppends(
   batch: StreamPushEventBatch,
-): AncestorAnnouncementAppend[] {
+): Array<{ path: string; event: StreamEventInput }> {
   if (batch.subscriptionKey !== ANCESTOR_ANNOUNCEMENT_SUBSCRIPTION_KEY) {
     throw new Error(`unexpected ancestor-announcement subscription "${batch.subscriptionKey}"`);
   }
