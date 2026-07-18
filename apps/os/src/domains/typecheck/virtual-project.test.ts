@@ -12,7 +12,7 @@ import { beforeAll, expect, test } from "vitest";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { openApiCapabilityTypeReference } from "../itx/capability-type-declarations.ts";
 import type { CompileFn } from "./run-typecheck.ts";
-import { runTypecheck, npmPackagesMentioned } from "./run-typecheck.ts";
+import { runTypecheck, npmPackagesMentioned, TYPECHECKER_WARMUP_FILES } from "./run-typecheck.ts";
 import {
   checkCapabilityTypes,
   checkItxScript,
@@ -126,6 +126,15 @@ const WEATHER_MOUNT: CapabilityDescription = {
   instructions: "Three-day forecasts.",
   types: "export type Forecast = { forecast(input: { city: string }): Promise<string> };",
 };
+
+test("the warmup probe compiles clean with zero network fetches", async () => {
+  // warm() fires on every capability-host wake; an import creeping into the
+  // probe would turn fleet-wide wakes into registry traffic.
+  fetchedUrls = [];
+  const result = await typechecker.check({ files: TYPECHECKER_WARMUP_FILES });
+  expect(result.diagnostics).toEqual([]);
+  expect(fetchedUrls).toEqual([]);
+});
 
 test("the platform surface compiles clean without eagerly loading Octokit's package graph", async () => {
   fetchedUrls = [];

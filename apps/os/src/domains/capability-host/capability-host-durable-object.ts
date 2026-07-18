@@ -98,12 +98,12 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   /**
    * Overlap this scope's cold activation with whatever woke the object: warm
    * the typechecker sidecar's wasm compiler, and pre-read this scope's
-   * capability descriptions — journal catch-up plus the one fallback-host
-   * dial, exactly the data the first script's typecheck gate needs.
-   * DELIBERATELY fire-and-forget: no verb awaits it and a failure only logs.
-   * Consumers re-do this work on demand and merely pay the cold cost warmup
-   * failed to hide; gating verbs on a cached warmup rejection would let one
-   * transient sidecar error brick the whole incarnation.
+   * capability descriptions — the runner's load (refold if stale) plus, once
+   * born, the one fallback-host dial: the exact read the first script's
+   * typecheck gate performs. DELIBERATELY fire-and-forget: no verb awaits it
+   * and a failure only logs. Consumers re-do this work on demand and merely
+   * pay the cold cost warmup failed to hide; gating verbs on a cached warmup
+   * rejection would let one transient sidecar error brick the incarnation.
    */
   #warmBoot(): void {
     this.env.TYPECHECKER.warm().catch((error: unknown) => {

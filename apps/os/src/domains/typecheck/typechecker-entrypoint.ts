@@ -8,7 +8,7 @@ import { createCachedFetch } from "@iterate-com/typm/cached-fetch";
 // CANNOT be one: esbuild-wasm + tswasm gzip to ~11 MiB, over Cloudflare's
 // 10 MiB compressed script limit (upload rejected, error 10027).
 import typescriptWasm from "tswasm/tswasm.wasm";
-import { runTypecheck, type TypecheckResult } from "./run-typecheck.ts";
+import { runTypecheck, TYPECHECKER_WARMUP_FILES, type TypecheckResult } from "./run-typecheck.ts";
 import { createCompilerCache } from "./compiler-cache.ts";
 
 /** The whole input is inert data: a virtual file map. The checker holds no
@@ -62,7 +62,7 @@ export class TypecheckerEntrypoint extends WorkerEntrypoint {
    * otherwise land inside a user's first script.
    */
   async warm(): Promise<void> {
-    await this.check({ files: { "/warmup.ts": "export const warm: number = 1;\n" } });
+    await this.check({ files: TYPECHECKER_WARMUP_FILES });
   }
 
   async check(input: {

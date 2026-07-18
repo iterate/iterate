@@ -12,6 +12,16 @@ import { listOpenApiOperations } from "../itx/openapi-types.ts";
 /** One compiler diagnostic — tswasm's own shape (aliased so nothing drifts). */
 export type TypecheckDiagnostic = import("tswasm").Diagnostic;
 
+/**
+ * The `warm()` probe: one trivial file that must compile clean with ZERO
+ * network fetches — warmup fires on every capability-host wake, so an import
+ * sneaking in here would turn fleet-wide wakes into registry traffic. That
+ * invariant is pinned by a test in virtual-project.test.ts.
+ */
+export const TYPECHECKER_WARMUP_FILES: Record<string, string> = {
+  "/warmup.ts": "export const warm: number = 1;\n",
+};
+
 /** What a check returns: diagnostics plus acquisition notes (npm budget
  * trips, download failures) — without the notes, a budget-tripped package
  * reads as a plain "Cannot find module" typo. */
