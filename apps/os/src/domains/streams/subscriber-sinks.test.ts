@@ -13,7 +13,8 @@ const dialMocks = vi.hoisted(() => ({
 vi.mock("../../itx/expression.ts", () => ({
   evaluateItxExpression: dialMocks.evaluateItxExpression,
 }));
-const { createSubscriberDial, retainWakeHandshakeResponse } = await import("./subscriber-sinks.ts");
+const { createSubscriberDial, retainProcessEventBatch, retainWakeHandshakeResponse } =
+  await import("./subscriber-sinks.ts");
 
 function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
   const rawDispose = vi.fn();
@@ -149,6 +150,100 @@ describe("push delivery RPC ownership", () => {
     await push();
     expect(createAuthorityRoot).toHaveBeenCalledTimes(2);
     expect(dialMocks.evaluateItxExpression).toHaveBeenCalledWith(root, expect.any(Array));
+  });
+});
+
+describe("retained batch RPC result ownership", () => {
+  const batch = {} as Parameters<ProcessEventBatch>[0];
+
+  test("contains result disposal failure after a resolved durable delivery", async () => {
+    const disposalError = new Error("result dispose exploded");
+    const disposeResult = vi.fn(() => {
+      throw disposalError;
+    });
+    const result = Object.assign(Promise.resolve(), {
+      [Symbol.dispose]: disposeResult,
+    });
+    const onDeliveryError = vi.fn();
+    const onSettled = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sink = retainProcessEventBatch(() => result, { onDeliveryError });
+
+    try {
+      sink(batch, { onSettled });
+      await vi.waitFor(() => expect(disposeResult).toHaveBeenCalledOnce());
+
+      expect(onDeliveryError).not.toHaveBeenCalled();
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(onSettled).toHaveBeenCalledWith("ok");
+      expect(warn).toHaveBeenCalledWith(
+        "stream delivery RPC result dispose failed after delivery outcome",
+        { error: disposalError },
+      );
+    } finally {
+      sink[Symbol.dispose]();
+      warn.mockRestore();
+    }
+  });
+
+  test("preserves a rejected durable delivery when result disposal also fails", async () => {
+    const deliveryError = new Error("delivery rejected");
+    const disposalError = new Error("result dispose exploded");
+    const disposeResult = vi.fn(() => {
+      throw disposalError;
+    });
+    const result = Object.assign(Promise.reject(deliveryError), {
+      [Symbol.dispose]: disposeResult,
+    });
+    const onDeliveryError = vi.fn();
+    const onSettled = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sink = retainProcessEventBatch(() => result, { onDeliveryError });
+
+    try {
+      sink(batch, { onSettled });
+      await vi.waitFor(() => expect(disposeResult).toHaveBeenCalledOnce());
+
+      expect(onDeliveryError).toHaveBeenCalledOnce();
+      expect(onDeliveryError).toHaveBeenCalledWith(deliveryError);
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(onSettled).toHaveBeenCalledWith("error");
+      expect(warn).toHaveBeenCalledWith(
+        "stream delivery RPC result dispose failed after delivery outcome",
+        { error: disposalError },
+      );
+    } finally {
+      sink[Symbol.dispose]();
+      warn.mockRestore();
+    }
+  });
+
+  test("does not misclassify synchronous result disposal failure as delivery failure", () => {
+    const disposalError = new Error("result dispose exploded");
+    const disposeResult = vi.fn(() => {
+      throw disposalError;
+    });
+    const onDeliveryError = vi.fn();
+    const onSettled = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sink = retainProcessEventBatch(() => ({ [Symbol.dispose]: disposeResult }), {
+      onDeliveryError,
+    });
+
+    try {
+      expect(() => sink(batch, { onSettled })).not.toThrow();
+      expect(disposeResult).toHaveBeenCalledOnce();
+      expect(onDeliveryError).not.toHaveBeenCalled();
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(onSettled).toHaveBeenCalledWith("ok");
+      expect(warn).toHaveBeenCalledWith(
+        "stream delivery RPC result dispose failed after delivery outcome",
+        { error: disposalError },
+      );
+    } finally {
+      sink[Symbol.dispose]();
+      warn.mockRestore();
+    }
   });
 });
 

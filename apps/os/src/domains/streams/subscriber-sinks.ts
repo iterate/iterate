@@ -71,6 +71,15 @@ export type RetainedProcessEventBatch = ((
     pendingDeliveries?(): number;
   };
 
+/** Cleanup cannot revise the delivery outcome that was already observed. */
+function disposeDeliveryResult(result: unknown): void {
+  try {
+    disposeIgnoredRpcResult(result);
+  } catch (error) {
+    console.warn("stream delivery RPC result dispose failed after delivery outcome", { error });
+  }
+}
+
 /**
  * Retains a delivery sink and wraps it in the pump's fire-and-forget calling
  * convention.
@@ -134,11 +143,11 @@ export function retainProcessEventBatch(
           )
           .finally(() => {
             pendingDeliveries -= 1;
-            disposeIgnoredRpcResult(result);
+            disposeDeliveryResult(result);
           });
         return;
       }
-      disposeIgnoredRpcResult(result);
+      disposeDeliveryResult(result);
       // Ephemeral lane (results disposed unpulled): "settled" is meaningless
       // here — the subscriber's consumption is self-reported instead — but a
       // LOCAL sink's synchronous return is a genuine settle.
