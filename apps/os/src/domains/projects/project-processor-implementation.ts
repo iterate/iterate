@@ -2,7 +2,7 @@ import { StreamProcessor } from "iterate/processors";
 import type { StreamEvent, StreamListItem } from "iterate/processors";
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { CONFIG_REPO_PATH } from "../repos/utils.ts";
+import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";

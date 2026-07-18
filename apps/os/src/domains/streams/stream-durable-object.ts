@@ -5,6 +5,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "iterate/processors";
+import { sameIdempotentEvent } from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
@@ -1334,39 +1335,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 /** Idempotency deduplicates one logical event, not arbitrary writes sharing a
  * key. Provenance is deliberately excluded: a processor may retry the same
  * logical output after a deploy changes its source-version stamp. */
-function sameIdempotentEvent(existing: StreamEvent, requested: StreamEventInput): boolean {
-  return (
-    existing.type === requested.type &&
-    jsonValuesEqual(existing.payload, requested.payload) &&
-    jsonValuesEqual(existing.metadata, requested.metadata) &&
-    existing.ephemeral === requested.ephemeral
-  );
-}
-
-function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonValuesEqual(value, right[index]))
-    );
-  }
-  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
-    return false;
-  }
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord);
-  return (
-    leftKeys.length === Object.keys(rightRecord).length &&
-    leftKeys.every(
-      (key) =>
-        Object.hasOwn(rightRecord, key) && jsonValuesEqual(leftRecord[key], rightRecord[key]),
-    )
-  );
-}
 
 /**
  * What `append` accepts over the wire: a public event input plus the optional
