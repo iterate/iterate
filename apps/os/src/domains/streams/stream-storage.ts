@@ -21,8 +21,8 @@
 // persists the batch in one await-free turn.
 
 import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
-import type { StreamEvent } from "./schemas.ts";
-import { StreamEvent as StreamEventSchema } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
+import { StreamEvent as StreamEventSchema } from "iterate/processors";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
@@ -78,6 +78,19 @@ export class StreamEventLog {
     return (
       this.sql
         .exec<{ offset: number | null }>("select max(offset) as offset from events")
+        .toArray()[0]?.offset ?? 0
+    );
+  }
+
+  /** The highest DURABLE offset — the tail a default (ephemeral-excluding)
+   * catch-up read can actually reach, and so the only head a fold barrier
+   * may wait for. Robust against a future ephemeral-row eviction sweep. */
+  highestDurableOffset(): number {
+    return (
+      this.sql
+        .exec<{
+          offset: number | null;
+        }>("select max(offset) as offset from events where ephemeral = 0")
         .toArray()[0]?.offset ?? 0
     );
   }

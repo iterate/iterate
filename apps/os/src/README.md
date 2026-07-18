@@ -41,8 +41,8 @@ live in domain files.
   "itx" is a NAMING CONVENTION, not a class: an itx is normally an instance of
   `ProjectRpcTarget` whose capability host sits at `"/"` — and sometimes at
   `"/agents/…"`, which is what "an agent context" means. Same type either way;
-  a nested scope sees its own mounted capabilities plus everything inherited
-  from enclosing scopes (child → parent → project).
+  a nested scope sees its own mounted capabilities plus everything its
+  journaled fallback host reports (usually the project root, one hop).
 - A **capability host** is the durable dynamic-capability table (and script
   journal) at one scope path — one `CapabilityHostDurableObject` per
   `{projectId, path}`. Host operations are `provideCapability`,
@@ -142,9 +142,10 @@ The itx and agent surfaces have NO dispatch machinery of their own: the
 to the injected capability host, and the host itself carries the same fallback
 (`host.foo.bar(x)` is `host.invokeCapability({ path: ["foo","bar"], args: [x] })`).
 
-The load-bearing asymmetry: **reads chain up, writes stay local.**
-`invokeCapability`/`__describe` fall through to the enclosing scope on a miss
-(agent -> namespace -> project root), so a root mount is visible everywhere.
+The load-bearing asymmetry: **reads fall back, writes stay local.**
+`invokeCapability`/`__describe` follow the scope's birth-certificate `fallback`
+expression on a miss — one direct hop, normally to the project root host, with
+no path-prefix walking — so a root mount is visible everywhere.
 `provideCapability` always mounts on exactly the host you called it on — to
 mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
 
@@ -304,7 +305,7 @@ default repo's `worker.ts`.
 
 Note: method-returned itx surfaces pipeline on every transport, including
 script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`,
-`await itx.agents.get(path).create({})`, and (after birth)
+`await itx.agents.get(path).create()`, and (after birth)
 `await itx.agents.get(path).message(...)` work as one expression (the
 dynamic-capability fallback lives on the classes' prototype chains, so the
 returned instances are genuine RpcTargets; see
@@ -314,7 +315,7 @@ pattern:
 
 ```ts
 using agent = itx.agents.get(path); // no await
-await agent.create({});
+await agent.create();
 const [sent, description] = await Promise.all([agent.message("hello"), agent.__describe()]);
 ```
 

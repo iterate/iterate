@@ -340,7 +340,7 @@ subscriber: every stream pumps checkpointed events into processEventBatch"** —
 slice of this design, live on main — plus **#1756 (MERGED): `event.path` stamped on every
 committed event**, with **#1778 (OPEN): agent birth policy → the worker via
 path-triggered agent defaults** on top. That policy was later superseded by explicit
-`agents.get(path).create(...)` birth batches. The single PR here **builds on #1761**, generalizing its pump
+`agents.get(path).create()` birth batches. The single PR here **builds on #1761**, generalizing its pump
 into the spine rather than adding a second mechanism.
 
 **Adopt verbatim from #1761/#1756 (already on main):**

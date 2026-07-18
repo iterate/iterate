@@ -3,7 +3,7 @@ import {
   StreamOffsetConflictError,
   isStreamOffsetConflictError,
   streamOffsetConflictMessage,
-} from "./rpc-types.ts";
+} from "iterate/processors";
 
 describe("isStreamOffsetConflictError", () => {
   it("matches a local typed conflict", () => {

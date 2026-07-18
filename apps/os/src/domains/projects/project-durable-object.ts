@@ -1,21 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
+import { LiveStateRpcTarget } from "iterate/live-state";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
-  LiveStateRpcTarget,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
@@ -35,6 +32,9 @@ import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agen
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
 import { TelegramProcessorContract } from "../integrations/telegram-processor-contract.ts";
+import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
+import { buildTelegramAccessSettingsUrl } from "../integrations/utils.ts";
+import { readProjectById } from "../../project-directory.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
@@ -57,8 +57,8 @@ import {
 } from "./openai-ai-gateway-egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
+import { AgentDatabase, type AgentTouchInput } from "./agent-database.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
-import { AgentStatusDatabase, type AgentStatusTouchInput } from "./agent-status-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
@@ -73,11 +73,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // will use.
   #liveDemo: { count: number } = { count: 0 };
   // The project's streams index — a materialized view in the DO's own SQLite,
-  // touched from the processEventBatch fan-in (see touchStreamActivity).
+  // updated from the processEventBatch fan-in.
   readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
-  // The agents roster — every agent stream's merged status record, fed from
-  // the same fan-in (the status-changed patches ride the touch call).
-  readonly #agentStatusDatabase = new AgentStatusDatabase(this.ctx.storage.sql);
+  // The complete agent catalog — metadata, exact runtime counts, binding,
+  // and timestamps reduced from every agent stream's committed facts.
+  readonly #agentDatabase = new AgentDatabase(this.ctx.storage.sql);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -98,10 +98,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // Reconcile any catalog stream missing an index row (cheap when none are),
       // so newly-created quiet streams show up in ⌘K without waiting for events.
       this.#streamDatabase.seedMissing(reduced.streams);
+      this.#agentDatabase.seedMissing(reduced.agents);
       return {
         reduced,
         streamsIndex: this.#streamDatabase.all(),
-        agents: this.#agentStatusDatabase.all(),
+        agents: this.#agentDatabase.all(),
         liveDemo: this.#liveDemo,
       };
     },
@@ -184,6 +185,27 @@ export class ProjectDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
+      now: Date.now,
+      sendTelegramMessage: ({ body, connection }) =>
+        callProjectTelegramBotApi({
+          body,
+          connection,
+          method: "sendMessage",
+          projectId: this.#name.projectId,
+        }),
+      telegramAccessSettingsUrl: async ({ connection, projectId }) => {
+        const project = await readProjectById(this.env.PROJECT_DIRECTORY, projectId);
+        if (project === null) {
+          throw new Error(
+            `Telegram access denial cannot link project ${projectId}: directory record missing`,
+          );
+        }
+        return buildTelegramAccessSettingsUrl({
+          baseUrl: parseConfig(this.env).baseUrl || "https://os.iterate.com",
+          connection,
+          projectSlug: project.slug,
+        });
+      },
     }),
   );
   readonly #telegramReads = this.#registry.reads(this.telegramRouterRegistration);
@@ -270,38 +292,22 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Record stream activity in the index and push it to `itx.liveState`. Called
-   * from the project's `processEventBatch` fan-in (every project-scoped
-   * stream's events flow through it). Idempotent — `StreamDatabase.touch` only
-   * advances recency — so a redelivered batch is harmless.
+   * Update the live projections from one committed delivery before that
+   * delivery is acknowledged. Both reducers are idempotent, so spine retries
+   * are harmless; a storage/RPC failure rejects the batch instead of silently
+   * leaving live state stale.
    */
-  touchStreamActivity(input: TouchInput): void {
-    this.#streamDatabase.touch(input);
-    this.#registry.refreshLive();
-  }
-
-  /**
-   * Fold a batch's agent status-changed patches into the agents roster and
-   * push the change to `itx.liveState` watchers. Same envelope as
-   * touchStreamActivity: called from the processEventBatch fan-in, idempotent
-   * (event offsets guard redelivery), never load-bearing for delivery.
-   */
-  touchAgentStatus(input: AgentStatusTouchInput): void {
-    this.#agentStatusDatabase.touch(input);
-    this.#registry.refreshLive();
-  }
-
-  /**
-   * Replace one roster row from the agent journal's full status-changed
-   * history — the recovery lane for a dropped touch (merge patches cannot
-   * reconstruct a lost field from later patches; the journal can). Returns
-   * false when the snapshot lost a race with a newer touch and the caller
-   * must re-read the journal. See AgentStatusDatabase.rebuild.
-   */
-  rebuildAgentStatus(input: AgentStatusTouchInput): boolean {
-    const applied = this.#agentStatusDatabase.rebuild(input);
-    if (applied) this.#registry.refreshLive();
-    return applied;
+  indexCommittedBatchFacts(input: { stream: TouchInput; agent?: AgentTouchInput }): void {
+    const streamsBefore = this.#streamDatabase.all();
+    const agentsBefore = this.#agentDatabase.all();
+    this.#streamDatabase.touch(input.stream);
+    if (input.agent !== undefined) this.#agentDatabase.touch(input.agent);
+    if (
+      streamsBefore !== this.#streamDatabase.all() ||
+      agentsBefore !== this.#agentDatabase.all()
+    ) {
+      this.#registry.refreshLive();
+    }
   }
 
   async fetch(request: Request): Promise<Response> {

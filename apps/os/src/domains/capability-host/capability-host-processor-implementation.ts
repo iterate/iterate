@@ -1,11 +1,9 @@
-import {
-  StreamProcessor,
-  type StreamProcessorConstructorArgs,
-} from "../streams/stream-processor.ts";
-import type { ProcessorState } from "../streams/processor-contracts.ts";
+import { StreamProcessor, type StreamProcessorConstructorArgs } from "iterate/processors";
+import type { ProcessorState } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
+import type { ItxExpression } from "../../itx/expression.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type {
@@ -114,17 +112,24 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
 }
 
 /**
- * The enclosing itx scope, as seen from a child scope's processor.
- *
- * Only the two read operations chain upward (see the class below); mounting is
- * always local, so `provide`/`revoke` are deliberately absent here. In practice
- * this is a `DurableObjectStub<CapabilityHostDurableObject>` for the parent scope, but the
- * processor only depends on these two methods.
+ * The host a capability miss falls back to, as this processor sees it after
+ * evaluating the birth certificate's `fallback` expression against its own
+ * itx. In practice that expression is `["capabilityHosts", ["get", "/"]]` and
+ * the value is a CapabilityHostRpcTarget, but only these two read operations
+ * are depended on — mounting is always local, so `provide`/`revoke` are
+ * deliberately absent.
  */
-export type ParentCapabilityHost = {
+type FallbackCapabilityHost = {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  describeCapabilities(): Promise<CapabilityDescription[]>;
+  __describe(): Promise<{ capabilities: CapabilityDescription[] }>;
+  /** The scope path the handle fronts, when it exposes one (the self-fallback guard reads it). */
+  path?: string;
 };
+
+function isFallbackCapabilityHost(value: unknown): value is FallbackCapabilityHost {
+  const host = value as Partial<FallbackCapabilityHost> | null | undefined;
+  return typeof host?.invokeCapability === "function" && typeof host.__describe === "function";
+}
 
 /**
  * RUNNER-backed reads of the committed fold. Under registry drive the runner
@@ -162,7 +167,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
   /** Injected clock (expiry decisions); production defaults to Date.now. */
   #now: (() => number) | undefined;
-  #parent: ParentCapabilityHost | undefined;
   #validateCapabilityTypes: ((types: string) => Promise<string[]>) | undefined;
   #typecheckScript:
     | ((input: {
@@ -183,10 +187,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
       /** Injected clock (expiry decisions); production defaults to Date.now. */
       now?: () => number;
-      // The enclosing scope, or undefined at the project root ("/"). Present for
-      // every nested scope (agents, sub-agents, agent namespaces) so capability
-      // lookups that miss locally can fall through to the surrounding scope.
-      parent?: ParentCapabilityHost;
       /**
        * Compiles a mount's `types` string, returning problems (empty = it
        * compiles). Wired to the typechecker sidecar in production; the node
@@ -211,7 +211,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#reads = args.reads;
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#now = args.now;
-    this.#parent = args.parent;
     this.#validateCapabilityTypes = args.validateCapabilityTypes;
     this.#typecheckScript = args.typecheckScript;
   }
@@ -374,12 +373,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         // typecheck gate must see capabilities provided in the same delivery
         // as the request or it would judge the script against a stale scope.
         const capabilities = args.state.capabilities;
+        const fallback = args.state.birthCertificate?.fallback ?? null;
         args.runInBackground(() =>
           this.#executeScript({
             capabilities,
             code: execution.code,
             executionId,
             expiresAt: execution.expiresAt,
+            fallback,
           }),
         );
         continue;
@@ -585,21 +586,17 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
     const { state } = await this.#reads.snapshot();
     if (state.birthCertificate === null) {
-      // A physical path segment need not itself be a capability scope. Reads
-      // pass straight through an unborn container (`/agents`, `/agents/slack`,
-      // and so on) until they reach a real enclosing host. Writes and script
-      // execution still require an explicit birth at the addressed scope.
-      if (this.#parent) return await this.#parent.invokeCapability({ args, path });
       throw new Error(`capability host at ${this.#path} has not been created`);
     }
     const hit = resolveLongestPrefix(state.capabilities, path);
     if (!hit) {
-      // Not declared at THIS scope. Capability reads chain up the scope hierarchy,
-      // so ask the enclosing scope before giving up — this is how an agent sees
-      // capabilities mounted on its namespace or on the project. Resolution reads
-      // live `state.capabilities` every call, so a revoked child mount transparently
-      // re-exposes whatever the parent still has at that path.
-      if (this.#parent) return await this.#parent.invokeCapability({ args, path });
+      // Not declared at THIS scope: follow the birth certificate's journaled
+      // fallback — ONE direct hop, usually to the project root host. This is
+      // how an agent sees capabilities mounted on the project. Resolution
+      // reads live state every call, so a revoked local mount transparently
+      // re-exposes whatever the fallback host has at that path.
+      const fallback = await this.#fallbackHost(state.birthCertificate.fallback);
+      if (fallback) return await fallback.invokeCapability({ args, path });
       throw new Error(`no capability "${path.join(".")}"`);
     }
     // `__describe` on a mounted capability is answered HERE, from the mount's
@@ -660,17 +657,54 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     };
   }
 
-  // Reports everything reachable at this scope: this scope's own mounts plus every
-  // capability inherited from enclosing scopes, each tagged with the scope it was
-  // declared at. A nearer scope shadows a farther one at the same path (same rule
-  // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
-  // it can invoke — sees exactly one entry per reachable path and where it lives.
-  async describeCapabilities(): Promise<CapabilityDescription[]> {
-    const { state } = await this.#reads.snapshot();
-    return await this.#describeCapabilitiesFrom(state.capabilities);
+  /**
+   * The birth certificate's fallback expression, evaluated against this
+   * scope's own itx into the host reads fall back to — or null when the
+   * certificate ends resolution here (the project root, and every unborn or
+   * pre-fallback host). Evaluated per read: the journal stores the NAME of
+   * the fallback, never a captured handle. Platform-written expressions
+   * evaluate to an in-process RpcTarget (never a disposable client stub), so
+   * the hop holds nothing that needs disposal.
+   */
+  async #fallbackHost(
+    fallback: ItxExpression | null | undefined,
+  ): Promise<FallbackCapabilityHost | null> {
+    if (!fallback) return null;
+    const { value } = await evaluateItxExpression(this.#itx, fallback);
+    if (!isFallbackCapabilityHost(value)) {
+      throw new Error(
+        `capability fallback expression for scope ${this.#path} did not evaluate to a capability host`,
+      );
+    }
+    // Platform-written fallbacks always point at "/", but the field is journal
+    // data: reject the one trivially-expressible cycle instead of letting a
+    // self-pointing scope recurse through DO dials to the subrequest limit.
+    if (typeof value.path === "string" && normalizePath(value.path) === this.#path) {
+      throw new Error(`capability fallback for scope ${this.#path} points at itself`);
+    }
+    return value;
   }
 
-  async #describeCapabilitiesFrom(records: CapabilityRecord[]): Promise<CapabilityDescription[]> {
+  // Reports everything reachable at this scope: this scope's own mounts plus
+  // everything the fallback host reports, each tagged with the scope it was
+  // declared at. A local mount shadows a fallback one at the same path (same
+  // rule as `resolveLongestPrefix` above), so the caller — usually an LLM
+  // deciding what it can invoke — sees exactly one entry per reachable path
+  // and where it lives.
+  async describeCapabilities(): Promise<CapabilityDescription[]> {
+    const { state } = await this.#reads.snapshot();
+    // Deliberately no #assertCreated: describing an unborn scope reports []
+    // (discovery stays safe everywhere), while invoking one throws above.
+    return await this.#describeCapabilitiesFrom(
+      state.capabilities,
+      state.birthCertificate?.fallback ?? null,
+    );
+  }
+
+  async #describeCapabilitiesFrom(
+    records: CapabilityRecord[],
+    fallbackExpression: ItxExpression | null | undefined,
+  ): Promise<CapabilityDescription[]> {
     const local: CapabilityDescription[] = records.map((record) => ({
       instructions: record.instructions,
       path: record.path,
@@ -679,9 +713,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       type: record.type,
       types: record.types,
     }));
-    if (!this.#parent) return local;
+    const fallback = await this.#fallbackHost(fallbackExpression);
+    if (!fallback) return local;
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
-    const inherited = await this.#parent.describeCapabilities();
+    const { capabilities: inherited } = await fallback.__describe();
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
   }
 
@@ -779,11 +814,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async #typecheckScriptForRun(
     code: string,
     records: CapabilityRecord[],
+    fallback: ItxExpression | null,
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.#typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
     try {
-      const capabilities = await this.#describeCapabilitiesFrom(records);
+      const capabilities = await this.#describeCapabilitiesFrom(records, fallback);
       const checked = await typecheckScript({ capabilities, code });
       if (checked.verdict === "clean") {
         // Check and emit are one compile: what runs IS the compiler's
@@ -800,7 +836,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       };
     } catch (error) {
       // The gate must never fail a script for the checker's own failure — an
-      // unreachable sidecar or a parent-scope dial error means unchecked.
+      // unreachable sidecar or a fallback-host dial error means unchecked.
       console.warn("[capability-host] script typecheck skipped", { error });
       return { rejection: null };
     }
@@ -811,6 +847,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     code: string;
     executionId: string;
     expiresAt: number;
+    fallback: ItxExpression | null;
   }) {
     const now = this.#now ?? Date.now;
     const executionExpiresAt = input.expiresAt - SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS;
@@ -819,7 +856,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       // effects, so a rejected script provably never ran (requested →
       // completed, no started event) and the reconciler doctrine is untouched.
       const checkedOutcome = await settleByDeadline(
-        this.#typecheckScriptForRun(input.code, input.capabilities),
+        this.#typecheckScriptForRun(input.code, input.capabilities, input.fallback),
         executionExpiresAt,
         now,
       );

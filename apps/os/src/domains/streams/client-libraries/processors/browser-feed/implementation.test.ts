@@ -1,8 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
+import type { StreamEvent } from "iterate/processors";
+import { StreamProcessorRunner } from "iterate/processors";
 import type { Stream } from "../../../../../itx-api.generated.ts";
-import type { StreamEvent } from "../../../schemas.ts";
-import { StreamProcessorRunner } from "../../../stream-processor-runner.ts";
 import { CompositeMirrorDrive } from "../../browser/composite-mirror-drive.ts";
 import { browserProcessorProgressStore } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
@@ -94,7 +95,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
   it("accepts only empty or current-schema reducer state", () => {
     const current = BrowserFeedContract.stateSchema.parse({});
     expect(current).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       nextLocalIndex: 0,
     });
     expect(() =>
@@ -197,9 +198,9 @@ describe("BrowserFeedProcessor live ephemerals", () => {
           code: `async () => ${index}`,
           expiresAt: 15 * 60_000,
         }),
-        event(requestedOffset + 1, "events.iterate.com/agent/status-changed", {
-          busy: false,
+        event(requestedOffset + 1, "events.iterate.com/agent/runtime-changed", {
           sinceOffset: requestedOffset,
+          runtime: ZERO_AGENT_RUNTIME,
         }),
       ];
     }).flat();

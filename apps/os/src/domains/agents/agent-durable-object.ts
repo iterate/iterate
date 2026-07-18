@@ -1,11 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
@@ -75,11 +72,11 @@ export class AgentDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
         }),
       // Oversized script results spill into the agent's OWN workspace (the
-      // same checkout itx.workspace resolves to), so the model can page
+      // same filesystem itx.workspace resolves to), so the model can page
       // through the file instead of blowing its context window. The first
-      // write on a fresh workspace waits for the repo clone.
+      // write on a fresh workspace births it (default mount table).
       writeWorkspaceFile: ({ content, path }) =>
-        this.env.WORKSPACE.getByName(
+        this.env.WORKSPACE_V2.getByName(
           DurableObjectNameCodec.stringify({
             path: agentWorkspacePath(this.#name.path),
             projectId: this.#name.projectId,
@@ -105,10 +102,12 @@ export class AgentDurableObject extends DurableObject<Env> {
 
   // Registered on every agent host; it only wakes on routed Slack agent
   // streams (`/agents/slack/**`) where the project processor configured its
-  // subscription. Slack-facing side effects are best effort: a failed status
-  // update or reaction must not wedge the processor checkpoint. Registered
-  // WITH recovery (codex review P1): the status paints and 👀 acks are
-  // blocking work, and the held cursor alone only helps while something still
+  // subscription. The processor sequences Slack presentation attempts after
+  // the durable work they acknowledge, but a rejected cosmetic/enrichment
+  // call is explicitly best-effort: it is logged once and never holds the
+  // checkpoint. Actual agent-authored Slack messages use the ordinary itx
+  // capability path instead and remain failure-visible. Registered WITH
+  // recovery because the held cursor alone only helps while something still
   // dials — a SIMULTANEOUS Agent+Stream DO death mid-blocker (a deploy evicts
   // both) leaves nothing armed to redeliver. The alarm's
   // `stream/processor-revived` append cold-boots the stream; the unacknowledged
@@ -124,20 +123,15 @@ export class AgentDurableObject extends DurableObject<Env> {
         // itx.integrations.slack in its script, which fails loudly on its
         // own. The facet birth certificate supplies the named connection;
         // the stream path is deliberately unrelated to processor config.
-        try {
-          await callProjectSlackWebApi({
-            body,
-            connection,
-            method,
-            projectId: this.#name.projectId,
-          });
-        } catch (error) {
-          console.error("[slack-agent] Slack side effect failed", {
-            error,
-            method,
-            path: this.#name.path,
-          });
-        }
+        // The processor owns outcome classification: idempotent Slack errors
+        // are quiet no-ops, while unexpected cosmetic failures are reported
+        // once without holding its durable checkpoint forever.
+        await callProjectSlackWebApi({
+          body,
+          connection,
+          method,
+          projectId: this.#name.projectId,
+        });
       },
       fetchSlackChannelName: async ({ channel, connection }) => {
         try {
@@ -150,10 +144,13 @@ export class AgentDurableObject extends DurableObject<Env> {
           const name = result.channel?.name;
           return typeof name === "string" && name.length > 0 ? name : null;
         } catch (error) {
-          console.warn("[slack-agent] conversations.info failed; falling back to channel id", {
-            channel,
-            error,
+          // The channel id is the binding identity; its human-readable name
+          // is optional enrichment. Record the binding without a name when
+          // Slack cannot provide it instead of wedging the route forever.
+          console.warn("[slack-agent] Slack channel-name enrichment failed", {
+            method: "conversations.info",
             path: this.#name.path,
+            reason: error instanceof Error ? error.message : String(error),
           });
           return null;
         }

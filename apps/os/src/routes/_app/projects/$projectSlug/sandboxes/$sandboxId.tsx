@@ -21,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@iterate-com/ui/components/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
@@ -104,7 +105,59 @@ function ProjectSandboxDetailContent() {
   );
 }
 
-function SandboxDetailPanel({
+export function SandboxDetailPanel({
+  projectId,
+  routeConfig,
+  sandboxPath,
+  state,
+}: {
+  projectId: string;
+  routeConfig: PublicRouteConfig;
+  sandboxPath: string;
+  state: SandboxProcessorState;
+}) {
+  const destroyed = state.status === "destroyed";
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg border bg-card">
+        <div className="flex items-center justify-between gap-3 border-b p-4">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold">{sandboxPath}</h2>
+            <p className="text-xs text-muted-foreground">Reduced sandbox lifecycle state</p>
+          </div>
+          <SandboxStatusBadge state={state} />
+        </div>
+        <InfoRow
+          label="Instance type"
+          value={state.birthCertificate?.config.instanceType ?? "unknown"}
+        />
+        <InfoRow label="Lifecycle" value={state.status ?? "unknown"} />
+        <InfoRow label="Running" value={state.running ? "yes" : "no"} />
+        <InfoRow label="Latest backup" value={state.lastBackupId ?? "none"} />
+      </div>
+
+      {destroyed ? (
+        <Alert>
+          <AlertTitle>Sandbox destroyed</AlertTitle>
+          <AlertDescription>
+            This sandbox is permanently retired. Lifecycle controls, container access, and SSH
+            instructions are no longer available, and its name cannot be reused.
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <SandboxManagementPanel
+          projectId={projectId}
+          routeConfig={routeConfig}
+          sandboxPath={sandboxPath}
+          state={state}
+        />
+      )}
+    </div>
+  );
+}
+
+function SandboxManagementPanel({
   projectId,
   routeConfig,
   sandboxPath,
@@ -117,7 +170,6 @@ function SandboxDetailPanel({
 }) {
   const itx = useItx();
   const [destroyOpen, setDestroyOpen] = useState(false);
-  const destroyed = state.status === "destroyed";
   const action = useMutation({
     mutationFn: async (requested: SandboxAction) => {
       const sandbox = await itx.sandboxes.get(sandboxPath);
@@ -147,104 +199,85 @@ function SandboxDetailPanel({
 
   return (
     <>
-      <div className="flex flex-col gap-4">
-        <div className="rounded-lg border bg-card">
-          <div className="flex items-center justify-between gap-3 border-b p-4">
-            <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold">{sandboxPath}</h2>
-              <p className="text-xs text-muted-foreground">Reduced sandbox lifecycle state</p>
-            </div>
-            <SandboxStatusBadge state={state} />
-          </div>
-          <InfoRow
-            label="Instance type"
-            value={state.birthCertificate?.config.instanceType ?? "unknown"}
-          />
-          <InfoRow label="Lifecycle" value={state.status ?? "unknown"} />
-          <InfoRow label="Running" value={state.running ? "yes" : "no"} />
-          <InfoRow label="Latest backup" value={state.lastBackupId ?? "none"} />
+      <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-sm font-semibold">Controls</h2>
+          <p className="text-xs text-muted-foreground">
+            Stop and restart preserve <code className="font-mono">/workspace</code> through a
+            snapshot. Destroy permanently retires this sandbox name.
+          </p>
         </div>
-
-        <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
-          <div className="flex flex-col gap-1">
-            <h2 className="text-sm font-semibold">Controls</h2>
-            <p className="text-xs text-muted-foreground">
-              Stop and restart preserve <code className="font-mono">/workspace</code> through a
-              snapshot. Destroy permanently retires this sandbox name.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              disabled={action.isPending || destroyed || state.running}
-              onClick={() => action.mutate("start")}
-            >
-              {pending("start") ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <PlayIcon data-icon="inline-start" />
-              )}
-              Start
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={action.isPending || destroyed || !state.running}
-              onClick={() => action.mutate("stop")}
-            >
-              {pending("stop") ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <MoonIcon data-icon="inline-start" />
-              )}
-              Stop
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={action.isPending || destroyed || !state.running}
-              onClick={() => action.mutate("restart")}
-            >
-              {pending("restart") ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <RotateCwIcon data-icon="inline-start" />
-              )}
-              Restart
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={action.isPending || destroyed}
-              title="Abort the Durable Object incarnation; its container lifecycle is unchanged."
-              onClick={() => action.mutate("kill")}
-            >
-              {pending("kill") ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <CircleStopIcon data-icon="inline-start" />
-              )}
-              Kill object
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={action.isPending || destroyed}
-              onClick={() => setDestroyOpen(true)}
-            >
-              <Trash2Icon data-icon="inline-start" />
-              Destroy
-            </Button>
-          </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            disabled={action.isPending || state.running}
+            onClick={() => action.mutate("start")}
+          >
+            {pending("start") ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <PlayIcon data-icon="inline-start" />
+            )}
+            Start
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={action.isPending || !state.running}
+            onClick={() => action.mutate("stop")}
+          >
+            {pending("stop") ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <MoonIcon data-icon="inline-start" />
+            )}
+            Stop
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={action.isPending || !state.running}
+            onClick={() => action.mutate("restart")}
+          >
+            {pending("restart") ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <RotateCwIcon data-icon="inline-start" />
+            )}
+            Restart
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={action.isPending}
+            title="Abort the Durable Object incarnation; its container lifecycle is unchanged."
+            onClick={() => action.mutate("kill")}
+          >
+            {pending("kill") ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <CircleStopIcon data-icon="inline-start" />
+            )}
+            Kill object
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={action.isPending}
+            onClick={() => setDestroyOpen(true)}
+          >
+            <Trash2Icon data-icon="inline-start" />
+            Destroy
+          </Button>
         </div>
-
-        <SandboxSshInstructions
-          projectId={projectId}
-          routeConfig={routeConfig}
-          sandboxPath={sandboxPath}
-          state={state}
-        />
       </div>
+
+      <SandboxSshInstructions
+        projectId={projectId}
+        routeConfig={routeConfig}
+        sandboxPath={sandboxPath}
+        state={state}
+      />
 
       <AlertDialog open={destroyOpen} onOpenChange={setDestroyOpen}>
         <AlertDialogContent size="sm">

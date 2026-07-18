@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
+import type { StreamEvent } from "iterate/processors";
+import { MemoryStream } from "iterate/processors/testing";
+import { StreamProcessorRunner } from "iterate/processors";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";

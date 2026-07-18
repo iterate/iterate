@@ -1,11 +1,19 @@
 import type {
   MintProjectAppSessionInput,
+  ValidatedProjectAppSession,
   ValidateProjectAppSessionInput,
 } from "@iterate-com/auth-contract/worker";
+import { ItxAuthenticationError } from "../auth.ts";
 import { isSameOriginBrowserRequest } from "./operator-session.ts";
 
 /** A declarative access rule for a project-host web app. */
 export type ProjectAuthPolicy = { policy: "project-member" };
+
+/** Browser credentials accepted by a project app's unauthenticated RPC root. */
+export type ProjectAuthCredentials = { type: "from-server-cookie" };
+
+/** Identity proven by the app-origin session, safe for app-defined authorization. */
+export type ProjectAuthActor = Pick<ValidatedProjectAppSession, "userId">;
 
 /** The request fields consumed by the server-side auth implementation. */
 type ProjectAuthRequest = Pick<Request, "body" | "headers" | "method" | "url">;
@@ -37,7 +45,7 @@ const MAX_TOKEN_BYTES = 8192;
 
 type ValidateSession = (
   input: ValidateProjectAppSessionInput,
-) => Promise<{ expiresAt: number } | null>;
+) => Promise<ValidatedProjectAppSession | null>;
 
 /** Runtime-check policy values because project code crosses an RPC boundary. */
 export function parseProjectAuthPolicy(value: ProjectAuthPolicy): ProjectAuthPolicy {
@@ -47,9 +55,46 @@ export function parseProjectAuthPolicy(value: ProjectAuthPolicy): ProjectAuthPol
     value.policy !== "project-member" ||
     Object.keys(value).length !== 1
   ) {
-    throw new TypeError('Expected { policy: "project-member" }');
+    throw new ItxAuthenticationError();
   }
   return value;
+}
+
+/**
+ * Exchange the ambient, exact-origin project-app cookie for an actor value.
+ * This is the server half of an app's explicit Cap'n Web `authenticate()`
+ * method: userspace decides which app capability to construct for the actor.
+ */
+export async function authenticateProjectRequest(input: {
+  credentials: ProjectAuthCredentials;
+  projectId: string;
+  request: ProjectAuthRequest;
+  validateSession: ValidateSession;
+}): Promise<ProjectAuthActor> {
+  if (
+    !input.credentials ||
+    typeof input.credentials !== "object" ||
+    input.credentials.type !== "from-server-cookie" ||
+    Object.keys(input.credentials).length !== 1
+  ) {
+    throw new ItxAuthenticationError();
+  }
+  // This credential name is deliberately browser-specific. Requiring the
+  // WebSocket handshake's exact Origin prevents a hostile site from using a
+  // member's browser to exchange this app's ambient cookie.
+  if (input.request.headers.get("origin") === null || !isSameOriginBrowserRequest(input.request)) {
+    throw new ItxAuthenticationError();
+  }
+
+  const token = readCookie(input.request.headers.get("cookie"), AUTH_COOKIE);
+  if (!token) throw new ItxAuthenticationError();
+  const session = await input.validateSession({
+    audience: new URL(input.request.url).origin,
+    projectId: input.projectId,
+    token,
+  });
+  if (!session) throw new ItxAuthenticationError();
+  return { userId: session.userId };
 }
 
 /**

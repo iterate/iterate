@@ -30,8 +30,8 @@ import {
   type Itx,
 } from "../itx/itx-react.ts";
 import {
+  ensureOnboardingAgentReady,
   ONBOARDING_AGENT_PATH,
-  onboardingAgentCreateInput,
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { sendAgentMessage } from "./agent-message-command.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
@@ -84,11 +84,11 @@ async function openAgentFeedSubscription(input: {
   // handle on dependency changes, reconnect, and unmount.
   const agent = input.itx.agents.get(args.agentPath);
   try {
-    const snapshot = await agent.processor.snapshot();
-    if (snapshot.state.birthCertificate === null) {
-      await agent.create(
-        args.agentPath === ONBOARDING_AGENT_PATH ? onboardingAgentCreateInput(args.projectId) : {},
-      );
+    if (args.agentPath === ONBOARDING_AGENT_PATH) {
+      await ensureOnboardingAgentReady({ agent });
+    } else {
+      const snapshot = await agent.processor.snapshot();
+      if (snapshot.state.birthCertificate === null) await agent.create();
     }
     return await agent.stream.subscribe({
       processEventBatch: (batch) => {

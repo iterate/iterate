@@ -5,9 +5,9 @@
 // RpcTarget layer. All callers are itx workers acting with internal
 // authority; caller-facing confinement stays in rpc-targets.ts.
 
+import type { StreamEvent } from "iterate/processors";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,

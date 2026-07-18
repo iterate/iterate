@@ -8,9 +8,11 @@ an agent and what the agent should do.
 ```text
 GitHub App webhook
   -> /integrations/github/<connection>       verified original fact
-       |-> /repos/config                     default-branch pushes only
+       |-> /repos/<project path>              default-branch pushes only
        `-> worker.ts processEvent
-            -> /agents/repos/config/pr/<n>   PR history and agent loop
+            -> match itx.repos.list() links
+                 -> /agents/repos/<project path>/pr/<n>
+                                                PR history and agent loop
 ```
 
 There is no pull-request processor or pull-request Durable Object. The agent
@@ -86,27 +88,43 @@ protected override async processEvent(event: StreamEvent): Promise<void> {
 }
 ```
 
-The handler reads the current link and accepts the event only when its stream
-path, installation, and stable repository ID all match. Agent identity mirrors
-the project-controlled repo path:
+The handler lists the project's repos, reads their current links, and accepts
+the event only when one link's stream path, installation, and stable repository
+ID all match. This lets one connection drive agents for every linked repo
+without hard-coding a single path. Agent identity mirrors the matching
+project-controlled repo path:
 
 ```text
 /repos/config       -> /agents/repos/config/pr/42
 /repos/team/service -> /agents/repos/team/service/pr/42
 ```
 
-Only `pull_request:opened` calls the idempotent `agent.create`. The status,
-webhook copy, and first review task are passed as its atomic `initialEvents`.
-Later events require the canonical agent birth event, so they cannot create an
-agent by accident. A valid delivery can append three kinds of facts to the PR
-stream:
+Only `pull_request:opened` or a trusted explicit mention calls the idempotent,
+zero-argument `agent.create()`. The router then uses `agent.append(...)` for
+the stable policy and presentation metadata consumed by the Agent processor.
+It appends the GitHub binding, raw webhook copy, and referencing task
+atomically through `agent.stream.append`; the raw API is needed because the
+webhook sits outside the Agent processor's vocabulary, while valid binding and
+context events retain exactly the same reducer meaning through either append
+API. Other later events require the canonical agent birth event, so they cannot
+create an agent by accident. A valid delivery can append the following groups
+of facts to the PR stream:
 
-- a stable title/icon status at birth;
+- a keyed, versioned developer-policy context item;
+- stable presentation metadata and a GitHub pull-request binding;
 - the complete webhook with explicit cross-post provenance; and
-- when appropriate, one developer task that wakes or interrupts the agent.
+- when appropriate, trusted developer instructions and one externally authored
+  request that wakes or interrupts the agent.
 
 The path itself is the association. There is no second association record,
 route plan, rejection protocol, or state reducer.
+
+Context references retain the original stream coordinate for provenance. A
+rendered ref such as `/integrations/github/acme@81` means exactly event offset
+81 on that stream; the agent's system protocol explains the corresponding
+`itx.streams.get(path).getEvent({ offset })` call. The userspace router already
+holds the committed event, however, so it validates and transcribes that event
+directly rather than spending an agent turn fetching the same webhook again.
 
 ## Structural reviews
 
@@ -115,17 +133,28 @@ IDs used in suppressions, comments, idempotency, and future analytics:
 
 ```ts
 const githubPullRequests = {
-  policyVersion: "1",
-  repoPath: "/repos/config",
+  policyVersion: "2",
   rules: {
     "typescript/explain-type-cast": {
-      files: ["**/*.{ts,tsx,mts,cts}"],
+      files: [
+        "**/*.{ts,tsx,mts,cts}",
+        "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
+        "!**/{__tests__,test,tests,spec,specs}/**",
+      ],
       invariant:
         "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
     },
   },
 };
 ```
+
+A rule applies only when a changed path matches at least one positive glob and
+none of its `!`-prefixed negative globs. The seeded policy excludes conventional
+test and spec filenames and directories from every structural rule.
+
+The same project policy applies to every GitHub-linked repo. The router derives
+each agent path from the matched Iterate repo path; GitHub owner/name changes
+therefore do not move its history.
 
 An open, non-draft `opened`, `ready_for_review`, or `synchronize` delivery adds
 a review task with `interrupt-current-request`. The task tells the existing
@@ -160,13 +189,23 @@ the nondeterministic reviewer oscillating on an unchanged head.
 
 A newly created PR comment, submitted review, or created review comment can
 wake the agent when it mentions the receiving App slug and GitHub identifies
-its non-bot author as an owner, member, or collaborator. The task then calls
-`repos.checkCollaborator` through the configured Octokit connection before
-following the referenced request. GitHub text remains untrusted input.
+its non-bot author as an `OWNER`, `MEMBER`, or `COLLABORATOR`. That
+`author_association` is part of the signed webhook, so userspace performs the
+authorization check before waking the agent; no redundant Octokit access-check
+turn is needed. If the PR agent does not exist yet, the trusted mention creates
+it first.
+
+The router appends a trusted developer item that names the already-authorized
+connection and reply call, followed by the exact GitHub message as externally
+authored user context. Only the latter triggers an LLM request. Straightforward
+requests can therefore be answered by the first script without rereading the
+webhook or checking collaboration, while GitHub text never gains developer
+instruction precedence.
 
 ## Proof-of-concept limits
 
-- PRs opened before the worker observed `opened` are not backfilled.
+- PRs opened before the worker observed `opened` are backfilled only by a
+  trusted explicit mention.
 - Globs, suppressions, and findings are enforced by the agent contract, not a
   deterministic validation engine.
 - Reviews are advisory `COMMENT` reviews; there is no Check Run, commit status,

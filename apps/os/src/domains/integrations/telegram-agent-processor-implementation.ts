@@ -26,10 +26,11 @@
 //   journal is exactly-once, the send is at-least-once).
 
 import { stringify as stringifyYaml } from "yaml";
+import { StreamProcessor } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import {
+  coerceTelegramId,
   integrationConnectionStreamPath,
   readRecord,
   readString,
@@ -421,13 +422,6 @@ export class TelegramAgentProcessor extends StreamProcessor<
       method: "sendChatAction",
     });
   }
-}
-
-/** Ids ride stream paths and state as strings; the Bot API wants the original
- * integers back where they were integers. */
-function coerceTelegramId(id: string): number | string {
-  const numeric = Number(id);
-  return Number.isSafeInteger(numeric) ? numeric : id;
 }
 
 /** Events that mean "the agent is working now", driving the typing repaint. */

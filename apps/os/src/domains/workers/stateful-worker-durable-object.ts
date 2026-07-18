@@ -1,13 +1,22 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { takeWorkerFetchDispatch, workerBuildStatusResponse } from "./worker-fetch-dispatch.ts";
+import {
+  invokeFlattenedPath,
+  invokePreferringFlattenedPath,
+  isMissingInvokeCapabilityError,
+  replayPath,
+} from "../capability-host/live-capability.ts";
+import { takeWorkerFetchDispatch, workerBuildStatus } from "./worker-fetch-dispatch.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
+/** The worker recipe to boot when an alarm fires on a cold outer DO — the
+ * same late-bound resolution every invocation does. Every arm rewrites it
+ * with the caller's current ref, so fires converge on current source. */
+const ALARM_REF_STORAGE_KEY = "workers:stateful-worker-alarm-ref";
 
 /** The durable marker for "which build is this facet running": enough to both
  * detect source changes and re-load the exact artifact for stale serving. */
@@ -60,8 +69,8 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       // Answer the building/failed cases HERE rather than relying on the
       // error name surviving the Durable Object fetch hop back to the
       // dispatching entrypoint — same pages every fetch-lane hop serves.
-      const buildStatus = workerBuildStatusResponse(error);
-      if (buildStatus !== null) return buildStatus;
+      const buildStatus = workerBuildStatus(error);
+      if (buildStatus !== null) return buildStatus.response;
       throw error;
     }
     return await (facet as Fetcher).fetch(taken.request);
@@ -94,6 +103,69 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       : await replayPath({ args, path, target });
   }
 
+  /**
+   * The hosted facet's durable alarm, owned HERE because workerd does not
+   * implement alarms for facets (their storage hooks throw "alarms are not
+   * yet implemented for SQLite-backed Durable Objects"; workerd#6810). This
+   * outer DO is a root actor, so its real platform alarm IS the facet's
+   * alarm — these verbs guard it, and the only extra state is the worker
+   * recipe to boot when a fire lands cold. Everything behavioral is the
+   * native runtime's, inherited rather than reimplemented: consume on
+   * success, retry with backoff on a throwing handler (this handler
+   * rethrows), and getAlarm()'s during-a-fire view. `iterate/sdk`'s
+   * `IterateDurableObject` presents this as the standard `ctx.storage` alarm
+   * API, self-addressed through the ref this host delivers on first contact
+   * (see `#facet`'s identity delivery).
+   */
+  async setAlarm({ atMs, ref }: { atMs: number | null; ref: StatefulDynamicWorkerRef }) {
+    this.#assertRefMatchesName(ref);
+    if (atMs === null) {
+      await this.ctx.storage.deleteAlarm();
+      this.ctx.storage.kv.delete(ALARM_REF_STORAGE_KEY);
+      return;
+    }
+    // Platform alarm first: if arming throws, nothing was persisted and
+    // getAlarm() keeps telling the truth. No interleave risk — storage
+    // awaits hold the Durable Object's input gate.
+    await this.ctx.storage.setAlarm(atMs);
+    this.ctx.storage.kv.put(ALARM_REF_STORAGE_KEY, ref);
+  }
+
+  getAlarm(): Promise<number | null> {
+    return this.ctx.storage.getAlarm();
+  }
+
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    const ref = this.ctx.storage.kv.get<StatefulDynamicWorkerRef>(ALARM_REF_STORAGE_KEY);
+    // No armed recipe (disarmed after the fire was scheduled) — a stray
+    // platform fire is a no-op.
+    if (ref === undefined) return;
+    // Plain copy: AlarmInvocationInfo is a host object and does not
+    // serialize across the facet RPC hop (DataCloneError).
+    const info =
+      alarmInfo === undefined
+        ? undefined
+        : { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount };
+    const target = await this.#facet(ref);
+    try {
+      // Flattened on purpose: workerd reserves `alarm` as an RPC method name
+      // on Durable Object stubs, so the fire rides the worker's own
+      // `invokeCapability` dispatcher, whose userland walk calls the class's
+      // `alarm()` locally — where the name is ordinary. Failures rethrow
+      // into the platform's native alarm retry.
+      await invokeFlattenedPath({ args: [info], path: ["alarm"], target });
+    } catch (error) {
+      if (isMissingInvokeCapabilityError(error)) {
+        throw new Error(
+          `Stateful worker class "${ref.className}" cannot receive alarm fires: it does not ` +
+            `expose invokeCapability — extend IterateDurableObject from iterate/sdk. (workerd ` +
+            `reserves "alarm" as an RPC name, so fires are delivered through that dispatcher.)`,
+        );
+      }
+      throw error;
+    }
+  }
+
   /** Abort the hosted facet and current outer Durable Object incarnation. */
   kill(): void {
     try {
@@ -104,7 +176,46 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
+  /** The (build version, ref) whose identity this incarnation already
+   * delivered — re-delivered when either changes, so a stashed inline recipe
+   * converges on current source and a rebuilt class that newly accepts
+   * identity gets it without waiting for an eviction. */
+  #identityDelivered: string | undefined;
+
   async #facet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
+    const facet = await this.#resolveFacet(ref, buildBudgetMs);
+    // A facet cannot learn its own identity (ctx.facets.get has no props
+    // channel, worker env is per-isolate) — deliver its ref before any
+    // traffic, once per incarnation per ref AND BUILD. The stash is what
+    // lets the worker's own code address itself (the SDK's alarm shim dials
+    // `itx.workers.get(ref)`, which resolves back to this DO). Marked
+    // delivered only on success (or on a class that structurally cannot
+    // accept identity), so a TRANSIENT failure retries on the next call
+    // instead of silently disabling self-alarms for the incarnation. The
+    // version marker in the key is what makes a "cannot accept" verdict
+    // expire with the build that earned it: a repo-backed ref's JSON never
+    // changes, but a rebuilt source that newly extends IterateDurableObject
+    // must get its identity without waiting for this DO's eviction.
+    const identity = `${this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) ?? ""}\n${JSON.stringify(ref)}`;
+    if (this.#identityDelivered !== identity) {
+      try {
+        await invokeFlattenedPath({ args: [ref], path: ["__stashSelfRef"], target: facet });
+        this.#identityDelivered = identity;
+      } catch (error) {
+        // No dispatcher (plain DurableObject class) or no door (an
+        // invokeCapability that doesn't expose __stashSelfRef): this class
+        // can never accept identity — stop offering, and never fail the
+        // caller's actual invocation over it.
+        const cannotAcceptIdentity =
+          isMissingInvokeCapabilityError(error) ||
+          (error instanceof Error && error.message.includes('"__stashSelfRef" is not a method'));
+        if (cannotAcceptIdentity) this.#identityDelivered = identity;
+      }
+    }
+    return facet;
+  }
+
+  async #resolveFacet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
     this.#assertRefMatchesName(ref);
 
     if (ref.updatePolicy === "stale-while-rebuild") {

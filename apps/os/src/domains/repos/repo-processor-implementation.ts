@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/processors";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import {
   repoArtifactPushFromEventPayload,
@@ -12,6 +12,15 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
+  /** Feed a queue-observed push into the branch-head cache authority —
+   * INCLUDING ref deletions (`afterCommitOid: null`), which produce no
+   * commit facts but must still evict a warm head/tree. The before oid lets
+   * the authority prune out-of-order deliveries. */
+  observeArtifactPush(input: {
+    afterCommitOid: string | null;
+    beforeCommitOid: string | null;
+    branch: string;
+  }): void;
   taskChangesForArtifactPush(input: {
     afterCommitOid: string | null;
     beforeCommitOid: string | null;
@@ -131,16 +140,19 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (event.type === "events.iterate.com/repo/created") return;
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);
-      const commitOid = push?.afterCommitOid;
-      if (
-        push === null ||
-        commitOid === null ||
-        commitOid === undefined ||
-        state.defaultBranch === null ||
-        push.branch !== state.defaultBranch
-      ) {
+      if (push === null || state.defaultBranch === null || push.branch !== state.defaultBranch) {
         return;
       }
+      // Ref projection is unconditional: every parsed default-branch push —
+      // including a deletion, which appends no commit facts — invalidates the
+      // head authority. Only the commit-diff work below needs a commit.
+      this.deps.observeArtifactPush({
+        afterCommitOid: push.afterCommitOid ?? null,
+        beforeCommitOid: push.beforeCommitOid ?? null,
+        branch: push.branch,
+      });
+      const commitOid = push.afterCommitOid;
+      if (commitOid === null || commitOid === undefined) return;
       blockProcessorWhile(async () => {
         await append({
           type: "events.iterate.com/repo/commit-completed",

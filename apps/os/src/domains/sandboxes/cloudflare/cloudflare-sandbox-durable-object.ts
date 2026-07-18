@@ -1,4 +1,5 @@
 import type { OutboundHandler } from "@cloudflare/containers";
+import { LiveStateRpcTarget } from "iterate/live-state";
 import {
   type DirectoryBackup,
   type ExecEvent,
@@ -7,27 +8,20 @@ import {
   parseSSEStream,
   Sandbox,
 } from "@cloudflare/sandbox";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type RegisteredProcessorReads,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
 import { trustedInternalAuthContext } from "../../../auth.ts";
 import { workerVersion, type Env } from "../../../env.ts";
-import {
-  LiveStateRpcTarget,
-  StreamProcessorRpcTarget,
-  StreamRpcTarget,
-} from "../../../rpc-targets.ts";
+import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake.ts";
-import {
-  createStreamProcessorRegistry,
-  type RegisteredProcessorReads,
-  type StreamProcessorRegistry,
-} from "../../streams/stream-processor-registry.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../../streams/rpc-types.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../streams/utils.ts";
 import {
   SandboxProcessorContract,

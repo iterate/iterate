@@ -1,6 +1,6 @@
 import { tracing } from "cloudflare:workers";
+import { StreamProcessor, type ProcessorReads } from "iterate/processors";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
-import { StreamProcessor, type ProcessorReads } from "../streams/stream-processor.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ScheduleView } from "./types.ts";
 import {
@@ -221,16 +221,54 @@ export class SchedulerProcessor extends StreamProcessor<
     const now = this.deps.now();
     const due = dueSchedules(state.schedules, now);
     if (due.length > 0) {
-      await this.append(
-        ...due.map(([key, entry]) => ({
+      // One request per (schedule incarnation, occurrence): a later re-set
+      // of the same key/occurrence (definedAtOffset differs) can never
+      // dedupe against a spent request from a past life.
+      const keyed = due.map(([key, entry]) => ({
+        entry,
+        idempotencyKey: this.idempotencyKey(
+          `trigger-requested:${key}:${entry.definedAtOffset}:${entry.nextTriggerAt}`,
+        ),
+        key,
+      }));
+      // A wake that crashed after appending re-runs against an un-advanced
+      // fold. Its retry body can never match the committed one (fresh
+      // executionId, wall-clock requestedAt), and the stream REJECTS a
+      // same-key append with a different body — so OBSERVE the committed
+      // requests (independent point reads, in parallel) and skip them
+      // instead of re-appending; catch-up folds them. An event occupying the
+      // key that is NOT this occurrence's trigger request (a raw append, a
+      // past producer bug) means the occurrence can never commit under its
+      // key — surface that LOUDLY instead of passing it off as deduplicated
+      // work: strict append would have exposed exactly this collision.
+      const committed = await Promise.all(
+        keyed.map(({ idempotencyKey }) => this.stream.getEvent({ idempotencyKey })),
+      );
+      for (const [index, event] of committed.entries()) {
+        if (event === undefined) continue;
+        const { entry, idempotencyKey, key } = keyed[index]!;
+        const payload: unknown = event.payload;
+        const matches =
+          event.type === "events.iterate.com/scheduler/trigger-requested" &&
+          typeof payload === "object" &&
+          payload !== null &&
+          "key" in payload &&
+          payload.key === key &&
+          "scheduledFor" in payload &&
+          payload.scheduledFor === new Date(entry.nextTriggerAt!).toISOString();
+        if (!matches) {
+          console.error(
+            `scheduler occurrence key "${idempotencyKey}" is occupied by a foreign event ` +
+              `(type ${event.type} at offset ${event.offset}) — the due trigger for schedule ` +
+              `"${key}" cannot commit under its occurrence key and is NOT being requested`,
+          );
+        }
+      }
+      const requests = keyed
+        .filter((_, index) => committed[index] === undefined)
+        .map(({ entry, idempotencyKey, key }) => ({
           type: "events.iterate.com/scheduler/trigger-requested" as const,
-          // One request per (schedule incarnation, occurrence): a wake that
-          // crashed after appending and re-runs cannot double-trigger, and a
-          // later re-set of the same key/occurrence (definedAtOffset differs)
-          // can never dedupe against a spent request from a past life.
-          idempotencyKey: this.idempotencyKey(
-            `trigger-requested:${key}:${entry.definedAtOffset}:${entry.nextTriggerAt}`,
-          ),
+          idempotencyKey,
           payload: {
             executionId: crypto.randomUUID(),
             key,
@@ -238,8 +276,8 @@ export class SchedulerProcessor extends StreamProcessor<
             runCount: entry.runCount + 1,
             scheduledFor: new Date(entry.nextTriggerAt!).toISOString(),
           },
-        })),
-      );
+        }));
+      if (requests.length > 0) await this.append(...requests);
     }
     // Restart recovery: anything pending that no live execution owns was
     // orphaned by an eviction mid-run — launch it again (at-least-once).

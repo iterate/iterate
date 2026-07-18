@@ -40,8 +40,7 @@ function liveSummary(activity: AgentUiActivity): string {
   if (current?.kind === "code") return "running code…";
   if (current?.kind === "llm" && current.responseText !== "") return "writing code…";
   if (current?.kind === "llm" && current.thinkingText !== "") return "thinking…";
-  if (activity.phase === "script") return "running code…";
-  if (activity.phase === "llm") return "waiting for a response…";
+  if (current?.kind === "llm") return "waiting for a response…";
   if (summarizeAgentUiActivity(activity).restartPending) return "restarted — continuing…";
   return "working…";
 }

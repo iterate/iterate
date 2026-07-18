@@ -1,8 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
-  ROOT_WORKSPACE_PATH,
   agentWorkspacePath,
-  isRootWorkspacePath,
+  normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
 } from "./utils.ts";
 
@@ -12,11 +11,9 @@ describe("normalizeWorkspacePath", () => {
     expect(normalizeWorkspacePath("/workspaces/agents/demo")).toBe("/workspaces/agents/demo");
   });
 
-  test('"/" is the root workspace, and the bare prefix is its identity', () => {
-    expect(normalizeWorkspacePath("/")).toBe(ROOT_WORKSPACE_PATH);
-    expect(normalizeWorkspacePath("/workspaces")).toBe(ROOT_WORKSPACE_PATH);
-    expect(isRootWorkspacePath(normalizeWorkspacePath("/"))).toBe(true);
-    expect(isRootWorkspacePath(normalizeWorkspacePath("/workspaces/agents/demo"))).toBe(false);
+  test("there is no root workspace — the bare prefix and '/' are rejected", () => {
+    expect(() => normalizeWorkspacePath("/")).toThrow(/no root workspace/);
+    expect(() => normalizeWorkspacePath("/workspaces")).toThrow(/no root workspace/);
   });
 
   test("agent workspaces live at the agent path under /workspaces", () => {
@@ -36,5 +33,37 @@ describe("normalizeWorkspacePath", () => {
   test("rejects paths outside /workspaces/ and codec-unstable paths", () => {
     expect(() => normalizeWorkspacePath("/agents/demo")).toThrow(/workspace paths live under/);
     expect(() => normalizeWorkspacePath("/workspaces/a b")).toThrow(/stable Durable Object path/);
+  });
+});
+
+describe("normalizeWorkspaceMountKeys", () => {
+  test("normalizes mount points and repo paths", () => {
+    expect(
+      normalizeWorkspaceMountKeys({
+        "/config/": { policy: "commit-to-main", repoPath: "repos/config" },
+      }),
+    ).toEqual({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } });
+  });
+
+  test("rejects .git segments, colliding spellings, and non-repo repoPaths", () => {
+    expect(() =>
+      normalizeWorkspaceMountKeys({ "/a/.git": { policy: "read-only", repoPath: "/repos/a" } }),
+    ).toThrow(/reserved .git segment/);
+    expect(() =>
+      normalizeWorkspaceMountKeys({
+        "/a": { policy: "read-only", repoPath: "/repos/a" },
+        "/a/": { policy: "read-only", repoPath: "/repos/b" },
+      }),
+    ).toThrow(/duplicate mount path/);
+    expect(() =>
+      normalizeWorkspaceMountKeys({ "/a": { policy: "read-only", repoPath: "/secrets/a" } }),
+    ).toThrow(/must name a \/repos\/\*\* stream/);
+  });
+
+  test("passes null (unmount) and repoPath-less patch values through", () => {
+    expect(normalizeWorkspaceMountKeys({ "/a": null })).toEqual({ "/a": null });
+    expect(normalizeWorkspaceMountKeys({ "/a": { policy: "read-only" } })).toEqual({
+      "/a": { policy: "read-only" },
+    });
   });
 });

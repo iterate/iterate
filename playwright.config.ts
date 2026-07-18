@@ -36,9 +36,10 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // 8 ≈ the Depot box's core count; the lane is network-bound (each spec
-  // waits on a deployed slot) and a full run peaked ~30% CPU at 6, so the
-  // extra workers shave the tail without starving the concurrent vitest lane.
+  // Eight is also the deployed-slot concurrency ceiling for this suite. The
+  // OS preview runner executes its remote suites sequentially: allowing this
+  // suite's eight workers to overlap vitest's eight in-flight tests caused
+  // project-processor timeouts even though each suite was clean in isolation.
   workers: process.env.CI ? 8 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [

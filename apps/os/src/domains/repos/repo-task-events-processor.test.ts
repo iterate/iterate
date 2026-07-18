@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
-import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { StreamProcessorRunner } from "iterate/processors";
+import { MemoryStream, MemoryStreamNetwork } from "iterate/processors/testing";
 import type { RepoCommittedFileChange } from "./repo-task-events.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -21,11 +21,17 @@ function newRepoProcessor(
     afterCommitOid: string;
     branch: string;
   }) => Promise<{ commitOid: string }> = async () => ({ commitOid: "github-head" }),
+  observeArtifactPush: (input: {
+    afterCommitOid: string | null;
+    beforeCommitOid: string | null;
+    branch: string;
+  }) => void = () => {},
 ) {
   const processor = new RepoProcessor({
     stream,
     path: "/repos/config",
     projectId: "prj_1",
+    observeArtifactPush,
     taskChangesForArtifactPush,
     syncFromGithubPush,
     createRepoArtifact: async () => {
@@ -102,14 +108,18 @@ function githubPush(input?: {
   };
 }
 
-function artifactPush(branch: string) {
+function artifactPush(branch: string, oids?: { after?: string; before?: string }) {
   return {
     type: "events.iterate.com/repo/cloudflare-artifact-event-received" as const,
     payload: {
       artifactName: "artifact",
       body: {
         type: "cf.artifacts.repo.pushed",
-        payload: { ref: `refs/heads/${branch}`, before: "before123", after: "after456" },
+        payload: {
+          ref: `refs/heads/${branch}`,
+          before: oids?.before ?? "before123",
+          after: oids?.after ?? "after456",
+        },
       },
       cloudflareEventType: "cf.artifacts.repo.pushed",
       namespace: "os-prd-repos",
@@ -361,5 +371,48 @@ describe("RepoProcessor task change events", () => {
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/repo/task-created"),
     ).toHaveLength(1);
+  });
+
+  it("observes every default-branch push — a ref DELETION invalidates despite appending no commit facts", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const observeArtifactPush = vi.fn();
+    const repo = newRepoProcessor(stream, async () => [], undefined, observeArtifactPush);
+
+    const zeroOid = "0".repeat(40);
+    await stream.append(
+      REPO_CREATED,
+      REPO_READY,
+      artifactPush("main"),
+      artifactPush("main", { after: zeroOid, before: "after456" }),
+    );
+    await repo.runner.catchUp();
+
+    expect(observeArtifactPush).toHaveBeenCalledWith({
+      afterCommitOid: "after456",
+      beforeCommitOid: "before123",
+      branch: "main",
+    });
+    expect(observeArtifactPush).toHaveBeenCalledWith({
+      afterCommitOid: null,
+      beforeCommitOid: "after456",
+      branch: "main",
+    });
+    // The deletion produced no commit fact — only the live push did.
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/repo/commit-completed"),
+    ).toHaveLength(1);
+  });
+
+  it("never observes a push on a non-default branch", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const observeArtifactPush = vi.fn();
+    const repo = newRepoProcessor(stream, async () => [], undefined, observeArtifactPush);
+
+    await stream.append(REPO_CREATED, REPO_READY, artifactPush("feature"));
+    await repo.runner.catchUp();
+
+    expect(observeArtifactPush).not.toHaveBeenCalled();
   });
 });

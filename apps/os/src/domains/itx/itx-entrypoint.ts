@@ -2,10 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
-import {
-  takeWorkerFetchDispatch,
-  workerBuildStatusResponse,
-} from "../workers/worker-fetch-dispatch.ts";
+import { takeWorkerFetchDispatch, workerBuildStatus } from "../workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts";
 
@@ -17,8 +14,8 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
  * There is deliberately no branching on the path: an agent context is not a
  * different type, it is the same {@link ProjectRpcTarget} fronting a deeper
  * scope's capability host. The agent's own `agent`/`chat` surface and the
- * capabilities of enclosing scopes come from the itx itself (getters + the
- * capability-host scope chain), not from a special entrypoint class.
+ * capabilities beyond this scope come from the itx itself (getters + the
+ * capability host's journaled fallback), not from a special entrypoint class.
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
@@ -82,8 +79,8 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       // Fetch responses can't carry a named error across the hop the way RPC
       // does; a budget-expired cold build becomes the retryable building
       // page, a failed first-ever build the build-failed page.
-      const buildStatus = workerBuildStatusResponse(error);
-      if (buildStatus !== null) return buildStatus;
+      const buildStatus = workerBuildStatus(error);
+      if (buildStatus !== null) return buildStatus.response;
       throw error;
     }
   }

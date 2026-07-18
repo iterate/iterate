@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { AgentUiStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { agentBusyPhaseLabel, formatElapsedSeconds, liveActivityLabel } from "./feed-format.ts";
+import { formatElapsedSeconds, liveActivityLabel } from "./feed-format.ts";
 
 const llm = (overrides: Partial<Extract<AgentUiStep, { kind: "llm" }>> = {}): AgentUiStep => ({
   kind: "llm",
@@ -51,13 +51,5 @@ describe("formatElapsedSeconds", () => {
     expect(formatElapsedSeconds(0)).toBe("0.0s");
     expect(formatElapsedSeconds(900)).toBe("0.9s");
     expect(formatElapsedSeconds(12_340)).toBe("12.3s");
-  });
-});
-
-describe("agentBusyPhaseLabel", () => {
-  test("maps platform phases to the live phrasing", () => {
-    expect(agentBusyPhaseLabel("llm")).toBe("waiting for a response");
-    expect(agentBusyPhaseLabel(undefined)).toBe("waiting for a response");
-    expect(agentBusyPhaseLabel("script")).toBe("running code");
   });
 });

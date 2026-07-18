@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "../../../schemas.ts";
+import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
+import type { StreamEvent } from "iterate/processors";
 import {
   BROWSER_FEED_SCHEMA_VERSION,
   initialBrowserFeedState,
@@ -24,6 +25,11 @@ const WOKEN = "events.iterate.com/stream/woken";
 const DEBUG = "events.iterate.com/debug/random-event";
 const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
+const RUNTIME_CHANGED = "events.iterate.com/agent/runtime-changed";
+
+function settledRuntime(offset: number, sinceOffset: number): StreamEvent {
+  return event(offset, RUNTIME_CHANGED, { sinceOffset, runtime: ZERO_AGENT_RUNTIME });
+}
 
 function userMessage(offset: number, text: string): StreamEvent {
   return event(offset, CONTEXT_ADDED, {
@@ -248,10 +254,7 @@ describe("browser-feed projector — one interleaved order", () => {
       llmRequestOffset: 2,
       result: { status: "success" },
     });
-    const idle = event(4, "events.iterate.com/agent/status-changed", {
-      busy: false,
-      sinceOffset: 3,
-    });
+    const idle = settledRuntime(4, 3);
     const second = planBrowserFeedOps(first.endState, [completed, idle]);
     expect(second.endState.agent.live).toBeNull();
     const settled = second.ops.find(
@@ -266,10 +269,7 @@ describe("browser-feed projector — one interleaved order", () => {
       code: "async () => mutate()",
       expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
     });
-    const idle = event(2, "events.iterate.com/agent/status-changed", {
-      busy: false,
-      sinceOffset: 1,
-    });
+    const idle = settledRuntime(2, 1);
     const first = planBrowserFeedOps(START, [requested, idle]);
     const inserted = first.ops.find(
       (op) => op.kind === "insert" && op.itemKind === "agent.activity",
@@ -322,10 +322,7 @@ describe("browser-feed projector — one interleaved order", () => {
           code: `async () => ${index}`,
           expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
         }),
-        event(requestedOffset + 1, "events.iterate.com/agent/status-changed", {
-          busy: false,
-          sinceOffset: requestedOffset,
-        }),
+        settledRuntime(requestedOffset + 1, requestedOffset),
       ];
     }).flat();
 

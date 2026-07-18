@@ -10,6 +10,9 @@ import {
   type WorkerLastGoodBuild,
 } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
+import { ITERATE_LIVE_STATE_VIRTUAL_MODULE } from "./iterate-live-state-virtual-module.generated.ts";
+import { ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE } from "./iterate-processors-cloudflare-virtual-module.generated.ts";
+import { ITERATE_PROCESSORS_VIRTUAL_MODULE } from "./iterate-processors-virtual-module.generated.ts";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 import type { WorkerServeInfo } from "./worker-serve-info.ts";
 import { stableSha256 } from "./utils.ts";
@@ -135,18 +138,25 @@ async function withBuildBudget(
 }
 
 /**
- * Every bundled dynamic worker build can `import ... from "iterate/sdk"`: the
- * platform supplies the sdk runtime as a virtual module, because resolving it
- * by install cannot work — the bundler's npm installer is registry-semver-only
- * and the seeded devDependency is a pkg.pr.new URL. Injection happens BEFORE
- * the build key is computed, and `options` is hashed into the key wholesale,
- * so an sdk change invalidates cached artifacts instead of serving stale
- * builds. A source that supplies its own `iterate/sdk` virtual module wins.
+ * Every bundled dynamic worker build gets the platform-owned `iterate/*`
+ * runtimes as virtual modules. `iterate/sdk` cannot be resolved by install —
+ * the bundler's npm installer is registry-semver-only and the seeded
+ * devDependency is a pkg.pr.new URL — and the other entries share its source
+ * and release cadence. Injection happens BEFORE the build key is computed,
+ * and `options` is hashed into the key wholesale, so a runtime change
+ * invalidates cached artifacts instead of serving stale builds. A source that
+ * supplies one of these virtual modules itself wins.
  */
-function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
+function withIterateVirtualModules(options: WorkerBuildOptions): WorkerBuildOptions {
   return {
     ...options,
-    virtualModules: { "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE, ...options.virtualModules },
+    virtualModules: {
+      "iterate/live-state": ITERATE_LIVE_STATE_VIRTUAL_MODULE,
+      "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE,
+      "iterate/processors": ITERATE_PROCESSORS_VIRTUAL_MODULE,
+      "iterate/processors/cloudflare": ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE,
+      ...options.virtualModules,
+    },
   };
 }
 
@@ -172,7 +182,7 @@ async function resolveThroughBuilder(input: {
   source: DynamicWorkerSource;
   waitUntil: (promise: Promise<unknown>) => void;
 }): Promise<ServedWorkerSource> {
-  const options = withIterateSdkVirtualModule(input.options);
+  const options = withIterateVirtualModules(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
   const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
@@ -559,7 +569,12 @@ export function loadResolvedWorker({
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    env: bindings,
+    // ITERATE_WORKER_VERSION is the worker's own build identity — the same
+    // content-addressed key this loader caches by. Its one job is to change
+    // exactly when the worker's source does: the SDK's processor registry
+    // uses it as the deploy version whose change resets a crash-looping
+    // keepalive's backoff budget (the "antidote deploy" lane).
+    env: { ...bindings, ITERATE_WORKER_VERSION: resolved.cacheKey },
     globalOutbound,
     mainModule: resolved.mainModule,
     modules: resolved.modules,

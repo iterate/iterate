@@ -32,10 +32,10 @@
 // The deployment's namespace must exist (ensure-resources); instances are
 // created per project at runtime.
 
+import type { StreamEvent } from "iterate/processors";
+import type { StreamPushEventBatch } from "iterate/processors";
 import { itxEnv } from "../../env.ts";
 import { ItxExpression } from "../../itx/expression.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
-import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import {
   MAX_SEARCH_KEY_BYTES,
   fileRef,

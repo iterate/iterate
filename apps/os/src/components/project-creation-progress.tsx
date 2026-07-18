@@ -1,6 +1,13 @@
+import { useEffect, useState } from "react";
 import { CheckIcon, LoaderCircleIcon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
+
+// Bootstrap commits every step within seconds, so a long quiet gap means the
+// saga needs a kick, not more patience. Comfortably past the e2e green-path
+// budget (60s covers birth + saga + handoff) so healthy creates never see it.
+const STALL_AFTER_MS = 90_000;
 
 /**
  * One bootstrap milestone, derived purely from the project processor's reduced
@@ -45,6 +52,17 @@ function creationSteps(state: ProjectProcessorState | undefined): CreationStep[]
 export function ProjectCreationProgress({ state }: { state: ProjectProcessorState | undefined }) {
   const steps = creationSteps(state);
   const activeIndex = steps.findIndex((step) => !step.done);
+  // Deadline restarts on every tick: a stalled saga must surface as a
+  // recoverable state, not an eternal spinner. Reload re-dials live state,
+  // and that dial snapshots the processor — which folds any stuck events, so
+  // the button is a real kick, not just hope.
+  const doneCount = steps.filter((step) => step.done).length;
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    setStalled(false);
+    const timer = setTimeout(() => setStalled(true), STALL_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [doneCount]);
 
   return (
     <section
@@ -92,6 +110,25 @@ export function ProjectCreationProgress({ state }: { state: ProjectProcessorStat
           );
         })}
       </ol>
+      {stalled ? (
+        <div
+          className="mt-5 rounded-md border border-dashed p-3 text-sm text-muted-foreground"
+          data-testid="creation-stalled"
+        >
+          <p>
+            This is taking longer than expected. Setup keeps running in the background — reloading
+            usually gets it moving again.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3 w-full"
+            onClick={() => window.location.reload()}
+          >
+            Reload page
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,12 +1,13 @@
 import { tracing } from "cloudflare:workers";
 import { v5 as uuidv5 } from "uuid";
 import { z } from "zod";
+import type { StreamPushEventBatch } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
-import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import { truncateJsonToBytes } from "./truncate-json.ts";
 
 export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
+const POSTHOG_STREAM_FEED_WORKER_NAME = "os-prd";
 
 const StreamEventTimestamp = z.iso.datetime({ offset: true });
 const ProjectGroupBirthPayload = z.object({
@@ -209,6 +210,11 @@ export async function capturePosthogStreamEventBatch(
   },
   deps: { fetch?: typeof fetch } = {},
 ): Promise<void> {
+  // The complete durable feed is a production observability surface. Preview
+  // and local deployments generate synthetic projects and streams at CI scale;
+  // exporting those facts adds no production signal and can dominate PostHog
+  // usage. WORKER_SELF is the reviewed deployment identity from envs.ts.
+  if (args.workerName !== POSTHOG_STREAM_FEED_WORKER_NAME) return;
   if (args.batch.events.length === 0) {
     throw new Error("PostHog stream delivery batch must contain an event");
   }

@@ -1,8 +1,7 @@
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 
 import * as prompts from "@clack/prompts";
@@ -133,29 +132,54 @@ export const buildChatCommand = (input: {
   ],
 });
 
-const runInheritedProcess = async (input: {
+const resolveExecutablePath = (command: string, pathValue: string | undefined): string => {
+  const candidates =
+    isAbsolute(command) || command.includes("/")
+      ? [resolve(command)]
+      : (pathValue ?? "")
+          .split(delimiter)
+          .filter(Boolean)
+          .map((directory) => join(directory, command));
+
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching PATH. The final error names the command, not every miss.
+    }
+  }
+
+  throw new Error(`Could not find executable "${command}" on PATH.`);
+};
+
+/**
+ * Replace the launcher with the interactive terminal process.
+ *
+ * A spawned TUI has a distinct PID and can survive when a terminal harness
+ * kills only the launcher. `execve` preserves the current stdin/stdout/stderr
+ * descriptors and process identity, so OpenTUI receives teardown signals
+ * directly.
+ */
+export const replaceWithInheritedProcess = (input: {
   command: string;
   args: string[];
   env: Record<string, string | undefined>;
-}): Promise<void> => {
-  const child = spawn(input.command, input.args, {
-    stdio: "inherit",
-    env: { ...process.env, ...input.env },
-  });
+  execve?: (file: string, args: string[], env: Record<string, string>) => never;
+}): never => {
+  const execve = input.execve ?? process.execve;
+  if (typeof execve !== "function") {
+    throw new Error("iterate chat requires Node.js 22.15 or newer on a POSIX platform.");
+  }
 
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code, signal) => resolve({ code, signal }));
-    },
+  const env = Object.fromEntries(
+    Object.entries({ ...process.env, ...input.env }).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
   );
-
-  if (result.signal) {
-    throw new Error(`${input.command} exited with signal ${result.signal}.`);
-  }
-  if (result.code !== 0) {
-    throw new Error(`${input.command} exited with code ${result.code ?? "unknown"}.`);
-  }
+  const executablePath = resolveExecutablePath(input.command, env.PATH);
+  execve(executablePath, [executablePath, ...input.args], env);
+  throw new Error(`Failed to replace the Iterate launcher with ${input.command}.`);
 };
 
 const hasConfig = (configFile: ReturnType<typeof readConfigFile>, name: string) =>
@@ -376,6 +400,8 @@ export const resolveChatProject = async (input: {
   createSession?: CreateOsSession;
   explicitProject?: string;
 }) => {
+  if (input.explicitProject?.startsWith("prj_")) return input.explicitProject;
+
   const configured = input.explicitProject || input.configuredDefaultProject;
 
   return await withAuthenticatedOsSession({
@@ -1041,7 +1067,7 @@ const launcherProcedures = {
         env.ITERATE_BEARER_TOKEN = token;
         env.ITERATE_CHAT_BEARER_FROM_STORED_SESSION = "1";
       }
-      await runInheritedProcess({ ...command, env });
+      replaceWithInheritedProcess({ ...command, env });
     }),
 
   useMyComputer: os

@@ -1,20 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
-  type ParentCapabilityHost,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
 import {
@@ -42,8 +38,9 @@ type ScriptExecutionLoopbackExports = {
 /**
  * One capability scope: the durable dynamic-capability table and script
  * journal at one `{projectId, path}`. `provideCapability` always mounts here;
- * `invokeCapability`/`describeCapabilities` chain up to the enclosing scope's
- * host on a local miss.
+ * `invokeCapability`/`describeCapabilities` follow the birth certificate's
+ * journaled `fallback` expression (usually straight to the project root's
+ * host) on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -78,12 +75,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         path: this.#name.path,
         projectId: this.#name.projectId,
       }),
-      // The enclosing scope, so a capability miss at this path falls through to
-      // the surrounding scope (agent → its namespace → the project). Only the
-      // immediate parent is wired; deeper ancestors are reached because that
-      // parent applies the same fallback. Undefined at the root, which ends the
-      // chain.
-      parent: this.#parentCapabilityHost(),
       reads: this.#processorReads(),
       scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
       validateCapabilityTypes: (types) =>
@@ -121,21 +112,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         projectId: this.#name.projectId,
       },
     });
-  }
-
-  #parentCapabilityHost(): ParentCapabilityHost | undefined {
-    const parentPath = parentScopePath(this.#name.path);
-    if (parentPath === null) return undefined;
-    const parent = this.env.CAPABILITY_HOST.getByName(
-      DurableObjectNameCodec.stringify({ path: parentPath, projectId: this.#name.projectId }),
-    );
-    // Forward only the two read methods the child scope chains through. Handing the
-    // full DurableObjectStub over as a typed dependency makes TypeScript instantiate
-    // the DO's self-referential stub type (TS2589); a thin forwarder keeps it shallow.
-    return {
-      invokeCapability: (input) => parent.invokeCapability(input),
-      describeCapabilities: () => parent.describeCapabilities(),
-    };
   }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {

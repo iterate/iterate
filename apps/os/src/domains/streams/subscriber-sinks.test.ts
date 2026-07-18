@@ -4,20 +4,15 @@ import type {
   ProcessEventBatch,
   StreamPushEventBatch,
   StreamSubscriberPing,
-} from "./rpc-types.ts";
+} from "iterate/processors";
 
 const dialMocks = vi.hoisted(() => ({
   evaluateItxExpression: vi.fn(),
-  itxLoopbackStub: vi.fn(),
 }));
 
 vi.mock("../../itx/expression.ts", () => ({
   evaluateItxExpression: dialMocks.evaluateItxExpression,
 }));
-vi.mock("../itx/utils.ts", () => ({
-  itxLoopbackStub: dialMocks.itxLoopbackStub,
-}));
-
 const { createSubscriberDial, retainWakeHandshakeResponse } = await import("./subscriber-sinks.ts");
 
 function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
@@ -33,47 +28,127 @@ function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
   return { duplicateDispose, raw, rawDispose };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 describe("push delivery RPC ownership", () => {
   beforeEach(() => {
     dialMocks.evaluateItxExpression.mockReset().mockResolvedValue({
       receiver: undefined,
       value: undefined,
     });
-    dialMocks.itxLoopbackStub.mockReset();
   });
 
-  test("disposes a freshly acquired authority root after each successful batch", async () => {
-    const acquired: Array<{
-      disposeBinding: ReturnType<typeof vi.fn>;
-      disposeRoot: ReturnType<typeof vi.fn>;
-    }> = [];
-    dialMocks.itxLoopbackStub.mockImplementation(() => {
-      const disposeBinding = vi.fn();
-      const disposeRoot = vi.fn();
-      acquired.push({ disposeBinding, disposeRoot });
-      return {
-        get: vi.fn().mockResolvedValue({ [Symbol.dispose]: disposeRoot }),
-        [Symbol.dispose]: disposeBinding,
-      };
-    });
+  test("uses fresh local roots and disposes overlapping ignored results on settlement", async () => {
+    const roots = [{ batch: 1 }, { batch: 2 }];
+    const createAuthorityRoot = vi.fn().mockReturnValueOnce(roots[0]).mockReturnValueOnce(roots[1]);
+    const first = deferred<{ receiver: undefined; value: { [Symbol.dispose](): void } }>();
+    const second = deferred<{ receiver: undefined; value: { [Symbol.dispose](): void } }>();
+    const disposeFirstResult = vi.fn();
+    const disposeSecondResult = vi.fn();
+    dialMocks.evaluateItxExpression
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
 
     const dial = createSubscriberDial({
       projectId: "prj_test",
       exports: {},
+      createAuthorityRoot,
       onDurableDeliveryError: vi.fn(),
     });
     const expression = ["worker", "processEventBatch"];
     const batch = {} as StreamPushEventBatch;
 
-    await dial.push(expression, batch);
-    expect(acquired).toHaveLength(1);
-    expect(acquired[0]!.disposeRoot).toHaveBeenCalledOnce();
-    expect(acquired[0]!.disposeBinding).toHaveBeenCalledOnce();
+    const firstPush = dial.push(expression, batch);
+    const secondPush = dial.push(expression, batch);
+    await vi.waitFor(() => expect(dialMocks.evaluateItxExpression).toHaveBeenCalledTimes(2));
+    expect(createAuthorityRoot).toHaveBeenCalledTimes(2);
+    expect(dialMocks.evaluateItxExpression.mock.calls[0]?.[0]).toBe(roots[0]);
+    expect(dialMocks.evaluateItxExpression.mock.calls[1]?.[0]).toBe(roots[1]);
 
-    await dial.push(expression, batch);
-    expect(acquired).toHaveLength(2);
-    expect(acquired[1]!.disposeRoot).toHaveBeenCalledOnce();
-    expect(acquired[1]!.disposeBinding).toHaveBeenCalledOnce();
+    first.resolve({ receiver: undefined, value: { [Symbol.dispose]: disposeFirstResult } });
+    await firstPush;
+    expect(disposeFirstResult).toHaveBeenCalledOnce();
+    expect(disposeSecondResult).not.toHaveBeenCalled();
+
+    second.resolve({ receiver: undefined, value: { [Symbol.dispose]: disposeSecondResult } });
+    await secondPush;
+    expect(disposeSecondResult).toHaveBeenCalledOnce();
+  });
+
+  test("preserves an evaluation rejection", async () => {
+    const failure = new Error("processor rejected the batch");
+    dialMocks.evaluateItxExpression.mockRejectedValue(failure);
+
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      createAuthorityRoot: () => ({}),
+      onDurableDeliveryError: vi.fn(),
+    });
+
+    await expect(
+      dial.push(["worker", "processEventBatch"], {} as StreamPushEventBatch),
+    ).rejects.toBe(failure);
+  });
+
+  test("does not retry an acknowledged batch when result disposal throws", async () => {
+    const disposalError = new Error("native result disposal failed");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    dialMocks.evaluateItxExpression.mockResolvedValue({
+      receiver: undefined,
+      value: {
+        [Symbol.dispose]: () => {
+          throw disposalError;
+        },
+      },
+    });
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      createAuthorityRoot: () => ({}),
+      onDurableDeliveryError: vi.fn(),
+    });
+
+    try {
+      await expect(
+        dial.push(["worker", "processEventBatch"], {} as StreamPushEventBatch),
+      ).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "stream push RPC result dispose failed after acknowledgement",
+        { error: disposalError },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a failed root construction does not evaluate and the next batch creates afresh", async () => {
+    const failure = new Error("root construction failed");
+    const root = {};
+    const createAuthorityRoot = vi.fn().mockImplementationOnce(() => {
+      throw failure;
+    });
+    createAuthorityRoot.mockReturnValueOnce(root);
+
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      createAuthorityRoot,
+      onDurableDeliveryError: vi.fn(),
+    });
+    const push = () => dial.push(["worker", "processEventBatch"], {} as StreamPushEventBatch);
+
+    await expect(push()).rejects.toBe(failure);
+    expect(dialMocks.evaluateItxExpression).not.toHaveBeenCalled();
+    await push();
+    expect(createAuthorityRoot).toHaveBeenCalledTimes(2);
+    expect(dialMocks.evaluateItxExpression).toHaveBeenCalledWith(root, expect.any(Array));
   });
 });
 
@@ -95,11 +170,8 @@ describe("wake-handshake RPC ownership", () => {
       getRuntimeState.raw[Symbol.dispose]();
       ping.raw[Symbol.dispose]();
     });
-    const disposeAuthorityRoot = vi.fn();
-
     const retained = retainWakeHandshakeResponse({
       onDeliveryError: vi.fn(),
-      onDisposed: disposeAuthorityRoot,
       value: {
         checkpointOffset: 17,
         sink: sink.raw as ProcessEventBatch,
@@ -135,17 +207,14 @@ describe("wake-handshake RPC ownership", () => {
     expect(sink.duplicateDispose).toHaveBeenCalledOnce();
     expect(getRuntimeState.duplicateDispose).toHaveBeenCalledOnce();
     expect(ping.duplicateDispose).toHaveBeenCalledOnce();
-    expect(disposeAuthorityRoot).toHaveBeenCalledOnce();
   });
 
-  test("disposes the RPC result and authority root when the handshake is invalid", () => {
+  test("disposes the RPC result when the handshake is invalid", () => {
     const disposeResult = vi.fn();
-    const disposeAuthorityRoot = vi.fn();
 
     expect(() =>
       retainWakeHandshakeResponse({
         onDeliveryError: vi.fn(),
-        onDisposed: disposeAuthorityRoot,
         value: {
           checkpointOffset: -1,
           sink: () => {},
@@ -154,6 +223,5 @@ describe("wake-handshake RPC ownership", () => {
       }),
     ).toThrow("checkpointOffset");
     expect(disposeResult).toHaveBeenCalledOnce();
-    expect(disposeAuthorityRoot).toHaveBeenCalledOnce();
   });
 });

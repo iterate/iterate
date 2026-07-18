@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRepoNotSeededError } from "../repos/utils.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
 import { isWorkerBuildFailedError } from "./artifact-store.ts";
@@ -78,14 +79,21 @@ export function workerBuildingResponse(): Response {
 
 /**
  * The fetch lane's one error classifier: named build-lifecycle errors become
- * their stand-in pages (they cannot cross a fetch hop the way they cross
- * RPC), anything else is the caller's to rethrow. Every fetch-lane hop —
- * ingress, ItxEntrypoint, the stateful worker DO — answers through this so a
- * new serve-side state is added in exactly one place.
+ * their stand-in pages and a modeled observability outcome (they cannot cross
+ * a fetch hop the way they cross RPC), anything else is the caller's to
+ * rethrow. Every fetch-lane hop — ingress, ItxEntrypoint, the stateful worker
+ * DO — answers through this so a new serve-side state is added in exactly one
+ * place.
  */
-export function workerBuildStatusResponse(error: unknown): Response | null {
-  if (isWorkerBuildInProgressError(error)) return workerBuildingResponse();
-  if (isWorkerBuildFailedError(error)) return workerBuildFailedResponse(error);
+export function workerBuildStatus(
+  error: unknown,
+): { outcome: "worker_build_failed" | "worker_building"; response: Response } | null {
+  if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
+    return { outcome: "worker_building", response: workerBuildingResponse() };
+  }
+  if (isWorkerBuildFailedError(error)) {
+    return { outcome: "worker_build_failed", response: workerBuildFailedResponse(error) };
+  }
   return null;
 }
 

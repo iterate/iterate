@@ -55,7 +55,7 @@ test(
     // Creation is explicit. This call itself is pipelined through get(); the
     // rest of the test proves the other methods still pipeline on the
     // already-created handle.
-    await itx.agents.get(agentPath).create({});
+    await itx.agents.get(agentPath).create();
 
     // A DURABLE dynamic capability on the agent's scope (an itx-expression
     // method alias: calling it appends to the proof stream). Durable rather
@@ -187,7 +187,7 @@ test(
     // Promise.all — dependent calls ride one round trip instead of
     // await-per-hop.
     using capnwebAgent = itx.agents.get("/agents/fanout-capnweb");
-    await capnwebAgent.create({});
+    await capnwebAgent.create();
     const [sentA, sentB, description] = await Promise.all([
       capnwebAgent.message("capnweb fanout A"),
       capnwebAgent.message("capnweb fanout B"),
@@ -219,7 +219,7 @@ test(
       }>(`
       async (itx) => {
         using agent = itx.agents.get("/agents/fanout-workerd");
-        await agent.create({});
+        await agent.create();
         const [a, b, desc] = await Promise.all([
           agent.message("workerd fanout A"),
           agent.message("workerd fanout B"),
@@ -243,7 +243,7 @@ test(
     await using handle = await createTestProject({ slugPrefix: "handle-pipeline-rel" });
     using itx = handle.itx();
     const parentPath = "/agents/pipeline-parent";
-    await itx.agents.get(parentPath).create({});
+    await itx.agents.get(parentPath).create();
 
     // Run from the PARENT AGENT's scope, so the script's itx resolves relative
     // paths against it and message() stamps the parent as the sender — the
@@ -252,7 +252,7 @@ test(
     const run = (
       await itxScript(parentHost).execute(async (itx) => {
         const researcher = itx.agents.get("researcher");
-        await researcher.create({});
+        await researcher.create();
         const sent = await researcher.message("pipelined delegation");
         return {
           actor: sent.payload?.actor,
