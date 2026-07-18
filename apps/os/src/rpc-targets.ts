@@ -5394,7 +5394,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
     });
   }
 
-  #assertConfigured(): void {
+  #assertConfigured() {
     if (this.props.policy === undefined) {
       throw new Error('Configure project auth with auth.get({ policy: "project-member" }) first.');
     }

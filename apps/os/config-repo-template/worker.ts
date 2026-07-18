@@ -490,7 +490,7 @@ class InternalAppSession extends RpcTarget {
     });
   }
 
-  #assertActive(): void {
+  #assertActive() {
     if (this.actor.expiresAt <= Math.floor(Date.now() / 1000)) {
       throw new Error("This app session has expired; reconnect to authenticate again.");
     }

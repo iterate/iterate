@@ -921,7 +921,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    });\n" +
       "  }\n" +
       "\n" +
-      "  #assertActive(): void {\n" +
+      "  #assertActive() {\n" +
       "    if (this.actor.expiresAt <= Math.floor(Date.now() / 1000)) {\n" +
       "      throw new Error(\"This app session has expired; reconnect to authenticate again.\");\n" +
       "    }\n" +

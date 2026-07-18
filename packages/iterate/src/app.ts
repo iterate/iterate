@@ -45,14 +45,12 @@ export class LiveStateRpcTarget<State extends object>
     this.#authorize = options.authorize;
   }
 
-  async get(): Promise<State> {
+  async get() {
     this.#authorize?.();
     return this.#live.getState();
   }
 
-  async subscribe(
-    onUpdate: (update: LiveUpdate<State>) => unknown,
-  ): Promise<LiveStateSubscriptionHandle> {
+  async subscribe(onUpdate: (update: LiveUpdate<State>) => unknown) {
     this.#authorize?.();
     if (this.#authorize === undefined) {
       return new LiveStateSubscriptionRpcTarget(this.#live.subscribe(onUpdate));
@@ -65,6 +63,9 @@ export class LiveStateRpcTarget<State extends object>
     const retained = retainCallback(onUpdate);
     const authorize = this.#authorize;
     const onRpcBroken = retained.onRpcBroken;
+    // Object.assign constructs the full intersection explicitly: a callable,
+    // required disposal hook, and optional onRpcBroken forwarder. TypeScript
+    // cannot preserve that conditional-spread shape as RetainedCallback.
     const guarded = Object.assign(
       (update: LiveUpdate<State>) => {
         authorize();
@@ -96,15 +97,15 @@ class LiveStateSubscriptionRpcTarget extends RpcTarget implements LiveStateSubsc
     this.#subscription = subscription;
   }
 
-  ping(): boolean {
+  ping() {
     return this.#subscription.ping();
   }
 
-  unsubscribe(): void {
+  unsubscribe() {
     this.#subscription.unsubscribe();
   }
 
-  [Symbol.dispose](): void {
+  [Symbol.dispose]() {
     this.#subscription.unsubscribe();
   }
 }
