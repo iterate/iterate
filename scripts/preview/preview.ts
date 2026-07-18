@@ -1559,10 +1559,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // deploy-order constraint: bakeStaticAuthJwks polls auth readiness while
     // the relying parties deploy in parallel, and workers are never deleted.
     previewDependencies: ["auth", "dummy-petshop"],
-    // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
-    // ~60s as of 2026-07-02). Crossing them warns, never fails.
-    previewDeployBudgetMs: 55_000,
-    previewTestBudgetMs: 80_000,
+    // The 90s deploy + 100s e2e phase guardrails leave about 20s for checkout,
+    // setup, and reporting inside the 210s full-check target. Crossing either
+    // warns, never fails. The 2026-07-18 full-fleet floor was 71.7s + 91.4s.
+    previewDeployBudgetMs: 90_000,
+    previewTestBudgetMs: 100_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",

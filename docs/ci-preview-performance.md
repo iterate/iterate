@@ -2,9 +2,10 @@
 
 The **Cloudflare Previews** check (deploy every app to a leased preview slot,
 then run the full e2e suite against it) is the slowest thing that runs on every
-PR push, so it gets a dedicated performance budget. As of 2026-07-02 it lands
-in **~2m30s** end-to-end. This doc explains how, and — more importantly — how
-to keep it there.
+PR push, so it gets a dedicated performance budget. The target is **under
+3m30s** end-to-end. A retry-clean full-fleet run on 2026-07-18 landed in
+**3m08s**. This doc explains how, and — more importantly — how to keep it
+there.
 
 For the mechanics (where the workflows live, how to run them locally, the
 Doppler wiring), see [Depot CI](depot-ci.md). This doc is about speed
@@ -12,12 +13,14 @@ and cost.
 
 ## Where the time goes
 
-| Phase  | Budget   | Typical | What it is                              |
-| ------ | -------- | ------- | --------------------------------------- |
-| Pickup | —        | ~7s     | Depot CI assigns a runner               |
-| Setup  | —        | ~20s    | checkout + `pnpm install` + Doppler CLI |
-| Deploy | 55s (OS) | ~40s    | all apps deploy in parallel to the slot |
-| Tests  | 80s (OS) | ~60s    | full e2e against the deployed slot      |
+| Phase      | Guardrail | Observed | What it is                                      |
+| ---------- | --------- | -------- | ----------------------------------------------- |
+| Pickup     | —         | ~4s      | Depot CI assigns a runner                       |
+| Setup      | —         | ~15s     | checkout + `pnpm install` + Doppler CLI         |
+| Deploy     | 90s (OS)  | ~72s     | all apps deploy in parallel to the slot         |
+| Tests      | 100s (OS) | ~91s     | full e2e against the deployed slot              |
+| Reporting  | —         | ~3s      | state update + test-artifact upload             |
+| Full check | 210s      | 188s     | check start through successful check completion |
 
 The OS deploy and the OS e2e lane are the long poles; the other apps finish in
 seconds and run alongside OS.
@@ -38,6 +41,15 @@ seconds and run alongside OS.
   apps deploy at once. `previewDependencies` co-selects current-head fixtures;
   it does not order their deploys. Reserve `previewDeployAfter` for a real
   start-after constraint that cannot be represented by a readiness barrier.
+- **Container rollout completion is part of deploy readiness.** Wrangler
+  returns after creating a Container rollout; it does not wait for every
+  assigned instance to be replaced. A default 10%→100% rollout once continued
+  for about 90 seconds after Wrangler returned and killed a test sandbox with
+  exit 137. Preview Container changes therefore use one 100% step, and the OS
+  deploy polls all six application rollouts concurrently until Cloudflare
+  reports every target instance updated and healthy. Production keeps gradual
+  rollout. Do not replace this API-backed barrier with a sleep or test
+  serialization.
 - **Parallelism is explicit per deployed slot, not accidental.** The OS
   Vitest catalogue uses twelve workers with at most two concurrent tests each;
   Playwright uses twelve fully-parallel workers. The create/onboarding smoke,
@@ -79,8 +91,9 @@ seconds and run alongside OS.
   intermittently 5xxs (its "Unicorn!" 503 page failed a run mid-flight). The
   calls retry with backoff (`withGithubRetry` in `scripts/preview/preview.ts`)
   so a blip doesn't fail the whole run and force a re-run.
-- **Right-sized runner.** The job is network-bound; Depot metrics showed peak
-  CPU ~30% / memory ~10% of a 16-core box, so it runs on 8 cores.
+- **Right-sized runner.** The job is network-bound on average. The 2026-07-18
+  full-fleet run on the current runner averaged 33% CPU / 16.5% memory, with
+  short build peaks of 81.4% CPU / 37% memory. It stays on 8 cores.
 
 ## Keeping it fast
 

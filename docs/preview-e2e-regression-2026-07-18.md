@@ -735,9 +735,21 @@ observable.
   REPL example append. Controlled 40-way session probes and a 120-operation
   same-head rollout probe remained clean, rejecting a load or scheduling-queue
   explanation.
-- Next: force the complete fleet with the keyed-birth and bounded-read
-  candidate. Once one run is retry-clean and under 3m30s, start the immutable-head
-  25-run proof, then the separate 15+ simultaneous preview-slot churn campaign.
+- 2026-07-18: experiment 15 completed the full fleet in 3m22s, but one sandbox
+  timeout test retried after its command died with exit 137. Cloudflare's
+  rollout API proved Wrangler had returned while six Container applications
+  were still replacing assigned instances; the command overlapped the lite
+  app's final 100% rollout step. Preview rollouts are now one-step and the OS
+  deploy waits concurrently for all six authoritative rollout records to be
+  complete and healthy before tests become eligible.
+- 2026-07-18: experiment 16 completed the full fleet in 3m08s (OS deploy 71.7s;
+  parallel tests 91.4s) with zero retry telemetry in every app. Playwright ran
+  57 tests in about 84s, Vitest ran 156 in 77.0s, and all other app suites
+  stayed underneath that same critical path. The Container image was unchanged,
+  so the new barrier inspected all six applications and correctly observed zero
+  pending rollouts.
+- Next: run the immutable-head 25-run proof, then the separate 15+
+  simultaneous preview-slot churn campaign.
   PR comments mirror each experiment and result rather than rewriting history
   here.
 

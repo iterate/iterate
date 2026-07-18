@@ -71,6 +71,8 @@ invocation; the same logical run number is repeated after a bounded reclaim.
 | 12         |         3m44 |                    38 | Failed: one shared-path race plus two post-deploy DO resets; does not qualify.                     |
 | 13         |         3m05 |                    38 | Full fleet green only via one browser retry after a route-asset connection loss; does not qualify. |
 | 14         |         3m54 |                    38 | Partial three-app fleet; three rollout-lifecycle retries exposed; does not qualify.                |
+| 15         |         3m22 |                    38 | Full fleet; one sandbox command was killed by a Container rollout and retried; does not qualify.   |
+| 16         |         3m08 |                    38 | Full fleet, zero retries. OS test 91.4s, deploy 71.7s.                                             |
 
 Experiment 11 (head a2d850761, Depot job 4cr9hswz8t) is the most useful
 failure sample:
@@ -242,6 +244,40 @@ redeployed; both old and new worker versions served the probe, with zero
 operation errors. Experiment 14's 120-second test phase was retry work, not a
 serial scheduling queue. The next experiment therefore keeps the existing
 full-parallel topology and forces the complete app fleet.
+
+Experiment 15 (head `acda42668`, Depot attempt
+[`l1tl0h1d5t`](https://depot.dev/orgs/0p91s0lz49/workflows/cp138k5m4d?job=c963rvx3jw&attempt=l1tl0h1d5t))
+completed the full fleet in **3m22s**. Its 103.3-second parallel test phase was
+within 1.5 seconds of the longest retried test, confirming that the suite now
+tracks its critical path rather than summing independent lanes. It was not
+retry-clean: `runScript caps an in-script sandbox timeout...` first died with
+exit 137 after 23.5 seconds, then passed on retry when its owned timer returned 124.
+
+The test sandbox ran from 14:43:11–14:43:34 UTC. Cloudflare's authoritative
+rollout record showed the lite Container application's 10%→100% rollout did
+not complete until 14:43:25.783, despite Wrangler declaring the OS deployed at
+14:42:43. The other five application rollouts also continued after Wrangler
+returned, the slowest until 14:44:12.871. Replacement terminates assigned
+instances, so this was a deploy-to-test readiness race—not preview load,
+project creation, or a timeout assertion bug.
+
+The fix keeps the topology parallel: previews request one 100% Container
+rollout step, and `apps/os/scripts/deploy.ts` polls all six application
+rollouts concurrently before declaring OS ready. Completion requires 100% of
+target instances updated, every rollout step completed, and no unhealthy
+instance state. Missing, replaced, reverted, unhealthy, or 90-second-stalled
+rollouts fail with their exact last state. Production retains gradual rollout.
+
+Experiment 16 (head `3f2f3e790`, Depot attempt
+[`b1lhqmfkt2`](https://depot.dev/orgs/0p91s0lz49/workflows/93xf5z9pcg?job=m4309znp2l&attempt=b1lhqmfkt2))
+then passed the exact full fleet in **3m08s** with every app's retry telemetry
+`null`. All five deploys began together; OS was the 71.7-second deploy critical
+path. All five app suites then began together; OS was the 91.4-second test
+critical path, with Playwright's 57 tests taking about 84 seconds and Vitest's
+156 tests taking 77.0 seconds. The unchanged image produced no new Container
+rollout in this run, so the readiness check correctly inspected all six apps
+and added no artificial wait. This is the qualifying single-run baseline; the
+immutable 25-run count starts from the final evidence/guardrail commit.
 
 ## Round 4 (2026-07-13/14, PR #1938)
 
