@@ -1420,11 +1420,14 @@ export class StreamSubscribers {
         );
       }
 
-      // Replacing any existing connection for this key only after the proposed
-      // open is valid; a rejected bounded replay must leave the live one intact.
-      this.#connections.get(subscriptionKey)?.close("replaced");
+      // Retain the complete replacement capability group before touching the
+      // incumbent. A throwing dup() means this open never acquired a usable
+      // replacement, so the existing live subscription must remain intact.
       getProcessorRuntimeState = retainGetProcessorRuntimeState(args.getRuntimeState);
       ping = retainSubscriberPing(args.ping);
+      // Replacing any existing connection for this key only after the proposed
+      // open is valid and fully retained; any earlier failure leaves it live.
+      this.#connections.get(subscriptionKey)?.close("replaced");
     } catch (error) {
       this.#disposeConnectionCapabilities({
         subscriptionKey,
@@ -1627,6 +1630,11 @@ export class StreamSubscribers {
         },
       });
       sink.onRpcBroken?.((error) => {
+        // Brokenness registration is best-effort and transports need not
+        // unregister a callback when its retained stub is disposed. Bind the
+        // signal to this exact connection so a late callback from a replaced
+        // sink cannot nack, park, or close its healthy same-key successor.
+        if (!connection.isLive() || this.#connections.get(subscriptionKey) !== connection) return;
         if (connection.subscriptionType === "configured") {
           this.onDurableDeliveryError(subscriptionKey, error);
         } else {
@@ -1913,7 +1921,15 @@ async function withDeliveryTimeout<T>(
     const onLateResolve = opts.onLateResolve;
     void promise.then(
       (value) => {
-        if (timedOut) onLateResolve(value);
+        if (!timedOut) return;
+        try {
+          onLateResolve(value);
+        } catch (error) {
+          // The timed-out attempt has already entered its recovery policy.
+          // Cleanup of a capability arriving after that boundary is
+          // orthogonal: report it without creating an unowned rejection.
+          console.error("late delivery result cleanup failed", { label, error });
+        }
       },
       () => {
         // Late rejections have nothing to dispose; the race already surfaced

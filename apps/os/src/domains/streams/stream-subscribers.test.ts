@@ -2068,6 +2068,79 @@ describe("StreamSubscribers", () => {
     expect(h.subscribers.hasConnection("k")).toBe(true);
   });
 
+  it("j3b. a stale sink's late onRpcBroken cannot penalize its healthy successor", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const brokenCallbacks: Array<(error: unknown) => void> = [];
+    const sinks = [makeSink().sink, makeSink().sink];
+    for (const sink of sinks) {
+      sink.onRpcBroken = (callback) => brokenCallbacks.push(callback);
+    }
+    let nextSink = 0;
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: sinks[nextSink++]! });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    const replacement = wakePayload();
+    h.configure(replacement, 2);
+    h.subscribers.onSubscriptionConfigured(replacement, 2);
+    await h.settle();
+    expect(h.pokes).toHaveLength(2);
+    expect(brokenCallbacks).toHaveLength(2);
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.row("k")).toMatchObject({ attempt: 0, lastError: null, retryAt: null });
+    const disconnectedBeforeLateCallback = h.factsOfType(DISCONNECTED).length;
+
+    brokenCallbacks[0]!(new Error("old transport broke after replacement"));
+    await h.settle();
+
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.row("k")).toMatchObject({ attempt: 0, lastError: null, retryAt: null });
+    expect(h.factsOfType(DISCONNECTED)).toHaveLength(disconnectedBeforeLateCallback);
+  });
+
+  it("j3c. a throwing disposer on a late timed-out poke response is contained", async () => {
+    vi.useFakeTimers();
+    const cleanupLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const h = makeHarness();
+      h.configure(wakePayload(), 0);
+      h.append(evt(1, "a"));
+      let resolvePoke!: (response: PokeResult) => void;
+      h.dialImpl.poke = () =>
+        new Promise<PokeResult>((resolve) => {
+          resolvePoke = resolve;
+        });
+      let disposals = 0;
+      const sink = Object.assign(() => undefined, {
+        [Symbol.dispose]: () => {
+          disposals += 1;
+          throw new Error("late sink disposal failed");
+        },
+      }) as RetainedProcessEventBatch;
+
+      h.subscribers.wake();
+      await vi.advanceTimersByTimeAsync(DELIVERY_TIMEOUT_MS);
+      await Promise.allSettled([...h.kept]);
+      expect(h.row("k")).toMatchObject({ attempt: 1 });
+
+      resolvePoke({ checkpointOffset: 0, sink });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(disposals).toBe(1);
+      expect(cleanupLog).toHaveBeenCalledWith(
+        "late delivery result cleanup failed",
+        expect.objectContaining({ label: "poke k", error: expect.any(Error) }),
+      );
+    } finally {
+      cleanupLog.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("k. coalescing: five wakes during one in-flight poke dial exactly once", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
@@ -2346,6 +2419,57 @@ describe("StreamSubscribers", () => {
     ).toThrow("ping retain failed");
     expect(disposals).toEqual(["sink", "runtime"]);
     expect(h.subscribers.hasConnection("watcher")).toBe(false);
+  });
+
+  it("n3. a replacement retention failure leaves the incumbent live", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"));
+    const incumbent = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: incumbent.sink,
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+    expect(incumbent.batches.flatMap((batch) => batch.events.map((event) => event.offset))).toEqual(
+      [1],
+    );
+
+    const replacementDisposals: string[] = [];
+    const replacementSink = Object.assign(() => undefined, {
+      [Symbol.dispose]: () => replacementDisposals.push("sink"),
+    });
+    const replacementRuntimeState = Object.assign(async () => ({}) as never, {
+      [Symbol.dispose]: () => replacementDisposals.push("runtime"),
+    });
+    const replacementPing = Object.assign(
+      (input: { t0: number }) => ({ t0: input.t0, t1: input.t0, t2: input.t0 }),
+      {
+        dup: () => {
+          throw new Error("replacement ping retain failed");
+        },
+      },
+    );
+
+    expect(() =>
+      h.subscribers.openEphemeral({
+        subscriptionKey: "watcher",
+        sink: replacementSink,
+        getRuntimeState: replacementRuntimeState,
+        ping: replacementPing,
+      }),
+    ).toThrow("replacement ping retain failed");
+    expect(replacementDisposals).toEqual(["sink", "runtime"]);
+    expect(h.subscribers.hasConnection("watcher")).toBe(true);
+    expect(h.factsOfType(DISCONNECTED)).toHaveLength(0);
+
+    h.append(evt(2, "b"));
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(incumbent.batches.flatMap((batch) => batch.events.map((event) => event.offset))).toEqual(
+      [1, 2],
+    );
   });
 
   it("o. webhook: one POST per event in order, per-event acking, lean envelope", async () => {
