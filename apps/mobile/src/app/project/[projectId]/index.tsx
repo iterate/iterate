@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { ProjectDrawerButton } from "../../../components/project-drawer.tsx";
 import { newMobileAgentPath } from "../../../lib/chat.ts";
 import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -54,33 +55,8 @@ export default function ChatListScreen() {
       <Stack.Screen
         options={{
           title: slug || "Chats",
-          headerRight: () => (
-            <View style={styles.headerActions}>
-              <Pressable
-                onPress={() =>
-                  router.push({ pathname: "/project/[projectId]/examples", params: { projectId } })
-                }
-              >
-                <Text style={styles.switchProject}>Examples</Text>
-              </Pressable>
-              <Pressable
-                onPress={() =>
-                  router.push({ pathname: "/project/[projectId]/reminders", params: { projectId } })
-                }
-              >
-                <Text style={styles.switchProject}>Reminders</Text>
-              </Pressable>
-              <Pressable
-                onPress={() =>
-                  router.push({ pathname: "/project/[projectId]/approvals", params: { projectId } })
-                }
-              >
-                <Text style={styles.switchProject}>Approvals</Text>
-              </Pressable>
-              <Pressable onPress={() => router.push("/projects")}>
-                <Text style={styles.switchProject}>Switch project</Text>
-              </Pressable>
-            </View>
+          headerLeft: () => (
+            <ProjectDrawerButton projectId={projectId} projectSlug={slug || "Chats"} />
           ),
         }}
       />
@@ -172,6 +148,4 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   retryText: { color: colors.text, fontSize: 14 },
-  headerActions: { flexDirection: "row", gap: spacing.md },
-  switchProject: { color: colors.textMuted, fontSize: 14 },
 });
