@@ -49,15 +49,19 @@ synthetic projects at CI scale and acknowledge the durable subscription
 without sending those facts to PostHog. Ephemeral events are excluded in both
 the subscription and capture paths.
 
-Every production row is a `stream:append` event containing the complete
-committed `StreamEvent`. The only payload reduction is deterministic JSON
-truncation when an individual event exceeds 100 KiB; the truncation flag and
-original byte count remain indexed.
+Every production row is named `append:<type>` and contains the complete
+committed `StreamEvent` under `stream_event`. The only custom properties beside
+that raw event are `stream_event_type`, `stream_path`,
+`stream_event_truncated`, and `stream_event_original_json_bytes`. Nested raw
+fields remain available in HogQL; type and path are promoted because they are
+the common UI filters and breakdowns. The only payload reduction is
+deterministic JSON truncation above 100 KiB.
 
 Machine events do not pretend to have a human actor. They use one stable,
 namespaced distinct ID per deployment/project and carry
 `$groups: { project: projectId }`. The authentic root project birth emits the
-project group metadata. The exporter does not query the project directory or
+project group metadata and labels the synthetic person `project:<slug>` for a
+readable activity feed. The exporter does not query the project directory or
 derive an organization for machine traffic; project is its complete grouping
 boundary.
 
