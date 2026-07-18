@@ -3655,7 +3655,7 @@ function isNoSlotAvailableError(error: unknown) {
 // worse, stealing a slot), the deploy waits its turn and logs who holds what
 // while it waits. Override with PREVIEW_SLOT_WAIT_MS=0 to fail fast.
 // Bounded so a slotless (or broken-slot) run fails LOUDLY inside the job's
-// 10-minute ceiling instead of being killed silently by it: 2026-07-09's
+// 15-minute ceiling instead of being killed silently by it: 2026-07-09's
 // unerasable-slot loop burned this entire budget per attempt, and external
 // retries stacked those into 15-30 minute walls. 6 minutes still rides out
 // a normal handover (cleanup of a closing PR takes ~2m); a genuinely full

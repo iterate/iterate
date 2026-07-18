@@ -119,7 +119,7 @@ export default async function eraseData(options: {
   }
 
   // Delete a batch of items with bounded concurrency and a deadline: this
-  // script runs inside the preview-slot cleanup job's 10-MINUTE ceiling, and
+  // script runs inside the preview-slot cleanup job's 15-MINUTE ceiling, and
   // an e2e-churned search-index bucket holds thousands of objects —
   // one-at-a-time REST deletes blew the ceiling on the first live run
   // (preview_6, 2026-07-14). The API's global rate limit (~1200 req/5min)
@@ -253,7 +253,7 @@ export default async function eraseData(options: {
   for (const bucket of bucketsToWalk) {
     // Per-bucket budget: a churn-refilled search-index must not starve the
     // files pass (Bugbot). 90s each + 90s instances stays well inside the
-    // cleanup job's 10-minute ceiling alongside the DO/D1/KV work.
+    // cleanup job's 15-minute ceiling alongside the DO/D1/KV work.
     const bucketDeadline = Date.now() + 90_000;
     try {
       let objectsDeleted = 0;
