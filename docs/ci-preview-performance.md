@@ -35,7 +35,9 @@ seconds and run alongside OS.
 - **Deploys run in one parallel batch.** OS bakes the auth JWKS at deploy time,
   but instead of waiting for auth to finish first, the OS deploy _polls_ the
   slot's auth worker for JWKS (`bakeStaticAuthJwks` in `apps/os/scripts/deploy.ts`). All
-  apps deploy at once.
+  apps deploy at once. `previewDependencies` co-selects current-head fixtures;
+  it does not order their deploys. Reserve `previewDeployAfter` for a real
+  start-after constraint that cannot be represented by a readiness barrier.
 - **Parallelism is explicit per deployed slot, not accidental.** The OS
   Vitest catalogue uses four workers with at most two concurrent tests each;
   Playwright uses eight fully-parallel workers. Each suite therefore peaks at

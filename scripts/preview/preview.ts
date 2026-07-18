@@ -1283,7 +1283,15 @@ export type CloudflarePreviewApp = {
     projectHostnameBases?: string[];
   };
   paths: string[];
+  /**
+   * Apps selected and deployed alongside this app so its runtime/tests see a
+   * coherent current-head fixture. Selection does not impose deploy order:
+   * use previewDeployAfter only when no readiness barrier can make concurrent
+   * deployment safe.
+   */
   previewDependencies?: CloudflarePreviewAppSlug[];
+  /** Apps that must finish deploying before this app may start. */
+  previewDeployAfter?: CloudflarePreviewAppSlug[];
   /**
    * Public URLs of deployed preview dependencies that the app's e2e command
    * must receive. Values come from this PR's recorded deployment at the
@@ -1543,8 +1551,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/os/src/domains/streams/**",
     ],
     // OS bakes auth JWKS and binds auth's default RPC entrypoint, and its
-    // integration e2e talks to the slot's deployed dummy Petshop. Both must
-    // finish deploying before OS starts.
+    // integration e2e talks to the slot's deployed dummy Petshop. Co-deploy
+    // both for a coherent current-head fixture. This is deliberately not a
+    // deploy-order constraint: bakeStaticAuthJwks polls auth readiness while
+    // the relying parties deploy in parallel, and workers are never deleted.
     previewDependencies: ["auth", "dummy-petshop"],
     // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
     // ~60s as of 2026-07-02). Crossing them warns, never fails.
@@ -1655,7 +1665,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
     // Semaphore bakes the slot's auth JWKS at deploy time (relying-party
-    // auth, same as OS), so auth must finish before semaphore starts.
+    // auth, same as OS). Co-deploy auth, but let bakeStaticAuthJwks poll its
+    // readiness instead of serializing the two deploys.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
@@ -4777,12 +4788,14 @@ function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
     const batch = apps.filter(
       (app) =>
         pendingSlugs.has(app.slug) &&
-        (app.previewDependencies ?? []).every(
+        (app.previewDeployAfter ?? []).every(
           (dependency) => !selectedSlugs.has(dependency) || !pendingSlugs.has(dependency),
         ),
     );
     if (batch.length === 0) {
-      throw new Error(`Preview app dependencies contain a cycle: ${[...pendingSlugs].join(", ")}`);
+      throw new Error(
+        `Preview app deploy-after constraints contain a cycle: ${[...pendingSlugs].join(", ")}`,
+      );
     }
 
     batches.push(batch);

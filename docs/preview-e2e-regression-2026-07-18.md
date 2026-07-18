@@ -36,6 +36,20 @@ took:
 The same green run logged a liveness-probe timeout followed by repeated 15s
 stream-dial timeouts. Green therefore did not mean healthy.
 
+The first experiment on PR #2116 restored bounded overlap at an explicit
+configured peak of 17 workers. It completed successfully, proving the preview
+deployment can serve the parallel lanes, but the whole check still took **8m22s**
+and absorbed two real failures. The OS sublanes were TUI 18s, Playwright 161s,
+and Vitest 213s; the enclosing OS test phase was 238.2s rather than their sum.
+The remaining critical path is therefore not a reason to serialize the lanes.
+
+That run also exposed an independent resource leak in slot handover. Reset took
+131.3s and deleted only 100 AI Search instances before its 90s deadline. The
+namespace still held 498 instances immediately after reset and 551 after the
+tests. Every project birth eagerly provisions an instance, while test project
+disposal is currently a no-op. The slot fleet therefore accumulates resources
+faster than cleanup can delete them.
+
 On 2026-07-18, commit `f9abd2b12` serialized TUI, Vitest, and Playwright after
 three Durable Object resets were observed under an uncontrolled aggregate peak.
 Before that change, the remote suites overlapped. The earlier flake-hunt
@@ -155,26 +169,29 @@ observable.
 
 ## Root-cause ledger
 
-| Thesis                                                                   | Confidence                                | Evidence                                                                                                                                                                                                                | Next proof / remediation                                                                                             |
-| ------------------------------------------------------------------------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Full serialization is the immediate wall-clock regression.               | Confirmed                                 | Current-main OS phase is 406.6s; Vitest and Playwright alone are 202.2s and 155.6s. Prior concurrent marathon was stable and much faster.                                                                               | Restore overlap, emit per-sublane markers/timings, and test explicit aggregate concurrency levels.                   |
-| Fresh project birth in nearly every test is the dominant load amplifier. | High                                      | 150 creation call sites; 763.7 Vitest test-seconds in the current green run; recurring birth/stream-dial/onboarding symptoms.                                                                                           | Profile create latency under load; introduce a worker-scoped project pool for non-birth tests.                       |
-| One bad preview slot explains the incident.                              | Refuted                                   | Failures appear across slots 1–9 rather than clustering on one slot.                                                                                                                                                    | Continue per-slot trace comparison, but fix fleet-wide runner/workload shape.                                        |
-| “Green” checks are healthy.                                              | Refuted                                   | 63.1% of green attempts absorbed retries; current green emitted liveness and dial timeouts.                                                                                                                             | Keep retry telemetry release-blocking during the hunt; audit corresponding traces.                                   |
-| The live-capability expected-failure test was a major active flake.      | Historical / fixed                        | It accounts for 163 retry events but last appears Jul 17 10:20; `ac9f2e107` disables retry for `test.fails`.                                                                                                            | Ensure it does not recur on heads containing the fix.                                                                |
-| The streams 32MiB expected-failure test was active retry noise.          | Historical / likely fixed                 | 62 events, last Jul 17 01:10; `1cc426d4b` replaced expected-failure framing with a direct rejection assertion.                                                                                                          | Re-run current head; no recurrence allowed.                                                                          |
-| Preview deployment dependencies are needlessly serial.                   | High                                      | OS waits for auth + dummy Petshop although workers are never deleted and JWKS readiness already polls; this adds roughly 15–20s before the 80–120s OS deploy. The performance doc still describes parallel app deploys. | Prove service-binding/JWKS safety, then start OS with the fleet and retain readiness barriers.                       |
-| Slot teardown/recreation is the primary current bottleneck.              | Open                                      | Long-lived slots avoid Cloudflare control-plane storms but accumulate project/DO state; hard failures are fleet-wide.                                                                                                   | Compare clean-slot vs warm-slot traces and timings; do not revert lifecycle policy without rate-limit/cost evidence. |
-| Cloudflare cannot tolerate parallel e2e traffic.                         | Unproven and not an acceptable assumption | Three DO resets occurred at an uncontrolled aggregate peak, but the 96-green concurrent marathon contradicts a blanket prohibition.                                                                                     | Load-step at explicit concurrency and inspect DO resets, CPU, queue time, and resulting state.                       |
+| Thesis                                                                   | Confidence                   | Evidence                                                                                                                                                                                                                | Next proof / remediation                                                                                             |
+| ------------------------------------------------------------------------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Full serialization is the immediate wall-clock regression.               | Confirmed                    | Current-main OS phase is 406.6s; Vitest and Playwright alone are 202.2s and 155.6s. Prior concurrent marathon was stable and much faster.                                                                               | Restore overlap, emit per-sublane markers/timings, and test explicit aggregate concurrency levels.                   |
+| Fresh project birth in nearly every test is the dominant load amplifier. | Confirmed resource amplifier | 150 creation call sites; the first parallel run created 53 net AI Search instances while project disposal remained a no-op; recurring birth/stream-dial/onboarding symptoms.                                            | Retain a small project-birth lane; pool/reset projects for non-birth tests and stop leaking per-project resources.   |
+| One bad preview slot explains the incident.                              | Refuted                      | Failures appear across slots 1–9 rather than clustering on one slot.                                                                                                                                                    | Continue per-slot trace comparison, but fix fleet-wide runner/workload shape.                                        |
+| “Green” checks are healthy.                                              | Refuted                      | 63.1% of green attempts absorbed retries; current green emitted liveness and dial timeouts.                                                                                                                             | Keep retry telemetry release-blocking during the hunt; audit corresponding traces.                                   |
+| The live-capability expected-failure test was a major active flake.      | Historical / fixed           | It accounts for 163 retry events but last appears Jul 17 10:20; `ac9f2e107` disables retry for `test.fails`.                                                                                                            | Ensure it does not recur on heads containing the fix.                                                                |
+| The streams 32MiB expected-failure test was active retry noise.          | Historical / likely fixed    | 62 events, last Jul 17 01:10; `1cc426d4b` replaced expected-failure framing with a direct rejection assertion.                                                                                                          | Re-run current head; no recurrence allowed.                                                                          |
+| Preview deployment dependencies are needlessly serial.                   | High                         | OS waits for auth + dummy Petshop although workers are never deleted and JWKS readiness already polls; this adds roughly 15–20s before the 80–120s OS deploy. The performance doc still describes parallel app deploys. | Prove service-binding/JWKS safety, then start OS with the fleet and retain readiness barriers.                       |
+| Slot handover is a primary current bottleneck.                           | Confirmed                    | PR #2116 reset took 131.3s. AI Search cleanup hit its 90s deadline after 100 deletes, left 498 instances, and the test run grew the namespace to 551.                                                                   | Make cleanup converge, then remove the source of per-test instance churn; preserve long-lived worker infrastructure. |
+| Cloudflare cannot tolerate parallel e2e traffic.                         | Refuted as a blanket claim   | All three OS lanes passed concurrently at a configured peak of 17 workers. The run had two retries and transport warnings, which require individual diagnoses rather than suite-wide serialization.                     | Keep the lanes parallel; trace the two retries and load-step only the implicated operations.                         |
 
 ## Immediate experiment order
 
 1. Restore TUI, Vitest, and Playwright overlap and add sublane start/end timing
-   markers. Keep one retry layer only.
+   markers. Keep one retry layer only. **Complete:** all lanes overlapped and
+   passed; lane timings were 18s / 161s / 213s.
 2. Run a current-head preview at an explicit aggregate concurrency; inspect
    Cloudflare traces/logs for resets, queueing, stream-dial failures, and
-   project-birth latency.
-3. If total time remains over 3m, move file-level work earlier and replace
+   project-birth latency. **In progress:** capacity handled the overlap; two
+   retries, repeated browser-stream dial warnings, and AI Search accumulation
+   remain unexplained.
+3. Restore parallel app deployment, then move file-level work earlier and replace
    per-test project births with a bounded worker-scoped pool.
 4. Remove tests from the deployed lane where the asserted behavior is
    deterministic/local.
@@ -207,9 +224,15 @@ observable.
 - 2026-07-18: current-main green run established the 406.6s serial OS-test
   critical path and captured liveness/dial warnings.
 - 2026-07-18: static suite inventory found 150 project-creation call sites.
-- Next: parallel-runner patch, current preview trace audit, and repeated timing
-  runs. PR comments will mirror each experiment/result rather than rewriting
-  history here.
+- 2026-07-18: experiment 1 restored an explicit 17-worker peak. The check
+  passed in 8m22s; OS lanes overlapped, but Vitest still took 213s and the run
+  absorbed two retries.
+- 2026-07-18: the same run proved slot cleanup is non-convergent: 131.3s spent
+  resetting, 100 AI Search instances deleted, 498 left after reset, and 551
+  present after tests.
+- Next: trace the absorbed failures, restore parallel app deployment, and make
+  project/resource ownership converge. PR comments mirror each experiment and
+  result rather than rewriting history here.
 
 <details>
 <summary>All 162 failed preview attempts</summary>

@@ -97,17 +97,17 @@ describe("preview deploy ordering", () => {
     ).toEqual([["semaphore"]]);
   });
 
-  test("deploys auth and dummy-petshop before OS", () => {
+  test("deploys OS alongside its co-deployed fixtures", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["auth", "dummy-petshop"], ["os"]]);
+    ).toEqual([["os", "auth", "dummy-petshop"]]);
   });
 
-  test("keeps auth dependents parallel after auth is ready", () => {
+  test("deploys the full app fleet in one parallel batch", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
@@ -115,10 +115,16 @@ describe("preview deploy ordering", () => {
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([
-      ["auth", "dummy-petshop"],
-      ["os", "semaphore"],
-    ]);
+    ).toEqual([["os", "semaphore", "auth", "dummy-petshop"]]);
+  });
+
+  test("honors an explicit deploy-after constraint", () => {
+    expect(
+      orderPreviewDeployBatches([
+        { ...cloudflarePreviewApps.os, previewDeployAfter: ["auth"] },
+        cloudflarePreviewApps.auth,
+      ]).map((batch) => batch.map((app) => app.slug)),
+    ).toEqual([["auth"], ["os"]]);
   });
 });
 
