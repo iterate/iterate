@@ -160,7 +160,7 @@ export function vectorSupersedes(other: string, ours: string): boolean {
 }
 
 /** The subset of `navigator.locks.query()` this module reads, injectable for tests. */
-export type LocksQuerySnapshot = {
+type LocksQuerySnapshot = {
   held?: readonly { name?: string | null; mode?: string | null }[] | null;
 };
 
