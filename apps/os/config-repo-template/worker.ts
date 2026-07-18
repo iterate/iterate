@@ -21,15 +21,14 @@ import {
   guestbookStreamPath,
 } from "./guestbook.ts";
 
-// This is ordinary project policy. The linked GitHub repository for repoPath
-// is the scope; no platform GitHub code knows that pull-request agents exist.
+// This is ordinary project policy. Every GitHub-linked project repository is
+// in scope; no platform GitHub code knows that pull-request agents exist.
 // Record keys are stable rule IDs: duplicate identities are structurally
 // impossible, and the same keys become inline prefixes, suppression handles,
 // and future analytics dimensions. Bump policyVersion to intentionally review
 // an unchanged head again after changing the policy.
 const githubPullRequests = {
   policyVersion: "1",
-  repoPath: "/repos/config",
   rules: {
     "structure/no-small-single-use-helper": {
       files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
@@ -172,23 +171,29 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
     number < 1 ||
     repository === undefined ||
     !Number.isSafeInteger(repository.id) ||
-    repository.id < 1
-  ) {
-    return;
-  }
-
-  const snapshot = await itx.repos.get(githubPullRequests.repoPath).processor.snapshot();
-  const route = snapshot.state.github;
-  if (
-    route === null ||
-    event.path !== `/integrations/github/${route.connection}` ||
-    webhook.installationId !== route.installationId ||
-    repository.id !== route.repositoryId ||
+    repository.id < 1 ||
     repository.owner.length === 0 ||
     repository.repo.length === 0
   ) {
     return;
   }
+
+  const repos = await itx.repos.list();
+  const linkedRepos = await Promise.all(
+    repos.map(async ({ path }) => ({
+      path,
+      route: (await itx.repos.get(path).processor.snapshot()).state.github,
+    })),
+  );
+  const linkedRepo = linkedRepos.find(
+    ({ route }) =>
+      route !== null &&
+      event.path === `/integrations/github/${route.connection}` &&
+      webhook.installationId === route.installationId &&
+      repository.id === route.repositoryId,
+  );
+  if (linkedRepo === undefined || linkedRepo.route === null) return;
+  const { path: repoPath, route } = linkedRepo;
 
   const action = webhook.body.action;
   const appSlug = webhook.appSlug;
@@ -218,7 +223,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
     ((webhook.delivery.name === "issue_comment" && action === "created") ||
       (webhook.delivery.name === "pull_request_review" && action === "submitted") ||
       (webhook.delivery.name === "pull_request_review_comment" && action === "created"));
-  const agentPath = `/agents${githubPullRequests.repoPath}/pr/${number}`;
+  const agentPath = `/agents${repoPath}/pr/${number}`;
   const agent = itx.agents.get(agentPath);
   const exists =
     (
@@ -252,7 +257,7 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
         ...event.source,
         crossPostedFrom: [
           {
-            subscriptionKey: `userspace:github-pr:${githubPullRequests.repoPath}`,
+            subscriptionKey: `userspace:github-pr:${repoPath}`,
             createdAt: event.createdAt,
             offset: event.offset,
             path: event.path,

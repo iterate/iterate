@@ -8,9 +8,11 @@ an agent and what the agent should do.
 ```text
 GitHub App webhook
   -> /integrations/github/<connection>       verified original fact
-       |-> /repos/config                     default-branch pushes only
+       |-> /repos/<project path>              default-branch pushes only
        `-> worker.ts processEvent
-            -> /agents/repos/config/pr/<n>   PR history and agent loop
+            -> match itx.repos.list() links
+                 -> /agents/repos/<project path>/pr/<n>
+                                                PR history and agent loop
 ```
 
 There is no pull-request processor or pull-request Durable Object. The agent
@@ -86,9 +88,11 @@ protected override async processEvent(event: StreamEvent): Promise<void> {
 }
 ```
 
-The handler reads the current link and accepts the event only when its stream
-path, installation, and stable repository ID all match. Agent identity mirrors
-the project-controlled repo path:
+The handler lists the project's repos, reads their current links, and accepts
+the event only when one link's stream path, installation, and stable repository
+ID all match. This lets one connection drive agents for every linked repo
+without hard-coding a single path. Agent identity mirrors the matching
+project-controlled repo path:
 
 ```text
 /repos/config       -> /agents/repos/config/pr/42
@@ -130,7 +134,6 @@ IDs used in suppressions, comments, idempotency, and future analytics:
 ```ts
 const githubPullRequests = {
   policyVersion: "1",
-  repoPath: "/repos/config",
   rules: {
     "typescript/explain-type-cast": {
       files: ["**/*.{ts,tsx,mts,cts}"],
@@ -140,6 +143,10 @@ const githubPullRequests = {
   },
 };
 ```
+
+The same project policy applies to every GitHub-linked repo. The router derives
+each agent path from the matched Iterate repo path; GitHub owner/name changes
+therefore do not move its history.
 
 An open, non-draft `opened`, `ready_for_review`, or `synchronize` delivery adds
 a review task with `interrupt-current-request`. The task tells the existing

@@ -11,6 +11,7 @@ const route = {
 } satisfies GithubRepoLink;
 
 const agentPath = "/agents/repos/config/pr/7";
+const iterateAgentPath = "/agents/repos/iterate/pr/7";
 
 function webhook(input?: {
   action?: string;
@@ -80,7 +81,11 @@ function webhook(input?: {
   };
 }
 
-function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null }) {
+function harness(input?: {
+  agentExists?: boolean;
+  route?: GithubRepoLink | null;
+  routes?: Record<string, GithubRepoLink | null>;
+}) {
   const births = new Map<string, StreamEvent>();
   if (input?.agentExists) {
     births.set(agentPath, {
@@ -124,19 +129,23 @@ function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null 
       getEvents: () => getEvents(path),
     },
   }));
-  const snapshot = vi.fn(async () => ({
-    offset: 1,
-    state: { github: input?.route === undefined ? route : input.route },
+  const routes = input?.routes ?? {
+    "/repos/config": input?.route === undefined ? route : input.route,
+  };
+  const repoList = vi.fn(async () => Object.keys(routes).map((path) => ({ path })));
+  const repoGet = vi.fn((path: string) => ({
+    processor: {
+      snapshot: async () => ({ offset: 1, state: { github: routes[path] ?? null } }),
+    },
   }));
-  const repoGet = vi.fn(() => ({ processor: { snapshot } }));
   const project = {
     agents: { get: agentGet },
     // Project is an RPC stub in userspace: property reads are thenables until
     // awaited, even though the generated ergonomic interface exposes string.
     projectId: Promise.resolve("prj_1"),
-    repos: { get: repoGet },
+    repos: { get: repoGet, list: repoList },
   };
-  // This fake implements the handler's three RPC calls; the generated Project
+  // This fake implements the handler's RPC calls; the generated Project
   // interface is intentionally much larger, so a structural cast is unavoidable.
   const itx = project as unknown as Project;
   return {
@@ -149,6 +158,7 @@ function harness(input?: { agentExists?: boolean; route?: GithubRepoLink | null 
     getEvents,
     itx,
     repoGet,
+    repoList,
   };
 }
 
@@ -233,6 +243,27 @@ describe("userspace GitHub pull-request routing", () => {
     expect(task).toContain("iterate-lint-disable-next-line");
     expect(task).toContain("structure/no-small-single-use-helper");
     expect(task).toContain("<!-- iterate-ai-lint:101:policy:1:head:head-abc -->");
+  });
+
+  it("routes each linked GitHub repository through its project-controlled repo path", async () => {
+    const test = harness({
+      routes: {
+        "/repos/config": { ...route, repo: "config", repositoryId: 202 },
+        "/repos/iterate": route,
+      },
+    });
+
+    await handleGithubPullRequestWebhook(test.itx, webhook());
+
+    expect(test.repoList).toHaveBeenCalledOnce();
+    expect(test.agentGet).toHaveBeenCalledWith(iterateAgentPath);
+    expect(test.create).toHaveBeenCalledWith(iterateAgentPath);
+    expect(test.appendBatches[0]?.path).toBe(iterateAgentPath);
+    expect(test.appendBatches[0]?.events[1]).toMatchObject({
+      source: {
+        crossPostedFrom: [{ subscriptionKey: "userspace:github-pr:/repos/iterate" }],
+      },
+    });
   });
 
   it("does not create from an unmentioned later delivery", async () => {
