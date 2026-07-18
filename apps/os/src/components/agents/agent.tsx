@@ -179,8 +179,15 @@ export function AgentListRow({
               · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
             </span>
           ) : null}
-          <BindingLink binding={agent.binding} className="relative z-10 max-w-48 shrink-0" />
-          <AgentWaitingBadge waitingFor={agent.summary.waitingFor} />
+          {agent.binding === undefined && agent.summary.waitingFor === undefined ? null : (
+            <span
+              className="relative z-10 ml-auto flex min-w-0 shrink-0 items-center gap-1.5"
+              data-agent-row-tail
+            >
+              <BindingLink binding={agent.binding} className="max-w-48 shrink-0" />
+              <AgentWaitingBadge waitingFor={agent.summary.waitingFor} />
+            </span>
+          )}
         </div>
       </div>
       <PinButton
@@ -221,11 +228,7 @@ function AgentRuntimeStatus({
 function AgentWaitingBadge({ waitingFor }: { waitingFor: AgentRecord["summary"]["waitingFor"] }) {
   if (waitingFor === undefined) return null;
   return (
-    <Badge
-      variant="secondary"
-      className="relative z-10 ml-auto"
-      data-agent-waiting-for={waitingFor}
-    >
+    <Badge variant="secondary" data-agent-waiting-for={waitingFor}>
       {WAITING_FOR_LABEL[waitingFor]}
     </Badge>
   );

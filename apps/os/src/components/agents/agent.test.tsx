@@ -187,6 +187,33 @@ describe("Agent presentation family", () => {
     expect(markup).toContain("Waiting for timer");
   });
 
+  test("a binding stays in the right-aligned row tail without a waiting badge", () => {
+    const agent = record("/agents/inbox", {
+      binding: {
+        type: "email_thread",
+        threadId: "thread-1",
+        subject: "Launch inbox",
+      },
+    });
+    const [node] = buildAgentForest({ [agent.path]: agent });
+    if (node === undefined) throw new Error("missing test node");
+
+    const markup = renderToStaticMarkup(
+      <AgentListRow
+        node={node}
+        nowMs={Date.parse(CREATED_AT)}
+        expanded={false}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-agent-row-tail="true"');
+    expect(markup).toContain('class="relative z-10 ml-auto flex');
+    expect(markup).toContain("Email · Launch inbox");
+    expect(markup).not.toContain('data-agent-waiting-for="');
+  });
+
   test("detail renders the complete path, self state, and every available exact timestamp", () => {
     const agent = record("/agents/a/long/and-readable/path", {
       summary: {
