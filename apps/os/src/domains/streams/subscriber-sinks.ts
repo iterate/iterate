@@ -71,12 +71,12 @@ export type RetainedProcessEventBatch = ((
     pendingDeliveries?(): number;
   };
 
-/** Cleanup cannot revise the delivery outcome that was already observed. */
-function disposeDeliveryResult(result: unknown): void {
+/** RPC-result cleanup cannot revise the operation outcome that was already observed. */
+function disposeRpcResultAfterOutcome(result: unknown, failureMessage: string): void {
   try {
     disposeIgnoredRpcResult(result);
   } catch (error) {
-    console.warn("stream delivery RPC result dispose failed after delivery outcome", { error });
+    console.warn(failureMessage, { error });
   }
 }
 
@@ -98,11 +98,12 @@ export function retainProcessEventBatch(
   opts: {
     onDeliveryError?: (error: unknown) => void;
     /**
-     * Runs after the retained stub is disposed — the hook that lets a caller
+     * Runs before the retained stub is disposed — the hook that lets a caller
      * tie the handshake's runtime-state and ping capabilities to this sink,
-     * so those sidecars outlive every batch call but not the connection.
+     * so those sidecars outlive every batch call but release before the sink
+     * tears down the RPC chain they proxy through.
      */
-    onDisposed?: () => void;
+    onDisposing?: () => void;
   } = {},
 ): RetainedProcessEventBatch {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
@@ -143,11 +144,17 @@ export function retainProcessEventBatch(
           )
           .finally(() => {
             pendingDeliveries -= 1;
-            disposeDeliveryResult(result);
+            disposeRpcResultAfterOutcome(
+              result,
+              "stream delivery RPC result dispose failed after delivery outcome",
+            );
           });
         return;
       }
-      disposeDeliveryResult(result);
+      disposeRpcResultAfterOutcome(
+        result,
+        "stream delivery RPC result dispose failed after delivery outcome",
+      );
       // Ephemeral lane (results disposed unpulled): "settled" is meaningless
       // here — the subscriber's consumption is self-reported instead — but a
       // LOCAL sink's synchronous return is a genuine settle.
@@ -158,10 +165,20 @@ export function retainProcessEventBatch(
       [Symbol.dispose]() {
         if (disposed) return;
         disposed = true;
+        const failures: unknown[] = [];
+        try {
+          opts.onDisposing?.();
+        } catch (error) {
+          failures.push(error);
+        }
         try {
           retained[Symbol.dispose]();
-        } finally {
-          opts.onDisposed?.();
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "stream retained delivery capability disposal failed");
         }
       },
     },
@@ -188,10 +205,16 @@ function retainPulledCall<In, Out>(
       const result = retained(input);
       if (isThenable(result)) {
         return Promise.resolve(result).finally(() =>
-          disposeIgnoredRpcResult(result),
+          disposeRpcResultAfterOutcome(
+            result,
+            "stream pulled RPC result dispose failed after RPC outcome",
+          ),
         ) as Promise<Out>;
       }
-      disposeIgnoredRpcResult(result);
+      disposeRpcResultAfterOutcome(
+        result,
+        "stream pulled RPC result dispose failed after RPC outcome",
+      );
       return result as Out;
     },
     {
@@ -254,7 +277,10 @@ export function retainWakeHandshakeResponse(args: {
   const releaseOriginal = () => {
     if (originalReleased) return;
     originalReleased = true;
-    disposeIgnoredRpcResult(args.value);
+    disposeRpcResultAfterOutcome(
+      args.value,
+      "stream wake handshake original RPC result dispose failed during ownership release",
+    );
   };
 
   let getRuntimeState: (GetProcessorRuntimeState & Disposable) | undefined;
@@ -264,31 +290,31 @@ export function retainWakeHandshakeResponse(args: {
   const releaseRetained = () => {
     if (retainedReleased) return;
     retainedReleased = true;
-    let firstError: unknown;
-    for (const release of [
-      () => ping?.[Symbol.dispose](),
-      () => getRuntimeState?.[Symbol.dispose](),
-    ]) {
+    const failures: { capability: string; error: unknown }[] = [];
+    for (const [capability, release] of [
+      ["ping", () => ping?.[Symbol.dispose]()],
+      ["getProcessorRuntimeState", () => getRuntimeState?.[Symbol.dispose]()],
+    ] as const) {
       try {
         release();
       } catch (error) {
-        firstError ??= error;
+        failures.push({ capability, error });
       }
     }
-    if (firstError !== undefined) throw firstError;
+    if (failures.length > 0) {
+      console.error("stream wake handshake retained capability disposal failed", { failures });
+    }
   };
 
-  let ownershipTransferred = false;
   try {
     const response = parseWakeHandshake(args.value);
     getRuntimeState = retainGetProcessorRuntimeState(response.getRuntimeState);
     ping = retainSubscriberPing(response.ping);
     sink = retainProcessEventBatch(response.sink, {
       onDeliveryError: args.onDeliveryError,
-      onDisposed: releaseRetained,
+      onDisposing: releaseRetained,
     });
     releaseOriginal();
-    ownershipTransferred = true;
     return {
       checkpointOffset: response.checkpointOffset,
       sink,
@@ -296,15 +322,20 @@ export function retainWakeHandshakeResponse(args: {
       getRuntimeState,
       ping,
     };
-  } finally {
-    if (!ownershipTransferred) {
-      try {
-        if (sink === undefined) releaseRetained();
-        else sink[Symbol.dispose]();
-      } finally {
-        releaseOriginal();
-      }
+  } catch (error) {
+    // This is failure CLEANUP, not the operation failure. Release the retained
+    // group in dependency order, release the original result last, report any
+    // broken disposer, and preserve the exact parse/duplication error.
+    try {
+      if (sink === undefined) releaseRetained();
+      else sink[Symbol.dispose]();
+    } catch (cleanupError) {
+      console.error("stream wake handshake retained sink disposal failed", {
+        error: cleanupError,
+      });
     }
+    releaseOriginal();
+    throw error;
   }
 }
 
@@ -417,7 +448,14 @@ export function createSubscriberDial(deps: {
         }
       } catch (error) {
         if (webhookEgress === egress) webhookEgress = undefined;
-        (egress as Partial<Disposable>)[Symbol.dispose]?.();
+        try {
+          (egress as Partial<Disposable>)[Symbol.dispose]?.();
+        } catch (disposeError) {
+          console.warn("stream webhook egress dispose failed after delivery failure", {
+            deliveryError: error,
+            error: disposeError,
+          });
+        }
         throw error;
       }
     },

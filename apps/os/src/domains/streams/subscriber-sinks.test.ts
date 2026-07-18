@@ -4,21 +4,36 @@ import type {
   ProcessEventBatch,
   StreamPushEventBatch,
   StreamSubscriberPing,
+  StreamWebhookDelivery,
 } from "iterate/processors";
 
 const dialMocks = vi.hoisted(() => ({
   evaluateItxExpression: vi.fn(),
+  projectEgressFetcher: vi.fn(),
 }));
 
 vi.mock("../../itx/expression.ts", () => ({
   evaluateItxExpression: dialMocks.evaluateItxExpression,
 }));
-const { createSubscriberDial, retainProcessEventBatch, retainWakeHandshakeResponse } =
-  await import("./subscriber-sinks.ts");
+vi.mock("../projects/utils.ts", () => ({
+  projectEgressFetcher: dialMocks.projectEgressFetcher,
+}));
+const {
+  createSubscriberDial,
+  retainProcessEventBatch,
+  retainSubscriberPing,
+  retainWakeHandshakeResponse,
+} = await import("./subscriber-sinks.ts");
 
-function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
-  const rawDispose = vi.fn();
-  const duplicateDispose = vi.fn();
+function remoteCallback<Arg, Result>(
+  implementation: (arg: Arg) => Result,
+  opts: {
+    onDuplicateDispose?: () => void;
+    onRawDispose?: () => void;
+  } = {},
+) {
+  const rawDispose = vi.fn(opts.onRawDispose);
+  const duplicateDispose = vi.fn(opts.onDuplicateDispose);
   const duplicate = Object.assign((arg: Arg) => implementation(arg), {
     [Symbol.dispose]: duplicateDispose,
   });
@@ -247,6 +262,86 @@ describe("retained batch RPC result ownership", () => {
   });
 });
 
+describe("pulled RPC result ownership", () => {
+  const input = { t0: 1 };
+  const reply = { t0: 1, t1: 2, t2: 3 };
+
+  test("preserves an asynchronous fulfillment when result disposal fails", async () => {
+    const disposalError = new Error("result dispose exploded");
+    const disposeResult = vi.fn(() => {
+      throw disposalError;
+    });
+    const result = Object.assign(Promise.resolve(reply), {
+      [Symbol.dispose]: disposeResult,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ping = retainSubscriberPing(() => result)!;
+
+    try {
+      await expect(ping(input)).resolves.toBe(reply);
+      expect(disposeResult).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "stream pulled RPC result dispose failed after RPC outcome",
+        { error: disposalError },
+      );
+    } finally {
+      ping[Symbol.dispose]();
+      warn.mockRestore();
+    }
+  });
+
+  test("preserves an asynchronous rejection when result disposal also fails", async () => {
+    const rpcError = new Error("ping rejected");
+    const disposalError = new Error("result dispose exploded");
+    const disposeResult = vi.fn(() => {
+      throw disposalError;
+    });
+    const result = Object.assign(Promise.reject(rpcError), {
+      [Symbol.dispose]: disposeResult,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ping = retainSubscriberPing(() => result)!;
+
+    try {
+      await expect(ping(input)).rejects.toBe(rpcError);
+      expect(disposeResult).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "stream pulled RPC result dispose failed after RPC outcome",
+        { error: disposalError },
+      );
+    } finally {
+      ping[Symbol.dispose]();
+      warn.mockRestore();
+    }
+  });
+
+  test("preserves a synchronous return when result disposal fails", () => {
+    const disposalError = new Error("result dispose exploded");
+    const result = Object.assign(
+      { ...reply },
+      {
+        [Symbol.dispose]: vi.fn(() => {
+          throw disposalError;
+        }),
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ping = retainSubscriberPing(() => result)!;
+
+    try {
+      expect(ping(input)).toBe(result);
+      expect(result[Symbol.dispose]).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "stream pulled RPC result dispose failed after RPC outcome",
+        { error: disposalError },
+      );
+    } finally {
+      ping[Symbol.dispose]();
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("wake-handshake RPC ownership", () => {
   test("retains every returned capability and disposes the original RPC result", async () => {
     const sink = remoteCallback<Parameters<ProcessEventBatch>[0], void>(() => {});
@@ -304,6 +399,140 @@ describe("wake-handshake RPC ownership", () => {
     expect(ping.duplicateDispose).toHaveBeenCalledOnce();
   });
 
+  test("keeps a healthy retained handshake when original result disposal fails", () => {
+    const disposalError = new Error("original result dispose exploded");
+    const sink = remoteCallback<Parameters<ProcessEventBatch>[0], void>(() => {});
+    const getRuntimeState = remoteCallback<void, { snapshot: { offset: number; state: object } }>(
+      () => ({ snapshot: { offset: 0, state: {} } }),
+    );
+    const ping = remoteCallback<{ t0: number }, { t0: number; t1: number; t2: number }>(
+      ({ t0 }) => ({ t0, t1: t0, t2: t0 }),
+    );
+    const onDeliveryError = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      const retained = retainWakeHandshakeResponse({
+        onDeliveryError,
+        value: {
+          checkpointOffset: 0,
+          sink: sink.raw as ProcessEventBatch,
+          getRuntimeState: getRuntimeState.raw as GetProcessorRuntimeState,
+          ping: ping.raw as StreamSubscriberPing,
+          [Symbol.dispose]: () => {
+            sink.raw[Symbol.dispose]();
+            getRuntimeState.raw[Symbol.dispose]();
+            ping.raw[Symbol.dispose]();
+            throw disposalError;
+          },
+        },
+      });
+
+      expect(retained.checkpointOffset).toBe(0);
+      expect(onDeliveryError).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "stream wake handshake original RPC result dispose failed during ownership release",
+        { error: disposalError },
+      );
+      retained.sink[Symbol.dispose]();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("preserves a duplication failure through every fallible cleanup", () => {
+    const order: string[] = [];
+    const duplicationError = new Error("sink dup failed");
+    const pingCleanupError = new Error("ping cleanup failed");
+    const runtimeCleanupError = new Error("runtime cleanup failed");
+    const originalCleanupError = new Error("original cleanup failed");
+    const runtime = remoteCallback<void, object>(() => ({}), {
+      onDuplicateDispose: () => {
+        order.push("runtime");
+        throw runtimeCleanupError;
+      },
+    });
+    const ping = remoteCallback<{ t0: number }, { t0: number; t1: number; t2: number }>(
+      ({ t0 }) => ({ t0, t1: t0, t2: t0 }),
+      {
+        onDuplicateDispose: () => {
+          order.push("ping");
+          throw pingCleanupError;
+        },
+      },
+    );
+    const sink = Object.assign(() => undefined, {
+      dup: () => {
+        throw duplicationError;
+      },
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      expect(() =>
+        retainWakeHandshakeResponse({
+          onDeliveryError: vi.fn(),
+          value: {
+            checkpointOffset: 0,
+            sink,
+            getRuntimeState: runtime.raw as GetProcessorRuntimeState,
+            ping: ping.raw as StreamSubscriberPing,
+            [Symbol.dispose]: () => {
+              order.push("original");
+              throw originalCleanupError;
+            },
+          },
+        }),
+      ).toThrow(duplicationError);
+      expect(order).toEqual(["ping", "runtime", "original"]);
+      expect(errorLog).toHaveBeenCalledWith(
+        "stream wake handshake retained capability disposal failed",
+        {
+          failures: [
+            { capability: "ping", error: pingCleanupError },
+            { capability: "getProcessorRuntimeState", error: runtimeCleanupError },
+          ],
+        },
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "stream wake handshake original RPC result dispose failed during ownership release",
+        { error: originalCleanupError },
+      );
+    } finally {
+      errorLog.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  test("releases retained sidecars before the sink that carries their RPC chain", () => {
+    const order: string[] = [];
+    const sink = remoteCallback<Parameters<ProcessEventBatch>[0], void>(() => {}, {
+      onDuplicateDispose: () => order.push("sink"),
+    });
+    const runtime = remoteCallback<void, object>(() => ({}), {
+      onDuplicateDispose: () => order.push("runtime"),
+    });
+    const ping = remoteCallback<{ t0: number }, { t0: number; t1: number; t2: number }>(
+      ({ t0 }) => ({ t0, t1: t0, t2: t0 }),
+      { onDuplicateDispose: () => order.push("ping") },
+    );
+    const retained = retainWakeHandshakeResponse({
+      onDeliveryError: vi.fn(),
+      value: {
+        checkpointOffset: 0,
+        sink: sink.raw as ProcessEventBatch,
+        getRuntimeState: runtime.raw as GetProcessorRuntimeState,
+        ping: ping.raw as StreamSubscriberPing,
+        [Symbol.dispose]: vi.fn(),
+      },
+    });
+
+    retained.sink[Symbol.dispose]();
+
+    expect(order).toEqual(["ping", "runtime", "sink"]);
+  });
+
   test("disposes the RPC result when the handshake is invalid", () => {
     const disposeResult = vi.fn();
 
@@ -352,5 +581,39 @@ describe("wake-handshake RPC ownership", () => {
 
     expect(sink.duplicateDispose).toHaveBeenCalledOnce();
     expect(onDeliveryError).not.toHaveBeenCalled();
+  });
+});
+
+describe("webhook egress RPC ownership", () => {
+  test("preserves the delivery failure when egress disposal also fails", async () => {
+    const deliveryError = new Error("webhook network failed");
+    const disposalError = new Error("egress dispose exploded");
+    const disposeEgress = vi.fn(() => {
+      throw disposalError;
+    });
+    dialMocks.projectEgressFetcher.mockReset().mockReturnValue({
+      fetch: vi.fn().mockRejectedValue(deliveryError),
+      [Symbol.dispose]: disposeEgress,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      createAuthorityRoot: () => ({}),
+      onDurableDeliveryError: vi.fn(),
+    });
+
+    try {
+      await expect(
+        dial.webhook("https://example.com/hook", {} as StreamWebhookDelivery),
+      ).rejects.toBe(deliveryError);
+      expect(disposeEgress).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "stream webhook egress dispose failed after delivery failure",
+        { deliveryError, error: disposalError },
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
