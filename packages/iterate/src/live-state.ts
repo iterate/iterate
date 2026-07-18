@@ -54,14 +54,12 @@ export class LiveStateRpcTarget<State extends object>
     }
   }
 
-  async get(): Promise<State> {
+  async get() {
     await this.#beforeRead?.();
     return this.#live.getState();
   }
 
-  async subscribe(
-    onUpdate: (update: LiveUpdate<State>) => unknown,
-  ): Promise<LiveStateSubscriptionHandle> {
+  async subscribe(onUpdate: (update: LiveUpdate<State>) => unknown) {
     await this.#beforeRead?.();
     return new LiveStateSubscriptionRpcTarget(this.#live.subscribe(onUpdate));
   }
