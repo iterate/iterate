@@ -394,7 +394,10 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     store.ensure("k", 0);
     const replacement = store.get("k")!;
 
-    store.beginAttempt(removed, 100);
+    expect(store.beginAttempt(removed, 100)).toBe(false);
+    expect(
+      store.deferInfrastructure(removed, { nextAttemptAt: 150, error: "old infrastructure" }),
+    ).toBe(false);
     store.nack(removed, { attempt: 7, nextAttemptAt: 200, error: "old failure" });
     store.advanceWatermark(removed, 99);
 
@@ -406,7 +409,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     store.ensure("k", 0);
     const attempt = store.get("k")!;
 
-    store.beginAttempt(attempt, 100);
+    expect(store.beginAttempt(attempt, 100)).toBe(true);
     expect(store.get("k")).toMatchObject({
       watchdogAt: 100,
       retryAt: null,

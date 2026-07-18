@@ -186,9 +186,12 @@ export class DurableDeliveryCoordinator {
 
   /** Persist and arm the successor wake before crossing a remote boundary. */
   async begin(attempt: DeliveryAttempt): Promise<"ready" | "stale" | "parked"> {
-    if (!this.isCurrent(attempt)) return "stale";
+    if (!this.#isConfigurationCurrent(attempt)) return "stale";
     const watchdogAt = this.#hooks.now() + DELIVERY_WATCHDOG_MS;
-    this.#hooks.store.beginAttempt(attempt, watchdogAt);
+    // The fenced UPDATE is both the epoch check and the first durable
+    // obligation. A separate pre-write get() could fail after reconciliation
+    // captured this fence and strand a quiet stream with no watchdog at all.
+    if (!this.#hooks.store.beginAttempt(attempt, watchdogAt)) return "stale";
     const projectionError = await this.#armWithRetries(watchdogAt, "delivery watchdog");
     if (projectionError !== undefined) {
       await this.#park(
@@ -254,12 +257,16 @@ export class DurableDeliveryCoordinator {
     attempt: DeliveryAttempt,
     error: unknown,
   ): Promise<"scheduled" | "parked" | "stale"> {
-    if (!this.isCurrent(attempt)) return "stale";
+    if (!this.#isConfigurationCurrent(attempt)) return "stale";
     const retryAt = this.#hooks.now() + INFRASTRUCTURE_RETRY_MS;
-    this.#hooks.store.deferInfrastructure(attempt, {
-      nextAttemptAt: retryAt,
-      error: errorMessage(error),
-    });
+    if (
+      !this.#hooks.store.deferInfrastructure(attempt, {
+        nextAttemptAt: retryAt,
+        error: errorMessage(error),
+      })
+    ) {
+      return "stale";
+    }
     const projectionError = await this.#armWithRetries(retryAt, "infrastructure retry");
     if (projectionError !== undefined) {
       await this.#park(

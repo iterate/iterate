@@ -602,9 +602,10 @@ export class StreamSubscribers {
           return;
         }
 
-        // Only the remote handshake itself belongs to receiver policy. Every
-        // parse/open/watermark failure below is local stream infrastructure and
-        // must preserve the receiver's attempt/poison counters.
+        // The remote handshake and validation of receiver-owned response data
+        // belong to receiver policy. Once that data is accepted, failures in
+        // connection installation and watermark persistence are local stream
+        // infrastructure and must preserve receiver attempt/poison counters.
         let response: Awaited<ReturnType<SubscriberDial["poke"]>>;
         try {
           // A poke that outlives its timeout still eventually settles with a
@@ -616,15 +617,7 @@ export class StreamSubscribers {
             onLateResolve: (late) => late.sink[Symbol.dispose](),
           });
         } catch (error) {
-          try {
-            await this.#delivery.fail(attempt, error);
-          } catch (recoveryError) {
-            await this.#recoverInfrastructure(
-              attempt,
-              recoveryError,
-              "wake receiver-failure persistence",
-            );
-          }
+          await this.#recordReceiverFailure(attempt, error, "wake receiver-failure persistence");
           return;
         }
 
@@ -643,30 +636,51 @@ export class StreamSubscribers {
         let connection: Connection | undefined;
         try {
           let presence: StreamSubscriberDescriptor | undefined;
+          let selector: CompiledEventSelector | undefined;
           try {
             presence =
               response.subscriber === undefined
                 ? undefined
                 : StreamSubscriberDescriptorSchema.parse(response.subscriber);
+            const streamHead = this.#hooks.coreState().maxOffset;
+            if (
+              !Number.isSafeInteger(response.checkpointOffset) ||
+              response.checkpointOffset < 0 ||
+              response.checkpointOffset > streamHead
+            ) {
+              throw new Error(
+                response.checkpointOffset > streamHead
+                  ? `checkpointOffset ${response.checkpointOffset} is ahead of the stream head ${streamHead}`
+                  : "checkpointOffset must be a non-negative safe integer",
+              );
+            }
+            // The announcement's consumes list is the wake-mode selector: the
+            // stream only delivers event types the processor consumes, exactly
+            // as the old subscribe-back handshake did. It is receiver-owned
+            // response data, so an invalid selector follows receiver policy.
+            const consumes = presence?.processor?.announcement.consumes;
+            selector =
+              consumes === undefined
+                ? undefined
+                : compileEventSelector({ eventTypes: [...consumes] });
           } catch (error) {
-            // Reject the malformed descriptor WITHOUT leaking the sink retained
-            // moments earlier (round-1 finding 4.2 / round-2 blocker 4a).
+            // Reject malformed receiver content WITHOUT leaking the sink
+            // retained moments earlier (round-1 finding 4.2 / round-2 blocker
+            // 4a), then use the same bounded receiver backoff as a failed poke.
             response.sink[Symbol.dispose]();
-            throw error;
+            await this.#recordReceiverFailure(
+              attempt,
+              error,
+              "wake response receiver-failure persistence",
+            );
+            return;
           }
-          // The announcement's consumes list is the wake-mode selector: the
-          // stream only delivers event types the processor consumes, exactly as
-          // the old subscribe-back handshake did.
-          const consumes = presence?.processor?.announcement.consumes;
           connection = this.#open({
             subscriptionKey,
             subscriptionType: "configured",
             sink: response.sink,
             replayAfterOffset: response.checkpointOffset,
-            selector:
-              consumes === undefined
-                ? undefined
-                : compileEventSelector({ eventTypes: [...consumes] }),
+            selector,
             presence,
             getRuntimeState: response.getRuntimeState,
             ping: response.ping,
@@ -979,6 +993,19 @@ export class StreamSubscribers {
         originalError: error,
       });
       this.#hooks.abortIncarnation("stream delivery infrastructure recovery failed");
+    }
+  }
+
+  /** Receiver policy first; infrastructure recovery only if persisting it fails. */
+  async #recordReceiverFailure(
+    attempt: DeliveryAttempt,
+    error: unknown,
+    recoveryOperation: string,
+  ): Promise<void> {
+    try {
+      await this.#delivery.fail(attempt, error);
+    } catch (recoveryError) {
+      await this.#recoverInfrastructure(attempt, recoveryError, recoveryOperation);
     }
   }
 

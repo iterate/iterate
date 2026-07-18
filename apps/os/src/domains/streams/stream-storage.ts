@@ -307,9 +307,11 @@ export type SubscriptionCursorStore = {
   advanceWatermark(fence: SubscriptionCursorFence, ackedOffset: number): void;
   /**
    * Begin a remote attempt: consume any due retry and persist its crash
-   * watchdog without changing the failure count/error.
+   * watchdog without changing the failure count/error. Returns whether the
+   * fenced row was mutated, so callers need no fallible read before the
+   * durable obligation exists.
    */
-  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): void;
+  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): boolean;
   /** Consume only the in-flight watchdog (for an immediate local transition). */
   clearWatchdog(fence: SubscriptionCursorFence): void;
   /**
@@ -319,7 +321,7 @@ export type SubscriptionCursorStore = {
   deferInfrastructure(
     fence: SubscriptionCursorFence,
     args: { nextAttemptAt: number; error: string },
-  ): void;
+  ): boolean;
   /** Failed delivery: record the consecutive attempt count and when to retry. */
   nack(
     fence: SubscriptionCursorFence,
@@ -465,17 +467,19 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set acked_offset = max(acked_offset, :ackedOffset), watchdog_at = null, retry_at = null, updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
-      beginAttempt: sql.run<{
+      beginAttempt: sql.nullableOne<{
         parameters: {
           subscriptionKey: string;
           watchdogAt: number;
           epoch: number;
           updatedAt: string;
         };
+        result: { epoch: number };
       }>`
         update subscriptions
         set watchdog_at = :watchdogAt, retry_at = null, updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
+        returning epoch
       `,
       clearWatchdog: sql.run<{
         parameters: {
@@ -488,7 +492,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set watchdog_at = null, updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
-      deferInfrastructure: sql.run<{
+      deferInfrastructure: sql.nullableOne<{
         parameters: {
           subscriptionKey: string;
           nextAttemptAt: number;
@@ -496,11 +500,13 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
           epoch: number;
           updatedAt: string;
         };
+        result: { epoch: number };
       }>`
         update subscriptions
         set watchdog_at = null, retry_at = :nextAttemptAt, last_error = :error,
           updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
+        returning epoch
       `,
       nack: sql.run<{
         parameters: {
@@ -642,12 +648,14 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#db.advanceWatermark({ ...fence, ackedOffset, updatedAt: new Date().toISOString() });
   }
 
-  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): void {
-    this.#db.beginAttempt({
-      ...fence,
-      watchdogAt,
-      updatedAt: new Date().toISOString(),
-    });
+  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): boolean {
+    return (
+      this.#db.beginAttempt({
+        ...fence,
+        watchdogAt,
+        updatedAt: new Date().toISOString(),
+      }) !== null
+    );
   }
 
   clearWatchdog(fence: SubscriptionCursorFence): void {
@@ -657,13 +665,15 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   deferInfrastructure(
     fence: SubscriptionCursorFence,
     args: { nextAttemptAt: number; error: string },
-  ): void {
-    this.#db.deferInfrastructure({
-      ...fence,
-      nextAttemptAt: args.nextAttemptAt,
-      error: args.error.slice(0, 2_000),
-      updatedAt: new Date().toISOString(),
-    });
+  ): boolean {
+    return (
+      this.#db.deferInfrastructure({
+        ...fence,
+        nextAttemptAt: args.nextAttemptAt,
+        error: args.error.slice(0, 2_000),
+        updatedAt: new Date().toISOString(),
+      }) !== null
+    );
   }
 
   nack(

@@ -124,10 +124,11 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     },
     beginAttempt: (fence, watchdogAt) => {
       const row = fenced(fence);
-      if (!row) return;
+      if (!row) return false;
       row.watchdogAt = watchdogAt;
       row.retryAt = null;
       refreshDeadline(row);
+      return true;
     },
     clearWatchdog: (fence) => {
       const row = fenced(fence);
@@ -137,13 +138,14 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     },
     deferInfrastructure: (fence, args) => {
       const row = fenced(fence);
-      if (!row) return;
+      if (!row) return false;
       Object.assign(row, {
         watchdogAt: null,
         retryAt: args.nextAttemptAt,
         lastError: args.error,
       });
       refreshDeadline(row);
+      return true;
     },
     nack: (fence, args) => {
       const row = fenced(fence);

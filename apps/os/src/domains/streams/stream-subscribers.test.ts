@@ -138,12 +138,13 @@ class FakeCursorStore implements SubscriptionCursorStore {
     this.#refreshDeadline(row);
   }
 
-  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): void {
+  beginAttempt(fence: SubscriptionCursorFence, watchdogAt: number): boolean {
     const row = this.#fenced(fence);
-    if (row === undefined) return;
+    if (row === undefined) return false;
     row.watchdogAt = watchdogAt;
     row.retryAt = null;
     this.#refreshDeadline(row);
+    return true;
   }
 
   clearWatchdog(fence: SubscriptionCursorFence): void {
@@ -156,13 +157,14 @@ class FakeCursorStore implements SubscriptionCursorStore {
   deferInfrastructure(
     fence: SubscriptionCursorFence,
     args: { nextAttemptAt: number; error: string },
-  ): void {
+  ): boolean {
     const row = this.#fenced(fence);
-    if (row === undefined) return;
+    if (row === undefined) return false;
     row.watchdogAt = null;
     row.retryAt = args.nextAttemptAt;
     row.lastError = args.error.slice(0, 2_000);
     this.#refreshDeadline(row);
+    return true;
   }
 
   nack(
@@ -734,6 +736,38 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
   });
 
+  it("a3c2. a cursor read failure after fence capture cannot precede the durable watchdog", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const get = h.store.get.bind(h.store);
+    let reads = 0;
+    h.store.get = (subscriptionKey) => {
+      reads += 1;
+      if (reads > 1) throw new Error("cursor reads failed after fence capture");
+      return get(subscriptionKey);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    h.store.get = get;
+    expect(h.pushes).toHaveLength(0);
+    const deadline = h.row("k")!.nextAttemptAt;
+    expect(deadline).not.toBeNull();
+    expect(h.platformAlarm()).toBe(deadline);
+
+    // The quiet stream needs no append or manual wake: a fresh incarnation
+    // reprojects the persisted successor and the due alarm resumes delivery.
+    h.restart();
+    h.advanceTo(deadline! + 1);
+    await h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, nextAttemptAt: null });
+  });
+
   it("a3d. a cursor read failure between webhook batches retains the prior fence", async () => {
     const h = makeHarness();
     h.configure(webhookPayload(), 0);
@@ -874,21 +908,16 @@ describe("StreamSubscribers", () => {
     h.configure(pushPayload(), 0);
     h.append(evt(1, "a"));
 
-    const get = h.store.get.bind(h.store);
-    let recoveryPending = false;
     h.store.ackAttempt = () => {
-      recoveryPending = true;
       throw new Error("cursor ack failed");
     };
-    h.store.get = (subscriptionKey) => {
-      if (recoveryPending) throw new Error("cursor recovery read failed");
-      return get(subscriptionKey);
+    h.store.deferInfrastructure = () => {
+      throw new Error("cursor recovery write failed");
     };
 
     h.subscribers.wake();
     await h.settle();
 
-    recoveryPending = false;
     expect(h.row("k")?.ackedOffset).toBe(0);
     expect(h.armedAlarms).toContain(h.row("k")!.nextAttemptAt);
     expect(h.platformAlarm()).toBe(h.row("k")!.nextAttemptAt);
@@ -1697,6 +1726,51 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake();
     await h.settle();
     expect(h.pokes).toHaveLength(1);
+  });
+
+  it("j1b. a malformed receiver descriptor enters bounded receiver backoff", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink: makeSink().sink,
+      subscriber: { processor: "not-a-processor-descriptor" },
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 1,
+    });
+    expect(h.row("k")!.retryAt).not.toBeNull();
+    expect(h.abortedIncarnations).toEqual([]);
+  });
+
+  it("j1c. a checkpoint beyond the stream head enters bounded receiver backoff", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 2,
+      sink: makeSink().sink,
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 1,
+    });
+    expect(h.row("k")!.retryAt).not.toBeNull();
+    expect(h.abortedIncarnations).toEqual([]);
   });
 
   it("j2. a synchronously failing first sink batch cannot be erased by the poke watermark", async () => {
