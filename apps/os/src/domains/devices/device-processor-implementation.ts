@@ -31,7 +31,7 @@ export type DevicePushSender = (input: {
   { status: "ok"; ticketId: string } | { status: "error"; error: string; message: string }
 >;
 
-export type DevicePushReceipt =
+type DevicePushReceipt =
   | { status: "pending" }
   | { status: "accepted-by-push-service" }
   | { status: "rejected-by-push-service"; error: string; message: string };

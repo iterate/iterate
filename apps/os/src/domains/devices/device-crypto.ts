@@ -1,13 +1,13 @@
 const DEVICE_PUSH_ALGORITHM = "AES-GCM-SHA256+DEVICE-PUSH-V1" as const;
 
-export type DevicePushTokenBinding = {
+type DevicePushTokenBinding = {
   offset: number;
   ownerId: string;
   path: string;
   projectId: string;
 };
 
-export type EncryptedDevicePushToken = {
+type EncryptedDevicePushToken = {
   algorithm: typeof DEVICE_PUSH_ALGORITHM;
   ciphertext: string;
   iv: string;

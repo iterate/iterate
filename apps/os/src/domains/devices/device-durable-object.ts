@@ -234,7 +234,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
   }
 }
 
-export function describeDeviceState(
+function describeDeviceState(
   state: ProcessorState<DeviceProcessorContract>,
   deviceId: string,
 ): DeviceDescription {
