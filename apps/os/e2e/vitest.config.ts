@@ -29,46 +29,56 @@ console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 const ci = process.env.CI === "true";
 
-// Observed wall-clock seconds per file on a green preview lane (Depot run
-// 1wd5nxb87d, 2026-07-09). Used for longest-first scheduling below — vitest
+// Observed wall-clock seconds per file on a zero-retry preview lane (Depot run
+// r9whdcvbwl, 2026-07-18). Used for longest-first scheduling below — vitest
 // hands files to workers in sort order, so a slow file starting LAST becomes
 // the whole lane's tail (the itx catalogue at ~100s used to routinely start
 // mid-run and stretch the lane past 3 minutes). Unlisted files default to 15s
 // (roughly the observed median); exact numbers matter much less than the
 // slow/fast partition, so refresh only when the ranking visibly drifts.
 const observedFileSeconds: Record<string, number> = {
-  "agent-tools.itx.e2e.test.ts": 78,
-  "script-execution-concurrency.e2e.test.ts": 38,
-  "streams.e2e.test.ts": 34,
-  "stream-lifecycle.e2e.test.ts": 33,
-  "sandbox-egress.e2e.test.ts": 33,
-  "live-capability-websocket.e2e.test.ts": 31,
-  // The itx-*.e2e.test.ts entries are the old itx.e2e.test.ts catalogue
-  // (104s as one file) split for file-level parallelism; per-file numbers
-  // are estimates proportional to test counts, not yet observed.
-  "itx-agents.e2e.test.ts": 25,
-  "integrations-userspace.e2e.test.ts": 23,
-  "agent-codemode-fence.itx.e2e.test.ts": 19,
-  "itx-connect.e2e.test.ts": 18,
-  "itx-workers.e2e.test.ts": 18,
-  "slack-agent.e2e.test.ts": 18,
-  "project-ingress.e2e.test.ts": 18,
-  "scheduler.e2e.test.ts": 16,
-  "agent-script-result-spill.itx.e2e.test.ts": 16,
-  "itx-live-capabilities.e2e.test.ts": 15,
-  "stream-security.e2e.test.ts": 15,
-  "worker-build.e2e.test.ts": 15,
-  "workspace.itx.e2e.test.ts": 13,
-  "github-backed-repo.e2e.test.ts": 12,
-  "itx-core.e2e.test.ts": 10,
-  "itx-subscribe.e2e.test.ts": 10,
-  "repo-history.itx.e2e.test.ts": 10,
-  "stream-wire.e2e.test.ts": 10,
-  "itx-egress.e2e.test.ts": 8,
-  "admin-project.itx.e2e.test.ts": 8,
-  "repo-binary.itx.e2e.test.ts": 8,
-  "preview-smoke.e2e.test.ts": 8,
-  "mcp-oauth.e2e.test.ts": 2,
+  "examples-matrix.e2e.test.ts": 72,
+  "itx-workers.e2e.test.ts": 66,
+  "project-ingress.e2e.test.ts": 61,
+  "script-execution-concurrency.e2e.test.ts": 46,
+  "sandbox-timeout.e2e.test.ts": 46,
+  "agent-response-cache.e2e.test.ts": 35,
+  "itx-agents.e2e.test.ts": 33,
+  "stateful-worker-alarm.e2e.test.ts": 30,
+  "workspace.itx.e2e.test.ts": 26,
+  "sandbox-egress.e2e.test.ts": 25,
+  "streams.e2e.test.ts": 23,
+  "agent-tools.itx.e2e.test.ts": 22,
+  "itx-egress.e2e.test.ts": 21,
+  "itx-connect.e2e.test.ts": 21,
+  "integrations-userspace.e2e.test.ts": 18,
+  "slack-agent.e2e.test.ts": 17,
+  "worker-build.e2e.test.ts": 17,
+  "agent-script-result-spill.itx.e2e.test.ts": 17,
+  "repo-history.itx.e2e.test.ts": 16,
+  "agent-handle-pipelining.itx.e2e.test.ts": 15,
+  "agent-codemode-fence.itx.e2e.test.ts": 14,
+  "integrations-petshop.e2e.test.ts": 14,
+  "github-backed-repo.e2e.test.ts": 14,
+  "stream-ancestor-announcements.e2e.test.ts": 13,
+  "integrations-github.e2e.test.ts": 12,
+  "admin-project.itx.e2e.test.ts": 12,
+  "live-capability-websocket.e2e.test.ts": 12,
+  "itx-subscribe.e2e.test.ts": 12,
+  "itx-live-capabilities.e2e.test.ts": 11,
+  "worker-stale-serve.e2e.test.ts": 11,
+  "guestbook-wake.e2e.test.ts": 11,
+  "scheduler.e2e.test.ts": 10,
+  "live-state.e2e.test.ts": 10,
+  "egress-approvals.e2e.test.ts": 10,
+  "stream-wire.e2e.test.ts": 9,
+  "itx-core.e2e.test.ts": 9,
+  "worker-build-version.e2e.test.ts": 9,
+  "repo-binary.itx.e2e.test.ts": 9,
+  "stream-security.e2e.test.ts": 7,
+  "preview-smoke.e2e.test.ts": 6,
+  "operator-sessions.e2e.test.ts": 1,
+  "mcp-oauth.e2e.test.ts": 0,
 };
 
 /** Longest-processing-time-first: start the slow files so they never tail the lane. */

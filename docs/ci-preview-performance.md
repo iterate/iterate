@@ -57,7 +57,9 @@ seconds and run alongside OS.
 - **Playwright runs 12 workers, `fullyParallel`, in CI**
   (`playwright.config.ts`). Specs isolate mutable state with unique namespaces,
   worker-owned project fixtures, or an explicit fresh project when creation is
-  what the spec proves.
+  what the spec proves. Preview queues the long reconnect/resume project first,
+  overlapping its fixed probe windows with the ordinary web catalogue instead
+  of letting four resilience tests become the end-of-lane tail.
 - **The create/onboarding smoke is an ordinary parallel lane.** It retains one
   production-shaped project-birth and onboarding proof with its own watchdog;
   it is not a serial warm-up barrier. Cold-start defects must be modelled by the

@@ -9,6 +9,13 @@ import {
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
+// Preview is the latency-sensitive full suite. Give its deliberately long
+// reconnect/resume proofs their own first project so Playwright queues those
+// test groups before the ordinary web catalogue and overlaps their fixed
+// 25-35s probe windows with useful work. Outside preview, keep the public
+// `web` / `mobile` project interface unchanged.
+const previewSlowFirst = process.env.PLAYWRIGHT_PREVIEW_SLOW_FIRST === "1";
+const resumeAfterSuspendSpec = "**/stream-resume-after-suspend.spec.ts";
 // CI retry artifacts already include screenshots/traces; retaining videos can
 // leave ffmpeg workers alive after a retry and keep the job open.
 const videoArtifactsEnabled = videoMode || !process.env.CI;
@@ -23,6 +30,10 @@ const mobileWebPort = Number(
 );
 process.env.PLAYWRIGHT_MOBILE_WEB_PORT = String(mobileWebPort);
 const mobileWebUrl = `http://127.0.0.1:${mobileWebPort}`;
+const desktopWebUse = {
+  ...devices["Desktop Chrome"],
+  viewport: { width: 1280, height: 900 },
+};
 
 export default defineConfig({
   testDir: "specs",
@@ -61,10 +72,19 @@ export default defineConfig({
     video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
   projects: [
+    ...(previewSlowFirst
+      ? [
+          {
+            name: "preview-resilience",
+            testMatch: resumeAfterSuspendSpec,
+            use: desktopWebUse,
+          },
+        ]
+      : []),
     {
       name: "web",
-      testIgnore: "**/mobile/**",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+      testIgnore: previewSlowFirst ? ["**/mobile/**", resumeAfterSuspendSpec] : "**/mobile/**",
+      use: desktopWebUse,
     },
     {
       name: "mobile",
