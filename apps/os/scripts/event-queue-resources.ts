@@ -3,11 +3,17 @@ import {
   desiredArtifactAccountEventSubscription,
   desiredArtifactRepoEventSubscription,
   ensureArtifactEventSubscription,
+  ensureQueues,
   ensureWorkerEventQueue,
   listArtifactEventSubscriptions,
   listArtifactRepos,
   type QueueRecord,
 } from "../src/domains/events/cloudflare-event-subscriptions.ts";
+import {
+  searchIndexDeadLetterQueueName,
+  searchIndexQueueName,
+  workerEventsQueueName,
+} from "../src/queue-names.ts";
 import type { DeployableEnv, EnvContext } from "../../../scripts/lib/env-context.ts";
 
 type QueueResourceContext = Pick<EnvContext<DeployableEnv>, "cf">;
@@ -21,11 +27,35 @@ export async function ensureWorkerEventsQueue(
   return queue;
 }
 
+/** Every queue binding the OS worker upload references. */
+export async function ensureWorkerQueues(
+  ctx: QueueResourceContext,
+  workerName: string,
+): Promise<{
+  eventQueue: QueueRecord;
+  searchDeadLetterQueue: QueueRecord;
+  searchQueue: QueueRecord;
+}> {
+  const [eventQueue, searchQueue, searchDeadLetterQueue] = await ensureQueues(ctx.cf, [
+    workerEventsQueueName(workerName),
+    searchIndexQueueName(workerName),
+    searchIndexDeadLetterQueueName(workerName),
+  ]);
+  console.log(
+    `Queues ${eventQueue!.queue_name}, ${searchQueue!.queue_name}, and ${searchDeadLetterQueue!.queue_name} exist`,
+  );
+  return {
+    eventQueue: eventQueue!,
+    searchQueue: searchQueue!,
+    searchDeadLetterQueue: searchDeadLetterQueue!,
+  };
+}
+
 export async function ensureWorkerEventQueueResources(
   ctx: QueueResourceContext,
   workerName: string,
 ): Promise<QueueRecord> {
-  const eventQueue = await ensureWorkerEventsQueue(ctx, workerName);
+  const { eventQueue } = await ensureWorkerQueues(ctx, workerName);
   await ensureArtifactEventSubscriptions(ctx, {
     queueId: eventQueue.queue_id,
     workerName,

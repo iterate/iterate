@@ -124,13 +124,13 @@ import {
   connectTelegram,
   disconnectProvider,
   getConnectionStatus,
-  listIntegrationConnections,
   startOAuthFlow,
   type ConnectTelegramResult,
 } from "./domains/integrations/connect-flows.ts";
 import {
   BUILTIN_INTEGRATION_SLUGS,
   googleConnectionSecretPath,
+  integrationConnectionsFromProjectStreams,
   integrationConnectionStreamPath,
   isBuiltinIntegrationSlug,
 } from "./domains/integrations/utils.ts";
@@ -249,16 +249,14 @@ import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
-  enqueueAutomaticStreamIndex,
   ensureProjectSearchInstance,
   indexDocument,
   indexPinnedStreamEvent,
   indexEntireStream,
-  indexStreamEventBatch,
   mirrorFileToSearchIndex,
   triggerProjectSearchSync,
-  triggerProjectSearchSyncDebounced,
 } from "./domains/search/search-index.ts";
+import { enqueueStreamSearchIndex } from "./domains/search/search-index-queue.ts";
 import {
   extractMatchSnippet,
   narrowStreamRefToChunk,
@@ -266,6 +264,7 @@ import {
   normalizeSearchSource,
   projectSearchInstanceId,
   searchFilters,
+  segmentForOffset,
 } from "./domains/search/search-corpus.ts";
 import { ItxExpression } from "./itx/expression.ts";
 import type {
@@ -2906,8 +2905,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
 
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
-   * predate search indexing, or the rare tail gap a failed per-batch write can
-   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   * predate search indexing or an automatic reconciliation task preserved in
+   * the dead-letter queue (`path` is the stream path, e.g.
+   * "/agents/slack/T1/thr-9").
    */
   async indexStream(input: { path: string }): Promise<{ segments: number }> {
     const streamStub = env.STREAM.getByName(
@@ -2929,10 +2929,11 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   /**
    * Snapshot one repo's default-branch HEAD into the search corpus now — the
    * backfill verb for repos that predate search indexing (writes index
-   * incrementally from here on). Runs on the repo Durable Object's own write
-   * chain so its stale-key sweep can't race post-commit indexing. Returned
-   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
-   * files, and a nonzero `failed` means re-run.
+   * incrementally from here on). Runs on the repo Durable Object's dedicated
+   * search-index chain so its stale-key sweep can't race another
+   * reconciliation, without blocking repo writes. Returned counts: `deleted`
+   * = stale keys swept, `skipped` = oversize/over-long-key files, and a
+   * nonzero `failed` means re-run.
    */
   async indexRepo(input: { path: string }): Promise<{
     deleted: number;
@@ -3722,11 +3723,21 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
    * credential-defined Waitrose accounts, plus provided mounts from the
    * capability table (deduped by path). */
   async list(): Promise<IntegrationConnectionListEntry[]> {
-    const [journalConnections, mounted, projectState] = await Promise.all([
-      listIntegrationConnections(this.props.projectId),
-      this.#capabilityHost.describeCapabilities(),
-      projectProcessorState(this.props.projectId),
+    const [mounted, projectState] = await Promise.all([
+      retryIdempotentDurableObjectRead({
+        call: () => this.#capabilityHost.describeCapabilities(),
+        operation: "project-integrations.list-capability-mounts",
+        path: "/",
+        projectId: this.props.projectId,
+      }),
+      retryIdempotentDurableObjectRead({
+        call: () => projectProcessorState(this.props.projectId),
+        operation: "project-integrations.list-project-state",
+        path: "/",
+        projectId: this.props.projectId,
+      }),
     ]);
+    const journalConnections = integrationConnectionsFromProjectStreams(projectState.streams);
     // Waitrose deliberately has no connect flow or lifecycle journal: its
     // session secret is the connection. Surface those secret paths in the
     // same collection so list() and no-argument get() retain one meaning.
@@ -6110,14 +6121,23 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     // Search is a derived mirror, so schedule it independently of the user
     // worker outcome: a batch that the delivery spine eventually poison-skips
     // must still be searchable. waitUntil keeps it off the authoritative
-    // acknowledgement path, while the isolate-wide per-stream tail preserves
-    // ordering across cached project-target remints.
-    if (batch.projectId !== null) {
+    // acknowledgement path. The queue is globally single-concurrency per
+    // deployment; its pointer task re-reads each complete segment, so
+    // duplicates and out-of-order delivery reconcile to the latest truth.
+    const searchProjectId = batch.projectId;
+    if (searchProjectId !== null && batch.events.length > 0) {
+      const segments = new Set(batch.events.map((event) => segmentForOffset(event.offset)));
       this.#props.ctx.waitUntil(
-        enqueueAutomaticStreamIndex({
-          projectId: batch.projectId,
+        enqueueStreamSearchIndex({
+          projectId: searchProjectId,
           path: batch.path,
-          run: () => this.#indexStreamSearch(batch),
+          segments: [...segments],
+        }).catch((error: unknown) => {
+          console.error("search index stream reconciliation enqueue failed", {
+            projectId: searchProjectId,
+            path: batch.path,
+            error,
+          });
         }),
       );
     }
@@ -6171,36 +6191,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       },
       ...(events.length === 0 ? {} : { agent: { path: batch.path, events } }),
     });
-  }
-
-  /**
-   * SPIKE platform step: mirror the batch's stream events into the itx.search
-   * corpus (domains/search/search-index.ts) as fixed 100-offset segment
-   * documents. It is idempotent (segment docs are deterministic rewrites),
-   * queued in delivery order under waitUntil, and MUST NOT throw — only the
-   * worker delegation may reject into the spine's retry. Re-reading each
-   * touched segment's full range means a transient failure self-heals on the
-   * next batch in that segment (see indexStreamEventBatch).
-   */
-  async #indexStreamSearch(batch: StreamPushEventBatch): Promise<void> {
-    if (batch.projectId === null) return;
-    try {
-      const streamStub = env.STREAM.getByName(
-        DurableObjectNameCodec.stringify(
-          { projectId: batch.projectId, path: batch.path },
-          { allowNullProjectId: true },
-        ),
-      );
-      await indexStreamEventBatch({
-        batch,
-        readEvents: (args) => streamStub.getEvents(args),
-      });
-      // Freshness: nudge the project's instance (if one exists) so passive
-      // content is searchable in minutes, not on the hourly schedule.
-      await triggerProjectSearchSyncDebounced(batch.projectId);
-    } catch (error: unknown) {
-      console.warn("search index stream batch failed", { path: batch.path, error });
-    }
   }
 
   /**

@@ -41,6 +41,10 @@ import {
   handleEventQueueBatch,
   isWorkerEventsQueue,
 } from "./domains/events/event-queue-entrypoint.ts";
+import {
+  handleSearchIndexQueueBatch,
+  isSearchIndexQueue,
+} from "./domains/search/search-index-queue-entrypoint.ts";
 import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
@@ -90,6 +94,10 @@ export default {
   },
 
   async queue(batch: MessageBatch, env: Env) {
+    if (isSearchIndexQueue(batch.queue, env)) {
+      await handleSearchIndexQueueBatch(batch, env);
+      return;
+    }
     if (isWorkerEventsQueue(batch.queue, env)) {
       await handleEventQueueBatch(batch, env);
       return;

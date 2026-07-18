@@ -28,7 +28,11 @@ import {
   SANDBOX_INSTANCE_TYPES,
   type SandboxInstanceType,
 } from "../src/domains/sandboxes/instance-types.ts";
-import { workerEventsQueueName } from "../src/queue-names.ts";
+import {
+  searchIndexDeadLetterQueueName,
+  searchIndexQueueName,
+  workerEventsQueueName,
+} from "../src/queue-names.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -336,6 +340,12 @@ function workerBindings(input: {
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
     queues: {
+      producers: [
+        {
+          binding: "SEARCH_INDEX_QUEUE",
+          queue: searchIndexQueueName(input.workerName),
+        },
+      ],
       consumers: [
         {
           queue: workerEventsQueueName(input.workerName),
@@ -343,6 +353,27 @@ function workerBindings(input: {
           max_batch_timeout: 5,
           max_retries: 3,
           retry_delay: 30,
+        },
+        {
+          // Search documents are derived from authoritative streams/repos/files,
+          // so this queue carries tiny reconciliation pointers rather than
+          // payloads. One consumer invocation at a time is the bucket-wide
+          // backpressure boundary; each message re-reads the latest source and
+          // can therefore retry safely or arrive out of order.
+          queue: searchIndexQueueName(input.workerName),
+          dead_letter_queue: searchIndexDeadLetterQueueName(input.workerName),
+          // One message per invocation means one poison task cannot consume
+          // untouched messages' retry budgets. max_concurrency=1 plus the
+          // handler's post-write pause is the global R2 pressure boundary.
+          max_batch_size: 1,
+          max_batch_timeout: 1,
+          max_concurrency: 1,
+          // The preview search bucket has a three-hour object lifecycle. A
+          // bounded exponential retry window of roughly four hours lets a
+          // bucket-wide lock drain without losing reconciliation pointers to
+          // the DLQ. The handler caps each individual delay at 32 minutes.
+          max_retries: 12,
+          retry_delay: 60,
         },
       ],
     },

@@ -14,6 +14,7 @@ import {
   E2E_TEST_TIMEOUT_MS,
   RetryTelemetryReporter,
 } from "@iterate-com/shared/test-support/e2e-policy";
+import { E2E_FILE_TEST_CONCURRENCY } from "./test-support/concurrency.ts";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./test-support/provide-keys.ts";
 import { createVitestRunSlug } from "./test-support/vitest-naming.ts";
 
@@ -140,7 +141,7 @@ export default defineConfig({
     // tests still exercise project creation.
     maxWorkers: 12,
     sequence: { concurrent: parallelDeployedSuite, sequencer: SlowestFirstSequencer },
-    maxConcurrency: 2,
+    maxConcurrency: E2E_FILE_TEST_CONCURRENCY,
     passWithNoTests: true,
     // Retry telemetry (policy rule 5 — see @iterate-com/shared
     // test-support/e2e-policy/budgets.ts): reporters DO belong at the root

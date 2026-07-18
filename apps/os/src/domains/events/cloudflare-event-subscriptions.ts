@@ -43,7 +43,29 @@ async function artifactRepoEventSubscriptionName(workerName: string, repoName: s
 }
 
 export async function ensureWorkerEventQueue(api: CloudflareAccountApi, workerName: string) {
-  return await ensureQueue(api, workerEventsQueueName(workerName));
+  return (await ensureQueues(api, [workerEventsQueueName(workerName)]))[0]!;
+}
+
+/** Ensure a set of named queues from one paginated listing. */
+export async function ensureQueues(
+  api: CloudflareAccountApi,
+  queueNames: readonly string[],
+): Promise<QueueRecord[]> {
+  const queues = await listCloudflarePages<QueueRecord>(api, `/queues`);
+  const byName = new Map(queues.map((queue) => [queue.queue_name, queue]));
+  const ensured: QueueRecord[] = [];
+  for (const queueName of queueNames) {
+    let queue = byName.get(queueName);
+    if (queue === undefined) {
+      queue = await api<QueueRecord>(`/queues`, {
+        method: "POST",
+        body: JSON.stringify({ queue_name: queueName }),
+      });
+      byName.set(queueName, queue);
+    }
+    ensured.push(queue);
+  }
+  return ensured;
 }
 
 export async function listArtifactRepos(
@@ -145,17 +167,6 @@ export function createCloudflareAccountApi(input: {
     }
     return body?.result as T;
   };
-}
-
-async function ensureQueue(api: CloudflareAccountApi, queueName: string): Promise<QueueRecord> {
-  const queues = await listCloudflarePages<QueueRecord>(api, `/queues`);
-  const existing = queues.find((queue) => queue.queue_name === queueName);
-  if (existing) return existing;
-
-  return await api<QueueRecord>(`/queues`, {
-    method: "POST",
-    body: JSON.stringify({ queue_name: queueName }),
-  });
 }
 
 function artifactEventSubscriptionMatches(

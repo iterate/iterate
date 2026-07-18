@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
+import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
 import { withTunnel } from "../test-support/tunnel.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
@@ -10,7 +11,10 @@ import {
 } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-const secretProjectPool = createTestProjectPool({ size: 2, slugPrefix: "secret-family" });
+const secretProjectPool = createTestProjectPool({
+  size: E2E_FILE_TEST_CONCURRENCY,
+  slugPrefix: "secret-family",
+});
 
 // These are hand written tests - they MUST pass
 test("public secret events can change egress but copied ciphertext cannot follow", async () => {

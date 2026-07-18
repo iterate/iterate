@@ -292,3 +292,25 @@ export function integrationCoordinatesFromStreamPath(
   if (!segments[2] || !segments[3]) return null;
   return { connection: segments[3], slug: segments[2] };
 }
+
+/**
+ * Derive connection coordinates from an already-read project snapshot. Keep
+ * this separate from the Durable Object dial so callers that also need other
+ * project state do not issue two identical root-processor reads in parallel.
+ */
+export function integrationConnectionsFromProjectStreams(
+  streams: readonly { path: string }[],
+): { connection: string; integration: string; path: string }[] {
+  return streams.flatMap((stream) => {
+    const coordinates = integrationCoordinatesFromStreamPath(stream.path);
+    return coordinates === null
+      ? []
+      : [
+          {
+            connection: coordinates.connection,
+            integration: coordinates.slug,
+            path: stream.path,
+          },
+        ];
+  });
+}

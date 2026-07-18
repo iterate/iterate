@@ -68,7 +68,7 @@ import {
   TELEGRAM_DISCONNECTED_EVENT_TYPE,
   githubConnectionSecretPath,
   googleConnectionSecretPath,
-  integrationCoordinatesFromStreamPath,
+  integrationConnectionsFromProjectStreams,
   readRecord,
   readString,
   integrationConnectionStreamPath,
@@ -1383,15 +1383,5 @@ export async function listIntegrationConnections(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
   );
   const snapshot = await (await project.processor).snapshot();
-  const entries: { connection: string; integration: string; path: string }[] = [];
-  for (const stream of snapshot.state.streams) {
-    const coordinates = integrationCoordinatesFromStreamPath(stream.path);
-    if (coordinates === null) continue;
-    entries.push({
-      connection: coordinates.connection,
-      integration: coordinates.slug,
-      path: stream.path,
-    });
-  }
-  return entries;
+  return integrationConnectionsFromProjectStreams(snapshot.state.streams);
 }

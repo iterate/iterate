@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
 import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
+import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -12,7 +13,10 @@ import {
 } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-const agentProjectPool = createTestProjectPool({ size: 2, slugPrefix: "agent-family" });
+const agentProjectPool = createTestProjectPool({
+  size: E2E_FILE_TEST_CONCURRENCY,
+  slugPrefix: "agent-family",
+});
 
 // These are hand written tests - they MUST pass
 test("agent create installs only generic machinery; later events configure it", async () => {
@@ -378,7 +382,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
 
   using projectLease = await agentProjectPool.acquire(itx);
   using project = itx.projects.get(projectLease.projectId);
-  const { projectId } = await project.__describe();
+  const projectId = projectLease.projectId;
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -518,7 +522,7 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
 
   using projectLease = await agentProjectPool.acquire(itx);
   using project = itx.projects.get(projectLease.projectId);
-  const { projectId } = await project.__describe();
+  const projectId = projectLease.projectId;
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -578,7 +582,6 @@ test('An agent scope provides a capability to the whole project via capabilityHo
 
   using projectLease = await agentProjectPool.acquire(itx);
   using project = itx.projects.get(projectLease.projectId);
-  await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();

@@ -154,6 +154,13 @@ export interface Env {
    */
   SEARCH_BUCKET: R2Bucket;
   /**
+   * Durable, globally bounded reconciliation lane for automatic search-index
+   * writes. Producers enqueue source coordinates; the single-concurrency
+   * consumer re-reads current authoritative state before touching
+   * {@link Env.SEARCH_BUCKET}. Explicit user-requested backfills remain direct.
+   */
+  SEARCH_INDEX_QUEUE: Queue<import("./domains/search/search-index-queue.ts").SearchIndexQueueTask>;
+  /**
    * The deployment's AI Search namespace (`ai_search_namespaces` binding,
    * namespace = `${WORKER_SELF}`). itx.search creates ONE INSTANCE PER
    * PROJECT in it on first use (domains/search/search-index.ts,

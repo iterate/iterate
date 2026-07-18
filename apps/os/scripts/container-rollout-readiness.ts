@@ -102,11 +102,13 @@ function describeState(state: RolloutState): string {
     }`;
   }
   const progress = rollout.progress;
+  const problems = rollout.status === "completed" ? completedRolloutProblems(rollout) : [];
   return (
     `${state.application.name}: ${rollout.status} rollout=${rollout.id}` +
     (progress
       ? ` updated=${progress.updated_instances ?? "?"}/${progress.total_instances ?? "?"}`
-      : "")
+      : "") +
+    (problems.length > 0 ? ` (${problems.join(", ")})` : "")
   );
 }
 
@@ -140,9 +142,21 @@ function assertTerminalState(state: RolloutState): void {
 
 function isInProgress(state: RolloutState): boolean {
   if (state.rollout) {
-    return state.rollout.status === "pending" || state.rollout.status === "progressing";
+    if (state.rollout.status === "pending" || state.rollout.status === "progressing") return true;
+    if (state.rollout.status !== "completed") return false;
+
+    // The rollout record can become `completed` a few polls before the
+    // assigned instances finish starting. Keep waiting for that transient
+    // convergence, but let assertTerminalState immediately classify explicit
+    // health errors or failed instances rather than disguising them as a
+    // timeout.
+    const health = state.rollout.health;
+    if ((health?.errors?.length ?? 0) > 0 || (health?.instances?.failed ?? 0) > 0) return false;
+    return completedRolloutProblems(state.rollout).length > 0;
   }
-  return healthProblems(state.application.health, state.application.instances).length > 0;
+  const health = state.application.health;
+  if ((health?.errors?.length ?? 0) > 0 || (health?.instances?.failed ?? 0) > 0) return false;
+  return healthProblems(health, state.application.instances).length > 0;
 }
 
 async function getLatestRollout(

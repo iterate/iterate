@@ -10,6 +10,7 @@ import { expect, test } from "vitest";
 import type { StreamEventBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
+import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -17,7 +18,10 @@ const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
 const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
 const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
-const streamProjectPool = createTestProjectPool({ size: 2, slugPrefix: "stream-api-family" });
+const streamProjectPool = createTestProjectPool({
+  size: E2E_FILE_TEST_CONCURRENCY,
+  slugPrefix: "stream-api-family",
+});
 const EXPECTED_POSTHOG_SUBSCRIPTION = {
   type: "events.iterate.com/stream/subscription-configured",
   idempotencyKey: "iterate-platform-posthog-subscription-v2",

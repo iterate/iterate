@@ -7,7 +7,11 @@ was 96 consecutive green runs at roughly 2.2–2.9 minutes end to end.
 
 ## Goal and acceptance bar
 
-- Every preview check completes in less than 3 minutes end to end.
+- Every preview check completes in less than 3 minutes 30 seconds end to end.
+- The release proof is 25 consecutive retry-clean full-fleet runs on one
+  immutable committed head, each below 210 seconds, followed by a separate
+  campaign with at least 15 simultaneously preview-eligible PRs and explicit
+  slot loss/reclaim churn.
 - A green check contains no unexplained retry, timeout, transport suspicion,
   storage reset, state leak, or hidden partial coverage.
 - The deployed lane remains a production-shaped proof. Tests that do not need a
@@ -17,6 +21,37 @@ was 96 consecutive green runs at roughly 2.2–2.9 minutes end to end.
   audits, not a single lucky green run.
 
 ## Current headline
+
+The final uncommitted candidate now matches the intended critical-path model.
+A retry-disabled full OS fleet against the exact deployed tree passed 43 files
+(156 tests, plus one expected failure and two skips) in **69.76s**. The tests
+represented 755.21 aggregate seconds of work; the longest file took 51.77s and
+the longest individual test took 49.70s. Eight catalogue-family projects were
+created simultaneously while the other family pools also ran. Project leases
+therefore preserve parallel eligibility rather than serializing runnable work.
+
+The previous pushed-head run was diagnostic rather than qualifying: OS Vitest
+took 190.6s after five absorbed retries. Its 130 project creations all
+succeeded (birth p50 about 5.1s, p95 about 6.3s, maximum 11s). The common
+failure was instead an unhealthy AI Search R2 bucket: thousands of automatic
+derived-index writes returned Cloudflare code 10001 after about 15 seconds.
+Repository indexing shared the authoritative repo `#writeChain`, so a derived
+mirror failure could delay edits, commits, worker builds, and unrelated tests.
+
+Automatic search reconciliation now sends small authoritative-state pointers
+to a durable, deployment-scoped queue. One batch-size-one/concurrency-one
+consumer re-reads current stream, file, or repo state and writes R2 with
+bounded exponential retry; a separate dead-letter queue retains exhausted
+work. Authoritative mutations no longer wait for R2. After the exact-tree
+fleet, the still-unhealthy bucket left 4,107 pointers (about 631 KiB) visibly
+backlogged and zero dead letters while tests remained clean. This adds two
+Cloudflare Queues per environment and queue operations proportional to changed
+stream segments/files/repos; that architecture and cost change is deliberate
+and must remain explicit in the PR.
+
+This local proof does **not** count toward acceptance. The candidate must first
+be committed and deployed from one immutable head, then pass the 25-run Depot
+marathon and the separate 15+-PR contention campaign.
 
 The initial serialized runner was structurally incapable of meeting the target.
 
@@ -525,27 +560,29 @@ observable.
 
 ## Root-cause ledger
 
-| Thesis                                                                                      | Confidence                  | Evidence                                                                                                                                                                                               | Next proof / remediation                                                                                                         |
-| ------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| Full serialization is the immediate wall-clock regression.                                  | Confirmed                   | Current-main OS phase is 406.6s; Vitest and Playwright alone are 202.2s and 155.6s. Prior concurrent marathon was stable and much faster.                                                              | Restore overlap, emit per-sublane markers/timings, and test explicit aggregate concurrency levels.                               |
-| Fresh project birth in nearly every test is the dominant load amplifier.                    | Confirmed critical path     | Experiment 2 made 176 creates (median 5.972s, p95 7.266s, 1,067s aggregate) spanning 209.2s of a 227.6s OS test window; each birth also leaks an eager AI Search instance because disposal is a no-op. | Retain a small project-birth lane; pool projects for isolation-safe families and stop leaking per-project resources.             |
-| One bad preview slot explains the incident.                                                 | Refuted                     | Failures appear across slots 1–9 rather than clustering on one slot.                                                                                                                                   | Continue per-slot trace comparison, but fix fleet-wide runner/workload shape.                                                    |
-| “Green” checks are healthy.                                                                 | Refuted                     | 63.1% of green attempts absorbed retries; current green emitted liveness and dial timeouts.                                                                                                            | Keep retry telemetry release-blocking during the hunt; audit corresponding traces.                                               |
-| The live-capability expected-failure test was a major active flake.                         | Historical / fixed          | It accounts for 163 retry events but last appears Jul 17 10:20; `ac9f2e107` disables retry for `test.fails`.                                                                                           | Ensure it does not recur on heads containing the fix.                                                                            |
-| The streams 32MiB expected-failure test was active retry noise.                             | Historical / likely fixed   | 62 events, last Jul 17 01:10; `1cc426d4b` replaced expected-failure framing with a direct rejection assertion.                                                                                         | Re-run current head; no recurrence allowed.                                                                                      |
-| Preview deployment dependencies are needlessly serial.                                      | Confirmed / fixed           | Experiment 2 deployed all five apps together: OS 78.9s while every other app finished underneath it in 7.8–17.2s; the full check fell from 8m22s to 5m28s.                                             | Keep co-selection separate from true deploy ordering; retain each app's explicit readiness checks.                               |
-| Slot handover is a primary current bottleneck.                                              | Confirmed                   | PR #2116 reset took 131.3s. AI Search cleanup hit its 90s deadline after 100 deletes, left 498 instances, and the test run grew the namespace to 551.                                                  | Make cleanup converge, then remove the source of per-test instance churn; preserve long-lived worker infrastructure.             |
-| Cloudflare cannot tolerate parallel e2e traffic.                                            | Refuted                     | Experiment 6 ran smoke, TUI, eight-worker Vitest, and twelve-worker Playwright at a configured peak of 30; all apps passed with zero retries or capacity errors in 3m50s.                              | Keep the lanes parallel; optimize slow-work scheduling and investigate only measured operation-specific saturation.              |
-| A project can be reported ready before every fresh app ingress can read its Artifacts repo. | Confirmed / partial fix     | Experiment 4's exact request returned HTTP 500 because Workers RPC dropped `FORK_IN_PROGRESS` and preserved only the service-authored materialization message.                                         | Classify the exact message to building 503, then strengthen or narrow the `project/ready` contract; reject raw errors.           |
-| `project/ready` implies every named seeded app is already warm.                             | Refuted / modelled          | Experiment 5's sole retry followed successful project birth; the first `hello` app fetch returned the exact documented marked building 503.                                                            | Poll only the marked cold-build response at the app boundary; never reroll the whole fresh project.                              |
-| Counter click can be torn down before its fire-and-forget fetch leaves the browser.         | Confirmed / pending preview | Experiment 4 had a successful page and WebSocket but no increment POST; the failure artifact showed count 0, an enabled button, and no progress UI when the 1ms guard fired.                           | Keep `incrementing…` visible until the WebSocket repaint; surface fetch/socket failure as product error UI.                      |
-| Agent-script chat reflection is ordered relative to script settlement.                      | Refuted / fixed             | Experiment 7's first attempt settled at offset 28 and reflected the attached chat message at offset 30; the test read between them. Both service paths otherwise succeeded.                            | Await both durable events, then inspect history. Never rely on independent event ordering or absorb the race in retry.           |
-| Twelve Vitest workers are required to meet the target.                                      | Unproven / weak benefit     | Experiment 8 cut Vitest about 9s (114s → 105s), but total work rose 864 → 934 test-seconds and four tests retried. The run had no project-create or preview-capacity rejection.                        | Keep twelve for one instrumented diagnosis, then choose concurrency from clean repeated runs rather than retry-hidden wall time. |
-| Fire-and-forget ancestor appends eventually heal by themselves.                             | Refuted / fixed locally     | Experiment 8's first child/probe persisted permanently without either ancestor fact. The old closure had neither a cursor nor a guaranteed future wake.                                                | Derive a platform push from the immutable birth fact; ack only after idempotent concurrent fan-out to all ancestors.             |
-| Durable topology plumbing may consume public stream offsets.                                | Refuted / fixed locally     | Experiment 9's config+trigger implementation shifted every non-root stream by two and deterministically broke 27 contract assertions.                                                                  | Derive both config and trigger from `stream/created`; retain only the source-owned cursor row outside the public log.            |
-| The root-workspace retry was workspace or project-create overload.                          | Refuted                     | The first attempt never called a workspace operation. Project creation succeeded, then two deploy-rollover lifecycle resets crossed the relay while readiness bootstrapped.                            | Permit a bounded third read-only facade acquisition under the existing deadline; never retry application errors.                 |
-| The cache-hit greeting mismatch proved a bad AI Gateway replay.                             | Refuted / fixed locally     | The first request reported HIT; the assertion compared an eventual greeting that could be emitted by a later project-specific turn.                                                                    | Compare the cached first provider response body, not downstream agent behavior.                                                  |
-| Retry telemetry preserves the failed-attempt cause.                                         | Refuted / fixed locally     | The experiment-8 artifact named four retried tests but omitted their assertion errors, although Vitest's retained `result().errors` still contained them.                                              | Store name/message/stack in JSON and print bounded message plus first stack location in the lane log.                            |
+| Thesis                                                                                      | Confidence                  | Evidence                                                                                                                                                                                                  | Next proof / remediation                                                                                                         |
+| ------------------------------------------------------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Full serialization is the immediate wall-clock regression.                                  | Confirmed                   | Current-main OS phase is 406.6s; Vitest and Playwright alone are 202.2s and 155.6s. Prior concurrent marathon was stable and much faster.                                                                 | Restore overlap, emit per-sublane markers/timings, and test explicit aggregate concurrency levels.                               |
+| Fresh project birth in nearly every test is the dominant load amplifier.                    | Confirmed critical path     | Experiment 2 made 176 creates (median 5.972s, p95 7.266s, 1,067s aggregate) spanning 209.2s of a 227.6s OS test window; each birth also leaks an eager AI Search instance because disposal is a no-op.    | Retain a small project-birth lane; pool projects for isolation-safe families and stop leaking per-project resources.             |
+| One bad preview slot explains the incident.                                                 | Refuted                     | Failures appear across slots 1–9 rather than clustering on one slot.                                                                                                                                      | Continue per-slot trace comparison, but fix fleet-wide runner/workload shape.                                                    |
+| “Green” checks are healthy.                                                                 | Refuted                     | 63.1% of green attempts absorbed retries; current green emitted liveness and dial timeouts.                                                                                                               | Keep retry telemetry release-blocking during the hunt; audit corresponding traces.                                               |
+| The live-capability expected-failure test was a major active flake.                         | Historical / fixed          | It accounts for 163 retry events but last appears Jul 17 10:20; `ac9f2e107` disables retry for `test.fails`.                                                                                              | Ensure it does not recur on heads containing the fix.                                                                            |
+| The streams 32MiB expected-failure test was active retry noise.                             | Historical / likely fixed   | 62 events, last Jul 17 01:10; `1cc426d4b` replaced expected-failure framing with a direct rejection assertion.                                                                                            | Re-run current head; no recurrence allowed.                                                                                      |
+| Preview deployment dependencies are needlessly serial.                                      | Confirmed / fixed           | Experiment 2 deployed all five apps together: OS 78.9s while every other app finished underneath it in 7.8–17.2s; the full check fell from 8m22s to 5m28s.                                                | Keep co-selection separate from true deploy ordering; retain each app's explicit readiness checks.                               |
+| Slot handover is a primary current bottleneck.                                              | Confirmed                   | PR #2116 reset took 131.3s. AI Search cleanup hit its 90s deadline after 100 deletes, left 498 instances, and the test run grew the namespace to 551.                                                     | Make cleanup converge, then remove the source of per-test instance churn; preserve long-lived worker infrastructure.             |
+| Cloudflare cannot tolerate parallel e2e traffic.                                            | Refuted                     | Experiment 6 ran smoke, TUI, eight-worker Vitest, and twelve-worker Playwright at a configured peak of 30; all apps passed with zero retries or capacity errors in 3m50s.                                 | Keep the lanes parallel; optimize slow-work scheduling and investigate only measured operation-specific saturation.              |
+| A project can be reported ready before every fresh app ingress can read its Artifacts repo. | Confirmed / partial fix     | Experiment 4's exact request returned HTTP 500 because Workers RPC dropped `FORK_IN_PROGRESS` and preserved only the service-authored materialization message.                                            | Classify the exact message to building 503, then strengthen or narrow the `project/ready` contract; reject raw errors.           |
+| `project/ready` implies every named seeded app is already warm.                             | Refuted / modelled          | Experiment 5's sole retry followed successful project birth; the first `hello` app fetch returned the exact documented marked building 503.                                                               | Poll only the marked cold-build response at the app boundary; never reroll the whole fresh project.                              |
+| Counter click can be torn down before its fire-and-forget fetch leaves the browser.         | Confirmed / pending preview | Experiment 4 had a successful page and WebSocket but no increment POST; the failure artifact showed count 0, an enabled button, and no progress UI when the 1ms guard fired.                              | Keep `incrementing…` visible until the WebSocket repaint; surface fetch/socket failure as product error UI.                      |
+| Agent-script chat reflection is ordered relative to script settlement.                      | Refuted / fixed             | Experiment 7's first attempt settled at offset 28 and reflected the attached chat message at offset 30; the test read between them. Both service paths otherwise succeeded.                               | Await both durable events, then inspect history. Never rely on independent event ordering or absorb the race in retry.           |
+| Twelve Vitest workers are required to meet the target.                                      | Unproven / weak benefit     | Experiment 8 cut Vitest about 9s (114s → 105s), but total work rose 864 → 934 test-seconds and four tests retried. The run had no project-create or preview-capacity rejection.                           | Keep twelve for one instrumented diagnosis, then choose concurrency from clean repeated runs rather than retry-hidden wall time. |
+| Fire-and-forget ancestor appends eventually heal by themselves.                             | Refuted / fixed locally     | Experiment 8's first child/probe persisted permanently without either ancestor fact. The old closure had neither a cursor nor a guaranteed future wake.                                                   | Derive a platform push from the immutable birth fact; ack only after idempotent concurrent fan-out to all ancestors.             |
+| Durable topology plumbing may consume public stream offsets.                                | Refuted / fixed locally     | Experiment 9's config+trigger implementation shifted every non-root stream by two and deterministically broke 27 contract assertions.                                                                     | Derive both config and trigger from `stream/created`; retain only the source-owned cursor row outside the public log.            |
+| The root-workspace retry was workspace or project-create overload.                          | Refuted                     | The first attempt never called a workspace operation. Project creation succeeded, then two deploy-rollover lifecycle resets crossed the relay while readiness bootstrapped.                               | Permit a bounded third read-only facade acquisition under the existing deadline; never retry application errors.                 |
+| The cache-hit greeting mismatch proved a bad AI Gateway replay.                             | Refuted / fixed locally     | The first request reported HIT; the assertion compared an eventual greeting that could be emitted by a later project-specific turn.                                                                       | Compare the cached first provider response body, not downstream agent behavior.                                                  |
+| Retry telemetry preserves the failed-attempt cause.                                         | Refuted / fixed locally     | The experiment-8 artifact named four retried tests but omitted their assertion errors, although Vitest's retained `result().errors` still contained them.                                                 | Store name/message/stack in JSON and print bounded message plus first stack location in the lane log.                            |
+| Project creation is the final-candidate capacity bottleneck.                                | Refuted                     | The diagnostic pushed-head run created 130 projects successfully (p50 ~5.1s, p95 ~6.3s, max 11s); the exact-tree retry-disabled fleet ran 755.21 aggregate test-seconds in 69.76s.                        | Keep independent families parallel; reuse only through concurrency-sized exclusive leases where fixture state is mutable.        |
+| Automatic search indexing may share the authoritative repo write chain.                     | Refuted / fixed locally     | The preview search bucket returned code 10001 after ~15s for thousands of derived writes; queued indexing delayed repo edits/builds and caused five unrelated retries while project birth stayed healthy. | Reconcile current authoritative pointers through one durable bounded consumer; retain failed work in a DLQ and expose backlog.   |
 
 ## Immediate experiment order
 
@@ -606,6 +643,12 @@ observable.
   fails.
 - Fresh-project stress coverage should become a small named capacity test, not
   an emergent property of 200 unrelated tests.
+- Automatic search reconciliation adds a writer queue and dead-letter queue to
+  every deployed environment. The observed full OS fleet enqueued about 4,100
+  tiny pointers while the existing R2 search bucket was unhealthy (about
+  631 KiB queued, zero dead letters). The consumer is deliberately batch size
+  one/concurrency one with bounded exponential retry, so a bucket-wide fault
+  becomes visible backlog rather than user-operation latency or an R2 storm.
 - Durable ancestor delivery adds one cursor row and one acknowledged birth
   delivery per non-root stream, but no public config or trigger facts. That is
   intentional persistent state in exchange for eliminating an unobservable
@@ -748,6 +791,18 @@ observable.
   stayed underneath that same critical path. The Container image was unchanged,
   so the new barrier inspected all six applications and correctly observed zero
   pending rollouts.
+- 2026-07-18: the next pushed-head run was nonqualifying: OS Vitest took
+  190.6s and absorbed five retries while all 130 project creations succeeded.
+  The shared signature was automatic AI Search R2 work returning Cloudflare
+  code 10001 after about 15 seconds and, for repos, blocking the authoritative
+  write chain. Automatic indexing now uses a deployment-scoped
+  single-concurrency queue plus DLQ and re-reads authoritative state.
+- 2026-07-18: the exact deployed candidate then passed the complete
+  retry-disabled OS fleet in 69.76s: 755.21 aggregate test-seconds, longest
+  file 51.77s, longest individual test 49.70s, and zero failures/retries. The
+  unhealthy search bucket left 4,107 tiny pointers (about 631 KiB) queued and
+  zero dead letters without delaying tests. This is local diagnostic evidence,
+  not an immutable-head acceptance run.
 - Next: run the immutable-head 25-run proof, then the separate 15+
   simultaneous preview-slot churn campaign.
   PR comments mirror each experiment and result rather than rewriting history

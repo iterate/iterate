@@ -73,6 +73,7 @@ invocation; the same logical run number is repeated after a bounded reclaim.
 | 14         |         3m54 |                    38 | Partial three-app fleet; three rollout-lifecycle retries exposed; does not qualify.                |
 | 15         |         3m22 |                    38 | Full fleet; one sandbox command was killed by a Container rollout and retried; does not qualify.   |
 | 16         |         3m08 |                    38 | Full fleet, zero retries. OS test 91.4s, deploy 71.7s.                                             |
+| 17         |          ~5m |                    38 | Pushed-head diagnostic; five retries exposed derived search R2 writes blocking authoritative work. |
 
 Experiment 11 (head a2d850761, Depot job 4cr9hswz8t) is the most useful
 failure sample:
@@ -119,8 +120,9 @@ capacity rejection.
 
 Reuse is still valuable where ownership is explicit:
 
-- the catalogue matrix creates and bakes one project per run, then all
-  examples reuse it with per-runtime markers;
+- the catalogue matrix has one concurrency-sized exclusive pool per runtime;
+  eight projects can be leased simultaneously, while the warm-container
+  sandbox cases use a separate exclusive family;
 - stateful test families use one-project-per-family fixtures;
 - mutation-heavy families use concurrency-sized exclusive project pools;
 - the browser chat routing proof reuses one deterministic project for its
@@ -278,6 +280,41 @@ critical path, with Playwright's 57 tests taking about 84 seconds and Vitest's
 rollout in this run, so the readiness check correctly inspected all six apps
 and added no artificial wait. This is the qualifying single-run baseline; the
 immutable 25-run count starts from the final evidence/guardrail commit.
+
+Experiment 17 (head `dff98e128`, Depot attempt
+[`9d9rxm1tps`](https://depot.dev/orgs/0p91s0lz49/workflows/jcf6pp35zp?job=kmqjdq2g7v&attempt=9d9rxm1tps))
+was deliberately retained as a nonqualifying diagnosis. OS Vitest took 190.6s
+and absorbed five retries across catalogue mounting, GitHub BYO App setup,
+Waitrose networking, a dynamic worker, and secret metadata. All 130 project
+creates succeeded (p50 about 5.1s, p95 about 6.3s, maximum 11s), while the
+runner remained below 82% CPU and 38% memory. The common pressure was not
+project creation: automatic search-index writes made thousands of R2 calls
+that failed with Cloudflare code 10001 after about 15 seconds. Repo indexing
+also occupied the authoritative repo write chain, turning derived search
+unavailability into edit/commit/build latency.
+
+The candidate keeps the full-parallel topology and separates fixture ownership
+from search durability:
+
+- every mutable family uses concurrency-sized exclusive project pools, so no
+  runnable test waits for another test's project lease; the catalogue alone
+  can own eight projects at once across its four runtimes;
+- automatic stream, file, and repo indexing enqueues tiny pointers to current
+  authoritative state instead of performing R2 writes inline;
+- one batch-size-one/concurrency-one consumer re-reads that state and applies
+  bounded exponential retry (at most 12 configured retries before the DLQ); a
+  successful write is spaced by 50ms;
+- the writer and dead-letter queues are new per-environment Cloudflare
+  resources and therefore an explicit architecture/cost change.
+
+After deploying that exact uncommitted tree, a retry-disabled full OS fleet
+passed 43 files and 156 tests in **69.76s**. It represented 755.21 aggregate
+test-seconds; the longest file was 51.77s and the longest individual test was
+49.70s. The still-unhealthy search bucket left 4,107 pointers (about 631 KiB)
+in the writer queue and zero in the DLQ, making the fault bounded and visible
+without delaying tests. This is decisive topology evidence but does not count
+toward acceptance because it was not an immutable committed-head Depot run.
+The next counted evidence starts after the candidate is committed and deployed.
 
 ## Round 4 (2026-07-13/14, PR #1938)
 

@@ -1063,17 +1063,19 @@ export interface Search {
   ): Promise<{ key: string }>;
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
-   * predate search indexing, or the rare tail gap a failed per-batch write can
-   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   * predate search indexing or an automatic reconciliation task preserved in
+   * the dead-letter queue (`path` is the stream path, e.g.
+   * "/agents/slack/T1/thr-9").
    */
   indexStream(input: { path: string }): Promise<{ segments: number }>;
   /**
    * Snapshot one repo's default-branch HEAD into the search corpus now — the
    * backfill verb for repos that predate search indexing (writes index
-   * incrementally from here on). Runs on the repo Durable Object's own write
-   * chain so its stale-key sweep can't race post-commit indexing. Returned
-   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
-   * files, and a nonzero `failed` means re-run.
+   * incrementally from here on). Runs on the repo Durable Object's dedicated
+   * search-index chain so its stale-key sweep can't race another
+   * reconciliation, without blocking repo writes. Returned counts: `deleted`
+   * = stale keys swept, `skipped` = oversize/over-long-key files, and a
+   * nonzero `failed` means re-run.
    */
   indexRepo(input: { path: string }): Promise<{
     deleted: number;

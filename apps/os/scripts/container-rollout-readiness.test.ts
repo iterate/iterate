@@ -91,6 +91,35 @@ describe("waitForContainerRollouts", () => {
     );
   });
 
+  it("keeps polling when a completed rollout still has an instance starting", async () => {
+    const settling = rollout("completed");
+    settling.health = {
+      errors: [],
+      instances: { failed: 0, healthy: 6, scheduling: 0, starting: 1 },
+    };
+    const calls: string[] = [];
+    const cf = vi.fn(async (path: string) => {
+      calls.push(path);
+      if (path === "/containers/applications?per_page=1000") {
+        return [{ health: healthy, id: "app-a", instances: 7, name: "sandbox-a" }];
+      }
+      if (path === "/containers/applications/app-a/rollouts?limit=1") return [settling];
+      if (path === "/containers/applications/app-a/rollouts/rollout-a") {
+        return rollout("completed");
+      }
+      throw new Error(`Unexpected path ${path}`);
+    });
+
+    await expect(
+      waitForContainerRollouts({
+        applicationNames: ["sandbox-a"],
+        cf,
+        sleep: async () => {},
+      }),
+    ).resolves.toEqual({ applications: 1, pendingApplications: 1 });
+    expect(calls).toContain("/containers/applications/app-a/rollouts/rollout-a");
+  });
+
   it("waits for a new application with no rollout to finish scheduling", async () => {
     const calls: string[] = [];
     const cf = vi.fn(async (path: string) => {

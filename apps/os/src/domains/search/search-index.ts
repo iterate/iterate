@@ -21,10 +21,11 @@
 // events never reach the index: durable delivery doesn't carry them and the
 // segment re-read uses the default `getEvents`, which excludes ephemeral rows.
 //
-// The write paths are best-effort mirrors: a failed index write must never
-// fail the user-facing operation that triggered it (append, file put, repo
-// commit). Failures log at warn — the corpus is derived and self-healing
-// (see indexStreamEventBatch), never the system of record.
+// Automatic write paths enqueue authoritative-state pointers to the durable,
+// globally bounded search-index queue: a failed index write never fails the
+// append/file put/repo commit that triggered it, and bounded retries plus the
+// dead-letter queue preserve an inspectable failure. Explicit index/backfill
+// calls remain direct and report their own outcomes.
 //
 // LOCAL DEV runs against the real cloud service, not a local emulation: the
 // AI Search bindings have no local simulator, so they always hit the account,
@@ -33,7 +34,6 @@
 // created per project at runtime.
 
 import type { StreamEvent } from "iterate/processors";
-import type { StreamPushEventBatch } from "iterate/processors";
 import { itxEnv } from "../../env.ts";
 import { ItxExpression } from "../../itx/expression.ts";
 import {
@@ -142,26 +142,6 @@ export async function triggerProjectSearchSyncDebounced(projectId: string): Prom
   await triggerProjectSearchSync(projectId);
 }
 
-// `ctx.exports` remints of a stream's cached project target stay in this
-// isolate, and waitUntil keeps the isolate alive while an index task runs.
-// Keep the tail here rather than on one target instance so a push failure and
-// target remint cannot let two rewrites of the same R2 segment overlap.
-const automaticStreamIndexTails = new Map<string, Promise<void>>();
-
-export function enqueueAutomaticStreamIndex(input: {
-  projectId: string;
-  path: string;
-  run: () => Promise<void>;
-}): Promise<void> {
-  const key = JSON.stringify([input.projectId, input.path]);
-  const previous = automaticStreamIndexTails.get(key) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(input.run);
-  automaticStreamIndexTails.set(key, current);
-  return current.finally(() => {
-    if (automaticStreamIndexTails.get(key) === current) automaticStreamIndexTails.delete(key);
-  });
-}
-
 /**
  * Pin ONE stream event into the corpus as a focused document (the write side
  * of `itx.search.indexEvent`). The event already lives in its 100-offset
@@ -195,39 +175,23 @@ export async function indexPinnedStreamEvent(input: {
 }
 
 /**
- * Index one delivered stream batch: rewrite every segment document the batch
- * touches. For each affected segment it re-reads the segment's FULL offset
- * range back from the stream (via `readEvents`) rather than indexing only the
- * batch's events, so the document is complete and the write is idempotent
- * regardless of how delivery batched the offsets.
- *
- * That full re-read is also what makes this safe to run as a best-effort
- * first-party step on the shared project-worker delivery (root
- * `processEventBatch`) instead of its own checkpointed lane. An isolate-wide
- * per-stream tail queues adjacent batches in order under waitUntil, so they
- * cannot rewrite one R2 object concurrently and indexing does not delay the
- * delivery acknowledgement. A transient R2 failure is logged; the NEXT batch
- * in the same segment heals it by re-reading and rewriting the whole segment.
- * Only a segment that goes permanently quiet right after a failed write stays short until
- * `itx.search.indexStream`/reindex — acceptable for a derived, rebuildable
- * corpus.
+ * Rewrite complete fixed-size stream segments from durable state. Never index
+ * only a delivered event batch: retries and arbitrary delivery boundaries
+ * mean a later batch in the same segment must not overwrite earlier events.
+ * Automatic callers enqueue touched segment numbers; the bounded consumer
+ * supplies the authoritative Stream DO read.
  */
-export async function indexStreamEventBatch(input: {
-  batch: StreamPushEventBatch;
-  /** Committed-event range read from the stream (bounds exclusive/exclusive, like the DO's getEvents). */
+export async function indexStreamSegments(input: {
+  projectId: string;
+  path: string;
+  segments: Iterable<number>;
   readEvents: (args: {
     afterOffset: number;
     beforeOffset: number;
     limit: number;
   }) => Promise<StreamEvent[]>;
 }): Promise<void> {
-  const { batch } = input;
-  if (batch.projectId === null) return;
-  const offsets = batch.events.map((event) => event.offset);
-  if (offsets.length === 0) return;
-
-  const segments = new Set(offsets.map(segmentForOffset));
-  for (const segment of segments) {
+  for (const segment of [...new Set(input.segments)].sort((left, right) => left - right)) {
     const { first, last } = segmentOffsetRange(segment);
     const events = await input.readEvents({
       afterOffset: first - 1,
@@ -237,11 +201,11 @@ export async function indexStreamEventBatch(input: {
     const document = renderStreamSegmentDocument({
       events,
       segment,
-      streamPath: batch.path,
+      streamPath: input.path,
     });
     const key = streamSegmentKey({
-      projectId: batch.projectId,
-      streamPath: batch.path,
+      projectId: input.projectId,
+      streamPath: input.path,
       segment,
     });
     if (document === null) {
@@ -255,8 +219,8 @@ export async function indexStreamEventBatch(input: {
       httpMetadata: { contentType: "text/markdown" },
       customMetadata: searchMetadata(
         "streams",
-        streamSegmentContext({ streamPath: batch.path, segment }),
-        streamEventsRef({ path: batch.path, firstOffset, lastOffset }),
+        streamSegmentContext({ streamPath: input.path, segment }),
+        streamEventsRef({ path: input.path, firstOffset, lastOffset }),
       ),
     });
   }
@@ -340,6 +304,25 @@ export async function indexEntireStream(input: {
 /** Outcome of one file mirror, so backfill callers can report honest counts. */
 type MirrorFileOutcome = "mirrored" | "skipped" | "failed";
 
+/** Strict file reconciliation used by the durable search-index queue. */
+export async function mirrorFileToSearchIndexStrict(input: {
+  bytes: Uint8Array;
+  contentType: string;
+  path: string;
+  projectId: string;
+}): Promise<Exclude<MirrorFileOutcome, "failed">> {
+  const key = fileSearchKey({ projectId: input.projectId, path: input.path });
+  if (input.bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) {
+    await itxEnv.SEARCH_BUCKET.delete(key);
+    return "skipped";
+  }
+  await itxEnv.SEARCH_BUCKET.put(key, input.bytes, {
+    httpMetadata: { contentType: input.contentType },
+    customMetadata: searchMetadata("files", `File ${input.path}`, fileRef(input.path)),
+  });
+  return "mirrored";
+}
+
 /**
  * Mirror one itx.files write into the search index. Raw bytes with the
  * original content type — AI Search converts rich formats (pdf, images,
@@ -356,21 +339,22 @@ export async function mirrorFileToSearchIndex(input: {
   path: string;
   projectId: string;
 }): Promise<MirrorFileOutcome> {
-  const key = fileSearchKey({ projectId: input.projectId, path: input.path });
   try {
-    if (input.bytes.byteLength > SEARCH_MAX_DOCUMENT_BYTES) {
-      await itxEnv.SEARCH_BUCKET.delete(key);
-      return "skipped";
-    }
-    await itxEnv.SEARCH_BUCKET.put(key, input.bytes, {
-      httpMetadata: { contentType: input.contentType },
-      customMetadata: searchMetadata("files", `File ${input.path}`, fileRef(input.path)),
-    });
-    return "mirrored";
+    return await mirrorFileToSearchIndexStrict(input);
   } catch (error) {
     console.warn("search index file mirror failed", { path: input.path, error });
     return "failed";
   }
+}
+
+/** Strict removal used by the durable reconciliation queue. */
+export async function removeFileFromSearchIndexStrict(input: {
+  path: string;
+  projectId: string;
+}): Promise<void> {
+  await itxEnv.SEARCH_BUCKET.delete(
+    fileSearchKey({ projectId: input.projectId, path: input.path }),
+  );
 }
 
 /** Remove one itx.files path from the search index. Best-effort: never throws. */
@@ -379,9 +363,7 @@ export async function removeFileFromSearchIndex(input: {
   projectId: string;
 }): Promise<void> {
   try {
-    await itxEnv.SEARCH_BUCKET.delete(
-      fileSearchKey({ projectId: input.projectId, path: input.path }),
-    );
+    await removeFileFromSearchIndexStrict(input);
   } catch (error) {
     console.warn("search index file removal failed", { path: input.path, error });
   }

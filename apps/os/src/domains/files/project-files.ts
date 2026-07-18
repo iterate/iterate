@@ -28,11 +28,7 @@
 
 import { itxEnv } from "../../env.ts";
 import type { AppConfig } from "../../config.ts";
-import {
-  mirrorFileToSearchIndex,
-  removeFileFromSearchIndex,
-  triggerProjectSearchSyncDebounced,
-} from "../search/search-index.ts";
+import { enqueueFileSearchIndex } from "../search/search-index-queue.ts";
 import { readProjectById } from "../../project-directory.ts";
 import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
@@ -85,17 +81,18 @@ export async function putProjectFile(input: {
   await itxEnv.FILES_BUCKET.put(fileObjectKey(input), bytes, {
     httpMetadata: { contentType },
   });
-  // Mirror into the itx.search corpus (best-effort; never fails the put),
-  // then nudge the project's search instance so the file is findable in
-  // minutes rather than on the hourly sync.
-  await mirrorFileToSearchIndex({
-    bytes,
-    contentType,
-    path: normalizePath(input.path),
-    projectId: input.projectId,
+  const path = normalizePath(input.path);
+  // Search is a derived mirror. Enqueue only the authoritative file pointer;
+  // the bounded consumer re-reads the latest bytes and owns retry/DLQ state.
+  // An unavailable queue must not turn a successful file write into failure.
+  await enqueueFileSearchIndex({ path, projectId: input.projectId }).catch((error: unknown) => {
+    console.warn("search index file reconciliation enqueue failed", {
+      error,
+      path,
+      projectId: input.projectId,
+    });
   });
-  await triggerProjectSearchSyncDebounced(input.projectId);
-  return { contentType, path: normalizePath(input.path), size: bytes.byteLength };
+  return { contentType, path, size: bytes.byteLength };
 }
 
 export async function readProjectFile(input: {
@@ -114,9 +111,13 @@ export async function readProjectFile(input: {
 
 export async function deleteProjectFile(input: { path: string; projectId: string }): Promise<void> {
   await itxEnv.FILES_BUCKET.delete(fileObjectKey(input));
-  await removeFileFromSearchIndex({
-    path: normalizePath(input.path),
-    projectId: input.projectId,
+  const path = normalizePath(input.path);
+  await enqueueFileSearchIndex({ path, projectId: input.projectId }).catch((error: unknown) => {
+    console.warn("search index file reconciliation enqueue failed", {
+      error,
+      path,
+      projectId: input.projectId,
+    });
   });
 }
 

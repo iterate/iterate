@@ -14,23 +14,81 @@
 
 import { expect, test as baseTest } from "vitest";
 import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
+import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
+import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
 import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
 import { connectGlobal, connectProject } from "./e2e-env.ts";
-import { bakeProjectWorkerRunner, MATRIX_RUNTIMES, runExampleCode } from "./example-matrix.ts";
+import {
+  bakeProjectWorkerRunner,
+  MATRIX_RUNTIMES,
+  runExampleCode,
+  type MatrixRuntime,
+} from "./example-matrix.ts";
 
-const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
-const PROJECT_SLUG = `itx-e2e-${RUN_SUFFIX}`;
-
-// One project, created here (the harness's job); every example then connects
-// INTO it and gets straight to work. The project-worker runtime needs the
-// catalogue baked into the project's worker.ts, so the lazy setup commits
-// that once.
 const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
   (example) =>
     example.runtimes.some((runtime) => (MATRIX_RUNTIMES as readonly string[]).includes(runtime)) &&
     EXAMPLE_CASES[example.id] !== undefined,
 );
 const matrixTest = baseTest;
+
+// Fixed public capability mounts, the config repo, and the repo-sourced
+// project worker are project-global mutable resources. Markers cannot isolate
+// them. Give each simultaneously eligible runtime an exclusive project, and
+// keep separate pools per runtime so a node example's repo commit cannot
+// rebuild the worker underneath a project-worker example.
+//
+// Pool size equals Vitest's in-file concurrency, so acquiring a lease never
+// serializes a runnable test. A project is reused only after its previous owner
+// releases it. Peak matrix ownership is 4 runtimes × 2 projects.
+const matrixProjectPools: Record<MatrixRuntime, ReturnType<typeof createTestProjectPool>> = {
+  node: createTestProjectPool({
+    size: E2E_FILE_TEST_CONCURRENCY,
+    slugPrefix: "matrix-node",
+  }),
+  cli: createTestProjectPool({
+    size: E2E_FILE_TEST_CONCURRENCY,
+    slugPrefix: "matrix-cli",
+  }),
+  "run-script": createTestProjectPool({
+    size: E2E_FILE_TEST_CONCURRENCY,
+    slugPrefix: "matrix-script",
+  }),
+  "project-worker": createTestProjectPool({
+    size: E2E_FILE_TEST_CONCURRENCY,
+    slugPrefix: "matrix-worker",
+  }),
+};
+
+// The sandbox example deliberately runs all runtimes against one warm
+// container. It is the only serial-runtime case, so it gets a separate
+// exclusive-project family instead of weakening isolation for every example.
+const serialMatrixProjectPool = createTestProjectPool({
+  size: E2E_FILE_TEST_CONCURRENCY,
+  slugPrefix: "matrix-serial",
+});
+
+const projectWorkerExamples = MATRIX_EXAMPLES.filter((example) =>
+  example.runtimes.includes("project-worker"),
+);
+const projectWorkerBakePromises = new Map<string, Promise<void>>();
+
+async function ensureProjectWorkerRunner(projectId: string): Promise<void> {
+  const current =
+    projectWorkerBakePromises.get(projectId) ??
+    bakeProjectWorkerRunner({ examples: projectWorkerExamples, projectId });
+  projectWorkerBakePromises.set(projectId, current);
+  try {
+    await current;
+  } catch (error) {
+    // A failed setup must not poison later tests or a Vitest retry that leases
+    // this otherwise healthy project.
+    if (projectWorkerBakePromises.get(projectId) === current) {
+      projectWorkerBakePromises.delete(projectId);
+    }
+    throw error;
+  }
+}
 
 baseTest("every catalogue example is either matrix-tested or explicitly excluded", () => {
   for (const example of ITX_EXAMPLES) {
@@ -55,64 +113,6 @@ baseTest("every catalogue example is either matrix-tested or explicitly excluded
   }
 });
 
-// Concurrency-safe under `sequence.concurrent`: the `??=` check-and-assign has
-// no await between them, so it's atomic against other microtasks — the first
-// matrix test to arrive creates the project, every other awaits the same
-// promise (one project, created once). Tests then share that read-only
-// projectId but isolate their writes with a per-runtime `marker` (below), so
-// concurrent examples don't collide.
-//
-// The setup is BOUNDED and NON-POISONING: the create + worker bake dials
-// RPCs with no deadline of their own, and a wedged repo commit under full
-// lane load once parked this promise forever — every matrix test AND every
-// vitest retry then awaited the same dead memo, so the whole file produced
-// zero output until the lane watchdog killed it (marathons of 2026-07-10).
-// A failed or timed-out setup clears the memo, so the next attempt
-// re-creates the project fresh instead of re-awaiting the corpse.
-const MATRIX_SETUP_TIMEOUT_MS = 120_000;
-let matrixSetupPromise: Promise<{ projectId: string }> | null = null;
-function ensureMatrixProject(): Promise<{ projectId: string }> {
-  matrixSetupPromise ??= (async () => {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timeoutId = setTimeout(
-        () =>
-          reject(
-            new Error(
-              `matrix project setup (create + worker bake) exceeded ${MATRIX_SETUP_TIMEOUT_MS / 1000}s`,
-            ),
-          ),
-        MATRIX_SETUP_TIMEOUT_MS,
-      );
-    });
-    try {
-      return await Promise.race([
-        deadline,
-        (async () => {
-          using itx = connectGlobal();
-          using project = itx.projects.create({
-            slug: `${PROJECT_SLUG}-${Date.now().toString(36)}`,
-          });
-          const { projectId } = await project.__describe();
-          await bakeProjectWorkerRunner({
-            examples: MATRIX_EXAMPLES.filter((example) =>
-              example.runtimes.includes("project-worker"),
-            ),
-            projectId,
-          });
-          return { projectId };
-        })(),
-      ]);
-    } catch (error) {
-      matrixSetupPromise = null;
-      throw error;
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  })();
-  return matrixSetupPromise;
-}
-
 for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   // Cold isolates and a dynamic-worker load per call make these the slowest
@@ -126,60 +126,83 @@ for (const example of MATRIX_EXAMPLES) {
     `catalogue example "${example.id}" runs identically across runtimes`,
     { timeout: (exampleCase.completionTimeoutMs ?? 90_000) + 30_000 },
     async () => {
-      const { projectId } = await ensureMatrixProject();
       const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
       expect(runtimes.length).toBeGreaterThan(0);
 
-      // Fresh per attempt, shared across this attempt's runtimes — see
-      // ExampleRunContext.attemptSalt.
+      // Fresh per attempt; shared only by a case that explicitly elects
+      // serial runtime execution (the warm sandbox container).
       const attemptSalt = crypto.randomUUID().slice(0, 8);
-      try {
-        const runRuntime = async (runtime: (typeof runtimes)[number]) => {
-          const ctx = {
-            attemptSalt,
-            marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
-            projectId,
-          };
-          const vars = exampleCase.vars?.(ctx) ?? {};
-          try {
-            const result = await runExampleCode(runtime, {
-              code: example.code,
-              id: example.id,
-              projectId,
-              timeoutMs: exampleCase.completionTimeoutMs ?? 90_000,
-              vars,
-            });
-            exampleCase.assert(result, ctx, expect);
-          } catch (error) {
-            throw new Error(
-              `example "${example.id}" failed in the ${runtime} runtime: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-              { cause: error },
-            );
-          }
+      const runRuntime = async (runtime: (typeof runtimes)[number], projectId: string) => {
+        if (runtime === "project-worker") await ensureProjectWorkerRunner(projectId);
+        const ctx = {
+          attemptSalt,
+          marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
+          projectId,
         };
-        if (exampleCase.runtimeExecution === "serial") {
+        const vars = exampleCase.vars?.(ctx) ?? {};
+        try {
+          const result = await runExampleCode(runtime, {
+            code: example.code,
+            id: example.id,
+            projectId,
+            timeoutMs: exampleCase.completionTimeoutMs ?? 90_000,
+            vars,
+          });
+          exampleCase.assert(result, ctx, expect);
+        } catch (error) {
+          throw new Error(
+            `example "${example.id}" failed in the ${runtime} runtime: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            { cause: error },
+          );
+        }
+      };
+
+      const cleanup = async (projectId: string) => {
+        if (!exampleCase.cleanup) return;
+        try {
+          using project = connectProject(projectId);
+          await exampleCase.cleanup(project, { attemptSalt, marker: "cleanup", projectId });
+        } catch (error) {
+          // Slot hygiene never replaces the test's own result, but remains
+          // visible so an accumulating resource leak cannot become folklore.
+          console.warn(`example "${example.id}" cleanup failed (ignored):`, error);
+        }
+      };
+
+      if (exampleCase.runtimeExecution === "serial") {
+        using itx = connectGlobal();
+        using projectLease = await serialMatrixProjectPool.acquire(itx);
+        try {
           for (const runtime of runtimes) {
-            await runRuntime(runtime);
+            await runRuntime(runtime, projectLease.projectId);
           }
-        } else {
-          await Promise.all(runtimes.map(runRuntime));
+        } finally {
+          await cleanup(projectLease.projectId);
         }
-      } finally {
-        // In a FINALLY: the failed attempts are precisely the ones whose
-        // resources must not leak (a stuck container that failed this
-        // attempt would otherwise keep holding slot capacity while the
-        // retry mints a fresh attemptSalt). Best-effort — slot hygiene
-        // never turns the test's own outcome.
-        if (exampleCase.cleanup) {
+        return;
+      }
+
+      // Wait for every runtime to settle before returning a failure. Promise.all
+      // would let the retry start while sibling runtimes still owned projects.
+      const results = await Promise.allSettled(
+        runtimes.map(async (runtime) => {
+          using itx = connectGlobal();
+          using projectLease = await matrixProjectPools[runtime].acquire(itx);
           try {
-            using project = connectProject(projectId);
-            await exampleCase.cleanup(project, { attemptSalt, marker: "cleanup", projectId });
-          } catch (error) {
-            console.warn(`example "${example.id}" cleanup failed (ignored):`, error);
+            await runRuntime(runtime, projectLease.projectId);
+          } finally {
+            await cleanup(projectLease.projectId);
           }
-        }
+        }),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, `example "${example.id}" failed in multiple runtimes`);
       }
     },
   );

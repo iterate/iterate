@@ -20,6 +20,10 @@ it("lists artifact event subscriptions with Cloudflare's accepted page size", as
       if (path === "/queues?page=1&per_page=100") {
         return [{ queue_id: "queue-1", queue_name: "os-prd-events" }] as T;
       }
+      if (path === "/queues" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { queue_name: string };
+        return { queue_id: `queue-${body.queue_name}`, queue_name: body.queue_name } as T;
+      }
       if (path === "/event_subscriptions/subscriptions?page=1&per_page=100") {
         return [] as T;
       }
@@ -37,17 +41,21 @@ it("lists artifact event subscriptions with Cloudflare's accepted page size", as
 
   expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
     "GET /queues?page=1&per_page=100",
+    "POST /queues",
+    "POST /queues",
     "GET /event_subscriptions/subscriptions?page=1&per_page=100",
     "POST /event_subscriptions/subscriptions",
     "GET /artifacts/namespaces/os-prd-repos/repos?page=1&per_page=100",
     "POST /event_subscriptions/subscriptions",
   ]);
-  expect(calls[2]?.body).toMatchObject({
+  expect(calls[1]?.body).toEqual({ queue_name: "os-prd-search-index-writes" });
+  expect(calls[2]?.body).toEqual({ queue_name: "os-prd-search-index-write-failures" });
+  expect(calls[4]?.body).toMatchObject({
     destination: { queue_id: "queue-1", type: "queues.queue" },
     name: "os-prd-artifact-account-events",
     source: { type: "artifacts" },
   });
-  expect(calls[4]?.body).toMatchObject({
+  expect(calls[6]?.body).toMatchObject({
     destination: { queue_id: "queue-1", type: "queues.queue" },
     name: expect.stringMatching(/^os-prd-artifact-repo-prj_123--Lw-[0-9a-f]{12}$/),
     source: { namespace: "os-prd-repos", repo_name: "prj_123--Lw", type: "artifacts.repo" },

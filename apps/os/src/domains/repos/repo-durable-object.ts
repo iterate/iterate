@@ -20,10 +20,8 @@ import {
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
-import {
-  indexRepoSnapshotToSearchIndex,
-  triggerProjectSearchSyncDebounced,
-} from "../search/search-index.ts";
+import { indexRepoSnapshotToSearchIndex } from "../search/search-index.ts";
+import { enqueueRepoSearchIndex } from "../search/search-index-queue.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -403,6 +401,14 @@ export class RepoDurableObject extends DurableObject<Env> {
   // completed push, so mutateArtifactRepo also verifies that its branch HEAD
   // is the last pushed commit before it changes anything.
   #writeChain: Promise<unknown> = Promise.resolve();
+  // Search is a derived mirror. Keep explicit full-snapshot/sweep operations
+  // ordered with each other, but never put them on the authoritative repo
+  // write chain: a slow or unavailable R2 corpus must not delay a later edit,
+  // commit, or worker build. Automatic reconciliation runs through the
+  // deployment's bounded search-index queue instead.
+  #searchIndexChain: Promise<unknown> = Promise.resolve();
+  #automaticSearchIndexRequested = false;
+  #automaticSearchIndexTask: Promise<void> | undefined;
   // Secondary repos have no root-workspace cache. Their HEAD reads otherwise
   // clone the complete Artifact once per call; a task board opening 42 files
   // concurrently therefore launched 42 full monorepo clones and reset this
@@ -512,6 +518,12 @@ export class RepoDurableObject extends DurableObject<Env> {
   #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
     const result = this.#writeChain.then(write, write);
     this.#writeChain = result.catch(() => {});
+    return result;
+  }
+
+  #serializeSearchIndex<T>(index: () => Promise<T>): Promise<T> {
+    const result = this.#searchIndexChain.then(index, index);
+    this.#searchIndexChain = result.catch(() => {});
     return result;
   }
 
@@ -1446,19 +1458,18 @@ export class RepoDurableObject extends DurableObject<Env> {
    * return the sweep/write counts. The public entry point behind
    * `itx.search.indexRepo` — a manual backfill/repair.
    *
-   * Serialized on `#serializeWrite`: a snapshot reads HEAD and runs a
-   * stale-key sweep, so a manual reindex that overlapped a post-commit index
-   * (or another manual one) and finished out of order could let an older
-   * sweep delete objects a newer snapshot wrote. Running on the same write
-   * chain as commits and `#scheduleSearchIndex` makes the last-committed
-   * snapshot the last to run, so the corpus converges on current HEAD.
+   * Serialized with other index operations: a snapshot reads HEAD and runs a
+   * stale-key sweep, so two reindexes finishing out of order could let an
+   * older sweep delete objects a newer snapshot wrote. This dedicated chain
+   * deliberately does NOT include user writes. A commit that lands during an
+   * older snapshot schedules one coalesced latest-HEAD pass behind it.
    */
   reindexSearch(): Promise<{ deleted: number; indexed: number; skipped: number; failed: number }> {
     const projectId = this.#name.projectId;
     if (projectId === null) {
       throw new Error("search indexing requires a project-scoped repo");
     }
-    return this.#serializeWrite(async () => {
+    return this.#serializeSearchIndex(async () => {
       const snapshot = await this.getFilesSnapshot({ branch: REPO_DEFAULT_BRANCH });
       return indexRepoSnapshotToSearchIndex({
         files: snapshot.files,
@@ -1469,23 +1480,37 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * SPIKE: best-effort re-index of this repo's default-branch HEAD into the
-   * itx.search corpus after a write lands. Same never-fail-the-write posture
-   * as the GitHub mirror push; a failure just leaves the index one commit
-   * stale until the next write (or an explicit `itx.search.indexRepo`).
-   * Shares the serialized `reindexSearch` path so post-commit and manual
-   * reindexes can never race each other's stale-key sweeps.
+   * Enqueue a pointer to this repo after a default-branch write lands. The
+   * bounded queue consumer re-reads the latest HEAD, so duplicate or reordered
+   * delivery is safe and consecutive commits naturally coalesce to current
+   * authoritative state. Queue retries and its dead-letter queue own derived
+   * indexing failures; they never block repo mutations.
    */
   #scheduleSearchIndex(branch: string): void {
     const projectId = this.#name.projectId;
     if (branch !== REPO_DEFAULT_BRANCH || projectId === null) return;
+    this.#automaticSearchIndexRequested = true;
+    if (this.#automaticSearchIndexTask !== undefined) return;
+
+    const task = (async () => {
+      do {
+        this.#automaticSearchIndexRequested = false;
+        await enqueueRepoSearchIndex({ path: this.#name.path, projectId });
+      } while (this.#automaticSearchIndexRequested);
+    })();
+    this.#automaticSearchIndexTask = task;
+
     this.ctx.waitUntil(
-      this.reindexSearch()
-        // Freshness: nudge the project's instance (if one exists) so the new
-        // snapshot is searchable in minutes, not on the hourly schedule.
-        .then(() => triggerProjectSearchSyncDebounced(projectId))
+      task
         .catch((error: unknown) => {
-          console.warn("search index repo snapshot failed", error);
+          console.warn("search index repo reconciliation enqueue failed", error);
+        })
+        .finally(() => {
+          if (this.#automaticSearchIndexTask !== task) return;
+          this.#automaticSearchIndexTask = undefined;
+          // A commit can request another pass after the loop's final condition
+          // check but before this completion continuation runs.
+          if (this.#automaticSearchIndexRequested) this.#scheduleSearchIndex(branch);
         }),
     );
   }

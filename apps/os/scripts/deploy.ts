@@ -56,7 +56,7 @@ import {
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
 import { waitForContainerRollouts } from "./container-rollout-readiness.ts";
-import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
+import { ensureWorkerQueues } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
@@ -231,8 +231,8 @@ export default async function deploy(
       await Promise.all([
         // Wrangler validates these bindings at upload, so every resource must
         // exist before deployApp uploads the main OS version.
-        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: event queue", () =>
-          ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName),
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: queues", () =>
+          ensureWorkerQueues(ctx, ctx.env.osWorkerName),
         ),
         runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: files bucket", () =>
           ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`),

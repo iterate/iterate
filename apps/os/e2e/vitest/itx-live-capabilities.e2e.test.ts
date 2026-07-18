@@ -2,11 +2,12 @@ import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
+import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
 import { PathFunctionTarget, startMockSlack } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const liveCapabilityProjectPool = createTestProjectPool({
-  size: 2,
+  size: E2E_FILE_TEST_CONCURRENCY,
   slugPrefix: "live-cap-family",
 });
 

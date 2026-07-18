@@ -243,13 +243,13 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
     id: "provide-itx-expression",
     title: "Provide a durable capability as an itx expression",
     description:
-      "An itx-expression capability is a serializable recipe over the project's own surface — here an alias to a stream: ['streams', ['get', path]]. Unlike a live mount it survives this session; itx evaluates the expression on demand. The same shape mounts dynamic workers (['workers', ['get', ref]]), MCP servers (['mcp', ['connect', { url }]]), and OpenAPI clients.",
+      "An itx-expression capability is a serializable recipe over the project's own surface — here an alias to a stream: ['streams', ['get', path]]. It is journaled and evaluated server-side instead of routing calls back to the providing process. Keep the returned provision handle for the mount's lifetime, then dispose or revoke it. The same shape mounts dynamic workers (['workers', ['get', ref]]), MCP servers (['mcp', ['connect', { url }]]), and OpenAPI clients.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 // Mount itx.demoStream as an alias for a project stream. The recipe is data —
 // it is recorded on the project's stream and needs no live provider.
-await itx.provideCapability({
+using _provision = await itx.provideCapability({
   expression: ["streams", ["get", vars.path ?? "/repl/expression-demo"]],
   instructions: "A demo stream alias: itx.demoStream.append({ type, payload }).",
   path: ["demoStream"],

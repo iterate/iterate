@@ -59,13 +59,9 @@ export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
   marker: string;
   /**
-   * Unique per test ATTEMPT, shared across the runtimes within it. For
-   * resources where the attempt should share one instance (the first runtime
-   * pays the cold path, the rest reuse it warm) but a RETRY must get a fresh
-   * one — a vitest retry that reuses the previous attempt's stuck resource
-   * can never recover (the sandbox container stall, marathons of
-   * 2026-07-10: the REPL spec's retry healed on a fresh placement while the
-   * matrix retry waited on the same stuck container).
+   * Unique per test ATTEMPT. Cases that explicitly run their runtimes serially
+   * also share one project, so this can name one warm resource across those
+   * runtimes while a RETRY still gets a fresh placement.
    */
   attemptSalt: string;
   projectId: string;
@@ -322,12 +318,9 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   },
   "workspace-edit-and-push": {
     // Unique workspace per example × runtime: the path is durable identity
-    // (one Durable Object), so sharing one across the matrix would make the
-    // second runtime's edit() fail (oldString already replaced) and commits
-    // race. Since #1831 git.commit lands on the config repo's MAIN (no
-    // workspace branches); each runtime writes a distinct file path, so the
-    // two main commits don't conflict. The budget covers the repo commit
-    // lane's cold tail.
+    // (one Durable Object). Exclusive runtime project leases also keep the
+    // config-repo commits from racing. The budget covers the repo commit lane's
+    // cold tail.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
     assert: (result, _ctx, expect) => {
@@ -354,9 +347,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "workspace-files-transfer": {
-    // Fresh workspace and project-file paths per runtime. A shared project is
-    // safe only when every mutable address is isolated: parallel puts to the
-    // old constant source path could make one runtime read another's marker.
+    // Fresh workspace and project-file paths per runtime also keep sequential
+    // reuse of an exclusive runtime-family project independent.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({
       note: `transfer-${marker}`,
@@ -377,8 +369,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "repo-commit-files": {
-    // Unique content per run so the commit is never a no-op on the shared
-    // matrix project.
+    // Unique content per run so sequential reuse of a runtime-family project
+    // never turns this into a no-op.
     vars: ({ marker }) => ({ note: marker }),
     assert: (result, _ctx, expect) => {
       expect(result).toEqual({

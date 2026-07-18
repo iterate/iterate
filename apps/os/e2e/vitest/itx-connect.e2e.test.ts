@@ -1,12 +1,16 @@
 import { expect, test } from "vitest";
 import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
+import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-const connectProjectPool = createTestProjectPool({ size: 2, slugPrefix: "connect-family" });
+const connectProjectPool = createTestProjectPool({
+  size: E2E_FILE_TEST_CONCURRENCY,
+  slugPrefix: "connect-family",
+});
 
 // These are hand written tests - they MUST pass
 test("OpenAPI built-in connects directly and mounts as a described capability", async () => {

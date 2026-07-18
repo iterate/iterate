@@ -162,9 +162,10 @@ async function finishBeforeRuntimeDeadline<Result>(
  * example baked in as `async (itx, vars) => { <body> }`, dispatched by id
  * through ONE exported method. `project.worker.runItxExample(...)` reaches the
  * repo-sourced default worker, and the script's handle is the worker's own
- * `await this.env.ITX.get()` — the same project-scoped itx every other runtime
- * connects to from outside. Plain JavaScript: dynamic workers may import
- * "cloudflare:workers" and nothing else.
+ * `await this.env.ITX.get()`. Each runtime has an exclusive project lease, so
+ * this proves the same project-scoped itx semantics without sharing mutable
+ * repo state with the other runtimes. Plain JavaScript: dynamic workers may
+ * import "cloudflare:workers" and nothing else.
  */
 export function projectWorkerRunnerSource(examples: ItxExample[]): string {
   const scripts = examples
