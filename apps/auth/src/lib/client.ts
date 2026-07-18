@@ -26,22 +26,12 @@ type RefreshOptions = {
   force?: boolean;
 };
 
-type AuthClient = ReturnType<typeof createIterateAuthClient>;
-
 type AuthClientContextValue = {
   session: PublicSessionResponse | null;
   loading: boolean;
   signIn: (options?: LoginOptions) => void;
   signOut: () => Promise<void>;
   refresh: (options?: RefreshOptions) => Promise<void>;
-};
-
-type AuthClientProviderProps = {
-  children: ReactNode;
-  client?: AuthClient;
-  initialSession: PublicSessionResponse;
-  globalSignOut?: boolean;
-  signOutReturnTo?: string | (() => string);
 };
 
 type IterateAuthClientConfig = {
@@ -112,6 +102,14 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
 const AuthClientContext = createContext<AuthClientContextValue | null>(null);
 
 const defaultAuthClient = createIterateAuthClient();
+
+type AuthClientProviderProps = {
+  children: ReactNode;
+  client?: ReturnType<typeof createIterateAuthClient>;
+  initialSession: PublicSessionResponse;
+  globalSignOut?: boolean;
+  signOutReturnTo?: string | (() => string);
+};
 
 export function AuthClientProvider({
   children,
