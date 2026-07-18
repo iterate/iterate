@@ -30,6 +30,7 @@
 // auth worker's directory as the source of truth — one cached membership
 // lookup widens the live context instead of forcing a token refresh.
 
+import { identityFromAccessToken, identityFromSession } from "@iterate-com/auth/server";
 import { authenticateAdminBearer } from "./auth/admin.ts";
 import {
   authenticateOperatorSession,
@@ -39,8 +40,7 @@ import {
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import { itxEnv } from "./env.ts";
 import {
-  principalFromAccessToken,
-  principalFromSession,
+  principalFromIdentity,
   principalIsAdmin,
   type Principal,
   type UserPrincipal,
@@ -231,6 +231,7 @@ export function resolveOrganizationSlugForCreate(
   );
 }
 
+/** Exchange explicit Cap'n Web credentials for capability authority, or reject. */
 export async function resolveItxAuth(input: {
   config: AppConfig;
   credentials: ItxAuthCredentials;
@@ -266,32 +267,27 @@ export async function resolveItxAuth(input: {
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
     if (!accessToken) throw new ItxAuthenticationError();
-    return itxAuthFromPrincipal(principalFromAccessToken(accessToken));
+    return itxAuthFromPrincipal(principalFromIdentity(identityFromAccessToken(accessToken)));
   }
 
-  // Ambient cookies are never authority on a cross-origin browser socket.
-  // Browsers always send Origin on WebSocket handshakes; non-browser clients
-  // normally omit it and authenticate explicitly.
+  // Ambient cookies are authority only on an exact-origin browser request.
   const cookieRequest = new Request(input.requestUrl, { headers: input.headers });
   if (!isSameOriginBrowserRequest(cookieRequest)) throw new ItxAuthenticationError();
 
-  // A short-lived operator session wins over the ordinary Iterate session so
-  // an operator can open a narrowly-scoped browser without signing out first.
-  const operatorSession = await authenticateOperatorSession({
-    config,
-    request: cookieRequest,
-  });
+  const operatorSession = await authenticateOperatorSession({ config, request: cookieRequest });
   if (operatorSession) {
-    return itxAuthFromPrincipal(operatorSession.principal, {
-      allowDirectoryFallback: false,
-    });
+    return itxAuthFromPrincipal(operatorSession.principal, { allowDirectoryFallback: false });
   }
 
   const auth = createOsIterateAuth(config, input.requestUrl);
   if (!auth) throw new Error("iterate auth is not configured");
-  const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
-  if (!result.session) throw new ItxAuthenticationError();
-  return itxAuthFromPrincipal(principalFromSession(result.session));
+  // An in-band RPC call cannot carry a rotated Set-Cookie back to the browser.
+  const { session } = await auth.authenticateSession({
+    headers: input.headers,
+    refresh: "never",
+  });
+  if (!session) throw new ItxAuthenticationError();
+  return itxAuthFromPrincipal(principalFromIdentity(identityFromSession(session)));
 }
 
 function assertAdminSecret(config: AppConfig, secret: string): void {
