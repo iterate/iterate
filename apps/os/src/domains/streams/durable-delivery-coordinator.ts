@@ -35,6 +35,9 @@ export type DeliveryAttempt = SubscriptionCursorFence & {
   configOffset: number;
 };
 
+/** Outcome of one delivery transition, including loss of its captured fence. */
+export type DeliveryDisposition = "scheduled" | "parked" | "stale";
+
 type DurableDeliveryCoordinatorHooks = {
   coreState(): CoreProcessorState;
   store: SubscriptionCursorStore;
@@ -44,7 +47,6 @@ type DurableDeliveryCoordinatorHooks = {
   armAlarm(atMs: number): Promise<void>;
   repointAlarm(atMs: number | null): Promise<void>;
   keepAlive(promise: Promise<unknown>): void;
-  abortIncarnation(reason: string): void;
   isInFlight(subscriptionKey: string): boolean;
   onParked(subscriptionKey: string): void;
 };
@@ -158,6 +160,7 @@ export class DurableDeliveryCoordinator {
             `subscription cursor changed during reconciliation recovery for ${args.subscriptionKey}`,
           );
         } catch (error) {
+          if (error instanceof StreamDeliveryFatalInvariantError) throw error;
           acquisitionError = error;
           console.warn("stream cursor acquisition recovery failed", {
             subscriptionKey: args.subscriptionKey,
@@ -234,17 +237,16 @@ export class DurableDeliveryCoordinator {
   }
 
   /** Receiver failure: bounded policy backoff, then a loud parked transition. */
-  async fail(attempt: DeliveryAttempt, error: unknown): Promise<void> {
-    if (!this.isCurrent(attempt)) return;
+  async fail(attempt: DeliveryAttempt, error: unknown): Promise<DeliveryDisposition> {
+    if (!this.isCurrent(attempt)) return "stale";
     const row = this.#hooks.store.get(attempt.subscriptionKey);
-    if (row === undefined || row.epoch !== attempt.epoch) return;
+    if (row === undefined || row.epoch !== attempt.epoch) return "stale";
     const attemptCount = Math.min(row.attempt + 1, MAX_DELIVERY_ATTEMPTS);
     if (attemptCount < MAX_DELIVERY_ATTEMPTS) {
-      await this.#backoff(attempt, attemptCount, error);
-      return;
+      return this.#backoff(attempt, attemptCount, error);
     }
 
-    await this.park(attempt, attemptCount, error);
+    return this.park(attempt, attemptCount, error);
   }
 
   /**
@@ -256,16 +258,15 @@ export class DurableDeliveryCoordinator {
   async failPoison(
     attempt: DeliveryAttempt,
     args: { error: unknown; poisonOffset: number; poisonConfirmations: number },
-  ): Promise<void> {
-    if (!this.isCurrent(attempt)) return;
+  ): Promise<DeliveryDisposition> {
+    if (!this.isCurrent(attempt)) return "stale";
     const row = this.#hooks.store.get(attempt.subscriptionKey);
-    if (row === undefined || row.epoch !== attempt.epoch) return;
+    if (row === undefined || row.epoch !== attempt.epoch) return "stale";
     const attemptCount = Math.min(row.attempt + 1, MAX_DELIVERY_ATTEMPTS);
     if (attemptCount >= MAX_DELIVERY_ATTEMPTS) {
-      await this.park(attempt, attemptCount, args.error);
-      return;
+      return this.park(attempt, attemptCount, args.error);
     }
-    await this.#backoffPoison(attempt, {
+    return this.#backoffPoison(attempt, {
       attemptCount,
       error: args.error,
       poisonOffset: args.poisonOffset,
@@ -296,7 +297,8 @@ export class DurableDeliveryCoordinator {
           this.#park(attempt, ALARM_PROJECTION_ATTEMPTS, projectionError, "infrastructure-failure"),
         purpose: "infrastructure retry projection",
       });
-      return recovery === "parked" ? "parked" : "scheduled";
+      if (recovery === "parked") return "parked";
+      return this.isCurrent(attempt) ? "scheduled" : "stale";
     }
     return "scheduled";
   }
@@ -308,19 +310,35 @@ export class DurableDeliveryCoordinator {
    * the generic delivery-attempt ceiling, so parking is an explicit durable
    * transition rather than an implementation detail of `fail`.
    */
-  async park(attempt: DeliveryAttempt, attempts: number, error: unknown): Promise<void> {
-    await this.#park(attempt, attempts, error, "receiver-failure");
+  async park(
+    attempt: DeliveryAttempt,
+    attempts: number,
+    error: unknown,
+  ): Promise<DeliveryDisposition> {
+    return this.#park(attempt, attempts, error, "receiver-failure");
   }
 
   async #park(
     attempt: DeliveryAttempt,
     attempts: number,
     error: unknown,
+    reason: "infrastructure-failure",
+  ): Promise<"parked" | "stale">;
+  async #park(
+    attempt: DeliveryAttempt,
+    attempts: number,
+    error: unknown,
+    reason: "receiver-failure",
+  ): Promise<DeliveryDisposition>;
+  async #park(
+    attempt: DeliveryAttempt,
+    attempts: number,
+    error: unknown,
     reason: "receiver-failure" | "infrastructure-failure",
-  ): Promise<void> {
-    if (!this.isCurrent(attempt)) return;
+  ): Promise<DeliveryDisposition> {
+    if (!this.isCurrent(attempt)) return "stale";
     const row = this.#hooks.store.get(attempt.subscriptionKey);
-    if (row === undefined || row.epoch !== attempt.epoch) return;
+    if (row === undefined || row.epoch !== attempt.epoch) return "stale";
 
     try {
       this.#hooks.appendRequiredFact({
@@ -341,8 +359,7 @@ export class DurableDeliveryCoordinator {
         deliveryError: error,
       });
       if (reason === "infrastructure-failure") throw parkError;
-      await this.#backoff(attempt, attempts, parkError);
-      return;
+      return this.#backoff(attempt, attempts, parkError);
     }
 
     try {
@@ -350,18 +367,24 @@ export class DurableDeliveryCoordinator {
       // the parked row cannot hot-loop the shared alarm.
       this.#hooks.store.ackAttempt(attempt, row.ackedOffset);
     } catch (cleanupError) {
-      console.error("stream parked cursor cleanup failed; restarting incarnation", {
+      // The required fact is authoritative and the folded parked config makes
+      // every remaining cursor deadline inert. Cleanup is best effort; an
+      // incarnation abort here would interrupt a final mass-park midway.
+      console.error("stream parked cursor cleanup failed after authoritative park", {
         subscriptionKey: attempt.subscriptionKey,
         error: cleanupError,
       });
-      this.#hooks.abortIncarnation("stream parked cursor cleanup failed");
-      return;
     }
     this.#hooks.onParked(attempt.subscriptionKey);
+    return "parked";
   }
 
-  async #backoff(attempt: DeliveryAttempt, attemptCount: number, error: unknown): Promise<void> {
-    if (!this.isCurrent(attempt)) return;
+  async #backoff(
+    attempt: DeliveryAttempt,
+    attemptCount: number,
+    error: unknown,
+  ): Promise<DeliveryDisposition> {
+    if (!this.isCurrent(attempt)) return "stale";
     const retryAt = this.#hooks.now() + computeBackoffMs(attemptCount, this.#hooks.random());
     this.#hooks.store.nack(attempt, {
       attempt: attemptCount,
@@ -370,13 +393,16 @@ export class DurableDeliveryCoordinator {
     });
     const projectionError = await this.#armWithRetries(retryAt, "receiver retry");
     if (projectionError !== undefined) {
-      await this.#parkOrReproject({
+      const recovery = await this.#parkOrReproject({
         error: projectionError,
         park: () =>
           this.#park(attempt, ALARM_PROJECTION_ATTEMPTS, projectionError, "infrastructure-failure"),
         purpose: "receiver retry projection",
       });
+      if (recovery === "parked") return "parked";
+      return this.isCurrent(attempt) ? "scheduled" : "stale";
     }
+    return "scheduled";
   }
 
   async #backoffPoison(
@@ -387,8 +413,8 @@ export class DurableDeliveryCoordinator {
       poisonOffset: number;
       poisonConfirmations: number;
     },
-  ): Promise<void> {
-    if (!this.isCurrent(attempt)) return;
+  ): Promise<DeliveryDisposition> {
+    if (!this.isCurrent(attempt)) return "stale";
     const retryAt = this.#hooks.now() + computeBackoffMs(args.attemptCount, this.#hooks.random());
     this.#hooks.store.nackPoison(attempt, {
       attempt: args.attemptCount,
@@ -399,13 +425,16 @@ export class DurableDeliveryCoordinator {
     });
     const projectionError = await this.#armWithRetries(retryAt, "poison confirmation retry");
     if (projectionError !== undefined) {
-      await this.#parkOrReproject({
+      const recovery = await this.#parkOrReproject({
         error: projectionError,
         park: () =>
           this.#park(attempt, ALARM_PROJECTION_ATTEMPTS, projectionError, "infrastructure-failure"),
         purpose: "poison confirmation retry projection",
       });
+      if (recovery === "parked") return "parked";
+      return this.isCurrent(attempt) ? "scheduled" : "stale";
     }
+    return "scheduled";
   }
 
   /**
@@ -417,14 +446,19 @@ export class DurableDeliveryCoordinator {
    */
   async #parkOrReproject(args: {
     error: unknown;
-    park(): Promise<void>;
+    park(): Promise<"parked" | "stale">;
     purpose: string;
   }): Promise<"parked" | "reprojected"> {
     const parkFailures: unknown[] = [];
     for (let attempt = 1; attempt <= ALARM_PROJECTION_ATTEMPTS; attempt += 1) {
       try {
-        await args.park();
-        return "parked";
+        const disposition = await args.park();
+        if (disposition === "parked") return "parked";
+        // A replacement consumed the old fence while alarm projection was
+        // failing. It is not parked: stop retrying the obsolete transition
+        // and exactly project whatever durable intent is current now.
+        parkFailures.push(new Error(`${args.purpose} park fence became stale`));
+        break;
       } catch (error) {
         parkFailures.push(error);
         console.warn("stream terminal park transition attempt failed", {
@@ -478,6 +512,10 @@ export class DurableDeliveryCoordinator {
     const now = this.#hooks.now();
     let next: number | null = null;
     for (const row of this.#hooks.store.list()) {
+      // Do not synthesize an alarm merely because the key is in memory. A
+      // real attempt writes its watchdog synchronously before its first await,
+      // and poke/drain remove their in-flight guard before their final exact
+      // projection. Therefore null here means there is no durable obligation.
       if (row.nextAttemptAt === null) continue;
       const configured = state.configuredSubscribersByKey[row.subscriptionKey];
       if (configured === undefined || configured.parkedReason !== undefined) continue;
@@ -536,13 +574,17 @@ export class DurableDeliveryCoordinator {
    * Used only when an activation source has exhausted its own bounded retry
    * policy and leaving a deadline behind would silently orphan work.
    */
-  async parkOutstandingInfrastructure(error: unknown, attempts: number): Promise<void> {
+  async parkOutstandingInfrastructure(
+    error: unknown,
+    attempts: number,
+  ): Promise<"parked" | "stale"> {
     const state = this.#hooks.coreState();
+    let stale = false;
     for (const row of this.#hooks.store.list()) {
       if (row.nextAttemptAt === null) continue;
       const configured = state.configuredSubscribersByKey[row.subscriptionKey];
       if (configured === undefined || configured.parkedReason !== undefined) continue;
-      await this.#park(
+      const disposition = await this.#park(
         {
           subscriptionKey: row.subscriptionKey,
           configOffset: configured.latestConfiguredEvent.offset,
@@ -552,6 +594,7 @@ export class DurableDeliveryCoordinator {
         error,
         "infrastructure-failure",
       );
+      stale ||= disposition === "stale";
     }
     for (const [subscriptionKey, pending] of [...this.#reconcileRetryByKey]) {
       const configured = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
@@ -563,16 +606,18 @@ export class DurableDeliveryCoordinator {
         this.#reconcileRetryByKey.delete(subscriptionKey);
         continue;
       }
-      await this.#parkConfigurationWithoutCursor({
+      const disposition = await this.#parkConfigurationWithoutCursor({
         subscriptionKey,
         configOffset: pending.configOffset,
         attempts,
         error,
       });
+      stale ||= disposition === "stale";
       if (!this.#isConfigurationCurrent({ subscriptionKey, configOffset: pending.configOffset })) {
         this.#reconcileRetryByKey.delete(subscriptionKey);
       }
     }
+    return stale ? "stale" : "parked";
   }
 
   /** Final native-alarm/boot recovery, owned here rather than by callers. */
@@ -619,14 +664,14 @@ export class DurableDeliveryCoordinator {
     configOffset: number;
     attempts: number;
     error: unknown;
-  }): Promise<void> {
+  }): Promise<"parked" | "stale"> {
     const configured = this.#hooks.coreState().configuredSubscribersByKey[args.subscriptionKey];
     if (
       configured === undefined ||
       configured.parkedReason !== undefined ||
       configured.latestConfiguredEvent.offset !== args.configOffset
     ) {
-      return;
+      return "stale";
     }
 
     let row;
@@ -639,7 +684,7 @@ export class DurableDeliveryCoordinator {
       });
     }
     if (row !== undefined) {
-      await this.#park(
+      return this.#park(
         {
           subscriptionKey: args.subscriptionKey,
           configOffset: args.configOffset,
@@ -649,7 +694,6 @@ export class DurableDeliveryCoordinator {
         args.error,
         "infrastructure-failure",
       );
-      return;
     }
 
     this.#hooks.appendRequiredFact({
@@ -662,6 +706,7 @@ export class DurableDeliveryCoordinator {
       },
     });
     this.#hooks.onParked(args.subscriptionKey);
+    return "parked";
   }
 
   #isConfigurationCurrent(args: { subscriptionKey: string; configOffset: number }): boolean {

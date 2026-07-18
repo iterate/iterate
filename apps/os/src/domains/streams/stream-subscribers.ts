@@ -59,6 +59,7 @@ import {
   DurableDeliveryCoordinator,
   StreamDeliveryFatalInvariantError,
   type DeliveryAttempt,
+  type DeliveryDisposition,
 } from "./durable-delivery-coordinator.ts";
 import type {
   CoreProcessorState,
@@ -241,6 +242,8 @@ type PushActivation = {
   attempt: DeliveryAttempt;
 };
 
+type InfrastructureRecoveryDisposition = DeliveryDisposition | "aborted";
+
 /**
  * The transport quarantine's face: how the spine reaches subscribers. Wake and
  * push are BOTH itx-expression evaluations against the stream's authority root
@@ -369,7 +372,6 @@ export class StreamSubscribers {
       armAlarm: args.hooks.armAlarm,
       repointAlarm: args.hooks.repointAlarm,
       keepAlive: args.hooks.keepAlive,
-      abortIncarnation: args.hooks.abortIncarnation,
       isInFlight: (subscriptionKey) =>
         this.#pushDrains.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey),
       onParked: (subscriptionKey) => {
@@ -415,8 +417,8 @@ export class StreamSubscribers {
    */
   wake(freshTail?: SizedStreamEvent[]): void {
     if (freshTail !== undefined && freshTail.length > 0) this.#freshTail = freshTail;
-    for (const connection of this.#connections.values()) connection.wake();
     if (this.#tearingDown) return;
+    for (const connection of this.#connections.values()) connection.wake();
     try {
       this.#reconcileDurable();
     } catch (error) {
@@ -591,7 +593,12 @@ export class StreamSubscribers {
         try {
           start = await this.#delivery.begin(attempt);
         } catch (error) {
-          await this.#recoverInfrastructure(attempt, error, "wake attempt setup");
+          const disposition = await this.#recoverInfrastructure(
+            attempt,
+            error,
+            "wake attempt setup",
+          );
+          reconcileAfterPoke ||= disposition === "stale";
           return;
         }
         if (start !== "ready") {
@@ -604,6 +611,7 @@ export class StreamSubscribers {
         // connection installation and watermark persistence are local stream
         // infrastructure and must preserve receiver attempt/poison counters.
         let response: Awaited<ReturnType<SubscriberDial["poke"]>>;
+        let responseOwned = false;
         try {
           // A poke that outlives its timeout still eventually settles with a
           // RETAINED sink; dropping that undisposed would leak a session-pinning
@@ -613,25 +621,33 @@ export class StreamSubscribers {
           response = await withDeliveryTimeout(pokePromise, `poke ${subscriptionKey}`, {
             onLateResolve: (late) => late.sink[Symbol.dispose](),
           });
+          responseOwned = true;
         } catch (error) {
-          await this.#recordReceiverFailure(attempt, error, "wake receiver-failure persistence");
-          return;
-        }
-
-        const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
-        if (
-          !this.#delivery.isCurrent(attempt) ||
-          current === undefined ||
-          current.latestConfiguredEvent.offset !== attempt.configOffset ||
-          current.latestConfiguredEvent.payload.delivery.mode !== "wake"
-        ) {
-          response.sink[Symbol.dispose]();
-          reconcileAfterPoke = true;
+          const disposition = await this.#recordReceiverFailure(
+            attempt,
+            error,
+            "wake receiver-failure persistence",
+          );
+          reconcileAfterPoke ||= disposition === "stale";
           return;
         }
 
         let connection: Connection | undefined;
         try {
+          // The response remains locally owned until the exact instruction
+          // that transfers its retained capabilities into #open. Every fence
+          // and validation read before that point is fallible.
+          const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+          if (
+            !this.#delivery.isCurrent(attempt) ||
+            current === undefined ||
+            current.latestConfiguredEvent.offset !== attempt.configOffset ||
+            current.latestConfiguredEvent.payload.delivery.mode !== "wake"
+          ) {
+            reconcileAfterPoke = true;
+            return;
+          }
+
           let presence: StreamSubscriberDescriptor | undefined;
           let selector: CompiledEventSelector | undefined;
           try {
@@ -661,17 +677,17 @@ export class StreamSubscribers {
                 ? undefined
                 : compileEventSelector({ eventTypes: [...consumes] });
           } catch (error) {
-            // Reject malformed receiver content WITHOUT leaking the sink
-            // retained moments earlier (round-1 finding 4.2 / round-2 blocker
-            // 4a), then use the same bounded receiver backoff as a failed poke.
-            response.sink[Symbol.dispose]();
-            await this.#recordReceiverFailure(
+            const disposition = await this.#recordReceiverFailure(
               attempt,
               error,
               "wake response receiver-failure persistence",
             );
+            reconcileAfterPoke ||= disposition === "stale";
             return;
           }
+          // #open owns the sink from entry: it disposes rejected inputs and a
+          // successfully installed connection owns every retained capability.
+          responseOwned = false;
           connection = this.#open({
             subscriptionKey,
             subscriptionType: "configured",
@@ -731,7 +747,25 @@ export class StreamSubscribers {
                 ? connection
                 : undefined;
           this.#closeConnectionQuietly(subscriptionKey, owned);
-          await this.#recoverInfrastructure(attempt, error, "wake response processing");
+          const disposition = await this.#recoverInfrastructure(
+            attempt,
+            error,
+            "wake response processing",
+          );
+          reconcileAfterPoke ||= disposition === "stale";
+        } finally {
+          if (responseOwned) {
+            try {
+              response.sink[Symbol.dispose]();
+            } catch (error) {
+              const disposition = await this.#recoverInfrastructure(
+                attempt,
+                error,
+                "wake response disposal",
+              );
+              reconcileAfterPoke ||= disposition === "stale";
+            }
+          }
         }
       } catch (error) {
         fatalRecovery = error instanceof StreamDeliveryFatalInvariantError;
@@ -774,6 +808,7 @@ export class StreamSubscribers {
   #drainPush(subscriptionKey: string, initial: PushActivation): void {
     this.#pushDrains.add(subscriptionKey);
     let fatalRecovery = false;
+    let reconcileAfterDrain = false;
     const work = (async () => {
       let recoveryAttempt = initial.attempt;
       try {
@@ -854,7 +889,7 @@ export class StreamSubscribers {
           // by this activation's outer recovery boundary.
           const start = await this.#delivery.begin(attempt);
           if (start === "stale") {
-            queueMicrotask(() => this.wake());
+            reconcileAfterDrain = true;
             continue;
           }
           if (start === "parked") return;
@@ -904,12 +939,16 @@ export class StreamSubscribers {
               matched,
               error,
             });
+            if (disposition === "stale") {
+              reconcileAfterDrain = true;
+              continue;
+            }
             if (disposition === "continue") continue;
             return;
           }
 
           if (!this.#delivery.isCurrent(attempt)) {
-            queueMicrotask(() => this.wake());
+            reconcileAfterDrain = true;
             continue;
           }
           // The awaited resolve above IS receiver success. Only this path
@@ -927,7 +966,12 @@ export class StreamSubscribers {
         }
       } catch (error) {
         try {
-          await this.#recoverInfrastructure(recoveryAttempt, error, "push drain local processing");
+          const disposition = await this.#recoverInfrastructure(
+            recoveryAttempt,
+            error,
+            "push drain local processing",
+          );
+          reconcileAfterDrain ||= disposition === "stale";
         } catch (recoveryError) {
           fatalRecovery = recoveryError instanceof StreamDeliveryFatalInvariantError;
           throw recoveryError;
@@ -935,6 +979,7 @@ export class StreamSubscribers {
       } finally {
         this.#pushDrains.delete(subscriptionKey);
         if (!fatalRecovery) await this.#delivery.repointAfterAttempt();
+        if (!fatalRecovery && reconcileAfterDrain) this.wake();
       }
     })();
     this.#hooks.keepAlive(
@@ -979,7 +1024,7 @@ export class StreamSubscribers {
     error: unknown,
     operation: string,
     onRecovered?: () => void,
-  ): Promise<void> {
+  ): Promise<InfrastructureRecoveryDisposition> {
     if (error instanceof StreamDeliveryFatalInvariantError) throw error;
     console.error("stream delivery infrastructure failed", {
       subscriptionKey: attempt.subscriptionKey,
@@ -991,9 +1036,8 @@ export class StreamSubscribers {
       onRecovered?.();
       if (disposition === "scheduled") {
         this.#hooks.abortIncarnation(`stream ${operation} failed`);
-      } else if (disposition === "stale") {
-        queueMicrotask(() => this.wake());
       }
+      return disposition;
     } catch (recoveryError) {
       if (recoveryError instanceof StreamDeliveryFatalInvariantError) throw recoveryError;
       console.error("stream infrastructure recovery failed; restarting incarnation", {
@@ -1003,6 +1047,7 @@ export class StreamSubscribers {
         originalError: error,
       });
       this.#hooks.abortIncarnation("stream delivery infrastructure recovery failed");
+      return "aborted";
     }
   }
 
@@ -1011,11 +1056,11 @@ export class StreamSubscribers {
     attempt: DeliveryAttempt,
     error: unknown,
     recoveryOperation: string,
-  ): Promise<void> {
+  ): Promise<InfrastructureRecoveryDisposition> {
     try {
-      await this.#delivery.fail(attempt, error);
+      return await this.#delivery.fail(attempt, error);
     } catch (recoveryError) {
-      await this.#recoverInfrastructure(attempt, recoveryError, recoveryOperation);
+      return this.#recoverInfrastructure(attempt, recoveryError, recoveryOperation);
     }
   }
 
@@ -1093,19 +1138,18 @@ export class StreamSubscribers {
     config: SubscriptionConfiguredPayload;
     matched: StreamEvent[];
     error: unknown;
-  }): Promise<"continue" | "stop"> {
+  }): Promise<"continue" | "stop" | "stale"> {
     const { attempt, config, matched, error } = args;
     const { subscriptionKey } = attempt;
     if (!this.#delivery.isCurrent(attempt)) {
-      queueMicrotask(() => this.wake());
-      return "continue";
+      return "stale";
     }
     // A receiver that declared itself unavailable, or whose Durable Object
     // incarnation reset mid-call, is down—not poisoned. Generic nack clears
     // the poison candidate, so outage retries can never confirm a later event.
     if (isStreamReceiverUnavailableError(error) || isDurableObjectLifecycleError(error)) {
-      await this.#delivery.fail(attempt, error);
-      return "stop";
+      const disposition = await this.#delivery.fail(attempt, error);
+      return disposition === "stale" ? "stale" : "stop";
     }
     if (config.onPoison === "skip") {
       if (matched.length > 1) {
@@ -1113,8 +1157,7 @@ export class StreamSubscribers {
         // log2(DELIVERY_BATCH_LIMIT) extra attempts; no backoff — the receiver
         // just proved it is alive enough to reject.
         if (!this.#delivery.clearWatchdog(attempt)) {
-          queueMicrotask(() => this.wake());
-          return "continue";
+          return "stale";
         }
         const current = this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT;
         this.#batchLimits.set(subscriptionKey, halveBatchLimit(current));
@@ -1122,27 +1165,30 @@ export class StreamSubscribers {
       }
       const row = this.#hooks.store.get(subscriptionKey);
       if (row === undefined || row.epoch !== attempt.epoch) {
-        queueMicrotask(() => this.wake());
-        return "continue";
+        return "stale";
       }
       const poison = matched[0]!;
       const confirmationCount =
         row.poisonOffset === poison.offset ? row.poisonConfirmations + 1 : 1;
       if (confirmationCount < SKIP_CONFIRM_ATTEMPTS) {
-        await this.#delivery.failPoison(attempt, {
+        const disposition = await this.#delivery.failPoison(attempt, {
           error,
           poisonOffset: poison.offset,
           poisonConfirmations: confirmationCount,
         });
-        return "stop";
+        return disposition === "stale" ? "stale" : "stop";
       }
       // Confirmed poison — unless skips are running consecutive, in which
       // case the receiver is down (everything fails, nothing is "the" poison
       // event) and mass-skipping its backlog would be silent data loss: park.
       const skips = row.consecutivePoisonSkips + 1;
       if (skips >= MAX_CONSECUTIVE_SKIPS) {
-        await this.#delivery.park(attempt, Math.min(row.attempt + 1, MAX_DELIVERY_ATTEMPTS), error);
-        return "stop";
+        const disposition = await this.#delivery.park(
+          attempt,
+          Math.min(row.attempt + 1, MAX_DELIVERY_ATTEMPTS),
+          error,
+        );
+        return disposition === "stale" ? "stale" : "stop";
       }
       // Cursor advancement makes the skip irreversible, so its idempotent
       // journal fact is required control state rather than best-effort
@@ -1171,8 +1217,8 @@ export class StreamSubscribers {
       return "continue";
     }
 
-    await this.#delivery.fail(attempt, error);
-    return "stop";
+    const disposition = await this.#delivery.fail(attempt, error);
+    return disposition === "stale" ? "stale" : "stop";
   }
 
   // ===========================================================================
@@ -1223,6 +1269,10 @@ export class StreamSubscribers {
 
   /** A `subscription-cursor-set` fact committed: the audited seek. */
   onCursorSet(subscriptionKey: string, afterOffset: number): void {
+    // The fact is authoritative even if config's post-commit cursor creation
+    // was interrupted. UPDATE alone is intentionally a no-op for a missing
+    // row, so establish the row before applying the audited seek.
+    this.#hooks.store.ensure(subscriptionKey, afterOffset);
     this.#hooks.store.setCursor(subscriptionKey, afterOffset);
     this.wake();
   }
@@ -1412,11 +1462,15 @@ export class StreamSubscribers {
       const work = pump();
       if (subscriptionType === "configured") {
         this.#hooks.keepAlive(
-          work.catch((error) =>
-            this.#recoverInfrastructure(args.ownership, error, "configured connection pump", () =>
-              connection.close("delivery-failed"),
-            ),
-          ),
+          work.catch(async (error) => {
+            const disposition = await this.#recoverInfrastructure(
+              args.ownership,
+              error,
+              "configured connection pump",
+              () => connection.close("delivery-failed"),
+            );
+            if (disposition === "stale") this.wake();
+          }),
         );
         return;
       }
@@ -1526,6 +1580,9 @@ export class StreamSubscribers {
     connection.close("delivery-failed");
     this.#hooks.keepAlive(
       recovery
+        .then((disposition) => {
+          if (disposition === "stale") this.wake();
+        })
         .catch((recoveryError) => {
           if (recoveryError instanceof StreamDeliveryFatalInvariantError) {
             fatalRecovery = true;

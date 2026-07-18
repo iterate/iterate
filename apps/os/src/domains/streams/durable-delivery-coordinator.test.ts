@@ -58,9 +58,9 @@ function makeHarness() {
   const armFailures: Error[] = [];
   const repointFailures: Error[] = [];
   const kept: Promise<unknown>[] = [];
-  const aborted: string[] = [];
   const parked: string[] = [];
   let requiredFactFailure: Error | undefined;
+  let armHook: (() => void) | undefined;
   const coordinator = new DurableDeliveryCoordinator({
     coreState: () => state,
     store,
@@ -69,17 +69,22 @@ function makeHarness() {
       facts.push(event);
       if (event.type === "events.iterate.com/stream/subscription-parked") {
         const payload = event.payload as {
+          subscriptionKey: string;
           atOffset?: number;
           reason: "receiver-failure" | "infrastructure-failure";
         };
-        state.configuredSubscribersByKey.k!.parkedAtOffset = payload.atOffset;
-        state.configuredSubscribersByKey.k!.parkedReason = payload.reason;
+        const configured = state.configuredSubscribersByKey[payload.subscriptionKey];
+        if (configured !== undefined) {
+          configured.parkedAtOffset = payload.atOffset;
+          configured.parkedReason = payload.reason;
+        }
       }
     },
     now: () => now,
     random: () => 0.5,
     armAlarm: async (atMs) => {
       armed.push(atMs);
+      armHook?.();
       const failure = armFailures.shift();
       if (failure !== undefined) throw failure;
     },
@@ -89,7 +94,6 @@ function makeHarness() {
       if (failure !== undefined) throw failure;
     },
     keepAlive: (promise) => kept.push(promise),
-    abortIncarnation: (reason) => aborted.push(reason),
     isInFlight: () => false,
     onParked: (subscriptionKey) => parked.push(subscriptionKey),
   });
@@ -98,6 +102,7 @@ function makeHarness() {
   return {
     coordinator,
     attempt,
+    state,
     store,
     facts,
     armed,
@@ -105,13 +110,15 @@ function makeHarness() {
     armFailures,
     repointFailures,
     kept,
-    aborted,
     parked,
     setNow: (value: number) => {
       now = value;
     },
     failRequiredFactsWith: (error: Error | undefined) => {
       requiredFactFailure = error;
+    },
+    setArmHook: (hook: (() => void) | undefined) => {
+      armHook = hook;
     },
   };
 }
@@ -191,7 +198,25 @@ describe("DurableDeliveryCoordinator", () => {
       retryAt: null,
     });
     expect(h.parked).toEqual(["k"]);
-    expect(h.aborted).toEqual([]);
+  });
+
+  it("reports a replacement fence as stale when alarm projection fails during replacement", async () => {
+    const h = makeHarness();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.armFailures.push(new Error("one"), new Error("two"), new Error("three"));
+    let arms = 0;
+    h.setArmHook(() => {
+      arms += 1;
+      if (arms === 3) h.store.setCursor("k", 0);
+    });
+
+    await expect(h.coordinator.begin(h.attempt)).resolves.toBe("stale");
+    expect(h.facts).toEqual([]);
+    expect(h.store.get("k")).toMatchObject({
+      epoch: h.attempt.epoch + 1,
+      watchdogAt: null,
+      retryAt: null,
+    });
   });
 
   it("preserves the watchdog and throws fatally when setup can neither park nor project it", async () => {
@@ -213,7 +238,6 @@ describe("DurableDeliveryCoordinator", () => {
       retryAt: null,
     });
     expect(h.facts).toEqual([]);
-    expect(h.aborted).toEqual([]);
   });
 
   it("parks orphanable boot obligations when bounded exact projection fails", async () => {
@@ -234,7 +258,6 @@ describe("DurableDeliveryCoordinator", () => {
       type: "events.iterate.com/stream/subscription-parked",
       payload: { reason: "infrastructure-failure", attempts: 3, error: "three" },
     });
-    expect(h.aborted).toEqual([]);
   });
 
   it("makes compound boot projection and park failure an explicit fatal invariant", async () => {
@@ -261,7 +284,71 @@ describe("DurableDeliveryCoordinator", () => {
     await expect(Promise.all(h.kept)).rejects.toBeInstanceOf(StreamDeliveryFatalInvariantError);
     expect(h.store.get("k")?.nextAttemptAt).toBe(4_000);
     expect(h.facts).toEqual([]);
-    expect(h.aborted).toEqual([]);
+  });
+
+  it("keeps a reconciliation fatal invariant fatal instead of retrying past it", async () => {
+    const h = makeHarness();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    h.failRequiredFactsWith(new Error("park append unavailable"));
+    h.armFailures.push(new Error("one"), new Error("two"), new Error("three"));
+    h.repointFailures.push(new Error("four"), new Error("five"), new Error("six"));
+
+    h.coordinator.recoverReconcile({
+      subscriptionKey: "k",
+      configOffset: 1,
+      initialCursor: 0,
+      error: new Error("cursor acquisition failed"),
+    });
+
+    await expect(Promise.all(h.kept)).rejects.toBeInstanceOf(StreamDeliveryFatalInvariantError);
+    expect(h.store.get("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      watchdogAt: null,
+      retryAt: 6_000,
+    });
+    expect(h.facts).toEqual([]);
+  });
+
+  it("continues parking outstanding rows after parked-cursor cleanup fails", async () => {
+    const h = makeHarness();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    h.state.configuredSubscribersByKey.j = {
+      latestConfiguredEvent: {
+        offset: 2,
+        createdAt: "2026-07-17T00:00:01.000Z",
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          subscriptionKey: "j",
+          delivery: { mode: "push", expression: ["processEventBatch"] },
+        },
+      },
+    };
+    h.store.ensure("j", 0);
+    h.store.nack(h.attempt, {
+      attempt: 1,
+      nextAttemptAt: 4_000,
+      error: "receiver unavailable",
+    });
+    const j = { subscriptionKey: "j", configOffset: 2, epoch: h.store.get("j")!.epoch };
+    h.store.nack(j, {
+      attempt: 1,
+      nextAttemptAt: 5_000,
+      error: "receiver unavailable",
+    });
+    const ackAttempt = h.store.ackAttempt.bind(h.store);
+    h.store.ackAttempt = (fence, offset) => {
+      if (fence.subscriptionKey === "k") throw new Error("cursor cleanup failed");
+      ackAttempt(fence, offset);
+    };
+
+    await h.coordinator.parkOutstandingInfrastructure(new Error("alarm exhausted"), 3);
+
+    expect(
+      h.facts.map((fact) => (fact.payload as { subscriptionKey: string }).subscriptionKey),
+    ).toEqual(["k", "j"]);
+    expect(h.parked).toEqual(["k", "j"]);
   });
 
   it("rejects stale attempts without writing or arming a successor", async () => {

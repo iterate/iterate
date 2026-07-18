@@ -289,6 +289,7 @@ function makeHarness() {
   let platformAlarmAtMs: number | null = null;
   const alarmArmFailures: Error[] = [];
   const alarmRepointFailures: Error[] = [];
+  let alarmArmHook: (() => void) | undefined;
   let requiredFactFailure: Error | undefined;
   const abortedIncarnations: string[] = [];
   const kept: Promise<unknown>[] = [];
@@ -401,6 +402,7 @@ function makeHarness() {
     random: () => 0.5,
     armAlarm: async (atMs: number) => {
       armedAlarms.push(atMs);
+      alarmArmHook?.();
       const failure = alarmArmFailures.shift();
       if (failure !== undefined) throw failure;
       if (platformAlarmAtMs === null || atMs < platformAlarmAtMs) platformAlarmAtMs = atMs;
@@ -479,6 +481,9 @@ function makeHarness() {
     failNextAlarmArmWith: (error: Error) => {
       alarmArmFailures.push(error);
     },
+    setAlarmArmHook: (hook: (() => void) | undefined) => {
+      alarmArmHook = hook;
+    },
     failNextAlarmRepointWith: (error: Error) => {
       alarmRepointFailures.push(error);
     },
@@ -525,13 +530,16 @@ function pushPayload(
   };
 }
 
-function wakePayload(): SubscriptionConfiguredPayload {
+function wakePayload(
+  overrides: Partial<SubscriptionConfiguredPayload> = {},
+): SubscriptionConfiguredPayload {
   return {
     subscriptionKey: "k",
     delivery: {
       mode: "wake",
       expression: ["agents", ["get", "/t"], "processor", "wakeStreamSubscriber"],
     },
+    ...overrides,
   };
 }
 
@@ -1436,6 +1444,17 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(3);
   });
 
+  it("f2. cursor-set recreates an interrupted cursor row before applying the audited seek", () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 5);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"), evt(4, "a"), evt(5, "a"));
+    h.configured.k.parkedReason = "receiver-failure";
+
+    h.subscribers.onCursorSet("k", 2);
+
+    expect(h.row("k")?.ackedOffset).toBe(2);
+  });
+
   it("g. onPoison skip: bisects down to the poison event, confirms it, records the skip, moves on", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
@@ -1721,6 +1740,37 @@ describe("StreamSubscribers", () => {
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
   });
 
+  it("i1b. idle teardown suppresses connection pumps until every snapshotted connection is closed", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.configure(wakePayload({ subscriptionKey: "j" }), 0);
+    h.append(evt(1, "a"));
+    const firstBatches: StreamEventBatch[] = [];
+    const second = makeSink();
+    h.dialImpl.poke = async (_expression, request) => {
+      if (request.subscriptionKey === "j") {
+        return { checkpointOffset: 0, sink: second.sink };
+      }
+      const sink = Object.assign((batch: StreamEventBatch) => firstBatches.push(batch), {
+        [Symbol.dispose]: () => h.subscribers.wake(),
+      }) as RetainedProcessEventBatch;
+      return { checkpointOffset: 0, sink };
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(firstBatches.at(-1)?.events.map((event) => event.offset)).toEqual([1]);
+    expect(second.batches.at(-1)?.events.map((event) => event.offset)).toEqual([1]);
+
+    h.append(evt(2, "a"));
+    h.subscribers.runIdleTeardownNow();
+    await h.settle();
+
+    expect(second.batches).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.subscribers.hasConnection("j")).toBe(false);
+  });
+
   it("i2. a local wake watermark failure preserves receiver policy and schedules a successor", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
@@ -1752,7 +1802,70 @@ describe("StreamSubscribers", () => {
     expect(h.abortedIncarnations).toEqual(["stream wake response processing failed"]);
   });
 
-  it("i2b. a configured pump read failure is owned and retried without another append", async () => {
+  it("i2a. a seek during failed watchdog projection is re-poked after the stale guard releases", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const returned = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: returned.sink });
+    h.failNextAlarmArmWith(new Error("one"));
+    h.failNextAlarmArmWith(new Error("two"));
+    h.failNextAlarmArmWith(new Error("three"));
+    let arms = 0;
+    h.setAlarmArmHook(() => {
+      arms += 1;
+      if (arms === 3) h.subscribers.onCursorSet("k", 0);
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.pokes).toHaveLength(1);
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(returned.batches.at(-1)?.events.map((event) => event.offset)).toEqual([1]);
+  });
+
+  it("i2b. a retained wake response is disposed when the first post-handshake fence read fails", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    let disposed = 0;
+    let failPostHandshakeRead = false;
+    const sink = Object.assign(() => undefined, {
+      [Symbol.dispose]: () => {
+        disposed += 1;
+      },
+    }) as RetainedProcessEventBatch;
+    h.dialImpl.poke = async () => {
+      failPostHandshakeRead = true;
+      return { checkpointOffset: 0, sink };
+    };
+    const get = h.store.get.bind(h.store);
+    h.store.get = (subscriptionKey) => {
+      if (failPostHandshakeRead) {
+        failPostHandshakeRead = false;
+        throw new Error("post-handshake cursor read failed");
+      }
+      return get(subscriptionKey);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(disposed).toBe(1);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      lastError: "post-handshake cursor read failed",
+    });
+    expect(h.row("k")!.nextAttemptAt).not.toBeNull();
+    expect(h.platformAlarm()).toBe(h.row("k")!.nextAttemptAt);
+    expect(h.abortedIncarnations).toEqual(["stream wake response processing failed"]);
+  });
+
+  it("i2c. a configured pump read failure is owned and retried without another append", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
     h.append(evt(1, "a"));
