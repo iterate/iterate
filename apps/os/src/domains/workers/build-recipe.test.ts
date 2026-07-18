@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectRecipeOutputs,
+  collectViteRecipeOutputs,
   WORKER_COMPATIBILITY_DATE,
   WORKER_COMPATIBILITY_FLAGS,
   workerBuildRecipe,
@@ -51,6 +52,60 @@ describe("workerBuildRecipe", () => {
     });
     expect(withoutPackage.commands).toHaveLength(1);
     expect(withoutPackage.commands[0]!.command).toContain("wrangler deploy --dry-run");
+  });
+
+  it("vite pipeline: the app's own install+build, collected as wrapped dist modules", () => {
+    const recipe = workerBuildRecipe({
+      files: {
+        "apps/tanstack/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
+        "apps/tanstack/vite.config.ts": "export default {};",
+        "elsewhere.ts": "export {};",
+      },
+      options: { pipeline: "vite", rootDir: "apps/tanstack" },
+    });
+    expect(recipe.pipeline).toBe("vite");
+    // rootDir re-roots the map and drops everything outside it.
+    expect(Object.keys(recipe.files).sort()).toEqual(["package.json", "vite.config.ts"]);
+    expect(recipe.commands).toHaveLength(2);
+    // devDependencies install (no --prod/--omit=dev — vite lives there), and
+    // BOTH install lanes keep the no-lifecycle-scripts property; the build
+    // step is where project code deliberately runs.
+    expect(recipe.commands[0]!.command).toContain("nub install --ignore-scripts --prefer-offline");
+    expect(recipe.commands[0]!.command).not.toContain("--prod");
+    expect(recipe.commands[0]!.command).toContain("|| npm install --ignore-scripts");
+    expect(recipe.commands[0]!.command).not.toContain("--omit=dev");
+    expect(recipe.commands[1]!.command).toBe("npm run build");
+
+    const collected = collectViteRecipeOutputs({
+      "dist/server/index.js": "export default { fetch() {} }; export class TanstackTodos {}",
+      "dist/server/assets/chunk-abc.js": "export {};",
+      "dist/server/wrangler.json": "{}",
+      "dist/client/assets/index-abc.js": "console.log(1)",
+      "dist/client/.assetsignore": "",
+    });
+    expect(collected.mainModule).toBe(".iterate-build.entry.js");
+    expect(Object.keys(collected.modules).sort()).toEqual([
+      ".iterate-build.assets.js",
+      ".iterate-build.entry.js",
+      "dist/server/assets/chunk-abc.js",
+      "dist/server/index.js",
+    ]);
+    // The wrapper serves the client asset and re-exports the server entry's
+    // names (Durable Object classes ride through for stateful hosting).
+    expect(collected.modules[".iterate-build.entry.js"]).toContain(
+      'export * from "./dist/server/index.js"',
+    );
+    expect(collected.modules[".iterate-build.assets.js"]).toContain("/assets/index-abc.js");
+
+    expect(() => collectViteRecipeOutputs({ "dist/server/other.js": "" })).toThrow(
+      /did not produce "dist\/server\/index.js"/,
+    );
+    expect(() =>
+      collectViteRecipeOutputs({
+        "dist/server/index.js": "",
+        "dist/client/logo.png": "binary",
+      }),
+    ).toThrow(/not a text type/);
   });
 
   it("materializes virtual modules as files aliased in the wrangler config", () => {

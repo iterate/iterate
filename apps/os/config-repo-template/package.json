@@ -6,9 +6,6 @@
   "description": "Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports its runtime subpaths: the platform supplies those modules to every worker build, so the devDependency is only for typechecking and editor support after `npm install`.",
   "dependencies": {
     "@iterate-com/capnweb": "0.10.0",
-    "@tanstack/react-router": "1.170.15",
-    "react": "19.1.1",
-    "react-dom": "19.1.1",
     "zod": "4.3.6"
   },
   "devDependencies": {

@@ -19,7 +19,12 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   // workflow is userspace code in worker.ts.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  expect(paths.filter((path) => path.startsWith("apps/"))).toEqual([]);
+  // The one seeded app: the TanStack Start todo app at apps/tanstack (its
+  // own package.json/vite build — the platform's "vite" worker pipeline).
+  // Everything else under apps/ is still the project's to grow.
+  const appPaths = paths.filter((path) => path.startsWith("apps/"));
+  expect(appPaths.length).toBeGreaterThan(0);
+  expect(appPaths.every((path) => path.startsWith("apps/tanstack/"))).toBe(true);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
   expect(paths).not.toContain("github-reviews.ts");
@@ -35,9 +40,6 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   // platform-injected.
   expect(templatePackageJson.dependencies).toEqual({
     "@iterate-com/capnweb": expect.any(String),
-    "@tanstack/react-router": expect.any(String),
-    react: expect.any(String),
-    "react-dom": expect.any(String),
     zod: expect.any(String),
   });
 });

@@ -132,23 +132,41 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   }, echoBody);
   expect(echo).toEqual({ body: echoBody, status: 200 });
 
-  // The tanstack app is a second member-gated origin on the same project: a
-  // server-rendered TanStack Router + React page. Its own origin has no app
-  // cookie yet, so the auth partial gates it exactly like the internal app
-  // did — and the same OS session carries the "Continue with Iterate" hop.
-  // Same worker.ts artifact as the apps above, so no cold build; the 120s
-  // budget covers a cold stateless-facet start.
+  // The tanstack app is a second member-gated origin on the same project: the
+  // project's shared todo list — a stateful dynamic worker whose rows live in
+  // its Durable Object's SQLite (via sqlfu), served as TanStack-routed SSR
+  // with a Cap'n Web live-state lane. Its own origin has no app cookie yet,
+  // so the auth partial gates it exactly like the internal app did — and the
+  // same OS session carries the "Continue with Iterate" hop. Same worker.ts
+  // The vite pipeline builds this app's own `npm run build` on first use —
+  // the 120s budget covers that cold build behind the building page.
   await page.goto(appUrl("tanstack", slug, baseURL!));
   await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 120_000 });
   await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
-  await page.getByRole("heading", { name: "TanStack on Iterate" }).waitFor({ timeout: 30_000 });
-  await page.getByText(/^Serving project .* to a signed-in member/).waitFor();
+  await page.getByRole("heading", { name: "TanStack todos" }).waitFor({ timeout: 30_000 });
 
-  // Server-side routing proof: the about link is a plain anchor — no client
-  // bundle exists, so this navigation is a full request the worker's router
-  // matches and renders.
-  await page.getByRole("link", { name: "about" }).click();
-  await page.getByText("Server-side routing proof").waitFor();
+  // The composer works once the Cap'n Web session authenticates (the
+  // "connecting…" status hides), and the add comes back over live state.
+  const todoTitle = `todo-${crypto.randomUUID().slice(0, 8)}`;
+  const composer = page.getByLabel("add a todo");
+  await composer.fill(todoTitle);
+  await composer.press("Enter");
+  await page.getByText(todoTitle).waitFor();
+
+  // Multiplayer: a second tab (same member, same app cookie) sees the row
+  // arrive over ITS OWN live-state subscription, and a toggle there strikes
+  // through here without any reload.
+  const second = await page.context().newPage();
+  await second.goto(appUrl("tanstack", slug, baseURL!));
+  await second.getByText(todoTitle).waitFor({ timeout: 30_000 });
+  await second.getByLabel(`done: ${todoTitle}`).click();
+  await page.locator(`input[aria-label="done: ${todoTitle}"]:checked`).waitFor();
+  await second.close();
+
+  // Durability: the row lives in the app's Durable Object SQLite, so a
+  // fresh page load (new hydration, new /api session) replays it.
+  await page.reload();
+  await page.getByText(todoTitle).waitFor({ timeout: 30_000 });
 
   // Logout is owned by the same partial. It clears the app-host cookie and
   // the redirected request is gated back to the login form.
