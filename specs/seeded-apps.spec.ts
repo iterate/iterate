@@ -80,6 +80,13 @@ test("the seeded internal app authenticates a real project member", async ({ bas
     payload: { marker },
   });
 
+  // Kick the tanstack app's cold vite build NOW so it overlaps the whole
+  // internal-app walk below: /api has no auth gate (it authenticates
+  // in-band), so this plain GET reaches the stateful facet, whose resolve
+  // starts the app's npm install + vite build in the builder pool. The
+  // response itself (an upgrade rejection) is irrelevant.
+  await page.request.get(`${appUrl("tanstack", slug, baseURL!)}api`).catch(() => {});
+
   // The project-app origin has no session yet, even though this browser is
   // already signed in to OS. The auth partial owns the request and renders
   // the form on the app's own origin.
@@ -139,14 +146,13 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   // so the auth partial gates it exactly like the internal app did — and the
   // same OS session carries the "Continue with Iterate" hop. Same worker.ts
   // The auth gate answers BEFORE any build (the root worker gates the host,
-  // then forwards), so the login form is quick — it is the first page load
-  // AFTER auth that triggers the vite lane's cold build (the app's own npm
-  // install + vite build in the builder pool, behind the self-refreshing
-  // building page). The heading wait is the one that must absorb it.
+  // then forwards); the cold vite build was kicked before the internal-app
+  // walk above and has been running throughout, so the heading wait only
+  // absorbs the tail of it (behind the self-refreshing building page).
   await page.goto(appUrl("tanstack", slug, baseURL!));
   await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 60_000 });
   await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
-  await page.getByRole("heading", { name: "TanStack todos" }).waitFor({ timeout: 300_000 });
+  await page.getByRole("heading", { name: "TanStack todos" }).waitFor({ timeout: 120_000 });
 
   // The composer works once the Cap'n Web session authenticates (the
   // "connecting…" status hides), and the add comes back over live state.
