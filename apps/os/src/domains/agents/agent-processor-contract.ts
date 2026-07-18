@@ -1,11 +1,8 @@
 import {
   AGENT_BINDING_SET_EVENT_TYPE,
   AGENT_METADATA_CHANGED_EVENT_TYPE,
-  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-  AGENT_WAITING_CLEARED_EVENT_TYPE,
   AgentLlmRequestCancelReason,
-  AgentRuntimeChange,
-  AgentWaitingCleared,
+  AgentRuntime,
 } from "@iterate-com/shared/agent-events";
 import { z } from "zod";
 import {
@@ -16,7 +13,7 @@ import {
 } from "iterate/processors";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
-import { AgentBinding, AgentMetadata, AgentMetadataPatch } from "./agent-presence.ts";
+import { AgentBinding, AgentMetadata, AgentMetadataChanged } from "./agent-presence.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -32,7 +29,7 @@ export type AgentConfig = z.infer<typeof AgentConfig>;
 const AgentConfigPatch = z.strictObject({
   llm: z.strictObject({ model: z.string().min(1).optional() }).optional(),
 });
-export const AgentBirthCertificate = z.strictObject({});
+const AgentBirthCertificate = z.strictObject({});
 
 /**
  * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
@@ -81,17 +78,6 @@ export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
  * summary attempt never races an imminent context overflow.
  */
 export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
-
-/**
- * Trailing delay before the fold's non-zero→zero transition is announced as a
- * runtime-changed event. The fold passes through zero for one append
- * round-trip during every hand-off (llm-request-completed lands, THEN the
- * extracted script-run-requested lands; script-run-settled
- * lands, THEN the rendered result input lands), and announcing those blips
- * would flicker every "is thinking..." surface downstream. Busy flips
- * announce immediately — only idle waits.
- */
-export const DEFAULT_AGENT_RUNTIME_IDLE_DEBOUNCE_MS = 1_000;
 
 /**
  * The default codemode system prompt for web-chat agents (child agents, MCP
@@ -449,12 +435,27 @@ const LlmRequestResult = z.discriminatedUnion("status", [
   }),
 ]);
 
-/** The runtime snapshot plus the event which first established it in the fold. */
-const AgentRuntimeTransition = AgentRuntimeChange.extend({ since: z.string() });
+/** Exact runtime plus the event which first established it in the fold. This
+ * is processor state exposed through live state, not a journal event. */
+export const AgentRuntimeTransition = z.strictObject({
+  runtime: AgentRuntime,
+  sinceOffset: z.number().int().nonnegative(),
+  since: z.iso.datetime(),
+});
+export type AgentRuntimeTransition = z.infer<typeof AgentRuntimeTransition>;
+
+/** The deliberately small push surface for one Agent DO. The full fold stays
+ * behind `processor.snapshot()`; publishing context/history through live state
+ * would duplicate the journal on every conversation update. */
+export const AgentLiveState = z.strictObject({
+  runtimeChange: AgentRuntimeTransition.optional(),
+});
+/** The transient runtime state pushed by one Agent durable object. */
+export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "2.0.0",
+  version: "3.0.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z
@@ -545,16 +546,11 @@ export const AgentProcessorContract = defineProcessorContract({
       activeScriptExecutionIds: z.array(z.string()).default([]),
       /**
        * The exact runtime counts last derived from consumed events,
-       * stamped with the event which established the snapshot. Zero is absent
-       * at genesis and otherwise trails non-zero work through the debounce.
+       * stamped with the event which established the snapshot. Genesis zero
+       * stays absent; every later count transition is exposed immediately to
+       * live-state consumers.
        */
       runtimeChange: AgentRuntimeTransition.optional(),
-      /**
-       * The newest accepted runtime snapshot journaled by the announcement
-       * reconciler. Its sinceOffset guard defeats a delayed zero snapshot that
-       * lost a race with newer work.
-       */
-      announcedRuntime: AgentRuntimeChange.optional(),
       /** Human- or agent-written presentation metadata. Both writers use the
        * same setMetadata API and metadata-changed event. */
       metadata: AgentMetadata.prefault({}),
@@ -872,7 +868,7 @@ export const AgentProcessorContract = defineProcessorContract({
         "Changes the agent's human-readable presentation metadata. Omitted fields remain " +
         "unchanged, null clears an optional field, and pinned false unpins. The same event is " +
         "used whether an agent or a human initiated the edit.",
-      payloadSchema: AgentMetadataPatch,
+      payloadSchema: AgentMetadataChanged,
       examples: [
         {
           description: "The agent names its work and describes the current phase.",
@@ -889,49 +885,6 @@ export const AgentProcessorContract = defineProcessorContract({
         {
           description: "A later wake clears a stale dependency.",
           payload: { waitingFor: null },
-        },
-      ],
-    },
-    [AGENT_RUNTIME_CHANGED_EVENT_TYPE]: {
-      description:
-        "A full snapshot of observed pending trigger, LLM request, and running script " +
-        "counts. sinceOffset is the generation guard: consumers ignore an older snapshot, " +
-        "including a delayed zero that lost a race with newer work.",
-      payloadSchema: AgentRuntimeChange,
-      examples: [
-        {
-          description: "One model request is in flight.",
-          payload: {
-            sinceOffset: 57,
-            runtime: {
-              triggers: { pending: 0, runnable: 0 },
-              llmRequests: { scheduled: 0, requested: 0, started: 1 },
-              runningScripts: 0,
-            },
-          },
-        },
-        {
-          description: "The trailing idle debounce elapsed and all work is settled.",
-          payload: {
-            sinceOffset: 64,
-            runtime: {
-              triggers: { pending: 0, runnable: 0 },
-              llmRequests: { scheduled: 0, requested: 0, started: 0 },
-              runningScripts: 0,
-            },
-          },
-        },
-      ],
-    },
-    [AGENT_WAITING_CLEARED_EVENT_TYPE]: {
-      description:
-        "Conditionally clears semantic waiting through the triggering input offset. A wait set " +
-        "after that offset wins even if the clear event is appended later.",
-      payloadSchema: AgentWaitingCleared,
-      examples: [
-        {
-          description: "A user reply at offset 81 woke the agent.",
-          payload: { throughOffset: 81 },
         },
       ],
     },
@@ -967,8 +920,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     AGENT_METADATA_CHANGED_EVENT_TYPE,
-    AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-    AGENT_WAITING_CLEARED_EVENT_TYPE,
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-settled",
     // Core lifecycle RE-CHECK signals. Neither folds into state (reduce
@@ -1003,8 +954,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     AGENT_METADATA_CHANGED_EVENT_TYPE,
-    AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-    AGENT_WAITING_CLEARED_EVENT_TYPE,
     "events.iterate.com/capability-host/script-run-requested",
   ],
 });

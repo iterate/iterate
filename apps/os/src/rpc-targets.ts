@@ -28,19 +28,11 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
-import {
-  AGENT_BINDING_SET_EVENT_TYPE,
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
-  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-  AGENT_WAITING_CLEARED_EVENT_TYPE,
-} from "@iterate-com/shared/agent-events";
-import type { LiveUpdate } from "iterate/live-state";
+import { AGENT_METADATA_CHANGED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
-  LiveStateRpc,
-  LiveStateSubscriptionHandle,
   ProcessEventBatch,
   StreamPushEventBatch,
   ProcessorRuntimeState,
@@ -55,8 +47,14 @@ import type {
 } from "iterate/processors";
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type { StreamThroughputMetrics } from "iterate/processors";
-import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
-import { disposeIgnoredRpcResult, LiveState, type LiveStateSubscription } from "iterate/live-state";
+import {
+  disposeIgnoredRpcResult,
+  LiveState,
+  LiveStateRpcTarget,
+  type LiveStateRpc,
+  type LiveStateSubscriptionHandle,
+  type LiveUpdate,
+} from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -83,6 +81,10 @@ import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
 import { AgentMetadataPatch } from "./domains/agents/agent-presence.ts";
+import {
+  AGENT_COLLECTION_PATH,
+  type AgentCollectionProcessorState,
+} from "./domains/agents/agent-collection-processor-contract.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -271,6 +273,7 @@ import {
   AgentProcessorContract,
   type AgentEventInput,
   type AgentFileAttachment,
+  type AgentLiveState,
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import {
@@ -297,9 +300,12 @@ import type {
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
 import {
+  authenticateProjectRequest,
   handleProjectAuthFetch,
   parseProjectAuthPolicy,
   projectAuthRequestFromRpc,
+  type ProjectAuthActor,
+  type ProjectAuthCredentials,
   type ProjectAuthPolicy,
   type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
@@ -335,7 +341,6 @@ import type {
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
-import type { AgentTouchInput } from "./domains/projects/agent-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import {
   SchedulerProcessorContract,
@@ -425,14 +430,6 @@ class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
 type FetchOnly = Pick<Fetcher, "fetch">;
 
 const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
-
-const AGENT_PROJECTION_EVENT_TYPES = new Set([
-  "events.iterate.com/agent/created",
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
-  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-  AGENT_WAITING_CLEARED_EVENT_TYPE,
-  AGENT_BINDING_SET_EVENT_TYPE,
-]);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
@@ -1425,10 +1422,46 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
         'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("researcher") from an agent script addresses a child agent, get("..") from a child addresses its parent. list() the known agent streams.',
       children: {
         get: "One agent by path (absolute, or relative to the calling scope).",
-        list: "Known agents (from project state).",
+        list: "Known agents (from the collection processor's reduced state).",
+        liveState: "The collection processor's reduced agent database.",
+        processor: "The collection's hosted stream processor.",
       },
       parent: "a project itx (itx.agents)",
     });
+  }
+
+  get #durableObjectStub() {
+    return env.AGENT_COLLECTION.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: AGENT_COLLECTION_PATH,
+      }),
+    );
+  }
+
+  get processor(): WakeableStreamProcessorRpc<AgentCollectionProcessorState> {
+    return new ProcessorRelayRpcTarget<AgentCollectionProcessorState>({
+      auth: this.props.auth,
+      // Workers generates the concrete AgentCollection DO stub, while the
+      // shared relay accepts the smaller processor-host surface. The DO owns
+      // that surface; the double assertion only bridges those generated and
+      // generic RPC types.
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  get liveState(): LiveStateRpc<AgentCollectionProcessorState> {
+    return new LiveStateRelayRpcTarget<AgentCollectionProcessorState>(
+      () => this.#durableObjectStub,
+    );
+  }
+
+  /** Stateless push sink: forwarding and authorization are its entire job. */
+  processEvent(batch: StreamPushEventBatch): Promise<void> {
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("agents.processEvent is dialed by stream push subscriptions, not sessions");
+    }
+    return Promise.resolve(this.#durableObjectStub.processEvent(batch));
   }
 
   constructor(
@@ -1478,9 +1511,13 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     });
   }
 
-  /** Known agents, read from the project processor's reduced state. */
-  list(): Promise<StreamListItem[]> {
-    return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  /** Known agents, read from the collection processor's reduced database. */
+  async list(): Promise<StreamListItem[]> {
+    const { state } = await this.processor.snapshot();
+    return Object.values(state.agents).map((agent) => ({
+      path: agent.path,
+      createdAt: agent.timestamps.createdAt,
+    }));
   }
 }
 
@@ -4360,8 +4397,21 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   get processor(): WakeableStreamProcessorRpc<AgentProcessorState> {
     return new ProcessorRelayRpcTarget<AgentProcessorState>({
       auth: this.#props.auth,
+      // Workers generates the concrete Agent DO stub, while the shared relay
+      // accepts the smaller processor-host surface. The DO implements that
+      // surface; the double assertion only bridges those RPC types.
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
     });
+  }
+
+  /** The agent's transient runtime as a push-driven live-state surface. */
+  get liveState(): LiveStateRpc<AgentLiveState> {
+    return new LiveStateRelayRpcTarget<AgentLiveState>(
+      // Workers generates the concrete Agent DO stub, while this generic relay
+      // accepts its live-state surface. The DO implements that surface; the
+      // double assertion only bridges those RPC types.
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<AgentLiveState>,
+    );
   }
 
   /** The agent's own event stream. */
@@ -4399,10 +4449,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Create the generic agent machinery on this stream and wait until both
-   * processors have consumed the birth batch. Configuration, context, and
-   * tasks are separate events: append processor-consumed events through
-   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Create the generic agent machinery on this stream and wait until the
+   * agent, capability-host, and singleton collection processors have reduced
+   * the birth. Configuration, context, and tasks are separate events: append
+   * processor-consumed events through `agent.append()` or use a typed helper
+   * such as `message()` after creation.
    */
   async create(): Promise<void> {
     if (arguments.length !== 0) {
@@ -4411,35 +4462,39 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       );
     }
     const snapshot = await this.processor.snapshot();
-    if (snapshot.state.birthCertificate !== null) {
-      // Creation is one atomic stream append. The agent snapshot proves its
-      // processor has folded that append; wait the paired capability host
-      // through the same observed head before returning from this barrier.
-      await this.capabilityHost.processor.waitUntilProcessed({
-        offset: snapshot.offset,
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    let birthOffset = snapshot.offset;
+    if (snapshot.state.birthCertificate === null) {
+      const creation = agentCreationForPath({
+        agentPath: this.#path,
+        projectId: this.#props.projectId,
+        ...(await agentBootProjectFacts(this.#props.projectId)),
       });
-      return;
+      const committed = await this.stream.append(...creation.events);
+      // append() preserves INPUT order, including idempotency hits at their old
+      // offsets. A paired capability host may already exist, so the last input
+      // is not necessarily the newest event. The create boundary is the maximum
+      // offset across the complete batch.
+      birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+      if (birthOffset === 0) throw new Error("agent create committed no events");
     }
-    const creation = agentCreationForPath({
-      agentPath: this.#path,
-      projectId: this.#props.projectId,
-      ...(await agentBootProjectFacts(this.#props.projectId)),
-    });
-    const committed = await this.stream.append(...creation.events);
-    // append() preserves INPUT order, including idempotency hits at their old
-    // offsets. A paired capability host may already exist, so the last input
-    // is not necessarily the newest event. The create boundary is the maximum
-    // offset across the complete batch.
-    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-    if (offset === 0) throw new Error("agent create committed no events");
+
+    const agentCollection = env.AGENT_COLLECTION.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.#props.projectId,
+        path: AGENT_COLLECTION_PATH,
+      }),
+    );
     await Promise.all([
       this.processor.waitUntilProcessed({
-        offset,
+        offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
       this.capabilityHost.processor.waitUntilProcessed({
-        offset,
+        offset: birthOffset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
+      agentCollection.waitUntilAgentCreated({
+        path: this.#path,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     ]);
@@ -5348,10 +5403,28 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** Bind a project-member gate to this itx's project. */
+  /** Select the project-member policy for this project's auth gate. */
   get(policy: ProjectAuthPolicy): ProjectAuthRpcTarget {
     parseProjectAuthPolicy(policy);
     return this;
+  }
+
+  /**
+   * Exchange an exact-origin app cookie for its authenticated actor. An app's
+   * unauthenticated Cap'n Web root uses this to construct its own session
+   * RpcTarget; the browser never receives the project's itx.
+   */
+  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
+  async authenticate(
+    request: ProjectAuthRpcMetadata | Request,
+    credentials: ProjectAuthCredentials,
+  ): Promise<ProjectAuthActor> {
+    return await authenticateProjectRequest({
+      credentials,
+      projectId: this.props.projectId,
+      request: projectAuthRequestFromRpc(request),
+      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+    });
   }
 
   /**
@@ -5377,7 +5450,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
   ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
-  auth: 'Project-member web auth: auth.get({ policy: "project-member" }).fetch(request).',
+  auth: "Project web auth: get(policy).fetch(request), or .authenticate(request, credentials) to construct an app RPC session.",
   browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
@@ -5456,7 +5529,7 @@ type ProjectRpcTargetProps = {
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
-  indexCommittedBatchFacts(input: { stream: TouchInput; agent?: AgentTouchInput }): Promise<void>;
+  indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
 };
 
 /**
@@ -5887,8 +5960,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // INTENT, not the implementation — so envelope evolution happens here in
   // deployment code instead of by patching user repos, and first-party
   // per-event work joins the same ordered, checkpointed delivery. Stream and
-  // agent projection writes are awaited: a failed write rejects into the
-  // spine and is retried rather than acknowledging stale live state. Same
+  // stream-index writes are awaited: a failed write rejects into the spine
+  // and is retried rather than acknowledging stale live state. Same
   // access model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     await this.#indexCommittedBatchFacts(batch);
@@ -5927,25 +6000,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
   }
 
-  /** Materialize one committed delivery's stream and agent facts together. */
+  /** Materialize one committed delivery's stream facts. */
   async #indexCommittedBatchFacts(batch: StreamPushEventBatch): Promise<void> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
-
-    const events = batch.path.startsWith("/agents/")
-      ? batch.events.flatMap((event) =>
-          AGENT_PROJECTION_EVENT_TYPES.has(event.type)
-            ? [
-                {
-                  type: event.type,
-                  payload: event.payload,
-                  offset: event.offset,
-                  createdAt: event.createdAt,
-                },
-              ]
-            : [],
-        )
-      : [];
 
     await this.#projectDo.indexCommittedBatchFacts({
       stream: {
@@ -5954,7 +6012,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         type: last.type,
         maxOffset: batch.streamMaxOffset,
       },
-      ...(events.length === 0 ? {} : { agent: { path: batch.path, events } }),
     });
   }
 
@@ -6154,9 +6211,10 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
 }
 
 // ---------------------------------------------------------------------------
-// Every RpcTarget class lives in this module (design rule): ownership handles,
-// built-in capability targets, and read-only facades included. Durable Object
-// and entrypoint classes stay in their domain folders.
+// Every OS-owned RpcTarget that defines or relays an itx contract lives in this
+// module. Transport primitives shared with userspace, such as the read-only
+// target from `iterate/live-state`, stay in that package; the local relay below
+// only bridges that target across the Durable Object hop.
 // ---------------------------------------------------------------------------
 
 type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
@@ -6987,60 +7045,6 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 }
 
-/**
- * DO-side RpcTarget over a registry's live-state engine — the surface a
- * `.liveState` node exposes: `get()`/`subscribe()` — read-only over the wire
- * (see LiveStateRpc: the DO derives this state from its fold, so writes go
- * through the node's own verbs). `get`/`subscribe` first seed the engine from
- * committed state so the first paint is never stale after a DO restart.
- */
-export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
-  extends IterateRpcRelay<"LiveStateRpc">
-  implements LiveStateRpc<State>
-{
-  readonly #host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">;
-
-  constructor(host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">) {
-    super();
-    this.#host = host;
-  }
-
-  async get(): Promise<State> {
-    await this.#host.loadAndRefreshLive();
-    return this.#host.live.getState();
-  }
-
-  async subscribe(
-    onUpdate: (update: LiveUpdate<State>) => unknown,
-  ): Promise<LiveStateSubscriptionHandle> {
-    await this.#host.loadAndRefreshLive();
-    const handle = this.#host.live.subscribe(onUpdate);
-    return new LiveStateSubscriptionRpcTarget(handle);
-  }
-}
-
-/** RPC ownership handle for one live-state subscription — the `.liveState` twin of {@link StreamSubscriptionRpcTarget}. */
-class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscriptionHandle"> {
-  readonly #handle: LiveStateSubscription;
-
-  constructor(handle: LiveStateSubscription) {
-    super();
-    this.#handle = handle;
-  }
-
-  ping() {
-    return this.#handle.ping();
-  }
-
-  unsubscribe() {
-    this.#handle.unsubscribe();
-  }
-
-  [Symbol.dispose](): void {
-    this.#handle.unsubscribe();
-  }
-}
-
 /** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
 type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
 
@@ -7101,27 +7105,31 @@ class LiveDemoTickerRpcTarget
       tick: 0,
       startedAt: this.#startedAt,
     });
-    const inner = engine.subscribe(onUpdate);
-    // The engine drops a subscriber itself when a delivery rejects (dead
-    // client), and it exposes no drop hook to the owner — so a driving loop
-    // like this one must check `ping()` and stop itself, or the timer outlives
-    // the subscription. This IS the template for the poll-an-API pattern.
-    const interval = setInterval(() => {
-      if (!inner.ping()) {
-        stop();
-        return;
-      }
-      engine.assign({ tick: engine.getState().tick + 1 });
-    }, LIVE_DEMO_TICK_MS);
-    const stop = () => {
-      clearInterval(interval);
-      inner.unsubscribe();
-    };
-    return new LiveStateSubscriptionRpcTarget({
-      ping: () => inner.ping(),
-      unsubscribe: stop,
-      [Symbol.dispose]: stop,
-    });
+    return await new LiveStateRpcTarget({
+      getState: () => engine.getState(),
+      subscribe: (sink) => {
+        const inner = engine.subscribe(sink);
+        // The engine drops a subscriber itself when a delivery rejects (dead
+        // client), and it exposes no drop hook to the owner — so a driving
+        // loop must check `ping()` or its timer would outlive the subscriber.
+        const interval = setInterval(() => {
+          if (!inner.ping()) {
+            stop();
+            return;
+          }
+          engine.assign({ tick: engine.getState().tick + 1 });
+        }, LIVE_DEMO_TICK_MS);
+        const stop = () => {
+          clearInterval(interval);
+          inner.unsubscribe();
+        };
+        return {
+          ping: () => inner.ping(),
+          unsubscribe: stop,
+          [Symbol.dispose]: stop,
+        };
+      },
+    }).subscribe(onUpdate);
   }
 }
 

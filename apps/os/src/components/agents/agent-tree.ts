@@ -145,7 +145,7 @@ export function agentNodeDisplayState(
 }
 
 function finalizeNode(node: AgentTreeNode): void {
-  let runtime = node.agent.runtime;
+  let runtime = node.agent.runtime ?? ZERO_AGENT_RUNTIME;
   const waiting = emptyWaitingAggregate();
   addWaiting(waiting, node.agent.metadata.waitingFor);
   let lastWorkAt = node.agent.timestamps.lastWorkAt;

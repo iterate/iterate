@@ -146,4 +146,17 @@ describe("HTTP operation logs", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ outcome, message: "http_request" });
   });
+
+  it("keeps a modeled 5xx response out of the error signal", async () => {
+    const events = captureLogs();
+
+    await runHttpWideLog(async () => {
+      wideLogger.setOutcome("worker_building");
+      return new Response(null, { status: 503 });
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ outcome: "worker_building", message: "http_request" });
+    expect(console.error).not.toHaveBeenCalled();
+  });
 });

@@ -321,8 +321,14 @@ export interface Ai {
 
 /** A partial fetch: return its response, or continue the app when it returns null. */
 export interface ProjectAuth {
-  /** Bind a project-member gate to this itx's project. */
+  /** Select the project-member policy for this project's auth gate. */
   get(policy: ProjectAuthPolicy): ProjectAuth;
+  /**
+   * Exchange an exact-origin app cookie for its authenticated actor. An app's
+   * unauthenticated Cap'n Web root uses this to construct its own session
+   * RpcTarget; the browser never receives the project's itx.
+   */
+  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
   /**
    * Own login, callback, logout, and the host-only cookie. Returns null only
    * when this request belongs to a current project member. Like any partial
@@ -378,6 +384,8 @@ export interface Agent {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** The agent stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<AgentProcessorState>;
+  /** The agent's transient runtime as a push-driven live-state surface. */
+  liveState: LiveStateRpc<AgentLiveState>;
   /** The agent's own event stream. */
   stream: Stream;
   /**
@@ -394,10 +402,11 @@ export interface Agent {
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
-   * Create the generic agent machinery on this stream and wait until both
-   * processors have consumed the birth batch. Configuration, context, and
-   * tasks are separate events: append processor-consumed events through
-   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Create the generic agent machinery on this stream and wait until the
+   * agent, capability-host, and singleton collection processors have reduced
+   * the birth. Configuration, context, and tasks are separate events: append
+   * processor-consumed events through `agent.append()` or use a typed helper
+   * such as `message()` after creation.
    */
   create(): Promise<void>;
   /**
@@ -569,6 +578,10 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
+  processor: WakeableStreamProcessorRpc<AgentCollectionProcessorState>;
+  liveState: LiveStateRpc<AgentCollectionProcessorState>;
+  /** Stateless push sink: forwarding and authorization are its entire job. */
+  processEvent(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
@@ -580,7 +593,7 @@ export interface AgentCollection {
    * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
    */
   get(path: string): Agent;
-  /** Known agents, read from the project processor's reduced state. */
+  /** Known agents, read from the collection processor's reduced database. */
   list(): Promise<StreamListItem[]>;
 }
 
@@ -1810,7 +1823,6 @@ export type ProjectProcessorState = {
   ready: boolean;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
-  agents: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
@@ -1857,8 +1869,6 @@ export type ProjectProcessorState = {
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
- * - `agents` — every agent's metadata, exact runtime facts, external binding,
- *   and meaningful timestamps, in the same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -1869,8 +1879,6 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
-  /** The complete agent catalog keyed by agent path. */
-  agents: Record<string, AgentRecord>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };
@@ -2096,72 +2104,6 @@ export type StreamIndexRow = {
   eventCount: number;
 };
 
-/** The project catalog's complete current projection for one explicitly created agent. */
-export type AgentRecord = {
-  path: string;
-  metadata: {
-    title?: string | undefined;
-    summary?: string | undefined;
-    activity?: string | undefined;
-    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
-    pinned: boolean;
-  };
-  runtime: {
-    triggers: { pending: number; runnable: number };
-    llmRequests: { scheduled: number; requested: number; started: number };
-    runningScripts: number;
-  };
-  binding?:
-    | {
-        type: "slack_thread";
-        connection: string;
-        channelId: string;
-        threadTs: string;
-        channelName?: string | undefined;
-        url?: string | undefined;
-      }
-    | {
-        type: "telegram_thread";
-        connection: string;
-        chatId: string;
-        messageThreadId?: string | undefined;
-      }
-    | {
-        type: "email_thread";
-        threadId: string;
-        subject?: string | undefined;
-        counterpart?: string | undefined;
-      }
-    | {
-        type: "github_pull_request";
-        connection: string;
-        installationId: string;
-        owner: string;
-        repo: string;
-        number: number;
-        url?: string | undefined;
-      }
-    | {
-        type: "github_check_run";
-        connection: string;
-        installationId: string;
-        owner: string;
-        repo: string;
-        number: number;
-        checkRunId?: number | undefined;
-        headSha?: string | undefined;
-        url?: string | undefined;
-      }
-    | undefined;
-  timestamps: {
-    createdAt: string;
-    lastWorkAt: string;
-    metadataUpdatedAt?: string | undefined;
-    activityUpdatedAt?: string | undefined;
-    runtimeUpdatedAt?: string | undefined;
-  };
-};
-
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
  * published structurally so itx callers can route a call through a specific
  * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
@@ -2224,6 +2166,12 @@ export type CfMarkdownConversionResult = {
 
 /** A declarative access rule for a project-host web app. */
 export type ProjectAuthPolicy = { policy: "project-member" };
+
+/** Browser credentials accepted by a project app's unauthenticated RPC root. */
+export type ProjectAuthCredentials = { type: "from-server-cookie" };
+
+/** Identity proven by the app-origin session, safe for app-defined authorization. */
+export type ProjectAuthActor = { userId: string };
 
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,
@@ -2523,23 +2471,13 @@ export type AgentProcessorState = {
   activeScriptExecutionIds: string[];
   runtimeChange?:
     | {
-        sinceOffset: number;
         runtime: {
           triggers: { pending: number; runnable: number };
           llmRequests: { scheduled: number; requested: number; started: number };
           runningScripts: number;
         };
+        sinceOffset: number;
         since: string;
-      }
-    | undefined;
-  announcedRuntime?:
-    | {
-        sinceOffset: number;
-        runtime: {
-          triggers: { pending: number; runnable: number };
-          llmRequests: { scheduled: number; requested: number; started: number };
-          runningScripts: number;
-        };
       }
     | undefined;
   metadata: {
@@ -2556,6 +2494,21 @@ export type AgentProcessorState = {
     totalCachedInputTokens: number;
     totalReasoningOutputTokens: number;
   };
+};
+
+/** The transient runtime state pushed by one Agent durable object. */
+export type AgentLiveState = {
+  runtimeChange?:
+    | {
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        sinceOffset: number;
+        since: string;
+      }
+    | undefined;
 };
 
 /** Append input accepted by the Agent processor, derived from its `consumes` contract. */
@@ -2602,24 +2555,14 @@ export type AgentEventInput =
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/metadata-changed",
-      {
-        title?: string | null | undefined;
-        summary?: string | null | undefined;
-        activity?: string | null | undefined;
-        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-        pinned?: boolean | undefined;
-      }
-    >
-  | TypedConsumedEventInput<
-      "events.iterate.com/agent/runtime-changed",
-      {
-        sinceOffset: number;
-        runtime: {
-          triggers: { pending: number; runnable: number };
-          llmRequests: { scheduled: number; requested: number; started: number };
-          runningScripts: number;
-        };
-      }
+      | {
+          title?: string | null | undefined;
+          summary?: string | null | undefined;
+          activity?: string | null | undefined;
+          waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+          pinned?: boolean | undefined;
+        }
+      | { waitingFor: null; clearWaitingForThroughOffset: number }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/token-usage-reported",
@@ -2633,7 +2576,6 @@ export type AgentEventInput =
         reasoningOutputTokens?: number | undefined;
       }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/waiting-cleared", { throughOffset: number }>
   | TypedConsumedEventInput<
       "events.iterate.com/agents/context-added",
       | {
@@ -2889,6 +2831,31 @@ export type ItxExpression = ItxExpressionStep[];
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
+
+/** The singleton agent collection processor's reduced database state. */
+export type AgentCollectionProcessorState = {
+  birthCertificate: Record<string, never> | null;
+  agents: Record<
+    string,
+    {
+      path: string;
+      metadata: {
+        title?: string | undefined;
+        summary?: string | undefined;
+        activity?: string | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+        pinned: boolean;
+      };
+      timestamps: {
+        createdAt: string;
+        lastWorkAt: string;
+        metadataUpdatedAt?: string | undefined;
+        activityUpdatedAt?: string | undefined;
+      };
+    }
+  >;
+  waitingForSinceOffsets: Record<string, number>;
+};
 
 /**
  * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned

@@ -56,7 +56,7 @@ export async function mintProjectAppSession(
 export async function validateProjectAppSession(
   rawInput: ValidateProjectAppSessionInput,
   dependencies: SessionDependencies,
-): Promise<{ expiresAt: number } | null> {
+): Promise<{ expiresAt: number; userId: string } | null> {
   let input: ReturnType<typeof parseValidateInput>;
   let rawClaims: unknown;
   try {
@@ -78,7 +78,7 @@ export async function validateProjectAppSession(
   ) {
     return null;
   }
-  return { expiresAt: claims.exp };
+  return { expiresAt: claims.exp, userId: claims.userId };
 }
 
 function parseMintInput(input: MintProjectAppSessionInput) {

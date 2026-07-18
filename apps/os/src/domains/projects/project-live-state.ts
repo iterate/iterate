@@ -1,4 +1,3 @@
-import type { AgentRecord } from "../agents/agent-presence.ts";
 import type { ProjectProcessorState } from "./project-processor-contract.ts";
 import type { StreamIndexRow } from "./stream-database.ts";
 
@@ -11,8 +10,6 @@ import type { StreamIndexRow } from "./stream-database.ts";
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
- * - `agents` — every agent's metadata, exact runtime facts, external binding,
- *   and meaningful timestamps, in the same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -23,8 +20,6 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
-  /** The complete agent catalog keyed by agent path. */
-  agents: Record<string, AgentRecord>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };

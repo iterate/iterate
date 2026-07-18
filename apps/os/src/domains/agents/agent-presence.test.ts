@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   ZERO_AGENT_RUNTIME,
   isAgentRuntimeZero,
-  mergeAgentRuntimeChange,
   type AgentRuntime as AgentRuntimeRecord,
 } from "@iterate-com/shared/agent-events";
 import {
@@ -128,22 +127,6 @@ describe("agent runtime", () => {
     );
     expect(deriveAgentDisplayState(ZERO_AGENT_RUNTIME)).toBe("idle");
     expect(isAgentRuntimeZero(ZERO_AGENT_RUNTIME)).toBe(true);
-  });
-
-  it("rejects a stale runtime generation and preserves exact no-op identity", () => {
-    const current = { sinceOffset: 9, runtime: runtime({ runningScripts: 1 }) };
-    expect(mergeAgentRuntimeChange(current, { sinceOffset: 5, runtime: ZERO_AGENT_RUNTIME })).toBe(
-      current,
-    );
-    expect(
-      mergeAgentRuntimeChange(current, {
-        sinceOffset: 9,
-        runtime: runtime({ runningScripts: 1 }),
-      }),
-    ).toBe(current);
-    expect(
-      mergeAgentRuntimeChange(current, { sinceOffset: 10, runtime: ZERO_AGENT_RUNTIME }),
-    ).toEqual({ sinceOffset: 10, runtime: ZERO_AGENT_RUNTIME });
   });
 });
 
