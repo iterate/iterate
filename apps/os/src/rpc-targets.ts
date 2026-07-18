@@ -34,13 +34,10 @@ import {
   AGENT_RUNTIME_CHANGED_EVENT_TYPE,
   AGENT_WAITING_CLEARED_EVENT_TYPE,
 } from "@iterate-com/shared/agent-events";
-import type { LiveUpdate } from "iterate/live-state";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
-  LiveStateRpc,
-  LiveStateSubscriptionHandle,
   ProcessEventBatch,
   StreamPushEventBatch,
   ProcessorRuntimeState,
@@ -60,6 +57,9 @@ import {
   disposeIgnoredRpcResult,
   LiveState,
   LiveStateRpcTarget as SharedLiveStateRpcTarget,
+  type LiveStateRpc,
+  type LiveStateSubscriptionHandle,
+  type LiveUpdate,
 } from "iterate/live-state";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
@@ -5402,7 +5402,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
   ai: "Workers AI: run(model, body), models(), toMarkdown({ name, blob }).",
-  auth: 'Project-member web auth: auth.get({ policy: "project-member" }).fetch(request), or authenticate(request, credentials) to construct an app RPC session.',
+  auth: "Project web auth: get(policy).fetch(request), or .authenticate(request, credentials) to construct an app RPC session.",
   browser: "Cloudflare Browser Run: quickAction(action, options), fetch().",
   capabilityHost:
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",

@@ -75,24 +75,18 @@ const ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES = new Set([10200, 10302, 10303]);
 const ARTIFACTS_REPO_NOT_READY_MESSAGE =
   /^Repository "[^"]+" is currently being (?:created|imported|forked)\. The repository is not yet available\. Retry after \d+ seconds\.$/;
 
-function hasArtifactsRepoNotReadyCode(error: unknown) {
+function isArtifactsRepoNotReadyError(error: unknown) {
   if (typeof error !== "object" || error === null) return false;
   const code = "code" in error ? error.code : undefined;
+  const message = "message" in error ? error.message : undefined;
+  const name = "name" in error ? error.name : undefined;
   const numericCode = "numericCode" in error ? error.numericCode : undefined;
   return (
     (typeof code === "string" && ARTIFACTS_REPO_NOT_READY_CODES.has(code)) ||
-    (typeof numericCode === "number" && ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES.has(numericCode))
-  );
-}
-
-function isArtifactsRepoNotReadyError(error: unknown) {
-  if (typeof error !== "object" || error === null) return false;
-  const message = "message" in error ? error.message : undefined;
-  const name = "name" in error ? error.name : undefined;
-  return (
-    name === "ArtifactsError" &&
-    (hasArtifactsRepoNotReadyCode(error) ||
-      (typeof message === "string" && ARTIFACTS_REPO_NOT_READY_MESSAGE.test(message)))
+    (name === "ArtifactsError" &&
+      ((typeof numericCode === "number" &&
+        ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES.has(numericCode)) ||
+        (typeof message === "string" && ARTIFACTS_REPO_NOT_READY_MESSAGE.test(message))))
   );
 }
 
@@ -120,10 +114,8 @@ export function classifyRepoAccessError(error: unknown, branch?: string): unknow
     branch !== undefined &&
     typeof message === "string" &&
     (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
-  const artifactNotReady =
-    hasArtifactsRepoNotReadyCode(error) || isArtifactsRepoNotReadyError(error);
   const notSeeded =
-    artifactNotReady ||
+    isArtifactsRepoNotReadyError(error) ||
     (code === "NotFoundError" &&
       typeof message === "string" &&
       (message.includes("refs/") || missingRequestedBranch));

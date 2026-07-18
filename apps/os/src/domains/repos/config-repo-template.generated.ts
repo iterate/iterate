@@ -72,20 +72,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "(`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP\n" +
       "rides the fetch lane.\n" +
       "\n" +
-      "`InternalApp` is the canonical authenticated userspace-app shape. Ordinary\n" +
-      "HTTP routes first call\n" +
-      "`itx.auth.get({ policy: \"project-member\" }).fetch(request)`: a Response means\n" +
-      "auth owns the request (login, callback, logout, or rejection), while `null`\n" +
-      "means continue with the original, unconsumed Request. Its `/api` route is an\n" +
-      "unauthenticated Cap'n Web root containing only `authenticate(credentials)`.\n" +
-      "That method calls the same bound auth policy with the WebSocket upgrade Request\n" +
-      "and returns an app-defined `InternalAppSession` RpcTarget. Give that target only\n" +
-      "the authority this UI needs; never return the project-wide `itx` capability to\n" +
-      "the browser. Import the Cap'n Web host directly from `@iterate-com/capnweb`;\n" +
-      "import `LiveState` and `LiveStateRpcTarget` from the same\n" +
-      "`iterate/live-state` module first-party apps use. Dynamic apps therefore use\n" +
-      "the same snapshot-and-patch implementation without hiding the capability\n" +
-      "graph behind a framework helper.\n" +
+      "`InternalApp` is the canonical authenticated userspace-app shape: partial-fetch\n" +
+      "HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an\n" +
+      "app-defined, attenuated session. `README.md` explains the complete flow.\n" +
       "\n" +
       "To give agents a new capability surface, add a getter or method to the\n" +
       "default-export worker class: the platform dispatches dotted\n" +
@@ -168,6 +157,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "```ts\n" +
       "class PublicApi extends RpcTarget {\n" +
+      "  constructor(\n" +
+      "    private readonly itxBinding: ItxBinding,\n" +
+      "    private readonly request: Request,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
       "  async authenticate(credentials: ProjectAuthCredentials) {\n" +
       "    using itx = await this.itxBinding.get();\n" +
       "    const actor = await itx.auth\n" +
@@ -858,7 +854,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "}\n" +
       "\n" +
-      "type InternalAppState = { events: StreamEvent[]; refreshedAt: string };\n" +
+      "type InternalAppState = { events: StreamEvent[] };\n" +
       "\n" +
       "// The unauthenticated capability at /api. It has one door: turn the app's\n" +
       "// exact-origin HttpOnly cookie into an actor, then let userspace decide which\n" +
@@ -887,7 +883,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// It can identify itself, refresh the event projection, and subscribe to that\n" +
       "// projection. It cannot access arbitrary project ITX methods.\n" +
       "class InternalAppSession extends RpcTarget {\n" +
-      "  readonly #state = new LiveState<InternalAppState>({ events: [], refreshedAt: \"\" });\n" +
+      "  readonly #state = new LiveState<InternalAppState>({ events: [] });\n" +
       "  readonly #liveState = new LiveStateRpcTarget(this.#state);\n" +
       "\n" +
       "  constructor(\n" +
@@ -906,10 +902,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  async refresh(): Promise<void> {\n" +
-      "    this.#state.setState({\n" +
-      "      events: await this.app.readLatestEvents(),\n" +
-      "      refreshedAt: new Date().toISOString(),\n" +
-      "    });\n" +
+      "    this.#state.setState({ events: await this.app.readLatestEvents() });\n" +
       "  }\n" +
       "}\n" +
       "\n" +
@@ -939,12 +932,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "\n" +
-      "    let nonceBytes = \"\";\n" +
-      "    for (const byte of crypto.getRandomValues(new Uint8Array(18))) {\n" +
-      "      nonceBytes += String.fromCharCode(byte);\n" +
-      "    }\n" +
-      "    const nonce = btoa(nonceBytes).replaceAll(\"+\", \"-\").replaceAll(\"/\", \"_\").replace(/=+$/u, \"\");\n" +
-      "    const apiPath = JSON.stringify(`${request.headers.get(\"x-iterate-url-prefix\") ?? \"\"}/api`);\n" +
+      "    const nonce = crypto.randomUUID().replaceAll(\"-\", \"\");\n" +
+      "    const prefix = request.headers.get(\"x-iterate-url-prefix\") ?? \"\";\n" +
+      "    const apiPath = JSON.stringify(`${prefix}/api`);\n" +
       "    return new Response(\n" +
       "      `<!doctype html>\n" +
       "        <html>\n" +
@@ -958,7 +948,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <h1>Latest project root events</h1>\n" +
       "              <p id=\"identity\">authenticating API…</p>\n" +
       "              <button id=\"refresh\" disabled>refresh over Cap'n Web</button>\n" +
-      "              <form action=\"/_iterate/auth/logout\" method=\"post\"><button>Sign out</button></form>\n" +
+      "              <form action=\"${escapeHtml(`${prefix}/_iterate/auth/logout`)}\" method=\"post\"><button>Sign out</button></form>\n" +
       "              <pre id=\"events\">loading…</pre>\n" +
       "            </main>\n" +
       "            <script type=\"module\" nonce=\"${nonce}\">\n" +

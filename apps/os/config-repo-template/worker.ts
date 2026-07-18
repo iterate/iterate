@@ -427,7 +427,7 @@ export class HelloApp extends IterateWorkerEntrypoint {
   }
 }
 
-type InternalAppState = { events: StreamEvent[]; refreshedAt: string };
+type InternalAppState = { events: StreamEvent[] };
 
 // The unauthenticated capability at /api. It has one door: turn the app's
 // exact-origin HttpOnly cookie into an actor, then let userspace decide which
@@ -456,7 +456,7 @@ class PublicInternalApi extends RpcTarget {
 // It can identify itself, refresh the event projection, and subscribe to that
 // projection. It cannot access arbitrary project ITX methods.
 class InternalAppSession extends RpcTarget {
-  readonly #state = new LiveState<InternalAppState>({ events: [], refreshedAt: "" });
+  readonly #state = new LiveState<InternalAppState>({ events: [] });
   readonly #liveState = new LiveStateRpcTarget(this.#state);
 
   constructor(
@@ -475,10 +475,7 @@ class InternalAppSession extends RpcTarget {
   }
 
   async refresh(): Promise<void> {
-    this.#state.setState({
-      events: await this.app.readLatestEvents(),
-      refreshedAt: new Date().toISOString(),
-    });
+    this.#state.setState({ events: await this.app.readLatestEvents() });
   }
 }
 
@@ -508,12 +505,9 @@ export class InternalApp extends IterateWorkerEntrypoint {
       });
     }
 
-    let nonceBytes = "";
-    for (const byte of crypto.getRandomValues(new Uint8Array(18))) {
-      nonceBytes += String.fromCharCode(byte);
-    }
-    const nonce = btoa(nonceBytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
-    const apiPath = JSON.stringify(`${request.headers.get("x-iterate-url-prefix") ?? ""}/api`);
+    const nonce = crypto.randomUUID().replaceAll("-", "");
+    const prefix = request.headers.get("x-iterate-url-prefix") ?? "";
+    const apiPath = JSON.stringify(`${prefix}/api`);
     return new Response(
       `<!doctype html>
         <html>
@@ -527,7 +521,7 @@ export class InternalApp extends IterateWorkerEntrypoint {
               <h1>Latest project root events</h1>
               <p id="identity">authenticating API…</p>
               <button id="refresh" disabled>refresh over Cap'n Web</button>
-              <form action="/_iterate/auth/logout" method="post"><button>Sign out</button></form>
+              <form action="${escapeHtml(`${prefix}/_iterate/auth/logout`)}" method="post"><button>Sign out</button></form>
               <pre id="events">loading…</pre>
             </main>
             <script type="module" nonce="${nonce}">

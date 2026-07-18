@@ -62,20 +62,9 @@ shape for anything real-time. Method calls on apps
 (`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP
 rides the fetch lane.
 
-`InternalApp` is the canonical authenticated userspace-app shape. Ordinary
-HTTP routes first call
-`itx.auth.get({ policy: "project-member" }).fetch(request)`: a Response means
-auth owns the request (login, callback, logout, or rejection), while `null`
-means continue with the original, unconsumed Request. Its `/api` route is an
-unauthenticated Cap'n Web root containing only `authenticate(credentials)`.
-That method calls the same bound auth policy with the WebSocket upgrade Request
-and returns an app-defined `InternalAppSession` RpcTarget. Give that target only
-the authority this UI needs; never return the project-wide `itx` capability to
-the browser. Import the Cap'n Web host directly from `@iterate-com/capnweb`;
-import `LiveState` and `LiveStateRpcTarget` from the same
-`iterate/live-state` module first-party apps use. Dynamic apps therefore use
-the same snapshot-and-patch implementation without hiding the capability
-graph behind a framework helper.
+`InternalApp` is the canonical authenticated userspace-app shape: partial-fetch
+HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an
+app-defined, attenuated session. `README.md` explains the complete flow.
 
 To give agents a new capability surface, add a getter or method to the
 default-export worker class: the platform dispatches dotted

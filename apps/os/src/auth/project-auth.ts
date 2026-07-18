@@ -3,6 +3,7 @@ import type {
   ValidatedProjectAppSession,
   ValidateProjectAppSessionInput,
 } from "@iterate-com/auth-contract/worker";
+import { ItxAuthenticationError } from "../auth.ts";
 import { isSameOriginBrowserRequest } from "./operator-session.ts";
 
 /** A declarative access rule for a project-host web app. */
@@ -13,14 +14,6 @@ export type ProjectAuthCredentials = { type: "from-server-cookie" };
 
 /** Identity proven by the app-origin session, safe for app-defined authorization. */
 export type ProjectAuthActor = Pick<ValidatedProjectAppSession, "userId">;
-
-/** A project-app RPC caller supplied no live session for this app origin. */
-class ProjectAuthenticationError extends Error {
-  constructor() {
-    super("missing or invalid project app authentication");
-    this.name = "ProjectAuthenticationError";
-  }
-}
 
 /** The request fields consumed by the server-side auth implementation. */
 type ProjectAuthRequest = Pick<Request, "body" | "headers" | "method" | "url">;
@@ -62,7 +55,7 @@ export function parseProjectAuthPolicy(value: ProjectAuthPolicy): ProjectAuthPol
     value.policy !== "project-member" ||
     Object.keys(value).length !== 1
   ) {
-    throw new TypeError('Expected { policy: "project-member" }');
+    throw new ItxAuthenticationError();
   }
   return value;
 }
@@ -84,24 +77,24 @@ export async function authenticateProjectRequest(input: {
     input.credentials.type !== "from-server-cookie" ||
     Object.keys(input.credentials).length !== 1
   ) {
-    throw new TypeError('Expected { type: "from-server-cookie" }');
+    throw new ItxAuthenticationError();
   }
   // This credential name is deliberately browser-specific. A WebSocket
   // handshake supplies Origin; requiring it prevents a non-browser caller
   // that somehow obtained the cookie from replaying it without proving the
   // app origin the cookie was minted for.
   if (input.request.headers.get("origin") === null || !isSameOriginBrowserRequest(input.request)) {
-    throw new ProjectAuthenticationError();
+    throw new ItxAuthenticationError();
   }
 
   const token = readCookie(input.request.headers.get("cookie"), AUTH_COOKIE);
-  if (!token) throw new ProjectAuthenticationError();
+  if (!token) throw new ItxAuthenticationError();
   const session = await input.validateSession({
     audience: new URL(input.request.url).origin,
     projectId: input.projectId,
     token,
   });
-  if (!session) throw new ProjectAuthenticationError();
+  if (!session) throw new ItxAuthenticationError();
   return { userId: session.userId };
 }
 

@@ -26,6 +26,13 @@ HTTP-only cookie for an actor and returns an app-specific session capability:
 
 ```ts
 class PublicApi extends RpcTarget {
+  constructor(
+    private readonly itxBinding: ItxBinding,
+    private readonly request: Request,
+  ) {
+    super();
+  }
+
   async authenticate(credentials: ProjectAuthCredentials) {
     using itx = await this.itxBinding.get();
     const actor = await itx.auth

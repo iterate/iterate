@@ -1,8 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
+import { ItxAuthenticationError } from "../auth.ts";
 import {
   authenticateProjectRequest,
   handleProjectAuthFetch,
   handleProjectAuthStart,
+  parseProjectAuthPolicy,
 } from "./project-auth.ts";
 
 const appOrigin = "https://internal--demo.iterate.app";
@@ -118,6 +120,12 @@ describe("project auth partial fetch", () => {
 });
 
 describe("project auth actor exchange", () => {
+  test("rejects malformed policy as a caller authentication outcome", () => {
+    expect(() => parseProjectAuthPolicy({ policy: "other" } as never)).toThrow(
+      ItxAuthenticationError,
+    );
+  });
+
   test("returns the actor for an exact-origin app session without consuming a body", async () => {
     const request = new Request(`${appOrigin}/api`, {
       body: "app-owned-body",
@@ -148,26 +156,24 @@ describe("project auth actor exchange", () => {
     });
   });
 
-  test("rejects missing sessions, absent or hostile origins, and unknown credential shapes", async () => {
+  test("rejects missing or invalid sessions and non-exact origins", async () => {
     const validateSession = vi.fn(async () => ({ expiresAt: 1, userId: "usr_one" }));
-    await expect(
-      authenticateProjectRequest({
-        credentials: { type: "from-server-cookie" },
-        projectId,
-        request: new Request(`${appOrigin}/api`, { headers: { origin: appOrigin } }),
-        validateSession,
-      }),
-    ).rejects.toMatchObject({ name: "ProjectAuthenticationError" });
-    await expect(
-      authenticateProjectRequest({
-        credentials: { type: "from-server-cookie" },
-        projectId,
-        request: new Request(`${appOrigin}/api`, {
-          headers: { cookie: "iterate-project-auth=signed-token" },
+    const invalidHeaders: HeadersInit[] = [
+      { origin: appOrigin },
+      { cookie: "iterate-project-auth=signed-token" },
+      { cookie: "iterate-project-auth=signed-token", origin: "https://evil.example" },
+    ];
+    for (const headers of invalidHeaders) {
+      await expect(
+        authenticateProjectRequest({
+          credentials: { type: "from-server-cookie" },
+          projectId,
+          request: new Request(`${appOrigin}/api`, { headers }),
+          validateSession,
         }),
-        validateSession,
-      }),
-    ).rejects.toMatchObject({ name: "ProjectAuthenticationError" });
+      ).rejects.toBeInstanceOf(ItxAuthenticationError);
+    }
+
     await expect(
       authenticateProjectRequest({
         credentials: { type: "from-server-cookie" },
@@ -175,20 +181,23 @@ describe("project auth actor exchange", () => {
         request: new Request(`${appOrigin}/api`, {
           headers: {
             cookie: "iterate-project-auth=signed-token",
-            origin: "https://evil.example",
+            origin: appOrigin,
           },
         }),
-        validateSession,
+        validateSession: vi.fn(async () => null),
       }),
-    ).rejects.toMatchObject({ name: "ProjectAuthenticationError" });
+    ).rejects.toBeInstanceOf(ItxAuthenticationError);
+  });
+
+  test("rejects unknown credential shapes", async () => {
     await expect(
       authenticateProjectRequest({
         credentials: { type: "from-server-cookie", extra: true } as never,
         projectId,
         request: new Request(`${appOrigin}/api`),
-        validateSession,
+        validateSession: vi.fn(async () => null),
       }),
-    ).rejects.toBeInstanceOf(TypeError);
+    ).rejects.toBeInstanceOf(ItxAuthenticationError);
   });
 });
 
