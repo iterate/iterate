@@ -10,7 +10,10 @@ import {
 } from "iterate/processors/testing";
 import { StreamProcessorRunner } from "iterate/processors";
 import { telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { TelegramProcessor } from "./telegram-processor-implementation.ts";
+import {
+  TELEGRAM_ACCESS_WELCOME_TEXT,
+  TelegramProcessor,
+} from "./telegram-processor-implementation.ts";
 import {
   TELEGRAM_NEW_SESSION_ACK_TEXT,
   TelegramAgentProcessor,
@@ -128,6 +131,55 @@ describe("TelegramProcessor (webhook router)", () => {
     await driver.deliver();
 
     expect(network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`)).toEqual([]);
+  });
+
+  it("welcomes only users newly added by an access-configured event", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(`/integrations/telegram/${CONNECTION}`);
+    const telegramCalls: Array<{ body: Record<string, unknown>; connection: string }> = [];
+    const processor = new TelegramProcessor({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      now: () => 60_000,
+      sendTelegramMessage: async (input) => {
+        telegramCalls.push(input);
+      },
+      telegramAccessSettingsUrl: async () =>
+        `https://os.iterate.com/projects/acme/integrations?telegramAccess=${CONNECTION}`,
+    });
+    const driver = driveProcessor(processor, stream);
+    await stream.append(
+      {
+        type: "events.iterate.com/telegram/created",
+        payload: { config: { connection: CONNECTION } },
+      },
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: ["555"] },
+      },
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: ["555", "777"] },
+      },
+      {
+        type: "events.iterate.com/telegram/access-configured",
+        payload: { allowedUserIds: ["777"] },
+      },
+    );
+
+    await driver.deliver();
+
+    expect(telegramCalls).toEqual([
+      {
+        connection: CONNECTION,
+        body: { chat_id: 555, text: TELEGRAM_ACCESS_WELCOME_TEXT },
+      },
+      {
+        connection: CONNECTION,
+        body: { chat_id: 777, text: TELEGRAM_ACCESS_WELCOME_TEXT },
+      },
+    ]);
   });
 
   it("preserves allowed legacy /new history when the first access policy is configured", async () => {
@@ -259,7 +311,9 @@ describe("TelegramProcessor (webhook router)", () => {
 
     await driver.deliver();
 
-    expect(telegramCalls).toEqual([
+    expect(
+      telegramCalls.filter(({ body }) => String(body.text).startsWith("Access denied.")),
+    ).toEqual([
       {
         connection: CONNECTION,
         body: {
@@ -302,10 +356,12 @@ describe("TelegramProcessor (webhook router)", () => {
 
     await driver.deliver();
 
-    expect(telegramCalls[0]?.body).toMatchObject({ chat_id: -1004242, message_thread_id: 77 });
+    expect(
+      telegramCalls.find(({ body }) => String(body.text).startsWith("Access denied."))?.body,
+    ).toMatchObject({ chat_id: -1004242, message_thread_id: 77 });
   });
 
-  it("does not block allowed traffic when a best-effort denial send fails", async () => {
+  it("does not block allowed traffic when best-effort access notifications fail", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
     const processor = newTelegramRouter({
@@ -346,13 +402,13 @@ describe("TelegramProcessor (webhook router)", () => {
   it("does not resend denial messages while refolding historical webhooks", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(`/integrations/telegram/${CONNECTION}`);
-    const telegramCalls: unknown[] = [];
+    const telegramCalls: Array<{ body: Record<string, unknown>; connection: string }> = [];
     const processor = newTelegramRouter({
       stream,
       path: stream.path,
       projectId: "prj_1",
       now: () => 999_999_999_999,
-      sendTelegramMessage: async (input: unknown) => {
+      sendTelegramMessage: async (input: { body: Record<string, unknown>; connection: string }) => {
         telegramCalls.push(input);
       },
     });
@@ -368,7 +424,9 @@ describe("TelegramProcessor (webhook router)", () => {
 
     await driver.deliver();
 
-    expect(telegramCalls).toEqual([]);
+    expect(
+      telegramCalls.filter(({ body }) => String(body.text).startsWith("Access denied.")),
+    ).toEqual([]);
     expect(network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`)).toEqual([]);
   });
 

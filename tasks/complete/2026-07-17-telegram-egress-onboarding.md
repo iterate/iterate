@@ -9,8 +9,8 @@ stream: /agents/telegram/nustombot/chat-161412593
 
 ## Status
 
-Complete. Telegram agents now receive the working token-safe media download
-recipe, and newly approved Telegram users receive a proactive welcome. Focused
+Complete. Telegram agents now receive a concise token-safe media download
+hint, and newly approved Telegram users receive a proactive welcome. Focused
 and full repository verification are green; no production state was changed.
 
 ## Scope
@@ -24,15 +24,16 @@ and full repository verification are green; no production state was changed.
       `telegram-processors.test.ts`, including the raw `file_id` transcription._
 - [x] After Telegram access configuration takes effect, send a short welcome
       message to each newly allowed user through the connected bot. _Implemented
-      by `setTelegramAccess` through the existing secret-backed Telegram API._
-- [x] Do not greet unchanged IDs or removed IDs; a welcome-send failure must be
-      surfaced rather than silently weakening the successful API response.
-      _The allowlist diff filters recipients; partial success is explicit and
-      the UI refreshes the authoritative allowlist before showing the error._
+      as the Telegram processor's reaction to the durable access event._
+- [x] Do not greet unchanged IDs or removed IDs; a failed welcome must not
+      weaken the access boundary or block later traffic. _The processor diffs
+      consecutive allowlists and runs each notification on its observable
+      non-blocking side-effect lane._
 - [x] Add focused tests for first approval, additions, unchanged access, and
-      Telegram send failures. _Five cases live in `telegram-access.test.ts`._
+      Telegram send failures. _Processor tests cover the access-event reaction
+      and prove failed notifications do not block later allowed traffic._
 - [x] Run the focused OS test lanes and update this task with the verification
-      evidence. _51 focused tests and the 1,829-test OS lane pass; the full
+      evidence. _47 focused tests and the 1,825-test OS lane pass; the full
       repository command is green._
 
 ## Assumptions
@@ -69,16 +70,18 @@ was a prompt/product defect, not an absent platform capability.
 - 2026-07-17: Read the 748-event production journal and reduced it to the
   Telegram transcript. No production state was changed.
 - 2026-07-17: Replaced the refusal instruction and stale transcription note
-  with the exact `getFile` → `getSecret` egress → `agent.addFiles` recipe; bumped
-  the prompt revision so existing Telegram agents receive it.
-- 2026-07-17: Added proactive welcomes after the access processor has folded the
-  new allowlist. Retained and removed IDs are skipped; all recipient attempts
-  settle, and any rejection reports that access already changed.
-- 2026-07-17: Updated the access UI to refresh authoritative state on partial
-  success, regenerated the public itx declarations, and documented Telegram
-  media behaviour.
+  with a `getFile` / secret-backed egress / `agent.addFiles` hint; bumped the
+  prompt revision so existing Telegram agents receive it.
+- 2026-07-17: Added proactive welcomes for newly allowed IDs and documented
+  Telegram media behaviour.
 - 2026-07-17: Verification: focused Vitest 51/51; `pnpm format`; zero-warning
   `pnpm lint`; repository-wide `pnpm typecheck` and `pnpm test`; OS unit result
   1,829 passed, 1 skipped.
-- 2026-07-17: Review simplified the media guidance from an embedded recipe to
-  a short hint naming the available primitives.
+- 2026-07-17: Review confirmed the media guidance should remain a short hint
+  naming the available primitives.
+- 2026-07-18: Review moved the welcome reaction onto the durable
+  `telegram/access-configured` event in the Telegram router; the RPC now only
+  appends the policy and waits for its access boundary.
+- 2026-07-18: Verification after review: focused Vitest 47/47; repository-wide
+  format, zero-warning lint, typecheck, and tests; OS result 1,825 passed and 1
+  skipped.
