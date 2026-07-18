@@ -18,7 +18,7 @@ was 96 consecutive green runs at roughly 2.2–2.9 minutes end to end.
 
 ## Current headline
 
-The current runner is structurally incapable of meeting the target.
+The initial serialized runner was structurally incapable of meeting the target.
 
 A current-main-based green run on PR #2095
 ([Depot attempt vfcpmkjn3d](https://depot.dev/orgs/0p91s0lz49/workflows/28651264rk?job=2zzmk7vm6l&attempt=vfcpmkjn3d))
@@ -88,6 +88,25 @@ The 26 REPL examples continue to use one project per Playwright worker (seven
 instead of twenty-six), and four other stateful Vitest families already use
 exclusive two-project pools. Reuse is parallel across families and workers,
 exclusive only between tests that mutate the same project.
+
+Experiment 5 stepped Vitest from four to six workers and made every independent
+OS deploy prerequisite concurrent. The full check fell to **4m27s**
+([Depot job `vj071601wv`](https://depot.dev/orgs/0p91s0lz49/workflows/98pdvhng3h?job=vj071601wv&attempt=762v3x1xrj)):
+OS deploy 73.2s; the enclosing OS test phase 170.6s; TUI 18s; Vitest 138s; and
+Playwright 144s. All five app deploys overlapped without a Wrangler collision,
+and Playwright passed 56/56 with zero retries. The onboarding smoke still ran
+as a 26.3s serial preflight, so it is now pure removable critical-path time.
+
+Vitest did absorb one retry in `Project repos, workers, runScript, and dynamic
+worker refs compose`; that makes the run faster, but not healthy. Cloudflare
+trace `02b03f1398b01482439b540682b3e1ba` shows the first project's create and
+`__describe` both succeeded, then the seeded `hello` app fetch returned HTTP
+503 with `x-iterate-worker-building: 1`. This is the product's documented cold
+build contract, not a capacity rejection. `project/ready` proves the root
+worker's readiness; it does not promise that every named seeded app artifact is
+already built. The test now polls only that exact marked response within a
+bounded deadline, surfaces any other response immediately, and keeps the same
+project instead of rerolling the entire composition test.
 
 That run also exposed an independent resource leak in slot handover. Reset took
 131.3s and deleted only 100 AI Search instances before its 90s deadline. The
@@ -251,6 +270,7 @@ observable.
 | Slot handover is a primary current bottleneck.                                              | Confirmed                   | PR #2116 reset took 131.3s. AI Search cleanup hit its 90s deadline after 100 deletes, left 498 instances, and the test run grew the namespace to 551.                                                  | Make cleanup converge, then remove the source of per-test instance churn; preserve long-lived worker infrastructure.   |
 | Cloudflare cannot tolerate parallel e2e traffic.                                            | Refuted as a blanket claim  | All three OS lanes passed concurrently at a configured peak of 17 workers. The run had two retries and transport warnings, which require individual diagnoses rather than suite-wide serialization.    | Keep the lanes parallel; trace the two retries and load-step only the implicated operations.                           |
 | A project can be reported ready before every fresh app ingress can read its Artifacts repo. | Confirmed / partial fix     | Experiment 4's exact request returned HTTP 500 because Workers RPC dropped `FORK_IN_PROGRESS` and preserved only the service-authored materialization message.                                         | Classify the exact message to building 503, then strengthen or narrow the `project/ready` contract; reject raw errors. |
+| `project/ready` implies every named seeded app is already warm.                             | Refuted / modelled          | Experiment 5's sole retry followed successful project birth; the first `hello` app fetch returned the exact documented marked building 503.                                                            | Poll only the marked cold-build response at the app boundary; never reroll the whole fresh project.                    |
 | Counter click can be torn down before its fire-and-forget fetch leaves the browser.         | Confirmed / pending preview | Experiment 4 had a successful page and WebSocket but no increment POST; the failure artifact showed count 0, an enabled button, and no progress UI when the 1ms guard fired.                           | Keep `incrementing…` visible until the WebSocket repaint; surface fetch/socket failure as product error UI.            |
 
 ## Immediate experiment order
@@ -273,11 +293,15 @@ observable.
    Keep explicit fresh projects for birth, catalog-wide isolation, lifecycle,
    and destructive coverage.
 6. Restore the previously proven six Vitest workers and run all independent OS
-   deploy prerequisites concurrently. The measured aggregate peak becomes 21,
-   while project reuse reduces the birth component of that load.
-7. Remove tests from the deployed lane where the asserted behavior is
+   deploy prerequisites concurrently. **Complete:** OS deploy fell to 73.2s and
+   Vitest from 210s to 138s. The only retry was an exact cold-build lifecycle
+   response, not a capacity rejection.
+7. Run the onboarding smoke in parallel, step Vitest to eight workers and
+   Playwright to twelve, and audit the explicit aggregate peak of 30. Preserve
+   every lane's separate watchdog, logs, and exit status.
+8. Remove tests from the deployed lane where the asserted behavior is
    deterministic/local.
-8. Re-run until the whole check is under 3m repeatedly with zero retry telemetry
+9. Re-run until the whole check is under 3m repeatedly with zero retry telemetry
    and coherent post-run state.
 
 ## Cost and architecture watchpoints
@@ -337,10 +361,15 @@ observable.
   The seeded-counter failure emitted no increment POST at all; its artifact
   proved the fire-and-forget click had no pending UI, so the seeded app now
   reports `incrementing…` until the WebSocket confirms the new count.
-- Next: preview the exact-message fix, six-worker Vitest lane, and fully
-  parallel OS deploy preparation; audit every retry and trace before expanding
-  reuse further. PR comments mirror each experiment and result rather than
-  rewriting history here.
+- 2026-07-18: experiment 5 completed in 4m27s (OS deploy 73.2s; OS tests
+  170.6s; TUI 18s; Vitest 138s; Playwright 144s). Six Vitest workers materially
+  lowered the critical path. Playwright was retry-free; Vitest's one retry was
+  traced to the documented seeded-app cold-build 503 after successful project
+  creation, not aggregate capacity.
+- Next: run smoke as a fourth parallel lane, step the bounded peak to 30, and
+  verify the exact cold-build poll on preview. Audit every retry and trace
+  before expanding reuse further. PR comments mirror each experiment and
+  result rather than rewriting history here.
 
 <details>
 <summary>All 162 failed preview attempts</summary>

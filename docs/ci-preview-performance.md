@@ -39,37 +39,39 @@ seconds and run alongside OS.
   it does not order their deploys. Reserve `previewDeployAfter` for a real
   start-after constraint that cannot be represented by a readiness barrier.
 - **Parallelism is explicit per deployed slot, not accidental.** The OS
-  Vitest catalogue uses four workers with at most two concurrent tests each;
-  Playwright uses eight fully-parallel workers. Each suite therefore peaks at
-  eight remote tests. TUI, Vitest, and Playwright overlap against one OS slot
-  for an aggregate configured peak of 17. Each sublane emits start/finish
-  timing markers and retry telemetry. A capacity failure must stay visible and
-  be fixed; serializing independent suites made a clean OS phase exceed six
-  minutes. The four apps' independent preview suites also run concurrently
+  Vitest catalogue uses eight workers with at most two concurrent tests each;
+  Playwright uses twelve fully-parallel workers. The create/onboarding smoke,
+  TUI, Vitest, and Playwright overlap against one OS slot for an aggregate
+  configured peak of 30. Each sublane emits start/finish timing markers and
+  retry telemetry. A capacity failure must stay visible and be fixed;
+  serializing independent suites made a clean OS phase exceed six minutes. The
+  four apps' independent preview suites also run concurrently
   (`scripts/preview/preview.ts`).
 - **File-level parallelism plus bounded intra-file concurrency.** Every Vitest
-  test provisions its own project, so files are independent (`fileParallelism`,
-  `maxWorkers: 4`, `sequence.concurrent`, `maxConcurrency: 2`, `retry: 1` in
+  file either uses unique state or leases from a bounded family-owned project
+  pool, so files are independent (`fileParallelism`, `maxWorkers: 8`,
+  `sequence.concurrent`, `maxConcurrency: 2`, `retry: 1` in
   `apps/os/e2e/vitest.config.ts`). The deployed slot — not the Depot runner —
   is the bottleneck. The real speedup for the slow itx suite is splitting its
   monolith file so file-level parallelism covers it.
-- **Playwright runs 8 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
-  — every spec creates its own fixture project, and the suite owns the slot
-  while it runs.
-- **One sequential create-saga smoke runs before the burst.** The first real
-  project create pays the genuine cold-start costs (cold DO chain, repo seed,
-  worker probe) once, sequentially, instead of surfacing as rotating timeout
-  flakes across the concurrent suites — and fails loudly if the slot is
-  broken. The curl-round HTTP warmups that used to accompany it existed to
+- **Playwright runs 12 workers, `fullyParallel`, in CI**
+  (`playwright.config.ts`). Specs isolate mutable state with unique namespaces,
+  worker-owned project fixtures, or an explicit fresh project when creation is
+  what the spec proves.
+- **The create/onboarding smoke is an ordinary parallel lane.** It retains one
+  production-shaped project-birth and onboarding proof with its own watchdog;
+  it is not a serial warm-up barrier. Cold-start defects must be modelled by the
+  operation that encounters them, not displaced into a preflight that adds its
+  healthy duration to every run. The old curl-round HTTP warmups existed to
   absorb post-deploy edge 499/522s; those were zombie worker routes (routes
   visible in the API but dead at the edge). Routes now ride the generated
   wrangler config as ensure-only (the worker script is never deleted, so a
   deploy can't strand them) with proxied DNS ensured by `ensureProxiedDnsRecord`
   (`scripts/lib/deploy-helpers.ts`), and slot teardowns leave routes parked, so
   the curls are gone.
-- **The chromium install overlaps the smoke.** `playwright install chromium`
-  hits no slot, so it runs in the background while the smoke runs and the
-  vitest lanes start, instead of blocking the specs.
+- **Chromium setup overlaps all remote lanes.** Its download hits no slot, so
+  it runs in the background while smoke, TUI, and Vitest start, instead of
+  blocking the specs.
 - **GitHub API calls retry transient 5xx.** The preview script fetches PR
   context from GitHub's REST API at the start of each step; that API
   intermittently 5xxs (its "Unicorn!" 503 page failed a run mid-flight). The
@@ -94,23 +96,25 @@ creep visible. If you see one:
 
 **Rules that keep the concurrency safe and the pipeline fast:**
 
-- **Every e2e test must self-provision** (its own uniquely-suffixed project,
-  fixture, marker). Shared mutable state breaks `sequence.concurrent`. This is
-  what makes test-level parallelism safe — don't introduce a test that depends
-  on another test's side effects.
+- **Every e2e test must isolate its mutable state.** Prefer unique resource
+  namespaces inside a worker/family-owned project pool. Create a fresh project
+  only when project birth/lifecycle/destruction is the behavior under test or
+  isolation cannot be bounded and verified. Tests must never depend on another
+  test's side effects.
 - **Prefer test-level parallelism over adding lanes.** A new check that runs
   _after_ the existing lanes adds its whole duration to the critical path. If
   you must add coverage, fold it into an existing concurrent lane.
 - **Never serialize what can self-provision.** The apps' suites and the vitest
   lanes run concurrently on purpose; keep it that way.
-- **Keep the create-saga smoke.** Removing it brings back the rotating
-  "saw 0 events" cold-start flakes across the concurrent suites, which fail or
-  retry and make runs _slower_, not faster.
-- **Mind slot load, not just runner load.** More Playwright workers or higher
-  `maxConcurrency` increases concurrent pressure on the _deployed slot_, which
-  is where the known stream-delivery race lives
-  (`tasks/streams-event-delivery-flake-under-concurrent-load.md`). Flakes cost
-  retry time. Raise concurrency only with evidence it stays green.
+- **Keep the create/onboarding proof, but never as a warm-up barrier.** It runs
+  in parallel and owns its failure. Every other suite must correctly handle the
+  lifecycle states its operation documents.
+- **Measure slot load, not folklore.** More Playwright workers or higher
+  `maxConcurrency` increases concurrent pressure on the deployed slot. Step it
+  with lane timings, retry telemetry, and exact traces; a traced product defect
+  is not evidence for suite-wide throttling. The 2026-07-18 audit observed 176
+  successful creates and no capacity rejection while the remote lanes
+  overlapped.
 
 **How to measure:**
 

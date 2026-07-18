@@ -1131,7 +1131,8 @@ async function requestRepoCreate(input: {
       predicate: (event) =>
         event.payload?.projectId === input.projectId && event.payload?.path === path,
       // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
-      // for the cold-slot outliers). Preview CI warms slots before the suites.
+      // for cold-slot outliers). Test orchestration must not hide those outliers
+      // behind a synthetic serial warm-up.
       timeoutMs: 60_000,
     }),
   );
@@ -5533,7 +5534,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       eventTypes: ["events.iterate.com/project/ready"],
       // Tight on purpose: the saga should complete in seconds (see
       // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-      // be fixed, not waited out). Preview CI warms slots before the suites.
+      // be fixed, not waited out). Test orchestration must not hide those
+      // outliers behind a synthetic serial warm-up.
       timeoutMs: args?.timeoutMs ?? 60_000,
     });
   }

@@ -15,6 +15,9 @@ import { z } from "zod";
  */
 export const WORKER_SERVE_HEADER = "x-iterate-worker-serve";
 
+/** Marks a 503 as "the worker is cold-building" on the fetch lane. */
+export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
+
 /** Marks a 500 as "the worker's build failed and no previous build exists" on
  * the fetch lane — the terminal sibling of WORKER_BUILDING_HEADER. */
 export const WORKER_BUILD_FAILED_HEADER = "x-iterate-worker-build-failed";

@@ -90,15 +90,19 @@ describe("retries live in exactly one layer", () => {
     }
   });
 
-  it("the os preview lane wraps all three sub-lanes in plain watchdogs — no lane retry", () => {
+  it("the os preview lane wraps all four sub-lanes in plain watchdogs — no lane retry", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
     expect(script).toContain(
       `timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts`,
+    );
+    expect(script).toContain(
+      `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts`,
     );
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e`);
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec`);
     // Exactly one invocation each: a second occurrence means a retry wrapper came back.
     expect(script.split("pnpm exec tsx e2e/tui-test/run.ts")).toHaveLength(2);
+    expect(script.split("pnpm exec tsx e2e/vitest/onboarding-smoke.ts")).toHaveLength(2);
     expect(script.split("pnpm e2e --project node")).toHaveLength(2);
     expect(script.split("pnpm --dir ../.. spec")).toHaveLength(2);
   });
@@ -111,11 +115,14 @@ describe("retries live in exactly one layer", () => {
     expect(source).toContain("const ATTEMPTS = 2;");
   });
 
-  it("bounds the onboarding smoke and streams its progress before the suites start", () => {
+  it("bounds the onboarding smoke in a joined parallel lane", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
     expect(script).toContain(
-      `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
+      `run_logged_lane smoke /tmp/os-preview-smoke.log timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
     );
+    expect(script).toContain('SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?');
+    expect(script).toContain("cat /tmp/os-preview-smoke.log");
+    expect(script).toContain('[ "$SMOKE_OK" -eq 0 ]');
   });
 });
 

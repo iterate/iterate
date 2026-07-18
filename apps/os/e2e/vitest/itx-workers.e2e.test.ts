@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
+import { WORKER_BUILDING_HEADER } from "../../src/domains/workers/worker-serve-info.ts";
+import type { Project } from "../../src/itx-api.generated.ts";
 import { itxScript } from "../test-support/itx-script-builder.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -17,6 +19,11 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
 
   // The seeded root worker now routes via x-iterate-app (static homepage
   // otherwise); the hello app keeps the path-echo this assertion relies on.
+  // project/ready proves the root worker loaded, not that every named seeded
+  // app has finished its own first build. Warm exactly that documented
+  // lifecycle state here rather than rerolling this entire project/composition
+  // test when the first fetch returns its marked building response.
+  await waitForSeededHelloWorker(project);
   const scriptResult = await itxScript(project.capabilityHost).execute(async (itx) => {
     const response = await itx.worker.fetch(
       new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
@@ -723,3 +730,52 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
     whoami: `agent ${projectId}:${agentPath}`,
   });
 });
+
+async function waitForSeededHelloWorker(project: Pick<Project, "worker">): Promise<void> {
+  const deadline = Date.now() + 90_000;
+  let buildingResponses = 0;
+
+  for (;;) {
+    const response = await project.worker.fetch(
+      new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
+    );
+    let waitMs = 2_000;
+    try {
+      const isBuilding =
+        response.status === 503 && response.headers.get(WORKER_BUILDING_HEADER) === "1";
+      if (!isBuilding) {
+        if (!response.ok) {
+          const body = (await response.text()).slice(0, 500);
+          throw new Error(`Seeded hello worker returned HTTP ${response.status}: ${body}`);
+        }
+        if (buildingResponses > 0) {
+          console.log(
+            `[worker-readiness] seeded hello app became ready after ${buildingResponses} marked building response(s)`,
+          );
+        }
+        return;
+      }
+
+      buildingResponses += 1;
+      const retryAfterSeconds = Number(response.headers.get("retry-after"));
+      if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        waitMs = retryAfterSeconds * 1_000;
+      }
+    } finally {
+      disposeRpcResult(response);
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `Seeded hello worker stayed in its marked building state for ${buildingResponses} responses`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, remainingMs)));
+  }
+}
+
+function disposeRpcResult(value: unknown): void {
+  const dispose = (value as { [Symbol.dispose]?: () => void } | null | undefined)?.[Symbol.dispose];
+  dispose?.call(value);
+}

@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
+import { WORKER_BUILDING_HEADER } from "../../src/domains/workers/worker-serve-info.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 /** The Response surface these tests read — what both lanes of fetchApp
@@ -83,7 +84,9 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
     const deadline = Date.now() + 120_000;
     for (;;) {
       const response = await fetchApp(appHostPrefix, init);
-      if (response.status !== 503 || Date.now() > deadline) return response;
+      const isBuilding =
+        response.status === 503 && response.headers.get(WORKER_BUILDING_HEADER) === "1";
+      if (!isBuilding || Date.now() > deadline) return response;
       await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
   };

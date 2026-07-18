@@ -1576,7 +1576,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       [
         "set -euo pipefail",
         // Remove stale retry-telemetry files FIRST — before any step that can
-        // exit the lane early (the smoke gate below). They survive from a
+        // exit the lane early. They survive from a
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
@@ -1585,27 +1585,18 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // let it overlap the smoke and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
-        // Create-saga smoke: one sequential real project create pays the
-        // cold-start costs (cold DO chain, repo seed, worker probe) that
-        // otherwise surface as rotating "saw 0 events" timeout flakes across
-        // the concurrent e2e suites (see tasks/os-cold-create-latency.md),
-        // and fails loudly if the slot is broken before the suites start.
-        // The curl-round HTTP warmups that used to run alongside it were
-        // treating symptoms of zombie routes (routes dead at the edge →
-        // 522s) — structurally gone now that deploys never delete workers
-        // (routes are declared in wrangler config; DNS is create-only).
-        // Keep the gate visible and separately bounded. Before this watchdog,
-        // an RPC wedge before waitForEvent's 90s greeting timeout produced no
-        // suite output and survived until Depot killed the entire 10m job.
-        `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
-        // The built-package PTY spec, e2e vitest lane, and Playwright specs all
-        // hit the same deployed slot, but they are independent suites and must
-        // overlap: serializing them made the OS phase structurally exceed six
-        // minutes on a clean run. Their configured peak is explicit — TUI 1 +
-        // vitest 8 + Playwright 8 = 17 remote tests — and the lane markers
-        // below make each component's wall time visible. If that load exposes
-        // a product or preview-capacity defect, fail and diagnose it instead of
-        // hiding it behind permanent serialization.
+        // The create/onboarding smoke, built-package PTY spec, e2e Vitest lane,
+        // and Playwright specs all hit the same deployed slot, but they are
+        // independent suites and must overlap: serializing them made the OS
+        // phase structurally exceed six minutes on a clean run. Their
+        // configured peak is explicit — smoke 1 + TUI 1 + Vitest 16 +
+        // Playwright 12 = 30 remote tests — and the lane markers below make
+        // each component's wall time visible. The 2026-07-18 trace audit saw
+        // 176/176 project creates succeed under the overlapping lanes; the
+        // remaining retry was an explicitly marked cold-build response, not a
+        // capacity rejection. If this bounded load exposes a product or
+        // preview-capacity defect, fail and diagnose it instead of hiding it
+        // behind permanent serialization.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -1624,17 +1615,26 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // emits a duration marker, including failures and watchdog exits.
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        // Keep this production-shaped birth/onboarding proof independently
+        // bounded, but do not use it as a synthetic warm-up barrier. A wedge
+        // before waitForEvent's 90s greeting timeout used to emit no suite
+        // output until Depot killed the whole job; the lane watchdog and join
+        // preserve that failure without adding its healthy ~26s to the
+        // critical path.
+        `run_logged_lane smoke /tmp/os-preview-smoke.log timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
         `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
-        // A failed Chromium install must not orphan the two remote background
+        // A failed Chromium install must not orphan the three remote background
         // lanes. Record it, join every child, replay their logs, then fail once.
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
         `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
+        'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
+        "cat /tmp/os-preview-smoke.log",
         "cat /tmp/os-preview-vitest.log",
         "cat /tmp/os-preview-tui.log",
-        '[ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
+        '[ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
     collectRetryTelemetry: async ({ repositoryRoot }) => {

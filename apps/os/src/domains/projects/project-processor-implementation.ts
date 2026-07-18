@@ -14,7 +14,7 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
-import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { WORKER_BUILDING_HEADER } from "../workers/worker-serve-info.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";

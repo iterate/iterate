@@ -99,11 +99,12 @@ const sharedResolve = {
 export default defineConfig({
   test: {
     // Run-scheduler options live at the ROOT test level — this is where vitest
-    // reads them, even with `projects`. Parallel in CI: each test provisions
-    // its own project against a deployed slot, so FILES are independent.
+    // reads them, even with `projects`. Parallel in CI: each file either uses
+    // unique state or a bounded family-owned project pool, so FILES are
+    // independent.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // 6 workers × maxConcurrency 2 = peak ~12 concurrent tests. History of
+    // 8 workers × maxConcurrency 2 = peak ~16 concurrent tests. History of
     // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
     // (DO-storage timeouts), 4×3 = ~12 still produced rotating
     // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
@@ -112,10 +113,13 @@ export default defineConfig({
     // 176 successful creates without a capacity failure. The failures seen at
     // lower concurrency were product lifecycle defects, not evidence that the
     // preview slot needed protection from independent tests. The preview
-    // runner overlaps this peak with Playwright's eight workers and one TUI
-    // test: aggregate peak 21. Keep that load visible; project reuse removes
-    // needless births, while fresh-project lifecycle tests still exercise it.
-    maxWorkers: 6,
+    // runner overlaps this peak with Playwright's twelve workers, one TUI test,
+    // and the one-project onboarding smoke: aggregate peak 30. Experiment 5
+    // cut Vitest from 210s to 138s at six workers; its only retry was a traced,
+    // explicitly marked cold-build response rather than a capacity rejection.
+    // Keep that load visible; project reuse removes needless births, while
+    // fresh-project lifecycle tests still exercise it.
+    maxWorkers: 8,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
     passWithNoTests: true,

@@ -4,7 +4,7 @@ import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
 import { isWorkerBuildFailedError } from "./artifact-store.ts";
 import { isWorkerBuildInProgressError } from "./worker-loader.ts";
-import { OVERLAY_OPT_OUT_HEADER } from "./worker-serve-info.ts";
+import { OVERLAY_OPT_OUT_HEADER, WORKER_BUILDING_HEADER } from "./worker-serve-info.ts";
 import { workerBuildFailedResponse, workerBuildingPageHtml } from "./worker-serve-overlay.ts";
 
 /**
@@ -59,7 +59,7 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
  * untouched already gives browsers the auto-refresh page and WebSocket
  * clients a retryable close.
  */
-export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
+export { WORKER_BUILDING_HEADER };
 
 /** The one cold-build response every fetch-lane hop answers with: a polling
  * page for browsers (meta refresh for no-JS clients), retry-after + the

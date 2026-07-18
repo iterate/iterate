@@ -1,12 +1,11 @@
 /**
  * Smoke: create a project as admin and watch the onboarding agent greet.
- * Runs manually and as the preview test lane's sequential entry gate
- * (scripts/preview/preview.ts), where it pays the create-saga cold-start
- * costs before the concurrent suites begin.
+ * Runs manually and as its own bounded preview sub-lane
+ * (scripts/preview/preview.ts), in parallel with the other independent suites.
  *
  *   doppler run -- pnpm exec tsx e2e/vitest/onboarding-smoke.ts [baseUrl]
  *
- * Two attempts, a fresh project each — an attempt IS this gate's "test", so
+ * Two attempts, a fresh project each — an attempt IS this lane's "test", so
  * per the fleet retry policy (docs/testing.md#retries-and-timeouts) it gets
  * exactly one retry, same as every vitest/playwright test. It used to run
  * with none at all: a single 90s greeting tail took down the whole run, as
