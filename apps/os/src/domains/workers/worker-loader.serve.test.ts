@@ -23,6 +23,9 @@ const h = vi.hoisted(() => {
   const kv = new FakeKv();
   const state = {
     buildCalls: [] as string[],
+    // When set, executeWorkerBuild blocks until the gate resolves — lets the
+    // stampede-guard tests hold a build "in flight" deterministically.
+    buildGate: undefined as Promise<void> | undefined,
     failBuilds: false,
     failTransport: false,
     files: { "worker.ts": "v1" } as Record<string, string>,
@@ -30,6 +33,7 @@ const h = vi.hoisted(() => {
   };
   const executeWorkerBuild = async (input: { buildKey: string; files: Record<string, string> }) => {
     state.buildCalls.push(input.buildKey);
+    if (state.buildGate !== undefined) await state.buildGate;
     if (state.failBuilds) {
       // Mirror the real backend's classification contract: genuine build
       // failures carry the NAME (matching is name-based because the real
@@ -313,5 +317,85 @@ describe("resolveWorkerSource serve matrix", () => {
     });
     expect(resolved.serveInfo).toBeUndefined();
     expect(resolved.mainModule).toBe("main.js");
+  });
+
+  // A project worker is loaded independently by every stream delivering to
+  // it, so one commit fans out into many concurrent cold resolves of ONE
+  // build key. The stampede guard makes the followers wait on the first
+  // resolve's build instead of each launching a duplicate (observed live:
+  // 100 pool builds for 27 distinct keys drowned the builder pool).
+  test("concurrent same-key blocking resolves share one build", async () => {
+    setCommit("c1", "repo-sg-v1", "SG1");
+    const callsBefore = h.state.buildCalls.length;
+    let releaseBuild!: () => void;
+    h.state.buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    vi.useFakeTimers();
+    try {
+      const first = resolveWorkerSource({
+        projectId: "prj_sg",
+        source: repoSource("/repos/sg"),
+        waitUntil,
+      });
+      // The follower must start only after the leader's build is actually in
+      // flight — the guard's presence signal, not test luck.
+      while (h.state.buildCalls.length === callsBefore) await vi.advanceTimersByTimeAsync(1);
+      const second = resolveWorkerSource({
+        projectId: "prj_sg",
+        source: repoSource("/repos/sg"),
+        waitUntil,
+      });
+      releaseBuild();
+      await vi.advanceTimersByTimeAsync(2_500);
+      const [leader, follower] = await Promise.all([first, second]);
+      expect(h.state.buildCalls.length).toBe(callsBefore + 1);
+      expect(follower.modules).toEqual(leader.modules);
+      expect(follower.serveInfo).toMatchObject({ status: "fresh" });
+    } finally {
+      h.state.buildGate = undefined;
+      vi.useRealTimers();
+    }
+  });
+
+  test("a waiting resolve replays the leader's genuine build failure", async () => {
+    setCommit("c1", "repo-sgf-v1", "SGF1");
+    const callsBefore = h.state.buildCalls.length;
+    h.state.failBuilds = true;
+    let releaseBuild!: () => void;
+    h.state.buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    vi.useFakeTimers();
+    try {
+      const first = resolveWorkerSource({
+        projectId: "prj_sgf",
+        source: repoSource("/repos/sgf"),
+        waitUntil,
+      });
+      while (h.state.buildCalls.length === callsBefore) await vi.advanceTimersByTimeAsync(1);
+      const second = resolveWorkerSource({
+        projectId: "prj_sgf",
+        source: repoSource("/repos/sgf"),
+        waitUntil,
+      });
+      const outcomes = Promise.allSettled([first, second]);
+      releaseBuild();
+      await vi.advanceTimersByTimeAsync(2_500);
+      const [leader, follower] = await outcomes;
+      expect(leader.status).toBe("rejected");
+      expect(follower.status).toBe("rejected");
+      for (const outcome of [leader, follower]) {
+        expect(
+          isWorkerBuildFailedError((outcome as PromiseRejectedResult).reason),
+          "both resolves classify as the same genuine build failure",
+        ).toBe(true);
+      }
+      expect(h.state.buildCalls.length).toBe(callsBefore + 1);
+    } finally {
+      h.state.buildGate = undefined;
+      h.state.failBuilds = false;
+      vi.useRealTimers();
+    }
   });
 });
