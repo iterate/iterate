@@ -380,7 +380,7 @@ function createStreamRuntime(
   let subscriptionHandle: { unsubscribe(): void } | undefined;
   let writerRole: WriterRole | undefined;
   // Set when this tab found a newer-deploy tab's writer lock held and resigned
-  // (see resignToSupersedingWriter): a queued request on that NEWER lock, whose
+  // (see watchSupersedingWriter): a queued request on that NEWER lock, whose
   // grant is exactly the newer writer's death — the wake-up to re-elect.
   let supersededWatch: WriterRole | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1305,7 +1305,23 @@ function createStreamRuntime(
         });
         if (!ownsRuntime()) return undefined;
         if (supersedingLock !== undefined) {
-          resignToSupersedingWriter(supersedingLock);
+          // Resign: give up writership (keeping the connection — a follower
+          // still appends and reads runtimeState) and let the newer tab own
+          // the shared mirror; its writes reach this tab's reactive queries
+          // through the database change channel like any follower's. Reloading
+          // this tab is the real upgrade; until then the watch below waits for
+          // the newer writer to be truly gone (closed, or rolled back) —
+          // which is when re-electing can win cleanly.
+          console.warn(
+            `[stream ${args.streamPath} ${slug}] a newer app version's tab owns this stream mirror; standing by as a follower (reload this tab to take over)`,
+            { supersedingLock },
+          );
+          writerRole?.release();
+          writerRole = undefined;
+          snapshot = { ...snapshot, subscriptionStatus: "follower" };
+          emitSnapshot();
+          liveAgentStateChannel.request();
+          watchSupersedingWriter(supersedingLock);
           return undefined;
         }
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
@@ -1647,35 +1663,23 @@ function createStreamRuntime(
     }
   }
 
-  // A newer-deploy tab's writer lock is held: this tab's bundle is the stale
-  // one. Give up writership (keeping the connection — a follower still appends
-  // and reads runtimeState) and let the newer tab own the shared mirror; its
-  // writes reach this tab's reactive queries through the database change
-  // channel like any follower's. Reloading this tab is the real upgrade; until
-  // then, a queued request on the newer tab's own lock is a zero-polling death
-  // watch — granted only when that tab is gone (closed, or navigated away),
-  // which is when re-electing can win cleanly (and, if the newer bundle never
-  // comes back — a rollback — legitimately rebuild to our schema).
-  function resignToSupersedingWriter(newerLockName: string) {
-    console.warn(
-      `[stream ${args.streamPath} ${slug}] a newer app version's tab owns this stream mirror; standing by as a follower (reload this tab to take over)`,
-      { newerLockName },
-    );
-    writerRole?.release();
-    writerRole = undefined;
-    snapshot = { ...snapshot, subscriptionStatus: "follower" };
-    emitSnapshot();
-    liveAgentStateChannel.request();
-    watchSupersedingWriter(newerLockName);
-  }
-
   // A grant only proves the newer writer is gone RIGHT NOW — a healthy newer
-  // tab also releases its lock on every routine reconnect (laptop sleep, socket
-  // churn). Debounce the takeover: re-check after a short delay, and only a
-  // writer that STAYED gone triggers re-election. A cycling one re-holds its
-  // lock within its own re-election and this tab just re-arms the watch.
-  const SUPERSEDED_RECHECK_DELAY_MS = 2_000;
+  // tab also releases its lock on every routine reconnect and only re-holds
+  // after its backoff, redial, and re-election complete. That gap can
+  // legitimately reach scheduleReconnect's 30s backoff ceiling (ingest
+  // self-heal, connect failures) plus the 15s dial deadline, so the takeover
+  // re-check must wait it out: only a writer that STAYED gone triggers
+  // re-election; a cycling one re-holds its lock and this tab just re-arms the
+  // watch. The asymmetry is deliberate — a false takeover deletes the newer
+  // tab's projection (the flicker this exists to prevent), while a slow
+  // takeover only delays live updates in a tab that is stale anyway (reads
+  // keep serving the last-written mirror, and reloading is always the fast
+  // path).
+  const SUPERSEDED_RECHECK_DELAY_MS = 60_000;
 
+  // The zero-polling death watch on the newer tab's own writer lock: a
+  // queued request granted only when that tab is gone (closed, navigated
+  // away, or rolled back).
   function watchSupersedingWriter(newerLockName: string) {
     supersededWatch?.release();
     // SHARED mode: granted only once the exclusive holder is gone, and other
