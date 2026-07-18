@@ -1589,8 +1589,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // and Playwright specs all hit the same deployed slot, but they are
         // independent suites and must overlap: serializing them made the OS
         // phase structurally exceed six minutes on a clean run. Their
-        // configured peak is explicit — smoke 1 + TUI 1 + Vitest 16 +
-        // Playwright 12 = 30 remote tests — and the lane markers below make
+        // configured peak is explicit — smoke 1 + TUI 1 + Vitest 24 +
+        // Playwright 12 = 38 remote tests — and the lane markers below make
         // each component's wall time visible. The 2026-07-18 trace audit saw
         // 176/176 project creates succeed under the overlapping lanes; the
         // remaining retry was an explicitly marked cold-build response, not a
