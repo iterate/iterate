@@ -61,14 +61,6 @@ type ActiveSubscription = {
 const SUBSCRIBE_RETRY_MS = 10_000;
 const SUBSCRIBE_TIMEOUT_MS = 15_000;
 
-export type StreamRuntimeLiveSourceOptions = {
-  /**
-   * Report a possibly half-open shared transport to its owner. The verifier,
-   * not this source, decides whether the socket should be retired.
-   */
-  reportTransportSuspicion?: () => void;
-};
-
 function sameSnapshot(left: StreamRuntimeLiveSnapshot, right: StreamRuntimeLiveSnapshot): boolean {
   return (
     left.value === right.value &&
@@ -77,6 +69,14 @@ function sameSnapshot(left: StreamRuntimeLiveSnapshot, right: StreamRuntimeLiveS
     left.refreshing === right.refreshing
   );
 }
+
+type StreamRuntimeLiveSourceOptions = {
+  /**
+   * Report a possibly half-open shared transport to its owner. The verifier,
+   * not this source, decides whether the socket should be retired.
+   */
+  reportTransportSuspicion?: () => void;
+};
 
 export function createStreamRuntimeLiveSource(
   initialConnection?: StreamRuntimeLiveConnection,
