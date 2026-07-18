@@ -176,11 +176,6 @@ export type AgentDisplayState =
   | "waiting_for_timer"
   | "idle";
 
-export type AgentRuntimeDisplayState = Extract<
-  AgentDisplayState,
-  "running_code" | "waiting_for_model" | "queued" | "idle"
->;
-
 export function applyAgentSummaryUpdate(
   summary: AgentSummary,
   update: AgentSummaryUpdate,
@@ -284,9 +279,7 @@ export function deriveAgentRuntime(
 
 /** Deterministic work state only. Agent-authored waiting requirements are a
  * separate attention signal and must never replace this runtime truth in UI. */
-export function deriveAgentRuntimeDisplayState(
-  runtime: AgentRuntimeRecord | undefined,
-): AgentRuntimeDisplayState {
+export function deriveAgentRuntimeDisplayState(runtime: AgentRuntimeRecord | undefined) {
   const current = runtime ?? ZERO_AGENT_RUNTIME;
   if (current.runningScripts > 0) return "running_code";
   if (current.llmRequests.requested > 0 || current.llmRequests.started > 0) {
