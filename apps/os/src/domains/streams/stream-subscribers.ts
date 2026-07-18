@@ -624,7 +624,6 @@ export class StreamSubscribers {
           // attempts count too (the wire carried them either way).
           const dispatchAtMs = this.#hooks.now();
           this.#hooks.recordEgress(matched.length, deliveredBytes);
-          this.#hooks.runtimeChanged();
           try {
             if (config.delivery.mode === "webhook") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
@@ -1101,7 +1100,6 @@ export class StreamSubscribers {
           connection.bytesSent += deliveredBytes;
           connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
           this.#hooks.recordEgress(events.length, deliveredBytes);
-          this.#hooks.runtimeChanged();
           const currentState = this.#hooks.coreState();
           if (currentState.projectId === undefined || currentState.path === undefined) {
             throw new Error(

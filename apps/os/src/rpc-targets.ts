@@ -331,7 +331,7 @@ import type {
   SecretCreateInput,
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
-import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-live-state.ts";
+import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -382,8 +382,6 @@ import {
 } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import { agentCreationForPath } from "./domains/agents/agent-defaults.ts";
-
-export { LiveStateRpcTarget };
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -503,7 +501,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
         readEvents: "Create a pager for bounded event pages.",
         removeCrossPost: "Remove a cross-post configured by crossPostTo.",
-        runtimeLiveState: "Subscribe to the stream core and delivery-runtime debug state.",
+        liveState: "Subscribe to the stream core and delivery-runtime debug state.",
         subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
@@ -720,7 +718,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * been collecting); latency stats fields are absent until a real sample
    * exists — no value is ever synthesized. Calling this also requests a
    * throttled mutual-ping round over the live connections (observer-driven
-   * sampling); new debug surfaces should subscribe through `runtimeLiveState`.
+   * sampling); live debug surfaces should subscribe through `liveState`.
    */
   async runtimeState(): Promise<StreamRuntimeDebugState> {
     const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
@@ -728,14 +726,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** Push-driven stream runtime state for polling-free debug surfaces. */
-  get runtimeLiveState(): LiveStateRpc<StreamRuntimeDebugState> {
+  get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
     return new LiveStateRelayRpcTarget<StreamRuntimeDebugState>(
       () =>
-        (
-          this.durableObjectStub as unknown as {
-            runtimeLiveState: PromiseLike<LiveStateRpc<StreamRuntimeDebugState>>;
-          }
-        ).runtimeLiveState,
+        this.durableObjectStub as unknown as LiveStateDurableObjectStub<StreamRuntimeDebugState>,
     );
   }
 
@@ -1362,9 +1356,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
   get liveState(): LiveStateRpc<RepoProcessorState> {
     return new LiveStateRelayRpcTarget<RepoProcessorState>(
-      () =>
-        (this.#durableObjectStub as unknown as LiveStateDurableObjectStub<RepoProcessorState>)
-          .liveState,
+      () => this.#durableObjectStub as unknown as LiveStateDurableObjectStub<RepoProcessorState>,
     );
   }
 }
@@ -1454,10 +1446,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
 
   get liveState(): LiveStateRpc<AgentCollectionProcessorState> {
     return new LiveStateRelayRpcTarget<AgentCollectionProcessorState>(
-      () =>
-        (
-          this.#durableObjectStub as unknown as LiveStateDurableObjectStub<AgentCollectionProcessorState>
-        ).liveState,
+      () => this.#durableObjectStub,
     );
   }
 
@@ -1672,11 +1661,8 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   liveState(path: string): LiveStateRpc<SandboxProcessorState> {
     return new LiveStateRelayRpcTarget<SandboxProcessorState>(
       async () =>
-        await (
-          (
-            await this.#claimedStub(path)
-          ).stub as unknown as LiveStateDurableObjectStub<SandboxProcessorState>
-        ).liveState,
+        (await this.#claimedStub(path))
+          .stub as unknown as LiveStateDurableObjectStub<SandboxProcessorState>,
     );
   }
 
@@ -2216,9 +2202,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
   get liveState(): LiveStateRpc<SecretDescription> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
-      () =>
-        (this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>)
-          .liveState,
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
     );
   }
 }
@@ -4420,8 +4404,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       // Workers generates the concrete Agent DO stub, while this generic relay
       // accepts its live-state surface. The DO implements that surface; the
       // double assertion only bridges those RPC types.
-      () =>
-        (this.durableObjectStub as unknown as LiveStateDurableObjectStub<AgentLiveState>).liveState,
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<AgentLiveState>,
     );
   }
 
@@ -5696,7 +5679,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   get liveState(): LiveStateRpc<ProjectLiveState> {
-    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo.liveState);
+    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo);
   }
 
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
@@ -7037,34 +7020,37 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 }
 
-/** A Durable Object stub exposing the conventional `.liveState` node. */
+/** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
 type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
 
 /**
- * Isolate-side relay for any DO-hosted LiveState node. The source resolves the
- * chosen RPC property (`liveState`, `runtimeLiveState`, etc.) because Workers
- * RPC property reads cannot be pipelined through. Mirrors
- * {@link ProcessorRelayRpcTarget}.
+ * Isolate-side relay for a DO-hosted `.liveState` node — awaits the DO stub's
+ * `.liveState` property (a Workers RPC property read can't be pipelined through)
+ * then forwards. Mirrors {@link ProcessorRelayRpcTarget}.
  */
 class LiveStateRelayRpcTarget<State>
   extends IterateRpcRelay<"LiveStateRpc">
   implements LiveStateRpc<State>
 {
-  readonly #liveState: () => LiveStateRpc<State> | PromiseLike<LiveStateRpc<State>>;
+  readonly #stub: () =>
+    | LiveStateDurableObjectStub<State>
+    | PromiseLike<LiveStateDurableObjectStub<State>>;
 
-  constructor(liveState: () => LiveStateRpc<State> | PromiseLike<LiveStateRpc<State>>) {
+  constructor(
+    stub: () => LiveStateDurableObjectStub<State> | PromiseLike<LiveStateDurableObjectStub<State>>,
+  ) {
     super();
-    this.#liveState = liveState;
+    this.#stub = stub;
   }
 
   async get(): Promise<State> {
-    return await (await this.#liveState()).get();
+    return await (await (await this.#stub()).liveState).get();
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    return await (await this.#liveState()).subscribe(onUpdate);
+    return await (await (await this.#stub()).liveState).subscribe(onUpdate);
   }
 }
 

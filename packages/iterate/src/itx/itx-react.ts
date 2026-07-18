@@ -24,7 +24,8 @@
  *
  *   READ ONCE   useItxQuery({ key, query })              project read; SUSPENDS
  *               useIterateSessionQuery({ key, query })   session read; NON-suspending (shell)
- *   LIVE STATE  useLiveState((itx) => itx.liveState, selector)  snapshot + diffs; never suspends
+ *   LIVE STATE  useLiveState((itx) => itx.liveState, selector)  project snapshot + diffs
+ *               useIterateSessionLiveState(...)                 session snapshot + diffs
  *   SUBSCRIBE   useItxSubscription((itx) => handle, deps)   raw event stream (escape hatch)
  *   MOUNT       <ProjectScope slug>   ambient project + socket pre-warm (no provider)
  *
@@ -265,11 +266,11 @@ export function useIterateSessionQuery<T>({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. Live subscriptions: useReconnectableItxEffect() — a reconnect-aware effect
+// 3. Live subscriptions: a reconnect-aware effect
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The cancellation contract an async {@link useReconnectableItxEffect} setup
+ * The cancellation contract an async reconnectable setup
  * runs under. `disposed` flips the moment THIS run is superseded — unmount,
  * deps change, or a reconnect re-run — and it flips BEFORE the run's own
  * cleanup executes. Everything a setup does after an `await` must be gated on
@@ -277,6 +278,12 @@ export function useIterateSessionQuery<T>({
  * late continuation would overwrite the successor's state.
  */
 type ItxEffectSignal = { readonly disposed: boolean };
+
+type RootConnection<Root> = {
+  key: unknown;
+  connect?: () => Promise<Root>;
+  missingMessage: string;
+};
 
 /**
  * Set up a live itx subscription (or any mount-scoped async itx work) and tear
@@ -288,7 +295,7 @@ type ItxEffectSignal = { readonly disposed: boolean };
  * whole retry story for a failed dial: the failing dial has already published
  * its (paced) successor, which re-runs the effect — no timer needed here.
  *
- *   useReconnectableItxEffect(async (itx, signal) => {
+ *   useReconnectableEffect(async (itx, signal) => {
  *     const sub = await itx.streams.get("/logs").subscribe({ processEventBatch });
  *     if (signal.disposed) { sub.unsubscribe(); return; }
  *     return () => sub.unsubscribe();
@@ -298,18 +305,16 @@ type ItxEffectSignal = { readonly disposed: boolean };
  * `itx` resolves from `opts.slug`, else the ambient <ProjectScope>.
  * `enabled: false` renders it fully inert.
  */
-function useReconnectableItxEffect(
-  setup: (itx: ProjectStub, signal: ItxEffectSignal) => Promise<void | (() => void)>,
+function useReconnectableEffect<Root>(
+  setup: (root: Root, signal: ItxEffectSignal) => Promise<void | (() => void)>,
   deps: unknown[],
+  connection: RootConnection<Root>,
   opts?: {
-    slug?: string;
     enabled?: boolean;
     onConnectionError?: (error: unknown) => void;
   },
 ): void {
-  const scopedSlug = useContext(ProjectScopeContext);
   const enabled = opts?.enabled ?? true;
-  const slug = opts?.slug ?? scopedSlug;
   // A socket death replaces the generation; that number in the deps re-runs the
   // effect on it (the reconnect recovery).
   const generation = useSyncExternalStore(
@@ -321,12 +326,12 @@ function useReconnectableItxEffect(
     if (!enabled) return;
     const signal = { disposed: false };
     let cleanup: void | (() => void);
-    if (slug !== undefined) {
+    if (connection.connect !== undefined) {
       // Await the connection INSIDE the effect: mounting never suspends the tree.
-      connectItx(slug).then(
-        (itx) => {
+      connection.connect().then(
+        (root) => {
           if (signal.disposed) return;
-          setup(itx, signal).then(
+          setup(root, signal).then(
             (late) => {
               // Setup resolved after this run was superseded: run its cleanup now.
               if (signal.disposed) late?.();
@@ -334,7 +339,7 @@ function useReconnectableItxEffect(
             },
             (error: unknown) => {
               if (!signal.disposed) {
-                console.error("useReconnectableItxEffect: setup failed", error);
+                console.error("reconnectable itx effect setup failed", error);
               }
             },
           );
@@ -342,15 +347,11 @@ function useReconnectableItxEffect(
         (error: unknown) => {
           if (signal.disposed) return;
           if (opts?.onConnectionError) opts.onConnectionError(error);
-          else console.error("useReconnectableItxEffect: connect failed", error);
+          else console.error("reconnectable itx effect connect failed", error);
         },
       );
     } else {
-      // No resolvable project: fail loudly rather than sit on "connecting"
-      // forever (a subscription with no <ProjectScope>).
-      const error = new Error(
-        "useReconnectableItxEffect needs a project: pass { slug } or render under <ProjectScope slug>.",
-      );
+      const error = new Error(connection.missingMessage);
       if (opts?.onConnectionError) opts.onConnectionError(error);
       else console.error(error.message);
     }
@@ -358,8 +359,8 @@ function useReconnectableItxEffect(
       signal.disposed = true;
       cleanup?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- connection + caller's deps; setup read fresh per run
-  }, [enabled, slug, generation, ...deps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connection key + caller's deps; setup/read factory are fresh per run
+  }, [enabled, connection.key, generation, ...deps]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -379,7 +380,7 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
  * mounted, owning the whole recovery story so consumers never hand-roll it:
  *
  *   - reconnect → re-subscribes on the fresh generation (via
- *     {@link useReconnectableItxEffect}'s generation dep); a failed dial rides
+ *     the reconnectable effect's generation dep; a failed dial rides
  *     the same dep — the failing dial has already published a paced successor;
  *   - SILENT death — DO restart, dropped callback, half-open TCP — → the
  *     `watchItxSubscription` watchdog re-subscribes (and, on a ping
@@ -402,12 +403,12 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
  * subscribes to a specific project (e.g. ⌘K reaching a project from the app
  * shell) without suspending the tree.
  */
-export function useItxSubscription(
-  subscribe: (itx: ProjectStub) => Promise<ItxLiveSubscriptionHandle>,
+function useRecoveringSubscription<Root>(
+  subscribe: (root: Root) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
-  opts?: { enabled?: boolean; slug?: string },
+  connection: RootConnection<Root>,
+  enabled = true,
 ): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
-  const enabled = opts?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
   const [state, setState] = useState<{ status: ItxSubscriptionStatus; error?: string }>({
     status: "connecting",
@@ -419,13 +420,13 @@ export function useItxSubscription(
     if (!enabled) setState({ status: "connecting" });
   }, [enabled]);
 
-  useReconnectableItxEffect(
-    async (effectItx, signal) => {
+  useReconnectableEffect(
+    async (root, signal) => {
       setState({ status: "connecting" });
 
       let subscription: ItxLiveSubscriptionHandle;
       try {
-        const pending = subscribe(effectItx);
+        const pending = subscribe(root);
         let timeout: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([
           pending,
@@ -496,8 +497,8 @@ export function useItxSubscription(
       };
     },
     [epoch, ...deps],
+    connection,
     {
-      slug: opts?.slug,
       enabled,
       // A failed connect never reaches setup, so without this the hook would sit
       // on "connecting" forever. No timer: the failed dial has already published
@@ -518,6 +519,26 @@ export function useItxSubscription(
   }, []);
 
   return { ...state, refresh };
+}
+
+export function useItxSubscription(
+  subscribe: (itx: ProjectStub) => Promise<ItxLiveSubscriptionHandle>,
+  deps: unknown[],
+  opts?: { enabled?: boolean; slug?: string },
+): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
+  const scopedSlug = useContext(ProjectScopeContext);
+  const slug = opts?.slug ?? scopedSlug;
+  return useRecoveringSubscription(
+    subscribe,
+    deps,
+    {
+      key: slug,
+      ...(slug === undefined ? {} : { connect: () => connectItx(slug) }),
+      missingMessage:
+        "useItxSubscription needs a project: pass { slug } or render under <ProjectScope slug>.",
+    },
+    opts?.enabled,
+  );
 }
 
 /**
@@ -553,17 +574,64 @@ export function useLiveState<State, Selected = State>(
   error?: string;
   refresh: () => void;
 } {
+  const scopedSlug = useContext(ProjectScopeContext);
+  const slug = opts?.slug ?? scopedSlug;
+  return useLiveStateForRoot(
+    live,
+    selector,
+    deps,
+    {
+      key: slug,
+      ...(slug === undefined ? {} : { connect: () => connectItx(slug) }),
+      missingMessage:
+        "useLiveState needs a project: pass { slug } or render under <ProjectScope slug>.",
+    },
+    opts?.enabled,
+  );
+}
+
+/** Session-scoped sibling of {@link useLiveState}, for deployment-wide live nodes. */
+export function useIterateSessionLiveState<State, Selected = State>(
+  live: (session: SessionStub) => LiveStateRpc<State>,
+  selector: (state: State) => Selected,
+  deps: unknown[] = [],
+  opts?: { enabled?: boolean },
+): {
+  value: Selected | undefined;
+  status: ItxSubscriptionStatus;
+  error?: string;
+  refresh: () => void;
+} {
+  return useLiveStateForRoot(
+    live,
+    selector,
+    deps,
+    {
+      key: "session",
+      connect: connectIterateSession,
+      missingMessage: "useIterateSessionLiveState could not resolve the session.",
+    },
+    opts?.enabled,
+  );
+}
+
+function useLiveStateForRoot<Root, State, Selected>(
+  live: (root: Root) => LiveStateRpc<State>,
+  selector: (state: State) => Selected,
+  deps: unknown[],
+  connection: RootConnection<Root>,
+  enabled = true,
+): {
+  value: Selected | undefined;
+  status: ItxSubscriptionStatus;
+  error?: string;
+  refresh: () => void;
+} {
   // useState, not useMemo: the store holds the accumulated live value.
   const [store] = useState(() => createLiveStateStore<State>());
-  // The node this hook points at — the caller's deps AND the EFFECTIVE project
-  // (exactly what re-points the subscription): `opts.slug` if given, else the
-  // ambient <ProjectScope>. The ambient slug matters — the router does NOT
-  // remount route components on param-only navigation, so /projects/a/repos →
-  // /projects/b/repos changes the scope under a mounted hook, and without it
-  // in the key project A's state would render under project B until B's first
-  // push.
-  const scopedSlug = useContext(ProjectScopeContext);
-  const nodeKey = [opts?.slug ?? scopedSlug, ...deps];
+  // The node key includes the project/session connection and the caller's deps.
+  // A route param change therefore cannot render the previous node's state.
+  const nodeKey = [connection.key, ...deps];
   // Node change = a different node: drop the held state (its slice is
   // meaningless now).
   // eslint-disable-next-line react-hooks/exhaustive-deps -- node identity by design
@@ -572,14 +640,14 @@ export function useLiveState<State, Selected = State>(
   // The sink needs `refresh` to resync on a gap, but `refresh` comes from the
   // subscription below — a ref bridges the cycle (the sink only fires later).
   const refreshRef = useRef<() => void>(() => {});
-  const subscription = useItxSubscription(
-    async (itx) => {
+  const subscription = useRecoveringSubscription(
+    async (root) => {
       // The stale-sink guard: revision lines RESTART per subscription, so a
       // straggler push from a dying subscription could apply a wrong patch — or
       // read as a gap and tear the healthy subscription down. Marking the sink
       // stale on unsubscribe closes both.
       let stale = false;
-      const handle = await live(itx).subscribe((update) => {
+      const handle = await live(root).subscribe((update) => {
         if (stale) return;
         store.apply(update, () => refreshRef.current());
       });
@@ -595,7 +663,8 @@ export function useLiveState<State, Selected = State>(
       };
     },
     deps,
-    { slug: opts?.slug, enabled: opts?.enabled },
+    connection,
+    enabled,
   );
   // In an effect, not during render (a discarded concurrent render must not
   // write refs); `refresh` is stable, so this runs once.

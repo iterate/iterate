@@ -15,6 +15,7 @@ import {
   connectItx,
   connectIterateSession,
   reportTransportSuspicion,
+  useIterateSessionLiveState,
   useLiveState,
 } from "iterate/react";
 import type { Stream } from "../itx-api.generated.ts";
@@ -192,6 +193,22 @@ function MirroredProjectStreamView({
 
   const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
+  const projectStreamRuntime = useLiveState(
+    (itx) => itx.streams.get(streamPath).liveState,
+    (state) => state,
+    [streamPath],
+    {
+      enabled: panels.processorsPanelOpen && projectId !== null,
+      ...(projectId === null ? {} : { slug: projectId }),
+    },
+  );
+  const deploymentStreamRuntime = useIterateSessionLiveState(
+    (session) => session.streams.get(streamPath).liveState,
+    (state) => state,
+    [streamPath],
+    { enabled: panels.processorsPanelOpen && projectId === null },
+  );
+  const streamRuntime = projectId === null ? deploymentStreamRuntime : projectStreamRuntime;
   const activeMode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
   // Trimmed: a whitespace-only query must read as "no filter", not a LIKE
@@ -371,7 +388,10 @@ function MirroredProjectStreamView({
       onClose={panels.closeProcessorsPanel}
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
-      streamRuntimeLive={store.streamRuntimeLive}
+      onRefreshStreamRuntime={streamRuntime.refresh}
+      streamRuntime={streamRuntime.value}
+      streamRuntimeError={streamRuntime.error}
+      streamRuntimeFetching={streamRuntime.status === "connecting"}
       tokenUsage={caps.agentFeed ? (presentedAgentUiState?.tokenUsage ?? null) : null}
     />
   );
@@ -691,7 +711,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
 /**
  * The processors sheet's one on-demand debug accessor: reduced state for the
  * focused processor. Stream runtime diagnostics arrive separately through
- * the store-owned LiveState, including the head offset used for lag math.
+ * the LiveState subscription, including the head offset used for lag math.
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;

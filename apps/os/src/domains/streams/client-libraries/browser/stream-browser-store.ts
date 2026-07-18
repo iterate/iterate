@@ -77,10 +77,6 @@ import {
   raceWithTimeout,
   StepTimeoutError,
 } from "./stream-runtime-utils.ts";
-import {
-  createStreamRuntimeLiveSource,
-  type StreamRuntimeLiveSource,
-} from "./stream-runtime-live-source.ts";
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 const DEFAULT_STREAM_PROJECT_ID = "default";
@@ -205,7 +201,7 @@ export type StreamServerRuntimeState = Awaited<ReturnType<Stream["runtimeState"]
 /**
  * This browser's own REAL stream metrics — every value is measured, never
  * synthesized. `transportRttMs` samples come from timing RPCs the store makes
- * anyway (liveness probes, nudges, debug reads). `subscriber` is the hosted
+ * anyway (liveness probes, nudges, debug polls). `subscriber` is the hosted
  * processor's self-measured consumption report (append round trip,
  * consume-own-append loop, ingest stats) — present only on the leader tab,
  * which is the tab that actually consumes; followers report `undefined` and
@@ -226,23 +222,16 @@ export type StreamRpcResult<T> = Promise<T> & Disposable;
 
 export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
-  /** Push-driven server runtime diagnostics, active only while locally observed. */
-  readonly streamRuntimeLive: StreamRuntimeLiveSource;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
   runtimeState(): StreamRpcResult<StreamRuntimeState>;
   /**
    * The full server runtime debug view, RTT-timed: each call also lands one
-   * transport-RTT sample in {@link StreamBrowserStore.metrics}.
+   * transport-RTT sample in {@link StreamBrowserStore.metrics}. The processors
+   * panel polls this while open.
    */
   debugRuntimeState(): Promise<StreamServerRuntimeState>;
-  /**
-   * This browser's own measured metrics (see {@link BrowserStreamMetrics}).
-   * The snapshot identity is stable until a producer records a measurement;
-   * subscribe through {@link StreamBrowserStore.subscribeMetrics} for updates.
-   */
+  /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). Poll-friendly. */
   metrics(): BrowserStreamMetrics;
-  /** Subscribe only to producer-recorded browser metric changes. */
-  subscribeMetrics(listener: () => void): () => void;
   /** Current rendered agent state, including this connection's live-only ephemeral tail. */
   agentUiState(): AgentUiState | null;
   /**
@@ -276,7 +265,7 @@ export type StreamBrowserStore = Disposable & {
 };
 
 // --- Runtime registry: one runtime per (projectId, path) -------------------------------
-// It leans on the store's listener lifecycles as its refcount (self-removing on dispose);
+// It leans on the store's own listener lifecycle as its refcount (self-removing on dispose);
 // the shared per-path OPFS database it holds is refcounted separately (stream-database-registry.ts).
 
 const runtimeRegistry = new Map<
@@ -387,15 +376,6 @@ function createStreamRuntime(
   };
 
   const listeners = new Set<() => void>();
-  const metricsListeners = new Set<() => void>();
-  const streamRuntimeLive = createStreamRuntimeLiveSource(undefined, {
-    // The runtime source can detect a half-open subscribe before a handle
-    // exists (and therefore before its handle watchdog can start). Report that
-    // suspicion through the SAME transport the current stream connection rides;
-    // the shared-session verifier retains sole ownership of socket retirement.
-    reportTransportSuspicion: () =>
-      (stream?.reportTransportSuspicion ?? transport.resetTransport)?.(),
-  });
   let stream: BrowserStreamClient | undefined;
   let subscriptionHandle: { unsubscribe(): void } | undefined;
   let writerRole: WriterRole | undefined;
@@ -481,7 +461,7 @@ function createStreamRuntime(
   let lastBatchEvents = 0;
   let ingestFailures = 0;
   // Real transport-RTT samples from RPCs the store makes anyway (probes,
-  // nudges, debug reads). Success-only: a timed-out call is not a sample.
+  // nudges, debug polls). Success-only: a timed-out call is not a sample.
   const transportRtt = new LatencyRing();
   // The leader election's live composite drive. Its (primary member's)
   // `subscriberMetrics` is the ONE place this browser's consumption metrics
@@ -505,16 +485,6 @@ function createStreamRuntime(
     };
   }
 
-  // useSyncExternalStore requires referentially stable snapshots. Metrics
-  // producers replace this value and notify the metrics listeners exactly
-  // when a measurement changes; readers never need to poll.
-  let metricsSnapshot = readMetrics();
-
-  function publishMetrics(): void {
-    metricsSnapshot = readMetrics();
-    for (const listener of metricsListeners) listener();
-  }
-
   /**
    * Time one RPC into the transport-RTT ring. Success only — and bounded:
    * callers race these calls against timeouts, and a call the caller already
@@ -527,10 +497,7 @@ function createStreamRuntime(
     const t0 = Date.now();
     return promise.then((value) => {
       const elapsed = Date.now() - t0;
-      if (elapsed <= GUARDED_CALL_TIMEOUT_MS) {
-        transportRtt.record(elapsed, Date.now());
-        publishMetrics();
-      }
+      if (elapsed <= GUARDED_CALL_TIMEOUT_MS) transportRtt.record(elapsed, Date.now());
       return value;
     });
   }
@@ -684,7 +651,6 @@ function createStreamRuntime(
     pendingIngestEvents = 0;
     stopLivenessProbe();
     stopSubscriptionElection();
-    streamRuntimeLive.setConnection(undefined);
     stream?.[Symbol.dispose]();
     stream = undefined;
     snapshot = { ...snapshot, connectionError, connectionStatus: "reconnecting" };
@@ -1251,7 +1217,6 @@ function createStreamRuntime(
         lastDeliveryArrivalAt = undefined;
         arrivalBaselineAt = Date.now();
         stream = connection;
-        streamRuntimeLive.setConnection(connection.runtimeLiveState);
         // A follower can still append / read runtimeState, so readiness is "connection
         // open", not "leader/subscribed". Unblock anyone awaiting reconnect (B2).
         resolveReadyWaiters();
@@ -1515,13 +1480,6 @@ function createStreamRuntime(
             return rtt === null ? undefined : rtt.p50 / 2;
           },
         });
-        const ping: typeof capabilities.ping = (input) => {
-          const response = capabilities.ping(input);
-          // hostRuntimeCapabilities records a ping observation only once an
-          // RTT-derived one-way estimate exists.
-          if (transportRtt.stats() !== null) publishMetrics();
-          return response;
-        };
         return {
           processor,
           replayAfterOffset,
@@ -1532,7 +1490,7 @@ function createStreamRuntime(
             },
           },
           getRuntimeState: capabilities.getRuntimeState,
-          ping,
+          ping: capabilities.ping,
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -1581,7 +1539,6 @@ function createStreamRuntime(
         currentProcessor = processor;
         nudgeSkipWarned = false;
         snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
-        publishMetrics();
         emitSnapshot();
         startLivenessProbe();
         // Note: we deliberately do NOT reset ingestFailureCount here. A clean resubscribe does
@@ -1678,7 +1635,6 @@ function createStreamRuntime(
         ingestFailureCount = 0;
         lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.scannedThroughOffset);
         updateLiveAgentUiState(processor.agentUiState, { publish: true });
-        if (currentProcessor === processor) publishMetrics();
       });
       ingestChain = run.catch(() => undefined);
       try {
@@ -1783,16 +1739,12 @@ function createStreamRuntime(
     // In-flight own-append correlations belong to the dying subscription; the
     // fresh election replays, and a replayed delivery must not close a stale
     // loop with an inflated sample.
-    const stoppedProcessor = currentProcessor;
-    if (stoppedProcessor !== undefined) {
-      stoppedProcessor.subscriberMetrics.clearPendingAppends();
-      currentProcessor = undefined;
-    }
+    currentProcessor?.subscriberMetrics.clearPendingAppends();
+    currentProcessor = undefined;
     snapshot = {
       ...snapshot,
       subscriptionStatus: "idle",
     };
-    if (stoppedProcessor !== undefined) publishMetrics();
     if (!disposed) emitSnapshot();
   }
 
@@ -2108,7 +2060,6 @@ function createStreamRuntime(
     stopLivenessProbe();
     stopSubscriptionElection();
     liveAgentStateChannel[Symbol.dispose]();
-    streamRuntimeLive.dispose();
     stream?.[Symbol.dispose]();
     stream = undefined;
     offDatabaseChange();
@@ -2138,14 +2089,12 @@ function createStreamRuntime(
     hasConnection: stream !== undefined,
     hasSubscription: subscriptionHandle !== undefined,
     hasHostedProcessor: currentProcessor !== undefined,
-    metrics: metricsSnapshot,
+    metrics: readMetrics(),
     listeners: listeners.size,
-    metricsListeners: metricsListeners.size,
   }));
 
   function dispose() {
     listeners.clear();
-    metricsListeners.clear();
     debugRegistry.delete(`${args.projectId} ${args.streamPath} ${slug}`);
     if (disposed) return;
     if (disposeTimer !== undefined) {
@@ -2197,7 +2146,6 @@ function createStreamRuntime(
 
   const runtime: StreamBrowserStore = {
     streamDatabase,
-    streamRuntimeLive,
     appendBatch(appendArgs) {
       // The itx Stream capability appends variadically; the batch arg shape is
       // kept for consumers of the store.
@@ -2228,13 +2176,12 @@ function createStreamRuntime(
               (max, event) => Math.max(max, event.offset),
               0,
             );
-            if (maxCommittedOffset > 0 && currentProcessor !== undefined) {
-              currentProcessor.subscriberMetrics.noteAppendCommitted({
+            if (maxCommittedOffset > 0) {
+              currentProcessor?.subscriberMetrics.noteAppendCommitted({
                 maxCommittedOffset,
                 t0,
                 atMs: Date.now(),
               });
-              publishMetrics();
             }
             return committed;
           } catch (error) {
@@ -2268,37 +2215,15 @@ function createStreamRuntime(
         timed(Promise.resolve(rpc.runtimeState() as Promise<StreamServerRuntimeState>)),
       );
     },
-    metrics: () => metricsSnapshot,
-    subscribeMetrics(listener) {
-      if (disposed) return () => {};
-      if (disposeTimer !== undefined) {
-        clearTimeout(disposeTimer);
-        disposeTimer = undefined;
-      }
-      metricsListeners.add(listener);
-      start();
-      return () => {
-        metricsListeners.delete(listener);
-        if (listeners.size === 0 && metricsListeners.size === 0 && !disposed) {
-          scheduleIdleDispose();
-        }
-      };
-    },
+    metrics: readMetrics,
     agentUiState: () => liveAgentUiState,
     noteExternalAppend({ maxCommittedOffset, t0 }) {
-      if (
-        !Number.isFinite(maxCommittedOffset) ||
-        maxCommittedOffset <= 0 ||
-        currentProcessor === undefined
-      ) {
-        return;
-      }
-      currentProcessor.subscriberMetrics.noteAppendCommitted({
+      if (!Number.isFinite(maxCommittedOffset) || maxCommittedOffset <= 0) return;
+      currentProcessor?.subscriberMetrics.noteAppendCommitted({
         maxCommittedOffset,
         t0,
         atMs: Date.now(),
       });
-      publishMetrics();
     },
     getProcessorRuntimeState(args) {
       return callWhenReady(
@@ -2307,7 +2232,6 @@ function createStreamRuntime(
     },
     async clearLocalDatabase() {
       stopSubscriptionElection();
-      streamRuntimeLive.setConnection(undefined);
       stream?.[Symbol.dispose]();
       stream = undefined;
       await discardLocalMirror();
@@ -2336,9 +2260,7 @@ function createStreamRuntime(
       start();
       return () => {
         listeners.delete(listener);
-        if (listeners.size === 0 && metricsListeners.size === 0 && !disposed) {
-          scheduleIdleDispose();
-        }
+        if (listeners.size === 0 && !disposed) scheduleIdleDispose();
       };
     },
     [Symbol.dispose]() {
@@ -2350,7 +2272,7 @@ function createStreamRuntime(
     if (disposeTimer !== undefined) clearTimeout(disposeTimer);
     disposeTimer = setTimeout(() => {
       disposeTimer = undefined;
-      if (listeners.size === 0 && metricsListeners.size === 0) dispose();
+      if (listeners.size === 0) dispose();
     }, IDLE_DISPOSE_GRACE_MS);
   }
 
@@ -2369,7 +2291,7 @@ function createStreamRuntime(
     // re-armed, not cancelled outright, so an acquire from a DISCARDED render
     // that never subscribes still lets the runtime dispose.
     retain() {
-      if (disposed || listeners.size > 0 || metricsListeners.size > 0) return;
+      if (disposed || listeners.size > 0) return;
       scheduleIdleDispose();
     },
   };

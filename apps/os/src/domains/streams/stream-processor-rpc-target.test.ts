@@ -16,7 +16,6 @@ describe("StreamRpcTarget", () => {
         subscriptions: {},
         metrics: {
           measuredSince: new Date(0).toISOString(),
-          reportedAt: new Date(1).toISOString(),
           ingress: {},
           egress: {},
         },
@@ -34,7 +33,7 @@ describe("StreamRpcTarget", () => {
     class TestStreamRpcTarget extends StreamRpcTarget {
       override get durableObjectStub() {
         return {
-          runtimeLiveState: Promise.resolve({ get, subscribe }),
+          liveState: Promise.resolve({ get, subscribe }),
           runtimeState: runtimeStatePoll,
         } as never;
       }
@@ -45,11 +44,11 @@ describe("StreamRpcTarget", () => {
       projectId: "prj_test",
     });
 
-    await expect(stream.runtimeLiveState.get()).resolves.toBe(runtimeState);
+    await expect(stream.liveState.get()).resolves.toBe(runtimeState);
     const updates: unknown[] = [];
-    await expect(
-      stream.runtimeLiveState.subscribe((update) => void updates.push(update)),
-    ).resolves.toBe(handle);
+    await expect(stream.liveState.subscribe((update) => void updates.push(update))).resolves.toBe(
+      handle,
+    );
 
     expect(get).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();

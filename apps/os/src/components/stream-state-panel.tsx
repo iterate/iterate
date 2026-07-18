@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
@@ -11,15 +11,9 @@ import type {
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProcessorRuntimeState } from "iterate/processors";
-import type { Stream } from "../itx-api.generated.ts";
-import type {
-  StreamRuntimeLiveSnapshot,
-  StreamRuntimeLiveSource,
-} from "~/domains/streams/client-libraries/browser/stream-runtime-live-source.ts";
+import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
 import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
-import { ageStreamThroughputMetrics } from "~/lib/stream-throughput.ts";
-import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import {
   AgentPrettyState,
   CorePrettyState,
@@ -78,13 +72,7 @@ export function PresenceAvatar({
  * the stream's runtime LiveState while this sheet is open. Clicking a
  * subscriber drills into its announced contract and self-reported metrics.
  */
-export type StreamRuntimePanelState = Awaited<ReturnType<Stream["runtimeState"]>>;
-
-export type { StreamRuntimeLiveSnapshot, StreamRuntimeLiveSource };
-export type StreamRuntimeLiveViewSource = Pick<
-  StreamRuntimeLiveSource,
-  "subscribe" | "getSnapshot" | "refresh"
->;
+export type StreamRuntimePanelState = StreamRuntimeDebugState;
 
 /**
  * Desired-state slice of a durable subscription, lifted from the latest
@@ -173,7 +161,10 @@ export function StreamStatePanel({
   onClose,
   onClearClientDatabase,
   getProcessorRuntimeState,
-  streamRuntimeLive,
+  onRefreshStreamRuntime,
+  streamRuntime,
+  streamRuntimeError,
+  streamRuntimeFetching,
   tokenUsage = null,
 }: {
   open: boolean;
@@ -189,22 +180,13 @@ export function StreamStatePanel({
   onClose: () => void;
   onClearClientDatabase: () => Promise<void>;
   getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeState | null>;
-  streamRuntimeLive: StreamRuntimeLiveViewSource;
+  onRefreshStreamRuntime: () => void;
+  streamRuntime: StreamRuntimePanelState | undefined;
+  streamRuntimeError: string | undefined;
+  streamRuntimeFetching: boolean;
   /** Agent context fullness + lifetime totals; shown in vitals when present. */
   tokenUsage?: AgentUiTokenUsage | null;
 }) {
-  const subscribeToStreamRuntime = useCallback(
-    (listener: () => void) => (open ? streamRuntimeLive.subscribe(listener) : () => {}),
-    [open, streamRuntimeLive],
-  );
-  const readStreamRuntime = useCallback(() => streamRuntimeLive.getSnapshot(), [streamRuntimeLive]);
-  const streamRuntimeSnapshot = useSyncExternalStore(
-    subscribeToStreamRuntime,
-    readStreamRuntime,
-    readStreamRuntime,
-  );
-  const streamRuntime = streamRuntimeSnapshot.value;
-  const streamRuntimeError = streamRuntimeSnapshot.error;
   const streamMaxOffset = readNumber(streamRuntime?.coreProcessorState, "maxOffset");
   const entries = useMemo(
     () => buildProcessorPanelEntries(presence, streamRuntime),
@@ -219,13 +201,12 @@ export function StreamStatePanel({
   const [runtimeStateLoad, setRuntimeStateLoad] = useState<ProcessorRuntimeStateLoad>({
     status: "idle",
   });
-  const [refreshingSubscriptionKey, setRefreshingSubscriptionKey] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const focusedRuntimeStateLoad = useMemo<ProcessorRuntimeStateLoad>(() => {
     if (focusedSubscriptionKey == null) return { status: "idle" };
 
     if (focusedKind === "core") {
-      // Error first: the live source deliberately keeps its last value through
+      // Error first: the LiveState hook deliberately keeps its last value through
       // reconnects, but a drill-in must still surface the transport failure
       // instead of silently presenting that retained value as current.
       if (streamRuntimeError !== undefined) {
@@ -257,12 +238,10 @@ export function StreamStatePanel({
 
   useEffect(() => {
     if (!open || focusedSubscriptionKey == null || focusedKind === "core") {
-      setRefreshingSubscriptionKey(null);
       return;
     }
 
     if (!focusedConnected) {
-      setRefreshingSubscriptionKey(null);
       setRuntimeStateLoad({
         status: "loaded",
         subscriptionKey: focusedSubscriptionKey,
@@ -272,16 +251,10 @@ export function StreamStatePanel({
     }
 
     let disposed = false;
-    setRefreshingSubscriptionKey(focusedSubscriptionKey);
-    setRuntimeStateLoad((current) =>
-      current.status === "loaded" && current.subscriptionKey === focusedSubscriptionKey
-        ? current
-        : { status: "loading", subscriptionKey: focusedSubscriptionKey },
-    );
+    setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
     void getProcessorRuntimeState(focusedSubscriptionKey)
       .then((runtimeState) => {
         if (!disposed) {
-          setRefreshingSubscriptionKey(null);
           setRuntimeStateLoad({
             status: "loaded",
             subscriptionKey: focusedSubscriptionKey,
@@ -291,7 +264,6 @@ export function StreamStatePanel({
       })
       .catch((error: unknown) => {
         if (!disposed) {
-          setRefreshingSubscriptionKey(null);
           setRuntimeStateLoad({
             status: "error",
             subscriptionKey: focusedSubscriptionKey,
@@ -311,11 +283,6 @@ export function StreamStatePanel({
     open,
     refreshKey,
   ]);
-
-  const runtimeStateRefreshing =
-    focusedSubscriptionKey !== null &&
-    focusedKind !== "core" &&
-    refreshingSubscriptionKey === focusedSubscriptionKey;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -337,8 +304,8 @@ export function StreamStatePanel({
             onFocus={onFocus}
             onClose={onClose}
             onClearClientDatabase={onClearClientDatabase}
-            onRefreshStreamRuntime={() => streamRuntimeLive.refresh()}
-            streamRuntimeFetching={streamRuntimeSnapshot.refreshing}
+            onRefreshStreamRuntime={onRefreshStreamRuntime}
+            streamRuntimeFetching={streamRuntimeFetching}
             streamRuntimeError={streamRuntimeError}
             streamRuntime={streamRuntime}
             tokenUsage={tokenUsage}
@@ -349,10 +316,9 @@ export function StreamStatePanel({
             busy={busy}
             runtimeStateLoad={focusedRuntimeStateLoad}
             streamMaxOffset={streamMaxOffset}
-            runtimeStateRefreshing={runtimeStateRefreshing}
             onRefreshRuntimeState={() => {
               if (focused.kind === "core") {
-                streamRuntimeLive.refresh();
+                onRefreshStreamRuntime();
               } else {
                 setRefreshKey((key) => key + 1);
               }
@@ -410,24 +376,7 @@ function ProcessorsOverview({
   const sections = processorEntrySections(entries);
   const rtt = metrics.transportRttMs;
   const subscriber = metrics.subscriber;
-  const throughputSnapshot = streamRuntime?.runtime.metrics;
-  const throughputReportedAtMs =
-    throughputSnapshot === undefined ? Number.NaN : Date.parse(throughputSnapshot.reportedAt);
-  const throughputStopAtMs = Number.isFinite(throughputReportedAtMs)
-    ? throughputReportedAtMs + 60_000
-    : null;
-  const throughputNowMs = useTickingNowMs(
-    1_000,
-    throughputSnapshot !== undefined,
-    throughputStopAtMs,
-  );
-  const throughput = useMemo(
-    () =>
-      throughputSnapshot === undefined
-        ? undefined
-        : ageStreamThroughputMetrics(throughputSnapshot, throughputNowMs),
-    [throughputNowMs, throughputSnapshot],
-  );
+  const throughput = streamRuntime?.runtime.metrics;
   const coreState = streamRuntime?.coreProcessorState;
   const createdAt = readRuntimeRecord(coreState)?.createdAt;
   const serverEventCount = readNumber(coreState, "eventCount");
@@ -800,14 +749,6 @@ function buildProcessorPanelEntries(
     entries.set(entry.subscriptionKey, {
       ...entry,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
-      // Presence is event-sourced history. Once the live runtime projection
-      // has loaded, its ephemeral connection table is the authority on what
-      // is connected now; a missed disconnect fact must not leave a ghost
-      // consumer green forever.
-      connected:
-        streamRuntime !== undefined && subscriptionType === "ephemeral"
-          ? runtimeConnection !== undefined
-          : entry.connected,
       subscriptionType,
       ...(runtimeConnection === undefined ? {} : { runtimeConnection }),
       ...(config === undefined
@@ -826,22 +767,20 @@ function buildProcessorPanelEntries(
     const subscriber = readRuntimeRecord(connection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
     const subscriptionType = readSubscriptionType(connection) ?? "ephemeral";
-    const runtimeConnection = streamRuntime?.runtime.connections[subscriptionKey];
     const config = configured[subscriptionKey];
     entries.set(subscriptionKey, {
       subscriptionKey,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
-      connected:
-        streamRuntime !== undefined && subscriptionType === "ephemeral"
-          ? runtimeConnection !== undefined
-          : true,
+      connected: true,
       direction: "outbound",
       ...(typeof subscriber?.description === "string"
         ? { description: subscriber.description }
         : {}),
       ...(announcement == null ? {} : { processor: announcement }),
       subscriptionType,
-      ...(runtimeConnection === undefined ? {} : { runtimeConnection }),
+      ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
+        ? {}
+        : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
       ...(config === undefined
         ? {}
         : {
@@ -1349,7 +1288,6 @@ function ProcessorDetail({
   busy,
   runtimeStateLoad,
   streamMaxOffset,
-  runtimeStateRefreshing,
   onRefreshRuntimeState,
   onBack,
   onClose,
@@ -1358,7 +1296,6 @@ function ProcessorDetail({
   busy: boolean;
   runtimeStateLoad: ProcessorRuntimeStateLoad;
   streamMaxOffset: number | null;
-  runtimeStateRefreshing: boolean;
   onRefreshRuntimeState: () => void;
   onBack: () => void;
   onClose: () => void;
@@ -1437,7 +1374,6 @@ function ProcessorDetail({
         <ProcessorRuntimeStateView
           runtimeStateLoad={runtimeStateLoad}
           streamMaxOffset={streamMaxOffset}
-          refreshing={runtimeStateRefreshing}
           onRefresh={onRefreshRuntimeState}
           processorSlug={processor?.slug}
         />
@@ -1609,13 +1545,11 @@ function DetailField({
 function ProcessorRuntimeStateView({
   runtimeStateLoad,
   streamMaxOffset,
-  refreshing,
   onRefresh,
   processorSlug,
 }: {
   runtimeStateLoad: ProcessorRuntimeStateLoad;
   streamMaxOffset: number | null;
-  refreshing: boolean;
   onRefresh: () => void;
   processorSlug?: string;
 }) {
@@ -1629,7 +1563,7 @@ function ProcessorRuntimeStateView({
   const isAgent = processorSlug === "agent";
   const isCore = processorSlug === "core";
   const refreshPending =
-    refreshing || runtimeStateLoad.status === "loading" || runtimeStateLoad.status === "idle";
+    runtimeStateLoad.status === "loading" || runtimeStateLoad.status === "idle";
 
   return (
     <div>

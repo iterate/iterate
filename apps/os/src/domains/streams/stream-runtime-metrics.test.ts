@@ -113,7 +113,6 @@ describe("StreamRuntimeMetrics", () => {
     metrics.egress.bump(1_700_000_010_000, 8, 8000);
     const report = metrics.report(1_700_000_010_500);
     expect(report.measuredSince).toBe("2023-11-14T22:13:20.000Z");
-    expect(report.reportedAt).toBe("2023-11-14T22:13:30.500Z");
     expect(report.ingress.perSecond5s).toBe(4 / 5);
     expect(report.ingress.bytesPerSecond5s).toBe(4000 / 5);
     expect(report.ingress.lastMinute).toEqual({ count: 4, bytes: 4000, perSecond: 4 / 60 });

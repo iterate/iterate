@@ -1387,11 +1387,11 @@ export interface Stream {
    * been collecting); latency stats fields are absent until a real sample
    * exists — no value is ever synthesized. Calling this also requests a
    * throttled mutual-ping round over the live connections (observer-driven
-   * sampling); new debug surfaces should subscribe through `runtimeLiveState`.
+   * sampling); live debug surfaces should subscribe through `liveState`.
    */
   runtimeState(): Promise<StreamRuntimeDebugState>;
   /** Push-driven stream runtime state for polling-free debug surfaces. */
-  runtimeLiveState: LiveStateRpc<StreamRuntimeDebugState>;
+  liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
@@ -3520,7 +3520,7 @@ export type ProcessorRuntimeState<State = unknown> = {
   runtime?: Record<string, unknown>;
 };
 
-/** Serializable stream-core and delivery-runtime projection used by debug surfaces. */
+/** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
 export type StreamRuntimeDebugState = {
   /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */
   coreProcessorState: unknown;
@@ -3985,8 +3985,6 @@ export type SubscriptionRuntimeState = {
 export type StreamThroughputMetrics = {
   /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
   measuredSince: string;
-  /** ISO timestamp anchoring the trailing windows and final bucket in each raw series. */
-  reportedAt: string;
   /** Appends committed (all producers). */
   ingress: ThroughputReport;
   /** Deliveries dispatched (all lanes, all subscribers). */
