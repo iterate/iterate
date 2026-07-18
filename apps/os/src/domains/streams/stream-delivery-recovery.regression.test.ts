@@ -171,7 +171,7 @@ test.fails("DESIRED: a post-delivery cursor failure schedules durable redelivery
     expect(pushes).toHaveLength(1);
     expect(failed).toMatchObject({
       ackedOffset: 0,
-      attempt: 0,
+      attempt: 1,
       lastError: "sqlite write failed",
     });
     expect(failed?.nextAttemptAt).not.toBeNull();
