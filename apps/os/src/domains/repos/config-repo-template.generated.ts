@@ -425,7 +425,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      <head>\n" +
       "        <HeadContent />\n" +
       "      </head>\n" +
-      "      <body style={{ fontFamily: \"system-ui\", maxWidth: \"36rem\", margin: \"2rem auto\", padding: \"0 1rem\" }}>\n" +
+      "      <body\n" +
+      "        style={{\n" +
+      "          fontFamily: \"system-ui\",\n" +
+      "          maxWidth: \"36rem\",\n" +
+      "          margin: \"2rem auto\",\n" +
+      "          padding: \"0 1rem\",\n" +
+      "        }}\n" +
+      "      >\n" +
       "        {children}\n" +
       "        <Scripts />\n" +
       "      </body>\n" +
@@ -606,7 +613,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  addTodo(title: string): void {\n" +
       "    const trimmed = title.trim().slice(0, 500);\n" +
       "    if (trimmed.length === 0) return;\n" +
-      "    this.#db.insert({ id: crypto.randomUUID(), title: trimmed, createdAt: new Date().toISOString() });\n" +
+      "    this.#db.insert({\n" +
+      "      id: crypto.randomUUID(),\n" +
+      "      title: trimmed,\n" +
+      "      createdAt: new Date().toISOString(),\n" +
+      "    });\n" +
       "    this.#refresh();\n" +
       "  }\n" +
       "\n" +
@@ -723,7 +734,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"name\": \"project-tanstack\",\n" +
       "  \"main\": \"./src/worker.ts\",\n" +
       "  \"compatibility_date\": \"2026-05-01\",\n" +
-      "  \"compatibility_flags\": [\"nodejs_compat\"]\n" +
+      "  \"compatibility_flags\": [\"nodejs_compat\"],\n" +
       "}\n",
   },
   {
