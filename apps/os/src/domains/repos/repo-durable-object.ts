@@ -668,14 +668,24 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
   }
 
-  #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
+  #recordPushedHead(result: {
+    branch: string;
+    commitOid: string;
+    noChanges?: boolean;
+    parentCommitOid?: string;
+  }) {
     if (result.noChanges) return;
-    // The pre-push head record (the write lanes re-record AFTER this) is the
-    // push's parent as far as this cache knew it — that pair lets the
-    // observed window prune a late-delivered external push from before this
-    // write. A missing record reads as null, which prunes nothing: safe.
+    // The push's parent must reach the observed window so that superseded tip
+    // is pruned from the frontier — otherwise, after an observation deleted
+    // the head record, an own commit would record (null -> new) and leave its
+    // real parent cacheable once the floor moves on. The commit lanes pass
+    // their checked clone's TRUE parent; lanes without one (GitHub adoption
+    // force-pushes) fall back to the pre-push head record, whose oid is
+    // exactly the tip that write superseded. A missing record reads as null,
+    // which prunes nothing: safe.
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(result.branch));
-    const beforeCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
+    const beforeCommitOid =
+      result.parentCommitOid ?? (isRepoHeadRecord(previous) ? previous.commitOid : null);
     if (result.branch === REPO_DEFAULT_BRANCH) {
       this.#headFilesSnapshot.clear();
       // The head moved: the tree sentinel is stale (the write lanes re-record
@@ -701,15 +711,31 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.#writeBranchAuthority(branch, { observedPushes: [], pushedFloor: undefined });
   }
 
-  /** The branch's head authority, read fresh from durable storage (sync).
-   * Elements failing validation — including legacy bare-oid values from the
-   * pre-frontier scheme — read as absent; the next observation rebuilds the
-   * window. */
+  /** The branch's head authority, read fresh from durable storage (sync). */
   #branchAuthority(branch: string): RepoHeadAuthority {
     const rawObserved = this.ctx.storage.kv.get<unknown>(repoObservedPushesStorageKey(branch));
-    const observedPushes = Array.isArray(rawObserved)
-      ? rawObserved.filter(isObservedPushRecord)
-      : [];
+    let observedPushes: ObservedPush[];
+    if (Array.isArray(rawObserved)) {
+      observedPushes = rawObserved.filter(isObservedPushRecord);
+    } else if (typeof rawObserved === "string" || rawObserved === null) {
+      // One-time migration from the pre-frontier scheme, which stored the
+      // LAST observed after-oid bare (null = deletion). That observation is
+      // still evidence — and a durable head record showing anything else may
+      // be exactly the stale pin the old scheme failed to evict. Invalidate
+      // it NOW: no new push may ever arrive to do it later.
+      observedPushes = [{ afterCommitOid: rawObserved, beforeCommitOid: null }];
+      this.ctx.storage.kv.put(repoObservedPushesStorageKey(branch), observedPushes);
+      const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+      if (isRepoHeadRecord(record) && record.commitOid !== rawObserved) {
+        this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+        if (branch === REPO_DEFAULT_BRANCH) {
+          this.#headFilesSnapshot.clear();
+          this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+        }
+      }
+    } else {
+      observedPushes = [];
+    }
     const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
     return { observedPushes, pushedFloor: typeof pushed === "string" ? pushed : undefined };
   }
@@ -1668,7 +1694,7 @@ async function commitFilesToArtifactRepo(input: {
   message: string;
   remote: string;
   token: string;
-}): Promise<CommitRepoFilesResult & { contentHash: string }> {
+}): Promise<CommitRepoFilesResult & { contentHash: string; parentCommitOid: string }> {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
@@ -1714,7 +1740,7 @@ async function editArtifactRepoFile(input: {
   remote: string;
   replaceAll?: boolean;
   token: string;
-}): Promise<EditRepoFileResult & { contentHash: string }> {
+}): Promise<EditRepoFileResult & { contentHash: string; parentCommitOid: string }> {
   return mutateArtifactRepo({
     author: input.author,
     branch: input.branch,
@@ -1760,7 +1786,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   mutate: (repo: { filesystem: InMemoryFs; git: ReturnType<typeof createGit> }) => Promise<Extra>;
   remote: string;
   token: string;
-}): Promise<CommitRepoFilesResult & { contentHash: string } & Extra> {
+}): Promise<CommitRepoFilesResult & { contentHash: string; parentCommitOid: string } & Extra> {
   const credentials = { password: input.token, username: "x" };
   const clone = async () => {
     const filesystem = new InMemoryFs();
@@ -1828,6 +1854,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
       commitOid: head.oid,
       contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
       noChanges: true,
+      parentCommitOid: cloned.head.oid,
       ...extra,
     };
   }
@@ -1858,6 +1885,9 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     commitOid: commit.oid,
     contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
     noChanges: false,
+    // The checked clone's pre-commit head — the commit's TRUE parent, which
+    // the head authority needs to prune that tip from the observed frontier.
+    parentCommitOid: cloned.head.oid,
     ...extra,
   };
 }

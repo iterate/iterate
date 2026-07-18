@@ -151,6 +151,23 @@ describe("repo head authority", () => {
     expect(frontierTips(reordered.observedPushes)).toEqual(["e"]);
   });
 
+  it("an own push carrying its TRUE parent prunes the abandoned external tip for good", () => {
+    // Observation a->b evicted the head record; an own commit (parent b)
+    // lands before any read refills it. With the true parent the abandoned
+    // tip b leaves the frontier permanently — even after a later external
+    // push moves the floor on. (A null before would leave b cacheable: the
+    // exact stale re-pin the DO threads parentCommitOid to prevent.)
+    const observed = observe(EMPTY, "a", "b").authority;
+    const own = recordOwnPushTransition(observed, { beforeCommitOid: "b", commitOid: "c" });
+    const later = observe(own, "c", "d").authority;
+    expect(frontierTips(later.observedPushes)).toEqual(["d"]);
+    expect(decideHeadResolution(later, "b").cache).toBe(false);
+
+    const nullParent = recordOwnPushTransition(observed, { beforeCommitOid: null, commitOid: "c" });
+    const leaky = observe(nullParent, "c", "d").authority;
+    expect(frontierTips(leaky.observedPushes)).toContain("b");
+  });
+
   it("retries the clone while behind the own-push floor", () => {
     const own = recordOwnPushTransition(EMPTY, { beforeCommitOid: "a", commitOid: "b" });
     expect(shouldRetryHeadResolution(own, "a")).toBe(true);
