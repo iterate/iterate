@@ -1,5 +1,6 @@
 import { minimatch } from "minimatch";
 import { Workspace } from "@cloudflare/shell";
+import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import type { RepoFileChange } from "../repos/types.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
@@ -17,7 +18,6 @@ import type { WorkspaceMount } from "./workspace-processor-contract.ts";
 import { encodeRepoContent } from "./utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
 import { filterPublishablePaths } from "./overlay-ignore.ts";
-import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 
 // Overlay whiteouts: mount paths hidden by a local delete, kept as ONE kv
 // record (a path -> true map) so status can enumerate deletions without a kv
