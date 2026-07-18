@@ -263,7 +263,6 @@ async function runBuild(
       buildKey,
       files,
       options: context.options,
-      projectId: context.projectId,
     });
     const artifact: WorkerBuildArtifact = {
       buildKey,

@@ -105,6 +105,15 @@ export interface Env {
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
   >;
   /**
+   * The deployment's worker-builder pool — stock SDK sandboxes that run every
+   * dynamic-worker build. Platform infrastructure, not project sandboxes: no
+   * catalogue, no streams, and project code can never reach this binding
+   * (src/domains/workers/builder-pool.ts).
+   */
+  WORKER_BUILDER: DurableObjectNamespace<
+    import("./domains/workers/builder-pool-sandbox.ts").WorkerBuilderDurableObject
+  >;
+  /**
    * Workspace persistence for sandbox containers. Container disk is
    * ephemeral — a sandbox that sleeps loses its filesystem — so the sandbox
    * Durable Object snapshots `/workspace` to this R2 bucket on idle and

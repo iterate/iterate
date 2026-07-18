@@ -17,13 +17,16 @@ tags: [os, workers, dynamic-workers, sandboxes, build-pipeline]
 > at birth put a container cold boot on `projects.create`'s 60s repo-ready
 > deadline and birth one builder container per project (fixture-heavy flows
 > collide with per-class instance caps). Deviations from the design below:
-> the builder sandbox is `/sandboxes/worker-builder` (sandbox names are single
-> path segments — `cloudflare/builder` is not addressable), destroyed names are
-> tombstoned forever so the platform probes name generations
-> (`worker-builder-2`, …), instance types already have per-type DO classes so
-> `basic` applies to the builder only, and runtime artifacts are project-KEYED
-> with a trusted content-only tier written exclusively by the deploy-time
-> seeder. **Remaining:** eager-on-commit builds (the other half of step 1).
+> builds run in the DEPLOYMENT'S builder pool, not a per-project sandbox — a
+> fixed fleet of stock-SDK containers (`src/domains/workers/builder-pool.ts`
+> + `builder-pool-sandbox.ts`, own container app with max_instances = pool
+> size) entirely outside the project sandbox catalogue and its streams; the
+> per-project `/sandboxes/worker-builder` design was implemented first and
+> replaced after it saturated preview's whole basic-instance fleet (builders
+> scaled with building projects and broken-head fixture retries kept them
+> warm forever). Runtime artifacts are project-KEYED with a trusted
+> content-only tier written exclusively by the deploy-time seeder.
+> **Remaining:** eager-on-commit builds (the other half of step 1).
 
 Replace the in-workerd bundler (`@cloudflare/worker-bundler`, esbuild-wasm)
 with real `npm install` + a real bundler running inside a **sandbox container

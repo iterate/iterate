@@ -15,8 +15,9 @@ revisions to this document:
    resolution, a hand-maintained builtin shim list, four pnpm patches). The
    shared recipe in `src/domains/workers/build-recipe.ts` runs real
    `npm install --ignore-scripts` plus a pinned wrangler dry-run bundle —
-   wrangler's canonical nodejs_compat pipeline — inside the project's builder
-   sandbox (`build-backend.ts`, `../src/domains/sandboxes/builder-sandbox.ts`)
+   wrangler's canonical nodejs_compat pipeline — inside the deployment's
+   builder pool (`build-backend.ts`, `../src/domains/workers/builder-pool-sandbox.ts`:
+   a fixed fleet of stock-SDK containers outside the project sandbox catalogue)
    on deployed envs, and on the host toolchain via the dev server's
    `/__dev/worker-build` endpoint in local dev. Every property that mattered
    survives: deduped concurrent builds, deterministic content-addressed

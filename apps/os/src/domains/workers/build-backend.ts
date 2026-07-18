@@ -1,5 +1,4 @@
 import { itxEnv as env } from "../../env.ts";
-import { getOrCreateBuilderSandbox } from "../sandboxes/builder-sandbox.ts";
 import { buildFailureMessageFromError, WorkerBuildFailedError } from "./artifact-store.ts";
 import {
   collectRecipeOutputs,
@@ -13,10 +12,10 @@ import type { WorkerBuildOptions } from "./schemas.ts";
  * Execute one dynamic-worker build (the shared recipe from build-recipe.ts)
  * and return loader-ready modules. Two runners, one recipe:
  *
- * - Deployed envs drive the PROJECT'S builder sandbox — a real container with
- *   real npm and pinned wrangler (sandboxes/builder-sandbox.ts). All its
- *   egress (npm registry included) flows through the project's egress policy
- *   like any other sandbox traffic.
+ * - Deployed envs drive the deployment's builder POOL — a fixed handful of
+ *   stock sandbox containers with real npm and pinned wrangler
+ *   (builder-pool.ts). Builds for one key always land on the same member;
+ *   concurrent builds get their own exec session and build tree.
  * - Local dev fetches the vite dev server's `/__dev/worker-build` endpoint,
  *   which runs the identical recipe on the host toolchain — local dev has no
  *   containers (scripts/worker-build-dev-endpoint.ts).
@@ -32,7 +31,6 @@ export async function executeWorkerBuild(input: {
   buildKey: string;
   files: Record<string, string>;
   options: WorkerBuildOptions;
-  projectId: string;
 }): Promise<{ mainModule: string; modules: Record<string, string> }> {
   const devEndpoint = env.WORKER_BUILD_DEV_ENDPOINT;
   if (devEndpoint !== undefined && devEndpoint.length > 0) {
@@ -76,39 +74,49 @@ async function buildAtDevEndpoint(
 
 async function buildInSandbox(
   recipe: WorkerBuildRecipe,
-  input: { buildKey: string; projectId: string },
+  input: { buildKey: string },
 ): Promise<{ mainModule: string; modules: Record<string, string> }> {
-  const { sandbox } = await getOrCreateBuilderSandbox(input.projectId);
+  // Deferred import: builder-pool-sandbox pulls the sandbox SDK
+  // (`cloudflare:workers`), which only loads inside workerd — and this module
+  // sits on import chains that node-side unit tests load. Only the deployed
+  // lane reaches this line.
+  const { getBuilderSandbox } = await import("./builder-pool-sandbox.ts");
+  const sandbox = getBuilderSandbox(env.WORKER_BUILDER, input.buildKey);
 
-  // The builder runs the STOCK sandbox image and installs its own toolchain
-  // once per container life. Baking wrangler into the image was tried and
-  // reverted: the stock image is cached on effectively every container host,
-  // but a per-account derived layer is not — every fresh placement paid a
-  // cold image pull measured in MINUTES, observed live as sandbox exec
-  // hanging fleet-wide (every sandbox in the deployment shares the image,
-  // so the builder's layer taxed sandboxes that never build anything).
-  // A failed install throws a PLAIN error — provisioning weather, retryable,
-  // never recorded as a build failure of the source.
-  const toolchain = await sandbox.exec(
-    `command -v wrangler >/dev/null || npm install -g wrangler@${WRANGLER_VERSION} --no-audit --no-fund`,
-    { env: { npm_config_cache: "/build/.npm-cache" }, timeout: 120_000 },
-  );
-  if (!toolchain.success) {
-    throw new Error(
-      `builder toolchain install failed (exit ${toolchain.exitCode}): ${toolchain.stderr.slice(-500)}`,
-    );
-  }
-
-  // Ephemeral by choice: /build is outside /workspace, so build trees and the
-  // npm cache never enter workspace snapshots (the builder's backups stay
-  // empty). The cache warms rebuilds only while the container stays up —
-  // good enough, and content-addressed artifacts make cold rebuilds correct.
-  // The random suffix keeps CONCURRENT builds of one key (which the loader
-  // deliberately allows) in separate trees — a shared directory would let one
-  // attempt's `rm -rf` or file writes corrupt the other mid-build. Duplicates
-  // still converge on the one idempotent KV write.
+  // Ephemeral by choice: the pool's containers snapshot nothing, so build
+  // trees and the npm cache live only while a container stays up — good
+  // enough (the cache warms rebuilds within a burst) and content-addressed
+  // artifacts make cold rebuilds correct. The random suffix keeps CONCURRENT
+  // builds — same key (which the loader deliberately allows) or different
+  // keys hashed to the same pool member — in separate trees; a shared
+  // directory would let one attempt's `rm -rf` or file writes corrupt the
+  // other mid-build.
   const buildDir = `/build/${input.buildKey}-${crypto.randomUUID().slice(0, 8)}`;
+  // Shell state is per-session on a SHARED container: every build gets its
+  // own session so concurrent builds cannot trample each other's shells, and
+  // the session carries the npm cache location for every command.
+  const session = await sandbox.createSession({
+    env: { npm_config_cache: "/build/.npm-cache" },
+  });
   try {
+    // The pool runs the STOCK sandbox image and installs its own toolchain
+    // once per container life. Baking wrangler into the image was tried and
+    // reverted: the stock image is cached on effectively every container
+    // host, but a per-account derived layer is not — every fresh placement
+    // paid a cold image pull measured in MINUTES, observed live as sandbox
+    // exec hanging fleet-wide. A failed install throws a PLAIN error —
+    // provisioning weather, retryable, never recorded as a build failure of
+    // the source.
+    const toolchain = await session.exec(
+      `command -v wrangler >/dev/null || npm install -g wrangler@${WRANGLER_VERSION} --no-audit --no-fund`,
+      { timeout: 120_000 },
+    );
+    if (!toolchain.success) {
+      throw new Error(
+        `builder toolchain install failed (exit ${toolchain.exitCode}): ${toolchain.stderr.slice(-500)}`,
+      );
+    }
+
     const directories = new Set([buildDir]);
     for (const name of Object.keys(recipe.files)) {
       const lastSlash = name.lastIndexOf("/");
@@ -125,10 +133,14 @@ async function buildInSandbox(
     );
 
     for (const step of recipe.commands) {
-      const result = await sandbox.exec(step.command, {
+      // coreutils `timeout` guarantees the deterministic exit-124 answer for
+      // a hung build step regardless of SDK timeout semantics (an SDK-thrown
+      // timeout would classify as retryable weather, and a deterministic
+      // hang must be a recorded build failure or its delivery retries churn
+      // forever). The SDK timeout stays as a backstop with headroom.
+      const result = await session.exec(withCommandTimeout(step.command, step.timeoutMs), {
         cwd: buildDir,
-        env: { npm_config_cache: "/build/.npm-cache" },
-        timeout: step.timeoutMs,
+        timeout: step.timeoutMs + 30_000,
       });
       if (!result.success) {
         throw new WorkerBuildFailedError(
@@ -139,7 +151,7 @@ async function buildInSandbox(
 
     // `ls -1` instead of the SDK's listFiles: the output directory is flat by
     // construction (wrangler bundles into it) and a name list is all we need.
-    const listing = await sandbox.exec(`ls -1 '${recipe.outputDir}'`, {
+    const listing = await session.exec(`ls -1 '${recipe.outputDir}'`, {
       cwd: buildDir,
       timeout: 30_000,
     });
@@ -167,13 +179,22 @@ async function buildInSandbox(
       throw new WorkerBuildFailedError(buildFailureMessageFromError(error), { cause: error });
     }
   } finally {
-    await sandbox.exec(`rm -rf '${buildDir}'`, { timeout: 30_000 }).catch(() => {});
+    await session.exec(`rm -rf '${buildDir}'`, { timeout: 30_000 }).catch(() => {});
+    await sandbox.deleteSession(session.id).catch(() => {});
   }
 }
 
+/** Wrap one build step so a hang is killed IN the container and reported as
+ * coreutils' exit 124 — the verified-timeout contract the failure classifier
+ * depends on. `-k` covers a step that ignores the polite TERM. */
+function withCommandTimeout(command: string, timeoutMs: number): string {
+  const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const escaped = command.replaceAll("'", `'\\''`);
+  return `timeout -k 10 ${seconds} sh -c '${escaped}'`;
+}
+
 /** The exec result flattened into the bounded, human-readable message the
- * serve overlay shows. Exit code 124 is the sandbox's verified-timeout
- * answer. */
+ * serve overlay shows. Exit code 124 is the verified-timeout answer. */
 function commandFailureMessage(
   step: { command: string; timeoutMs: number },
   result: { exitCode: number; stderr: string; stdout: string },

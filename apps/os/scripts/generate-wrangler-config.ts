@@ -23,6 +23,7 @@ import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
+import { WORKER_BUILDER_POOL_SIZE } from "../src/domains/workers/builder-pool.ts";
 import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SANDBOX_INSTANCE_TYPES,
@@ -171,6 +172,10 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
+  // The deployment's worker-builder pool: stock-SDK sandbox containers that
+  // run dynamic-worker builds, deliberately outside the project sandbox
+  // catalogue (src/domains/workers/builder-pool.ts).
+  WORKER_BUILDER: "WorkerBuilderDurableObject",
   WORKSPACE: "WorkspaceDurableObject",
   // One sandbox container class PER INSTANCE TYPE (Cloudflare fixes instance_type per
   // class) — bindings and class names come from the canonical table in
@@ -220,14 +225,11 @@ const DO_EXPORTS = {
 const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; production: number }> =
   {
     lite: { preview: 20, production: 50 },
-    // basic 20 (was 15, was 10): the dynamic-worker build pipeline runs one
-    // builder container per building project (sleepAfter 20s), and an e2e run
-    // churns builders across many projects at once alongside the suite's own
-    // pet sandboxes — 15 was observed saturated live (15/15 active, every
-    // further placement denied) while broken-head fixture projects kept their
-    // builders warm. The failure-replay TTL and the short builder sleepAfter
-    // fix the churn; this cap is headroom for the honest peak.
-    basic: { preview: 20, production: 30 },
+    // Worker builds no longer draw on this fleet (the builder pool below is
+    // its own app with its own cap) — this budget is pet sandboxes only. The
+    // per-project-builder era saturated 15/15 live; without builders, 15 is
+    // comfortable headroom for an e2e run's own pets.
+    basic: { preview: 15, production: 30 },
     "standard-1": { preview: 5, production: 20 },
     "standard-2": { preview: 2, production: 10 },
     "standard-3": { preview: 2, production: 5 },
@@ -358,19 +360,32 @@ function workerBindings(input: {
     // builds and deploys are fast and every size shares one cached image).
     // `instance_type` is the size verbatim: our size names ARE Cloudflare's
     // instance-type names (instance-types.ts).
-    containers: SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
-      class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-      image: "./sandbox/Dockerfile",
-      instance_type: instanceType,
-      max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
-      // Interactive shell into any running sandbox via `wrangler containers
-      // ssh <instance-id>` (find ids with `wrangler containers instances`).
-      // Account-authenticated + gated on the keys below; opens no public
-      // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
-      // the wrangler schema, so it is set explicitly.
-      ssh: { enabled: true },
-      authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
-    })),
+    containers: [
+      ...SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
+        class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+        image: "./sandbox/Dockerfile",
+        instance_type: instanceType as string,
+        max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
+        // Interactive shell into any running sandbox via `wrangler containers
+        // ssh <instance-id>` (find ids with `wrangler containers instances`).
+        // Account-authenticated + gated on the keys below; opens no public
+        // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
+        // the wrangler schema, so it is set explicitly.
+        ssh: { enabled: true },
+        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+      })),
+      {
+        // The worker-builder pool: its own app so builder demand can NEVER
+        // compete with pet sandboxes for placement. max_instances equals the
+        // pool size — there are exactly that many member names.
+        class_name: "WorkerBuilderDurableObject",
+        image: "./sandbox/Dockerfile",
+        instance_type: "basic",
+        max_instances: WORKER_BUILDER_POOL_SIZE,
+        ssh: { enabled: true },
+        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+      },
+    ],
     secrets: { required: REQUIRED_SECRETS },
     observability: OBSERVABILITY,
   };

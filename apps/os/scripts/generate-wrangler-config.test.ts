@@ -65,13 +65,34 @@ it("binds the os worker to its own env's typechecker sidecar", () => {
 });
 
 it("never binds the retired builder sidecar", () => {
-  // The esbuild-wasm builder is gone: dynamic workers build in the project's
-  // builder sandbox (deployed) or the dev server's host endpoint (local).
+  // The esbuild-wasm builder is gone: dynamic workers build in the
+  // deployment's builder pool (deployed) or the dev server's host endpoint
+  // (local).
   for (const [envName, envBlock] of Object.entries(config.env)) {
     expect(
       envBlock.services.find((service) => service.binding === "BUILDER"),
       envName,
     ).toBeUndefined();
+  }
+});
+
+it("hosts a worker-builder pool app sized to the pool", async () => {
+  // The pool addresses exactly WORKER_BUILDER_POOL_SIZE member names, so the
+  // container app's max_instances must match — smaller would deny placements
+  // for members that exist, larger would reserve quota nothing can use.
+  const { WORKER_BUILDER_POOL_SIZE } = await import("../src/domains/workers/builder-pool.ts");
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const pool = (envBlock.containers ?? []).find(
+      (entry) => entry.class_name === "WorkerBuilderDurableObject",
+    );
+    expect(pool, envName).toBeDefined();
+    expect(pool?.max_instances, envName).toBe(WORKER_BUILDER_POOL_SIZE);
+    expect(pool?.instance_type, envName).toBe("basic");
+    expect(
+      envBlock.durable_objects.bindings.find((b) => b.class_name === "WorkerBuilderDurableObject")
+        ?.name,
+      envName,
+    ).toBe("WORKER_BUILDER");
   }
 });
 
@@ -219,7 +240,8 @@ it("keeps deployed sandbox capacity within account quota", () => {
     expect(
       containers.map((entry) => entry.instance_type),
       envName,
-    ).toEqual(["lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4"]);
+      // The trailing basic entry is the worker-builder pool's own app.
+    ).toEqual(["lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4", "basic"]);
     for (const entry of containers) {
       expect(entry.max_instances, `${envName} ${entry.instance_type}`).toBeGreaterThan(0);
     }
