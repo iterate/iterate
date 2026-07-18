@@ -34,8 +34,8 @@ const CHARS_PER_TOKEN = 4;
 // 3500 → 3600 (2026-07-14): the original presentation teach was an explicit
 // product ask and did not fit the previous ceiling's ~15-token headroom.
 // 3600 → 3800 (2026-07-18): summary became an event-first lifecycle with
-// mandatory first-script title, second-script activity, and final-script
-// waiting. One canonical append example keeps the teach compact.
+// mandatory first-turn title, second-turn activity, and final-turn waiting.
+// Three short code patterns keep the lifecycle concrete.
 const DEFAULT_PROMPT_TOKEN_CEILING = 3_800;
 
 const AGENT_PROMPTS: Record<string, string> = {
@@ -66,10 +66,14 @@ test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, ()
 });
 
 test("every agent prompt teaches the summary turn lifecycle and append event", () => {
-  expect(AGENT_SUMMARY_INSTRUCTION.length).toBeLessThanOrEqual(850);
-  expect(AGENT_SUMMARY_INSTRUCTION).toContain("FIRST SCRIPT:");
-  expect(AGENT_SUMMARY_INSTRUCTION).toContain("SECOND SCRIPT:");
-  expect(AGENT_SUMMARY_INSTRUCTION).toContain("LAST SCRIPT BEFORE USER INPUT");
+  expect(AGENT_SUMMARY_INSTRUCTION.length).toBeLessThanOrEqual(1_200);
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("FIRST TURN:");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("SECOND TURN:");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("WHEN RETURNING NO VALUE / WAITING FOR USER:");
+  expect(AGENT_SUMMARY_INSTRUCTION.match(/await Promise\.all\(\[/g)).toHaveLength(3);
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain(
+    'payload: { title: "Short specific title", activity: "Starting work" }',
+  );
   expect(AGENT_SUMMARY_INSTRUCTION).toContain("events.iterate.com/agent/summary-updated");
 
   for (const [channel, prompt] of Object.entries(AGENT_PROMPTS)) {
