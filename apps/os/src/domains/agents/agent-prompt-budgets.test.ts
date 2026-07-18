@@ -85,6 +85,23 @@ test("every agent prompt teaches the summary turn lifecycle and append event", (
   }
 });
 
+test("the default tour sets waiting only after its last work example", () => {
+  const lastWorkIndex = DEFAULT_AGENT_SYSTEM_PROMPT.indexOf("// SHARE A FILE");
+  const waitingIndex = DEFAULT_AGENT_SYSTEM_PROMPT.lastIndexOf(
+    'payload: { waitingFor: "user_input" }',
+  );
+  const replyIndex = DEFAULT_AGENT_SYSTEM_PROMPT.indexOf(
+    'await itx.chat.sendMessage("Which option?");',
+    waitingIndex,
+  );
+  const finishIndex = DEFAULT_AGENT_SYSTEM_PROMPT.indexOf("  return;", replyIndex);
+
+  expect(lastWorkIndex).toBeGreaterThanOrEqual(0);
+  expect(waitingIndex).toBeGreaterThan(lastWorkIndex);
+  expect(replyIndex).toBeGreaterThan(waitingIndex);
+  expect(finishIndex).toBeGreaterThan(replyIndex);
+});
+
 test("no platform prompt embeds the type surface", () => {
   // The whole point of the docs door: the flat type file never rides a
   // prompt again. "export interface Project" only appears in prompts as an
