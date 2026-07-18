@@ -41,35 +41,59 @@ export async function handleEventQueueBatch(
     console.warn(`[event-queue] received batch from unexpected queue ${batch.queue}`);
   }
 
-  const repoNamesToSubscribe = new Set<string>();
-  const messagesToAck: Message[] = [];
-
   // Finish the authoritative stream fanout for the whole batch before making
-  // any account-level control-plane calls. A slow subscription listing must
-  // never hold the other messages in the batch (and their projects) behind it.
-  for (const message of batch.messages) {
-    try {
+  // any account-level control-plane calls. Repo streams are independent, so
+  // fan them out concurrently instead of making the tenth project wait for
+  // nine unrelated Durable Objects.
+  const fanoutResults = await Promise.all(
+    batch.messages.map(async (message): Promise<RepoFanoutResult | null> => {
       const cloudflareEvent = cloudflareEventFromMessageBody(message.body);
       if (cloudflareEvent === null) {
         console.warn(`[event-queue] ignoring unrecognized message ${message.id}`);
         message.ack();
-        continue;
+        return null;
       }
 
-      const repoNameToSubscribe = await appendRepoArtifactEventIfAddressable({
-        env,
-        message,
-        event: cloudflareEvent,
-      });
-      await appendCloudflareCapture({ env, message });
-      if (repoNameToSubscribe !== null) repoNamesToSubscribe.add(repoNameToSubscribe);
-      messagesToAck.push(message);
-    } catch (error) {
-      console.error(`[event-queue] failed to process message ${message.id}`, error);
-      message.retry();
-    }
+      try {
+        const repoNameToSubscribe = await appendRepoArtifactEventIfAddressable({
+          env,
+          message,
+          event: cloudflareEvent,
+        });
+        return { message, repoNameToSubscribe };
+      } catch (error) {
+        console.error(`[event-queue] failed to fan out message ${message.id}`, error);
+        message.retry();
+        return null;
+      }
+    }),
+  );
+  const successfulFanouts = fanoutResults.filter(
+    (result): result is RepoFanoutResult => result !== null,
+  );
+  if (successfulFanouts.length === 0) return;
+
+  // One append preserves per-message idempotency while avoiding ten serial
+  // round trips to the deployment-global capture stream.
+  try {
+    await appendCloudflareCaptures({
+      env,
+      messages: successfulFanouts.map((result) => result.message),
+    });
+  } catch (error) {
+    console.error(
+      `[event-queue] failed to globally capture ${successfulFanouts.length} messages`,
+      error,
+    );
+    for (const { message } of successfulFanouts) message.retry();
+    return;
   }
 
+  const repoNamesToSubscribe = new Set(
+    successfulFanouts.flatMap((result) =>
+      result.repoNameToSubscribe === null ? [] : [result.repoNameToSubscribe],
+    ),
+  );
   await ensureRepoEventSubscriptionsIfConfigured({
     env,
     repoNames: [...repoNamesToSubscribe],
@@ -78,8 +102,13 @@ export async function handleEventQueueBatch(
   // Provisioning failures are bounded and logged inside the helper. Preserve
   // the previous best-effort semantics, but acknowledge only after the attempt
   // so an interrupted invocation retries its idempotent stream appends.
-  for (const message of messagesToAck) message.ack();
+  for (const { message } of successfulFanouts) message.ack();
 }
+
+type RepoFanoutResult = {
+  message: Message;
+  repoNameToSubscribe: string | null;
+};
 
 function cloudflareEventFromMessageBody(body: unknown): Record<string, unknown> | null {
   const event = asRecord(body);
@@ -90,18 +119,18 @@ function cloudflareEventFromMessageBody(body: unknown): Record<string, unknown> 
   return event;
 }
 
-async function appendCloudflareCapture(input: {
+async function appendCloudflareCaptures(input: {
   env: EventQueueEnv;
-  message: Message;
+  messages: Message[];
 }): Promise<void> {
   await appendToStream(
     input.env,
     { projectId: null, path: GLOBAL_CLOUDFLARE_EVENTS_STREAM_PATH },
-    {
+    ...input.messages.map((message) => ({
       type: CLOUDFLARE_EVENT_RECEIVED_TYPE,
-      idempotencyKey: `cf-event:${input.message.id}`,
-      payload: { body: input.message.body },
-    },
+      idempotencyKey: `cf-event:${message.id}`,
+      payload: { body: message.body },
+    })),
   );
 }
 
@@ -240,11 +269,11 @@ function artifactRepoReferenceFromCloudflareEvent(
 function appendToStream(
   env: Pick<Env, "STREAM">,
   address: { projectId: string | null; path: string },
-  event: StreamEventInput,
+  ...events: StreamEventInput[]
 ) {
   return env.STREAM.getByName(
     DurableObjectNameCodec.stringify(address, { allowNullProjectId: true }),
-  ).append(event);
+  ).append(...events);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

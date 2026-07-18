@@ -260,9 +260,15 @@ describe("event queue handler", () => {
 
     await handleEventQueueBatch(createBatch(messages), env);
 
-    // Both repo and global stream appends for both messages finish before the
-    // first account-level control-plane request begins.
-    expect(appendCountAtFirstApiCall).toBe(4);
+    // Both repo appends and one batched global append finish before the first
+    // account-level control-plane request begins.
+    expect(appendCountAtFirstApiCall).toBe(3);
+    const globalName = DurableObjectNameCodec.stringify(
+      { path: GLOBAL_CLOUDFLARE_EVENTS_STREAM_PATH, projectId: null },
+      { allowNullProjectId: true },
+    );
+    expect(appends.filter((append) => append.name === globalName)).toHaveLength(1);
+    expect(eventsFor(appends, globalName)).toHaveLength(2);
     expect(calls.filter((call) => call.path.endsWith("/queues?page=1&per_page=100"))).toHaveLength(
       1,
     );
@@ -276,6 +282,51 @@ describe("event queue handler", () => {
       expect(message.ack).toHaveBeenCalledOnce();
       expect(message.retry).not.toHaveBeenCalled();
     }
+  });
+
+  test("fans independent repo streams out concurrently within a queue batch", async () => {
+    const { env } = createEnv();
+    const globalName = DurableObjectNameCodec.stringify(
+      { path: GLOBAL_CLOUDFLARE_EVENTS_STREAM_PATH, projectId: null },
+      { allowNullProjectId: true },
+    );
+    let barrierReleased = false;
+    const barrier = new Promise<void>((resolve) =>
+      setTimeout(() => {
+        barrierReleased = true;
+        resolve();
+      }, 0),
+    );
+    const repoAppendStarts: boolean[] = [];
+    vi.mocked(env.STREAM.getByName).mockImplementation(
+      (name: string) =>
+        ({
+          append: vi.fn(async () => {
+            if (name !== globalName) {
+              repoAppendStarts.push(barrierReleased);
+              await barrier;
+            }
+            return [];
+          }),
+        }) as never,
+    );
+    const messages = ["prj_first", "prj_second"].map((projectId, index) => {
+      const artifactName = RepoArtifactNameCodec.stringify({ path: "/", projectId });
+      return createMessage(
+        {
+          type: "cf.artifacts.repo.pushed",
+          source: { type: "artifacts.repo", namespace: "os-prd-repos", repoName: artifactName },
+        },
+        `msg-pushed-${index + 1}`,
+      );
+    });
+
+    await handleEventQueueBatch(createBatch(messages), env);
+
+    // Both calls start in the same turn. A serial loop would start the second
+    // only after the timer releases the first.
+    expect(repoAppendStarts).toEqual([false, false]);
+    for (const message of messages) expect(message.ack).toHaveBeenCalledOnce();
   });
 
   test("still routes created repo events when repo subscription setup fails", async () => {
