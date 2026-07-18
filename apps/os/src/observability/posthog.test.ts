@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppConfig } from "~/config.ts";
 
 const sdk = vi.hoisted(() => ({
   captureExceptionImmediate: vi.fn(),
@@ -36,6 +35,7 @@ vi.mock("posthog-node", () => ({
 }));
 
 import { schedulePosthogException, withPosthogExceptionCapture } from "./posthog.ts";
+import type { AppConfig } from "~/config.ts";
 
 const config = {
   cloudflare: { workerName: "os-prd" },

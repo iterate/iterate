@@ -88,6 +88,7 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
 export function requestProjectId(request: Request, projects: Array<{ id: string; slug: string }>) {
   const requestUrl = new URL(request.url);
   const pathnames = [requestUrl.pathname];
+  const projectIdBySlug = new Map(projects.map((project) => [project.slug, project.id]));
   const referrer = request.headers.get("referer");
   if (referrer) {
     try {
@@ -103,8 +104,8 @@ export function requestProjectId(request: Request, projects: Array<{ id: string;
     if (!encodedSlug) continue;
     try {
       const slug = decodeURIComponent(encodedSlug);
-      const project = projects.find((candidate) => candidate.slug === slug);
-      if (project) return project.id;
+      const projectId = projectIdBySlug.get(slug);
+      if (projectId) return projectId;
     } catch {
       // Keep looking; malformed percent escapes cannot identify a project.
     }
