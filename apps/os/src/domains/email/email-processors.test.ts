@@ -106,6 +106,7 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
     ]);
@@ -122,7 +123,7 @@ describe("EmailProcessor (thread router)", () => {
         role: "system",
       },
     });
-    expect(routed[12]!.payload).toEqual(receivedPayload({}));
+    expect(routed[13]!.payload).toEqual(receivedPayload({}));
     expect(driver.state.threads).toEqual({ "2": "/agents/email/t2" });
     expect(driver.state.threadByMessageId).toEqual({ "msg-1@mail.example": "2" });
   });
@@ -356,6 +357,7 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
       "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",

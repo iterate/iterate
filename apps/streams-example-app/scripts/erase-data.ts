@@ -36,6 +36,7 @@ export default async function eraseData(options: {
       CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
     },
     compatibilityDate: COMPATIBILITY_DATE,
+    containerClassNames: [],
   });
   console.log(`✅ ${ctx.name} streams playground data erased; worker and infrastructure remain.`);
 }

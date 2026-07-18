@@ -1,13 +1,6 @@
 import { describe, expect, it, test, vi } from "vitest";
 import type { z } from "zod";
-import {
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
-  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-  AGENT_WAITING_CLEARED_EVENT_TYPE,
-  AgentRuntimeChange,
-  ZERO_AGENT_RUNTIME,
-  isAgentRuntimeZero,
-} from "@iterate-com/shared/agent-events";
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { MemoryStream, MemoryStreamNetwork, eventsOfType } from "iterate/processors/testing";
 import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
@@ -32,38 +25,8 @@ import { deriveAgentDisplayState, deriveAgentRuntime } from "./agent-presence.ts
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 
-/** The runner-backed fold read the REQUIRED `reads` dep serves (the idle
- * debounce timer's fire-time staleness check). */
-type AgentSnapshotReads = { snapshot(): Promise<{ offset: number; state: AgentState }> };
-
-/** The runner that ended up driving each processor, recorded by `agentRunner`
- * so `makeAgentProcessor`'s lazily-wired `reads` dep answers from it — the
- * unit-harness mirror of the DO wiring `registry.reads(processor)` after
- * registering it. */
-const runnerReadsByProcessor = new WeakMap<AgentProcessor, AgentSnapshotReads>();
-
-/**
- * AgentProcessor construction for these tests: identical to `new
- * AgentProcessor(...)` except the REQUIRED runner-backed `reads` dep is wired
- * lazily to whichever runner `agentRunner` ends up driving this processor
- * with (the processor instance holds no readable fold under runner drive).
- */
-function makeAgentProcessor(
-  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads">,
-): AgentProcessor {
-  const processor: AgentProcessor = new AgentProcessor({
-    ...deps,
-    reads: {
-      snapshot: () => {
-        const reads = runnerReadsByProcessor.get(processor);
-        if (reads === undefined) {
-          throw new Error("no runner drives this processor yet — agentRunner wires reads");
-        }
-        return reads.snapshot();
-      },
-    },
-  });
-  return processor;
+function makeAgentProcessor(deps: ConstructorParameters<typeof AgentProcessor>[0]): AgentProcessor {
+  return new AgentProcessor(deps);
 }
 
 /**
@@ -83,14 +46,10 @@ function agentRunner(
   stream: MemoryStream,
   opts: { seeded?: { offset: number; state: AgentState }; readPageSize?: number } = {},
 ) {
-  const track = <Runner extends AgentSnapshotReads>(runner: Runner): Runner => {
-    runnerReadsByProcessor.set(processor, runner);
-    return runner;
-  };
   const pageSize = opts.readPageSize === undefined ? {} : { readPageSize: opts.readPageSize };
   const seeded = opts.seeded;
   if (seeded === undefined) {
-    return track(new StreamProcessorRunner({ processor, stream, ...pageSize }));
+    return new StreamProcessorRunner({ processor, stream, ...pageSize });
   }
   let record: ProcessorProgress<AgentState> = {
     reduction: {
@@ -100,21 +59,19 @@ function agentRunner(
     },
     processing: { acknowledgedThroughOffset: seeded.offset, cursorRevision: 0 },
   };
-  return track(
-    new StreamProcessorRunner({
-      processor,
-      stream,
-      ...pageSize,
-      durability: {
-        progress: {
-          read: () => record,
-          commit: (progress) => {
-            record = progress;
-          },
+  return new StreamProcessorRunner({
+    processor,
+    stream,
+    ...pageSize,
+    durability: {
+      progress: {
+        read: () => record,
+        commit: (progress) => {
+          record = progress;
         },
       },
-    }),
-  );
+    },
+  });
 }
 
 const systemContext = (content = DEFAULT_AGENT_SYSTEM_PROMPT): StreamEventInput => ({
@@ -261,6 +218,39 @@ function scriptFailed(error: string) {
 }
 
 describe("minimal web-chat agent processors", () => {
+  it("exposes runtime transitions in reduced state without appending runtime events", async () => {
+    const stream = agentStream();
+    const [requested] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: DEFAULT_AGENT_MODEL, requestId: "llm-request:runtime-state" },
+    });
+
+    expect(reduceAgentEvents(stream.events).runtimeChange).toMatchObject({
+      runtime: { llmRequests: { requested: 1 } },
+      sinceOffset: requested!.offset,
+      since: requested!.createdAt,
+    });
+
+    const [completed] = await stream.append({
+      type: "events.iterate.com/agent/llm-request-completed",
+      payload: {
+        durationMs: 1,
+        llmRequestOffset: requested!.offset,
+        result: { status: "success" },
+      },
+    });
+    expect(reduceAgentEvents(stream.events).runtimeChange).toMatchObject({
+      runtime: {
+        triggers: { pending: 0, runnable: 0 },
+        llmRequests: { scheduled: 0, requested: 0, started: 0 },
+        runningScripts: 0,
+      },
+      sinceOffset: completed!.offset,
+      since: completed!.createdAt,
+    });
+    expect(stream.events.some((event) => event.type.includes("runtime-changed"))).toBe(false);
+  });
+
   it("feeds a returned script result back as input and schedules another turn", async () => {
     const stream = agentStream();
     const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
@@ -780,8 +770,6 @@ describe("minimal web-chat agent processors", () => {
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agent/llm-request-scheduled",
-      AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-      AGENT_RUNTIME_CHANGED_EVENT_TYPE,
     ]);
     expect(events[1]!.payload).toMatchObject({
       role: "user",
@@ -3070,287 +3058,8 @@ describe("token usage and history compaction", () => {
   });
 });
 
-describe("runtime announcements and semantic waiting", () => {
-  const userMessage = () => userContext("hi");
-  const announcements = (stream: MemoryStream) =>
-    stream.events
-      .filter((event) => event.type === AGENT_RUNTIME_CHANGED_EVENT_TYPE)
-      .map((event) => AgentRuntimeChange.parse(event.payload));
-
-  async function announceCurrentRuntime(stream: MemoryStream, sinceOffset: number) {
-    const runtime = deriveAgentRuntime(reduceAgentEvents(stream.events), "agent/system-prompt");
-    await stream.append({
-      type: AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-      payload: { sinceOffset, runtime },
-    });
-    return runtime;
-  }
-
-  function runnerSeededAtHead(stream: MemoryStream) {
-    const offset = stream.events.at(-1)?.offset;
-    if (offset === undefined) throw new Error("cannot seed an empty journal");
-    const state = AgentProcessorContract.stateSchema.parse(reduceAgentEvents(stream.events));
-    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
-    return agentRunner(agent, stream, { seeded: { offset, state } });
-  }
-
-  it("announces the exact queued runtime immediately", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
-    const [, received] = await stream.append(systemContext(), userMessage());
-    await agentRunner(agent, stream).catchUp();
-
-    expect(announcements(stream)[0]).toEqual({
-      sinceOffset: received!.offset,
-      runtime: {
-        triggers: { pending: 1, runnable: 1 },
-        llmRequests: { scheduled: 0, requested: 0, started: 0 },
-        runningScripts: 0,
-      },
-    });
-  });
-
-  it("announces zero after the trailing debounce and then goes quiet", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      runtimeIdleDebounceMs: 0,
-      ai: {
-        async run() {
-          return { response: "All done." };
-        },
-      },
-    });
-    const runner = agentRunner(agent, stream);
-    await stream.append(systemContext(), userMessage());
-
-    await vi.waitFor(
-      async () => {
-        await runner.catchUp();
-        const last = announcements(stream).at(-1) as
-          | { runtime?: typeof ZERO_AGENT_RUNTIME }
-          | undefined;
-        expect(last?.runtime).toEqual(ZERO_AGENT_RUNTIME);
-      },
-      { timeout: 5_000 },
-    );
-
-    const journalLength = stream.events.length;
-    await runner.catchUp();
-    await runner.catchUp();
-    expect(stream.events.length).toBe(journalLength);
-  });
-
-  it("uses the default 1,000ms idle boundary exactly", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(Date.parse("2026-07-17T12:00:00.000Z"));
-      const stream = agentStream();
-      const [requested] = await stream.append({
-        type: "events.iterate.com/capability-host/script-run-requested",
-        payload: {
-          code: "async () => {}",
-          executionId: "script-boundary",
-          expiresAt: Date.now() + 60_000,
-        },
-      });
-      await announceCurrentRuntime(stream, requested!.offset);
-      const runner = runnerSeededAtHead(stream);
-
-      await stream.append({
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: { executionId: "script-boundary", settlement: scriptSucceeded() },
-      });
-      await runner.catchUp();
-
-      expect(announcements(stream).some(({ runtime }) => isAgentRuntimeZero(runtime))).toBe(false);
-      await vi.advanceTimersByTimeAsync(999);
-      expect(announcements(stream).some(({ runtime }) => isAgentRuntimeZero(runtime))).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(announcements(stream).at(-1)).toMatchObject({ runtime: ZERO_AGENT_RUNTIME });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not journal an idle blip during a non-zero hand-off", async () => {
-    const stream = agentStream();
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      runtimeIdleDebounceMs: 60_000,
-    });
-    const runner = agentRunner(agent, stream);
-    await stream.append(systemContext(), userMessage());
-    await runner.catchUp();
-
-    const [script] = await stream.append({
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        code: "async () => {}",
-        executionId: "script-1",
-        expiresAt: Date.now() + 60_000,
-      },
-    });
-    await runner.catchUp();
-
-    const emitted = announcements(stream);
-    expect(emitted.some(({ runtime }) => isAgentRuntimeZero(runtime))).toBe(false);
-    expect(emitted.at(-1)).toMatchObject({
-      sinceOffset: script!.offset,
-      runtime: { runningScripts: 1 },
-    });
-  });
-
-  it("does not announce idle across a genuine LLM-to-script handoff", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(Date.parse("2026-07-17T12:00:00.000Z"));
-      const stream = agentStream();
-      const requestId = "llm-request:handoff";
-      const [, requested] = await stream.append(
-        {
-          type: "events.iterate.com/agent/llm-request-scheduled",
-          payload: { debounceMs: 0, model: "gpt-test", requestId },
-        },
-        {
-          type: "events.iterate.com/agent/llm-request-requested",
-          payload: { model: "gpt-test", requestId, expiresAt: Date.now() + 60_000 },
-        },
-      );
-      await announceCurrentRuntime(stream, requested!.offset);
-      const runner = runnerSeededAtHead(stream);
-
-      await stream.append({
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          durationMs: 10,
-          llmRequestOffset: requested!.offset,
-          result: { status: "success" },
-        },
-      });
-      await runner.catchUp();
-      const [script] = await stream.append({
-        type: "events.iterate.com/capability-host/script-run-requested",
-        payload: {
-          code: "async () => {}",
-          executionId: "script-after-llm",
-          expiresAt: Date.now() + 60_000,
-        },
-      });
-      await runner.catchUp();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      const emitted = announcements(stream);
-      expect(emitted.some(({ runtime }) => isAgentRuntimeZero(runtime))).toBe(false);
-      expect(emitted.at(-1)).toMatchObject({
-        sinceOffset: script!.offset,
-        runtime: { runningScripts: 1 },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not announce idle across a genuine script-to-LLM handoff", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(Date.parse("2026-07-17T12:00:00.000Z"));
-      const stream = agentStream();
-      const [script] = await stream.append({
-        type: "events.iterate.com/capability-host/script-run-requested",
-        payload: {
-          code: "async () => {}",
-          executionId: "script-before-llm",
-          expiresAt: Date.now() + 60_000,
-        },
-      });
-      await announceCurrentRuntime(stream, script!.offset);
-      const runner = runnerSeededAtHead(stream);
-
-      await stream.append({
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: { executionId: "script-before-llm", settlement: scriptSucceeded() },
-      });
-      await runner.catchUp();
-      const [scheduled] = await stream.append({
-        type: "events.iterate.com/agent/llm-request-scheduled",
-        payload: {
-          debounceMs: 60_000,
-          model: "gpt-test",
-          requestId: "llm-request:after-script",
-        },
-      });
-      await runner.catchUp();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      const emitted = announcements(stream);
-      expect(emitted.some(({ runtime }) => isAgentRuntimeZero(runtime))).toBe(false);
-      expect(emitted.at(-1)).toMatchObject({
-        sinceOffset: scheduled!.offset,
-        runtime: { llmRequests: { scheduled: 1 } },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a replayed settled journal with no non-zero announcement silent", async () => {
-    const stream = agentStream();
-    await stream.append(
-      userMessage(),
-      {
-        type: "events.iterate.com/agent/llm-request-scheduled",
-        payload: { debounceMs: 0, model: "gpt-test", requestId: "llm-request:gen-0" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        // The key the replayed scheduled event's re-armed debounce timer will
-        // re-derive, so its append dedupes into this seeded event.
-        idempotencyKey: "agent/llm-request-requested@5",
-        payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 10, llmRequestOffset: 6, result: { status: "success" } },
-      },
-    );
-    const agent = makeAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      runtimeIdleDebounceMs: 0,
-    });
-    await agentRunner(agent, stream).catchUp();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(announcements(stream)).toEqual([]);
-  });
-
-  it("rejects a stale zero runtime generation", () => {
-    const event = (payload: Record<string, unknown>, offset: number) => ({
-      type: AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-      payload,
-      offset,
-      createdAt: "2026-07-09T00:00:00.000Z",
-      path: "/agents/test",
-    });
-    const activeRuntime = {
-      triggers: { pending: 0, runnable: 0 },
-      llmRequests: { scheduled: 0, requested: 0, started: 1 },
-      runningScripts: 0,
-    };
-    const state = reduceAgentEvents([
-      event({ sinceOffset: 4, runtime: activeRuntime }, 5),
-      event({ sinceOffset: 2, runtime: ZERO_AGENT_RUNTIME }, 6),
-    ]);
-    expect(state.announcedRuntime).toEqual({ sinceOffset: 4, runtime: activeRuntime });
-  });
-
-  it("folds metadata and conditionally clears only the wait that preceded a wake", () => {
+describe("semantic waiting", () => {
+  it("folds summaries and conditionally clears only the wait that preceded a wake", () => {
     const event = (type: string, payload: Record<string, unknown>, offset: number) => ({
       type,
       payload,
@@ -3359,7 +3068,7 @@ describe("runtime announcements and semantic waiting", () => {
       path: "/agents/test",
     });
     const state = reduceAgentEvents([
-      event(AGENT_METADATA_CHANGED_EVENT_TYPE, { waitingFor: "user_input" }, 1),
+      event(AGENT_SUMMARY_UPDATED_EVENT_TYPE, { waitingFor: "user_input" }, 1),
       event(
         "events.iterate.com/agents/context-added",
         {
@@ -3370,11 +3079,15 @@ describe("runtime announcements and semantic waiting", () => {
         },
         2,
       ),
-      event(AGENT_METADATA_CHANGED_EVENT_TYPE, { waitingFor: "timer" }, 3),
-      event(AGENT_WAITING_CLEARED_EVENT_TYPE, { throughOffset: 2 }, 4),
+      event(AGENT_SUMMARY_UPDATED_EVENT_TYPE, { waitingFor: "timer" }, 3),
+      event(
+        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+        { waitingFor: null, clearWaitingForThroughOffset: 2 },
+        4,
+      ),
     ]);
 
-    expect(state.metadata.waitingFor).toBe("timer");
+    expect(state.summary.waitingFor).toBe("timer");
     expect(state.waitingForSinceOffset).toBe(3);
   });
 
@@ -3388,18 +3101,24 @@ describe("runtime announcements and semantic waiting", () => {
     const externalRunner = agentRunner(external, externalStream);
     await externalStream.append(
       {
-        type: AGENT_METADATA_CHANGED_EVENT_TYPE,
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         payload: { waitingFor: "user_input" },
       },
       systemContext(),
-      userMessage(),
+      userContext("hi"),
     );
     await externalRunner.catchUp();
     await externalRunner.catchUp();
-    expect(
-      externalStream.events.some((event) => event.type === AGENT_WAITING_CLEARED_EVENT_TYPE),
-    ).toBe(true);
-    expect(externalRunner.currentState.metadata.waitingFor).toBeUndefined();
+    expect(externalStream.events).toContainEqual(
+      expect.objectContaining({
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+        payload: {
+          waitingFor: null,
+          clearWaitingForThroughOffset: expect.any(Number),
+        },
+      }),
+    );
+    expect(externalRunner.currentState.summary.waitingFor).toBeUndefined();
 
     const continuationStream = agentStream();
     const continuation = makeAgentProcessor({
@@ -3410,7 +3129,7 @@ describe("runtime announcements and semantic waiting", () => {
     const continuationRunner = agentRunner(continuation, continuationStream);
     await continuationStream.append(
       {
-        type: AGENT_METADATA_CHANGED_EVENT_TYPE,
+        type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         payload: { waitingFor: "timer" },
       },
       {
@@ -3426,8 +3145,12 @@ describe("runtime announcements and semantic waiting", () => {
     await continuationRunner.catchUp();
 
     expect(
-      continuationStream.events.some((event) => event.type === AGENT_WAITING_CLEARED_EVENT_TYPE),
+      continuationStream.events.some(
+        (event) =>
+          event.type === AGENT_SUMMARY_UPDATED_EVENT_TYPE &&
+          event.payload?.clearWaitingForThroughOffset !== undefined,
+      ),
     ).toBe(false);
-    expect(continuationRunner.currentState.metadata.waitingFor).toBe("timer");
+    expect(continuationRunner.currentState.summary.waitingFor).toBe("timer");
   });
 });

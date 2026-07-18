@@ -28,12 +28,6 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
-import {
-  AGENT_BINDING_SET_EVENT_TYPE,
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
-  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-  AGENT_WAITING_CLEARED_EVENT_TYPE,
-} from "@iterate-com/shared/agent-events";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
@@ -85,7 +79,10 @@ import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
-import { AgentMetadataPatch } from "./domains/agents/agent-presence.ts";
+import {
+  AGENT_COLLECTION_PATH,
+  type AgentCollectionProcessorState,
+} from "./domains/agents/agent-collection-processor-contract.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
@@ -106,6 +103,7 @@ import {
 } from "./domains/sandboxes/instance-types.ts";
 import {
   assertSandboxPath,
+  sandboxCreateClaimKey,
   assertValidSleepAfter,
   sandboxPathFor,
 } from "./domains/sandboxes/utils.ts";
@@ -274,6 +272,7 @@ import {
   AgentProcessorContract,
   type AgentEventInput,
   type AgentFileAttachment,
+  type AgentLiveState,
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import {
@@ -341,7 +340,6 @@ import type {
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
-import type { AgentTouchInput } from "./domains/projects/agent-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import {
   SchedulerProcessorContract,
@@ -431,14 +429,6 @@ class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
 type FetchOnly = Pick<Fetcher, "fetch">;
 
 const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
-
-const AGENT_PROJECTION_EVENT_TYPES = new Set([
-  "events.iterate.com/agent/created",
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
-  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-  AGENT_WAITING_CLEARED_EVENT_TYPE,
-  AGENT_BINDING_SET_EVENT_TYPE,
-]);
 
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
@@ -1431,10 +1421,46 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
         'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("researcher") from an agent script addresses a child agent, get("..") from a child addresses its parent. list() the known agent streams.',
       children: {
         get: "One agent by path (absolute, or relative to the calling scope).",
-        list: "Known agents (from project state).",
+        list: "Known agents (from the collection processor's reduced state).",
+        liveState: "The collection processor's reduced agent database.",
+        processor: "The collection's hosted stream processor.",
       },
       parent: "a project itx (itx.agents)",
     });
+  }
+
+  get #durableObjectStub() {
+    return env.AGENT_COLLECTION.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: AGENT_COLLECTION_PATH,
+      }),
+    );
+  }
+
+  get processor(): WakeableStreamProcessorRpc<AgentCollectionProcessorState> {
+    return new ProcessorRelayRpcTarget<AgentCollectionProcessorState>({
+      auth: this.props.auth,
+      // Workers generates the concrete AgentCollection DO stub, while the
+      // shared relay accepts the smaller processor-host surface. The DO owns
+      // that surface; the double assertion only bridges those generated and
+      // generic RPC types.
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  get liveState(): LiveStateRpc<AgentCollectionProcessorState> {
+    return new LiveStateRelayRpcTarget<AgentCollectionProcessorState>(
+      () => this.#durableObjectStub,
+    );
+  }
+
+  /** Stateless push sink: forwarding and authorization are its entire job. */
+  processEvent(batch: StreamPushEventBatch): Promise<void> {
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("agents.processEvent is dialed by stream push subscriptions, not sessions");
+    }
+    return Promise.resolve(this.#durableObjectStub.processEvent(batch));
   }
 
   constructor(
@@ -1484,9 +1510,13 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     });
   }
 
-  /** Known agents, read from the project processor's reduced state. */
-  list(): Promise<StreamListItem[]> {
-    return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  /** Known agents, read from the collection processor's reduced database. */
+  async list(): Promise<StreamListItem[]> {
+    const { state } = await this.processor.snapshot();
+    return Object.values(state.agents).map((agent) => ({
+      path: agent.path,
+      createdAt: agent.timestamps.createdAt,
+    }));
   }
 }
 
@@ -1588,16 +1618,12 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     );
   }
 
-  static #claimKey(path: string) {
-    return `sandbox-create-requested:${path}`;
-  }
-
   /** The name claim journaled for a path (the catalogue's `create-requested`
    * event), or undefined if no create was ever requested there. Its instance
    * type is what routes the path to the right container namespace. */
   async #claim(path: string): Promise<{ instanceType: SandboxInstanceType } | undefined> {
     const event = await this.#catalogue.getEvent({
-      idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
+      idempotencyKey: sandboxCreateClaimKey(path),
     });
     if (event === undefined) return undefined;
     return {
@@ -1664,7 +1690,7 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     const [claim] = await this.#catalogue.append(
       SandboxProcessorContract.buildEvent({
         type: "events.iterate.com/sandbox/create-requested",
-        idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
+        idempotencyKey: sandboxCreateClaimKey(path),
         payload: {
           path,
           instanceType,
@@ -4366,8 +4392,21 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   get processor(): WakeableStreamProcessorRpc<AgentProcessorState> {
     return new ProcessorRelayRpcTarget<AgentProcessorState>({
       auth: this.#props.auth,
+      // Workers generates the concrete Agent DO stub, while the shared relay
+      // accepts the smaller processor-host surface. The DO implements that
+      // surface; the double assertion only bridges those RPC types.
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
     });
+  }
+
+  /** The agent's transient runtime as a push-driven live-state surface. */
+  get liveState(): LiveStateRpc<AgentLiveState> {
+    return new LiveStateRelayRpcTarget<AgentLiveState>(
+      // Workers generates the concrete Agent DO stub, while this generic relay
+      // accepts its live-state surface. The DO implements that surface; the
+      // double assertion only bridges those RPC types.
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<AgentLiveState>,
+    );
   }
 
   /** The agent's own event stream. */
@@ -4405,10 +4444,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Create the generic agent machinery on this stream and wait until both
-   * processors have consumed the birth batch. Configuration, context, and
-   * tasks are separate events: append processor-consumed events through
-   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Create the generic agent machinery on this stream and wait until the
+   * agent, capability-host, and singleton collection processors have reduced
+   * the birth. Configuration, context, and tasks are separate events: append
+   * processor-consumed events through `agent.append()` or use a typed helper
+   * such as `message()` after creation.
    */
   async create(): Promise<void> {
     if (arguments.length !== 0) {
@@ -4417,35 +4457,39 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       );
     }
     const snapshot = await this.processor.snapshot();
-    if (snapshot.state.birthCertificate !== null) {
-      // Creation is one atomic stream append. The agent snapshot proves its
-      // processor has folded that append; wait the paired capability host
-      // through the same observed head before returning from this barrier.
-      await this.capabilityHost.processor.waitUntilProcessed({
-        offset: snapshot.offset,
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    let birthOffset = snapshot.offset;
+    if (snapshot.state.birthCertificate === null) {
+      const creation = agentCreationForPath({
+        agentPath: this.#path,
+        projectId: this.#props.projectId,
+        ...(await agentBootProjectFacts(this.#props.projectId)),
       });
-      return;
+      const committed = await this.stream.append(...creation.events);
+      // append() preserves INPUT order, including idempotency hits at their old
+      // offsets. A paired capability host may already exist, so the last input
+      // is not necessarily the newest event. The create boundary is the maximum
+      // offset across the complete batch.
+      birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+      if (birthOffset === 0) throw new Error("agent create committed no events");
     }
-    const creation = agentCreationForPath({
-      agentPath: this.#path,
-      projectId: this.#props.projectId,
-      ...(await agentBootProjectFacts(this.#props.projectId)),
-    });
-    const committed = await this.stream.append(...creation.events);
-    // append() preserves INPUT order, including idempotency hits at their old
-    // offsets. A paired capability host may already exist, so the last input
-    // is not necessarily the newest event. The create boundary is the maximum
-    // offset across the complete batch.
-    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-    if (offset === 0) throw new Error("agent create committed no events");
+
+    const agentCollection = env.AGENT_COLLECTION.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.#props.projectId,
+        path: AGENT_COLLECTION_PATH,
+      }),
+    );
     await Promise.all([
       this.processor.waitUntilProcessed({
-        offset,
+        offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
       this.capabilityHost.processor.waitUntilProcessed({
-        offset,
+        offset: birthOffset,
+        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      }),
+      agentCollection.waitUntilAgentCreated({
+        path: this.#path,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     ]);
@@ -4503,23 +4547,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return source !== undefined && source.startsWith("/agents/")
       ? { type: "agent", path: source }
       : { type: "user", origin: "web" };
-  }
-
-  /**
-   * Merge human-readable metadata for this agent. Omitted properties remain
-   * unchanged; null clears an optional property; pinned false unpins. Title is
-   * a stable identity, activity is the current-condition sentence updated as
-   * work moves through phases, summary is one or two durable sentences, and
-   * waitingFor declares a semantic dependency once current runtime is zero.
-   */
-  async setMetadata(input: AgentMetadataPatch): Promise<StreamEvent> {
-    await this.#assertCreated();
-    const patch = AgentMetadataPatch.parse(input);
-    const [event] = await this.stream.append({
-      type: AGENT_METADATA_CHANGED_EVENT_TYPE,
-      payload: patch,
-    });
-    return event;
   }
 
   /**
@@ -4619,8 +4646,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
         create: "Create this agent and wait for its processors to consume the birth batch.",
-        setMetadata:
-          "Merge title, activity, summary, waitingFor, or project-global pinned presentation metadata.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
         message:
           "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
@@ -5480,7 +5505,7 @@ type ProjectRpcTargetProps = {
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
-  indexCommittedBatchFacts(input: { stream: TouchInput; agent?: AgentTouchInput }): Promise<void>;
+  indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
 };
 
 /**
@@ -5911,8 +5936,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // INTENT, not the implementation — so envelope evolution happens here in
   // deployment code instead of by patching user repos, and first-party
   // per-event work joins the same ordered, checkpointed delivery. Stream and
-  // agent projection writes are awaited: a failed write rejects into the
-  // spine and is retried rather than acknowledging stale live state. Same
+  // stream-index writes are awaited: a failed write rejects into the spine
+  // and is retried rather than acknowledging stale live state. Same
   // access model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     await this.#indexCommittedBatchFacts(batch);
@@ -5951,25 +5976,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
   }
 
-  /** Materialize one committed delivery's stream and agent facts together. */
+  /** Materialize one committed delivery's stream facts. */
   async #indexCommittedBatchFacts(batch: StreamPushEventBatch): Promise<void> {
     const last = batch.events.at(-1);
     if (last === undefined) return;
-
-    const events = batch.path.startsWith("/agents/")
-      ? batch.events.flatMap((event) =>
-          AGENT_PROJECTION_EVENT_TYPES.has(event.type)
-            ? [
-                {
-                  type: event.type,
-                  payload: event.payload,
-                  offset: event.offset,
-                  createdAt: event.createdAt,
-                },
-              ]
-            : [],
-        )
-      : [];
 
     await this.#projectDo.indexCommittedBatchFacts({
       stream: {
@@ -5978,7 +5988,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         type: last.type,
         maxOffset: batch.streamMaxOffset,
       },
-      ...(events.length === 0 ? {} : { agent: { path: batch.path, events } }),
     });
   }
 

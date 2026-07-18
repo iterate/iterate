@@ -1,18 +1,30 @@
 # Dynamic Worker Build Requirements
 
-Status: implemented (see apps/os/src/domains/workers/), with one deliberate
-revision to this document:
-build coordination is a direct RPC to a dedicated **builder worker**, not a
-stream processor. The stream-processor design below was built first and then
-removed — build lifecycle events bought observability nobody planned to
-consume, at the price of a processor subscription on every scope, a
-claim/stale-window dedupe fold, and callers waiting on eventually-consistent
-KV. The builder worker keeps every property that mattered (one bundler
-toolchain in one script, deduped concurrent builds, deterministic
-content-addressed artifacts) with none of the coordination machinery; build
-failures reach callers as plain errors. The journal records what dynamic
-workers DO (script executions, capability mounts), not how their bytes were
-produced.
+Status: implemented (see apps/os/src/domains/workers/), with two deliberate
+revisions to this document:
+
+1. Build coordination is direct (in the worker-loader's own promise chain),
+   not a stream processor. The stream-processor design below was built first
+   and then removed — build lifecycle events bought observability nobody
+   planned to consume, at the price of a processor subscription on every
+   scope, a claim/stale-window dedupe fold, and callers waiting on
+   eventually-consistent KV. The journal records what dynamic workers DO
+   (script executions, capability mounts), not how their bytes were produced.
+2. The build BACKEND is no longer Cloudflare's in-workerd bundler
+   (esbuild-wasm in a builder sidecar worker — permanently incomplete node
+   resolution, a hand-maintained builtin shim list, four pnpm patches). The
+   shared recipe in `src/domains/workers/build-recipe.ts` runs real
+   `npm install --ignore-scripts` plus a pinned wrangler dry-run bundle —
+   wrangler's canonical nodejs_compat pipeline — inside the deployment's
+   builder pool (`build-backend.ts`, `../src/domains/workers/builder-pool-sandbox.ts`:
+   a fixed fleet of stock-SDK containers outside the project sandbox catalogue)
+   on deployed envs, and on the host toolchain via the dev server's
+   `/__dev/worker-build` endpoint in local dev. Every property that mattered
+   survives: deduped concurrent builds, deterministic content-addressed
+   artifacts (now two-tier: a trusted content-only key for deploy-seeded
+   template artifacts, and a project-scoped key for runtime builds, because a
+   project can influence its own builder sandbox's output), and build
+   failures reaching callers as plain errors.
 
 ## Goal
 

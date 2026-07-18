@@ -10,9 +10,11 @@ There are nine preview **slots**. Each is a fixed shell of Cloudflare
 resources — a Worker, its hostname/DNS, a D1 database, KV namespaces, R2
 buckets, an AI Search namespace — created once by `ensure-resources` and
 **never deleted** (Workers especially: recreating a container-bearing Durable
-Object class is broken upstream). A slot is leased to one PR at a time through
-the [semaphore](../apps/semaphore); a PR's deploy and e2e renew the lease, and
-closing the PR releases it.
+Object class is broken upstream). Erase preserves container classes declared
+by the incoming branch, but deletes any retired container application before
+tombstoning a class left by another branch. A slot is leased to one PR at a
+time through the [semaphore](../apps/semaphore); a PR's deploy and e2e renew
+the lease, and closing the PR releases it.
 
 The bug this design fixes: teardown used to be **on the critical path of
 releasing the slot**. Cleanup erased the slot's data, and only then released

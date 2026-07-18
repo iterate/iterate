@@ -384,6 +384,8 @@ export interface Agent {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** The agent stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<AgentProcessorState>;
+  /** The agent's transient runtime as a push-driven live-state surface. */
+  liveState: LiveStateRpc<AgentLiveState>;
   /** The agent's own event stream. */
   stream: Stream;
   /**
@@ -400,10 +402,11 @@ export interface Agent {
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
-   * Create the generic agent machinery on this stream and wait until both
-   * processors have consumed the birth batch. Configuration, context, and
-   * tasks are separate events: append processor-consumed events through
-   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Create the generic agent machinery on this stream and wait until the
+   * agent, capability-host, and singleton collection processors have reduced
+   * the birth. Configuration, context, and tasks are separate events: append
+   * processor-consumed events through `agent.append()` or use a typed helper
+   * such as `message()` after creation.
    */
   create(): Promise<void>;
   /**
@@ -425,14 +428,6 @@ export interface Agent {
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
         },
   ): Promise<StreamEvent>;
-  /**
-   * Merge human-readable metadata for this agent. Omitted properties remain
-   * unchanged; null clears an optional property; pinned false unpins. Title is
-   * a stable identity, activity is the current-condition sentence updated as
-   * work moves through phases, summary is one or two durable sentences, and
-   * waitingFor declares a semantic dependency once current runtime is zero.
-   */
-  setMetadata(input: AgentMetadataPatch): Promise<StreamEvent>;
   /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -575,6 +570,10 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
+  processor: WakeableStreamProcessorRpc<AgentCollectionProcessorState>;
+  liveState: LiveStateRpc<AgentCollectionProcessorState>;
+  /** Stateless push sink: forwarding and authorization are its entire job. */
+  processEvent(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
@@ -586,7 +585,7 @@ export interface AgentCollection {
    * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
    */
   get(path: string): Agent;
-  /** Known agents, read from the project processor's reduced state. */
+  /** Known agents, read from the collection processor's reduced database. */
   list(): Promise<StreamListItem[]>;
 }
 
@@ -1816,7 +1815,6 @@ export type ProjectProcessorState = {
   ready: boolean;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
-  agents: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
@@ -1863,8 +1861,6 @@ export type ProjectProcessorState = {
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
- * - `agents` — every agent's metadata, exact runtime facts, external binding,
- *   and meaningful timestamps, in the same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -1875,8 +1871,6 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
-  /** The complete agent catalog keyed by agent path. */
-  agents: Record<string, AgentRecord>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };
@@ -2100,72 +2094,6 @@ export type StreamIndexRow = {
   lastType: string;
   /** How many events we've observed on the stream. */
   eventCount: number;
-};
-
-/** The project catalog's complete current projection for one explicitly created agent. */
-export type AgentRecord = {
-  path: string;
-  metadata: {
-    title?: string | undefined;
-    summary?: string | undefined;
-    activity?: string | undefined;
-    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
-    pinned: boolean;
-  };
-  runtime: {
-    triggers: { pending: number; runnable: number };
-    llmRequests: { scheduled: number; requested: number; started: number };
-    runningScripts: number;
-  };
-  binding?:
-    | {
-        type: "slack_thread";
-        connection: string;
-        channelId: string;
-        threadTs: string;
-        channelName?: string | undefined;
-        url?: string | undefined;
-      }
-    | {
-        type: "telegram_thread";
-        connection: string;
-        chatId: string;
-        messageThreadId?: string | undefined;
-      }
-    | {
-        type: "email_thread";
-        threadId: string;
-        subject?: string | undefined;
-        counterpart?: string | undefined;
-      }
-    | {
-        type: "github_pull_request";
-        connection: string;
-        installationId: string;
-        owner: string;
-        repo: string;
-        number: number;
-        url?: string | undefined;
-      }
-    | {
-        type: "github_check_run";
-        connection: string;
-        installationId: string;
-        owner: string;
-        repo: string;
-        number: number;
-        checkRunId?: number | undefined;
-        headSha?: string | undefined;
-        url?: string | undefined;
-      }
-    | undefined;
-  timestamps: {
-    createdAt: string;
-    lastWorkAt: string;
-    metadataUpdatedAt?: string | undefined;
-    activityUpdatedAt?: string | undefined;
-    runtimeUpdatedAt?: string | undefined;
-  };
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
@@ -2535,28 +2463,18 @@ export type AgentProcessorState = {
   activeScriptExecutionIds: string[];
   runtimeChange?:
     | {
-        sinceOffset: number;
         runtime: {
           triggers: { pending: number; runnable: number };
           llmRequests: { scheduled: number; requested: number; started: number };
           runningScripts: number;
         };
+        sinceOffset: number;
         since: string;
       }
     | undefined;
-  announcedRuntime?:
-    | {
-        sinceOffset: number;
-        runtime: {
-          triggers: { pending: number; runnable: number };
-          llmRequests: { scheduled: number; requested: number; started: number };
-          runningScripts: number;
-        };
-      }
-    | undefined;
-  metadata: {
+  summary: {
     title?: string | undefined;
-    summary?: string | undefined;
+    description?: string | undefined;
     activity?: string | undefined;
     waitingFor?: "external_event" | "timer" | "user_input" | undefined;
     pinned: boolean;
@@ -2568,6 +2486,21 @@ export type AgentProcessorState = {
     totalCachedInputTokens: number;
     totalReasoningOutputTokens: number;
   };
+};
+
+/** The transient runtime state pushed by one Agent durable object. */
+export type AgentLiveState = {
+  runtimeChange?:
+    | {
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        sinceOffset: number;
+        since: string;
+      }
+    | undefined;
 };
 
 /** Append input accepted by the Agent processor, derived from its `consumes` contract. */
@@ -2613,25 +2546,15 @@ export type AgentEventInput =
       { maxAutonomousTurns: number; reason: string; triggerOffset: number }
     >
   | TypedConsumedEventInput<
-      "events.iterate.com/agent/metadata-changed",
-      {
-        title?: string | null | undefined;
-        summary?: string | null | undefined;
-        activity?: string | null | undefined;
-        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-        pinned?: boolean | undefined;
-      }
-    >
-  | TypedConsumedEventInput<
-      "events.iterate.com/agent/runtime-changed",
-      {
-        sinceOffset: number;
-        runtime: {
-          triggers: { pending: number; runnable: number };
-          llmRequests: { scheduled: number; requested: number; started: number };
-          runningScripts: number;
-        };
-      }
+      "events.iterate.com/agent/summary-updated",
+      | {
+          title?: string | null | undefined;
+          description?: string | null | undefined;
+          activity?: string | null | undefined;
+          waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+          pinned?: boolean | undefined;
+        }
+      | { waitingFor: null; clearWaitingForThroughOffset: number }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/token-usage-reported",
@@ -2645,7 +2568,6 @@ export type AgentEventInput =
         reasoningOutputTokens?: number | undefined;
       }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/waiting-cleared", { throughOffset: number }>
   | TypedConsumedEventInput<
       "events.iterate.com/agents/context-added",
       | {
@@ -2870,15 +2792,6 @@ export type StreamEvent = {
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
-/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
-export type AgentMetadataPatch = {
-  title?: string | null | undefined;
-  summary?: string | null | undefined;
-  activity?: string | null | undefined;
-  waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-  pinned?: boolean | undefined;
-};
-
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
@@ -2901,6 +2814,31 @@ export type ItxExpression = ItxExpressionStep[];
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
+
+/** The singleton agent collection processor's reduced database state. */
+export type AgentCollectionProcessorState = {
+  birthCertificate: Record<string, never> | null;
+  agents: Record<
+    string,
+    {
+      path: string;
+      summary: {
+        title?: string | undefined;
+        description?: string | undefined;
+        activity?: string | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+        pinned: boolean;
+      };
+      timestamps: {
+        createdAt: string;
+        lastWorkAt: string;
+        summaryUpdatedAt?: string | undefined;
+        activityUpdatedAt?: string | undefined;
+      };
+    }
+  >;
+  waitingForSinceOffsets: Record<string, number>;
+};
 
 /**
  * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
@@ -4370,45 +4308,35 @@ export type WorkerFileSource =
 /**
  * Build options for a dynamic worker.
  *
- * This mirrors Cloudflare's `CreateWorkerOptions` from
- * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
- * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language (drift fails typecheck via the assignability pin
- * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the
- * invariant is one OS materialization pipeline, not one bundled output file.
- * When the file map has a `package.json` with dependencies, the bundler
- * installs them from the npm registry at build time.
+ * Deliberately small: exactly what the build recipe (build-recipe.ts — real
+ * `npm install` plus wrangler's canonical bundling pipeline) expresses.
+ * When the file map has a `package.json`, dependencies are installed from
+ * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
  */
 export type WorkerBuildOptions = {
-  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  /** Entry point file path relative to the source root. Default: "worker.ts". */
   entryPoint?: string;
-  /** Bundle all dependencies into a single output file. Default: true. */
+  /** Bundle to loader-ready output (default: true). `bundle: false` is the
+   * run-script fast path: inline JavaScript that is ALREADY loader-ready
+   * skips the build pipeline entirely. */
   bundle?: boolean;
-  /** Modules kept external ("cloudflare:*" always is). */
-  externals?: string[];
-  /** Target environment. Default: "es2022". */
-  target?: string;
   minify?: boolean;
-  sourcemap?: boolean;
-  /** npm registry URL for dependency installs. */
-  registry?: string;
-  jsx?: "transform" | "preserve" | "automatic";
-  jsxImportSource?: string;
-  define?: Record<string, string>;
-  loader?: Record<string, WorkerBundlerLoader>;
-  conditions?: string[];
+  /**
+   * Which build pipeline turns the source into loader-ready modules.
+   * "wrangler" (default): the platform's own bundle — npm install + wrangler
+   * dry-run, source code is PARSED but never executed. "vite": the source's
+   * OWN `npm run build` (a real Vite/TanStack-Start app) — install includes
+   * devDependencies and the build EXECUTES project code in the builder, so
+   * runtime artifacts stay project-scoped and the output is collected from
+   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +
+   * dist/client assets, served by a generated wrapper entry).
+   */
+  pipeline?: "wrangler" | "vite";
+  /** Build from this subdirectory of the resolved source: files outside it
+   * are dropped and paths are re-rooted, so a repo can host an app at e.g.
+   * `apps/tanstack/` with its own package.json and config. */
+  rootDir?: string;
+  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
+   * runtime rides in this way). A source's own entry wins over the platform's. */
   virtualModules?: Record<string, string>;
 };
-
-/** Loader names accepted by Cloudflare's worker bundler `loader` option. */
-export type WorkerBundlerLoader =
-  | "js"
-  | "jsx"
-  | "ts"
-  | "tsx"
-  | "json"
-  | "css"
-  | "text"
-  | "binary"
-  | "base64"
-  | "dataurl";

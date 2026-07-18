@@ -56,13 +56,25 @@ export function buildAgentForest(records: Record<string, AgentRecord>): AgentTre
 export function pinnedAgentShortcuts(forest: readonly AgentTreeNode[]): AgentTreeNode[] {
   const nodes: AgentTreeNode[] = [];
   walkAgentForest(forest, (node) => {
-    if (node.agent.metadata.pinned) nodes.push(node);
+    if (node.agent.summary.pinned) nodes.push(node);
   });
-  return nodes.toSorted(
-    (left, right) =>
-      right.aggregateLastWorkAt.localeCompare(left.aggregateLastWorkAt) ||
-      left.agent.path.localeCompare(right.agent.path),
-  );
+  return nodes.toSorted(compareRecentNodes);
+}
+
+/** Sidebar selection still honors pin/root caps, but presentation is one
+ * recency-ordered list: pinning or attention state never jumps stale work over
+ * a more recently active agent. */
+export function sidebarAgentShortcuts(
+  forest: readonly AgentTreeNode[],
+  pinnedLimit: number,
+  rootLimit: number,
+): AgentTreeNode[] {
+  const pinned = pinnedAgentShortcuts(forest).slice(0, pinnedLimit);
+  const roots = forest
+    .filter((node) => !node.agent.summary.pinned)
+    .toSorted(compareRecentNodes)
+    .slice(0, rootLimit);
+  return [...pinned, ...roots].toSorted(compareRecentNodes);
 }
 
 const AGENT_TREE_SHAPE = {
@@ -90,7 +102,7 @@ export function walkAgentForest(
 }
 
 export function agentTitle(agent: AgentRecord): string {
-  if (agent.metadata.title !== undefined) return agent.metadata.title;
+  if (agent.summary.title !== undefined) return agent.summary.title;
   const bindingTitle = agentBindingTitle(agent.binding);
   if (bindingTitle !== undefined) return bindingTitle;
   return agent.path.split("/").filter(Boolean).at(-1) ?? agent.path;
@@ -121,8 +133,8 @@ function agentSearchText(agent: AgentRecord): string {
   const binding = agent.binding === undefined ? [] : Object.values(agent.binding);
   return [
     agentTitle(agent),
-    agent.metadata.activity,
-    agent.metadata.summary,
+    agent.summary.activity,
+    agent.summary.description,
     agent.path,
     ...binding,
   ]
@@ -138,16 +150,27 @@ export function agentNodeDisplayState(
 ) {
   const aggregateState = deriveAgentDisplayState(node.aggregateRuntime);
   if (aggregateState !== "idle") return aggregateState;
-  if (node.aggregateWaiting.userInput > 0) return "waiting_for_user_input";
-  if (node.aggregateWaiting.externalEvent > 0) return "waiting_for_external_event";
-  if (node.aggregateWaiting.timer > 0) return "waiting_for_timer";
+  const waitingFor = agentNodeWaitingFor(node);
+  if (waitingFor === "user_input") return "waiting_for_user_input";
+  if (waitingFor === "external_event") return "waiting_for_external_event";
+  if (waitingFor === "timer") return "waiting_for_timer";
   return "idle";
 }
 
+/** Highest-priority waiting requirement in a node's collapsed subtree. */
+export function agentNodeWaitingFor(
+  node: Pick<AgentTreeNode, "aggregateWaiting">,
+): AgentRecord["summary"]["waitingFor"] {
+  if (node.aggregateWaiting.userInput > 0) return "user_input";
+  if (node.aggregateWaiting.externalEvent > 0) return "external_event";
+  if (node.aggregateWaiting.timer > 0) return "timer";
+  return undefined;
+}
+
 function finalizeNode(node: AgentTreeNode): void {
-  let runtime = node.agent.runtime;
+  let runtime = node.agent.runtime ?? ZERO_AGENT_RUNTIME;
   const waiting = emptyWaitingAggregate();
-  addWaiting(waiting, node.agent.metadata.waitingFor);
+  addWaiting(waiting, node.agent.summary.waitingFor);
   let lastWorkAt = node.agent.timestamps.lastWorkAt;
   let agentCount = 1;
   let activeCount = deriveAgentDisplayState(node.agent.runtime) === "idle" ? 0 : 1;
@@ -174,6 +197,13 @@ function finalizeNode(node: AgentTreeNode): void {
 function compareStructuralNodes(left: AgentTreeNode, right: AgentTreeNode): number {
   return (
     displayPriority(left) - displayPriority(right) ||
+    right.aggregateLastWorkAt.localeCompare(left.aggregateLastWorkAt) ||
+    left.agent.path.localeCompare(right.agent.path)
+  );
+}
+
+function compareRecentNodes(left: AgentTreeNode, right: AgentTreeNode): number {
+  return (
     right.aggregateLastWorkAt.localeCompare(left.aggregateLastWorkAt) ||
     left.agent.path.localeCompare(right.agent.path)
   );
@@ -216,7 +246,7 @@ function emptyWaitingAggregate(): AgentWaitingAggregate {
 
 function addWaiting(
   aggregate: AgentWaitingAggregate,
-  waitingFor: AgentRecord["metadata"]["waitingFor"],
+  waitingFor: AgentRecord["summary"]["waitingFor"],
 ): void {
   if (waitingFor === "user_input") aggregate.userInput += 1;
   if (waitingFor === "external_event") aggregate.externalEvent += 1;

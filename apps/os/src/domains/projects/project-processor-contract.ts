@@ -3,7 +3,6 @@ import { defineProcessorContract, type ProcessorState } from "iterate/processors
 import { StreamListItem } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
@@ -74,7 +73,7 @@ const ProjectBirthCertificate = z.object({
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
     "Project projection: bootstrap the default repo/project worker and manage custom-domain routing.",
   stateSchema: z.object({
@@ -82,7 +81,6 @@ export const ProjectProcessorContract = defineProcessorContract({
     ready: z.boolean().default(false),
     onboardingActive: z.boolean().default(false),
     onboardingCompletedAt: z.string().nullable().default(null),
-    agents: z.array(StreamListItem).default([]),
     repos: z.array(StreamListItem).default([]),
     secrets: z.array(StreamListItem).default([]),
     streams: z.array(StreamListItem).default([]),
@@ -438,7 +436,6 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/onboarding-completed",
     "events.iterate.com/project/created",
     "events.iterate.com/project/ready",
-    "events.iterate.com/agent/created",
     "events.iterate.com/repo/created",
     "events.iterate.com/repo/ready",
     "events.iterate.com/secret/created",
@@ -448,7 +445,6 @@ export const ProjectProcessorContract = defineProcessorContract({
   processorDeps: [
     CoreProcessorContract,
     RepoProcessorContract,
-    AgentProcessorContract,
     EmailProcessorContract,
     SecretProcessorContract,
     CapabilityHostProcessorContract,

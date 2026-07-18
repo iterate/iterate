@@ -1,5 +1,6 @@
 import { useCallback, useState, type FormEvent, type MouseEvent } from "react";
 import { ChevronRight, Copy, Pencil, Star } from "lucide-react";
+import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
@@ -11,14 +12,31 @@ import {
   bindingLabel,
   bindingUrl,
 } from "./agent-presentation.ts";
-import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-tree.ts";
+import {
+  agentNodeDisplayState,
+  agentNodeWaitingFor,
+  agentTitle,
+  type AgentTreeNode,
+} from "./agent-tree.ts";
+import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
 import {
   deriveAgentDisplayState,
+  deriveAgentRuntimeDisplayState,
   type AgentBinding,
   type AgentDisplayState,
   type AgentRecord,
 } from "~/domains/agents/agent-presence.ts";
+import { formatElapsedSeconds } from "~/lib/feed-format.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
+
+const LIVE_RUNTIME_TICK_MS = 100;
+
+const WAITING_FOR_LABEL = {
+  user_input: "Needs input",
+  external_event: "Waiting for external event",
+  timer: "Waiting for timer",
+} as const;
 
 /**
  * Two-line sidebar shortcut: channel icon, title, live activity, and the
@@ -50,14 +68,14 @@ export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen:
             <span className="min-w-0 flex-1 truncate text-sm">{agentTitle(agent)}</span>
             <StateDot state={state} className="size-1.5" />
           </span>
-          {agent.metadata.activity === undefined ? null : (
+          {agent.summary.activity === undefined ? null : (
             <span
               className={cn(
                 "block truncate text-[11px] text-muted-foreground",
                 state.active && "motion-safe:animate-pulse",
               )}
             >
-              {agent.metadata.activity}
+              {agent.summary.activity}
             </span>
           )}
         </span>
@@ -75,6 +93,7 @@ export function AgentSidebarRow({ node, onOpen }: { node: AgentTreeNode; onOpen:
 export function AgentListRow({
   node,
   nowMs,
+  runtimeTransition,
   expanded,
   onOpen,
   onTogglePinned,
@@ -82,15 +101,18 @@ export function AgentListRow({
 }: {
   node: AgentTreeNode;
   nowMs: number;
+  runtimeTransition?: AgentRuntimeTransition;
   expanded: boolean;
   onOpen: () => void;
   onTogglePinned: () => void | Promise<unknown>;
   onToggleChildren?: () => void;
 }) {
   const agent = node.agent;
-  const displayState = agentNodeDisplayState(node);
+  const runtime = runtimeTransition?.runtime ?? node.aggregateRuntime;
+  const runtimeState = deriveAgentRuntimeDisplayState(runtime);
+  const displayState = runtimeState === "idle" ? agentNodeDisplayState(node) : runtimeState;
+  const waitingFor = expanded ? agent.summary.waitingFor : agentNodeWaitingFor(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const description = agent.metadata.activity ?? agent.metadata.summary;
   const descendantCount = node.aggregateAgentCount - 1;
   const expandable = node.children.length > 0 && onToggleChildren !== undefined;
   return (
@@ -98,6 +120,7 @@ export function AgentListRow({
       className="group/agent relative flex items-start gap-2 border-b py-2.5 pr-2 hover:bg-accent/40"
       data-agent-path={agent.path}
       data-agent-state={displayState}
+      data-agent-runtime-state={runtimeState}
       data-agent-variant="catalog"
     >
       <span className="flex w-4 shrink-0 justify-end pt-0.5">
@@ -132,7 +155,7 @@ export function AgentListRow({
           >
             {agentTitle(agent)}
           </button>
-          {agent.metadata.pinned ? (
+          {agent.summary.pinned ? (
             <Star
               className="size-3 shrink-0 self-center fill-amber-400 text-amber-500 group-hover/agent:opacity-0"
               aria-hidden
@@ -147,23 +170,34 @@ export function AgentListRow({
           </time>
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="shrink-0">{state.label}</span>
+          {agent.summary.activity === undefined ? null : (
+            <>
+              <span className="min-w-0 truncate">{agent.summary.activity}</span>
+              <span aria-hidden>·</span>
+            </>
+          )}
+          <AgentRuntimeStatus
+            runtimeState={runtimeState}
+            since={runtimeTransition?.since ?? agent.timestamps.runtimeUpdatedAt}
+          />
           {descendantCount > 0 ? (
             <span className="shrink-0">
               · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
             </span>
           ) : null}
-          {description === undefined ? null : (
-            <span className="min-w-0 truncate">· {description}</span>
+          {agent.binding === undefined && waitingFor === undefined ? null : (
+            <span
+              className="relative z-10 ml-auto flex min-w-0 shrink-0 items-center gap-1.5"
+              data-agent-row-tail
+            >
+              <BindingLink binding={agent.binding} className="max-w-48 shrink-0" />
+              <AgentWaitingBadge waitingFor={waitingFor} />
+            </span>
           )}
-          <BindingLink
-            binding={agent.binding}
-            className="relative z-10 ml-auto max-w-48 shrink-0"
-          />
         </div>
       </div>
       <PinButton
-        pinned={agent.metadata.pinned}
+        pinned={agent.summary.pinned}
         onToggle={onTogglePinned}
         className="absolute right-1 top-1.5 opacity-0 focus-visible:opacity-100 group-hover/agent:opacity-100"
       />
@@ -171,8 +205,43 @@ export function AgentListRow({
   );
 }
 
+function AgentRuntimeStatus({
+  runtimeState,
+  since,
+}: {
+  runtimeState: "running_code" | "waiting_for_model" | "queued" | "idle";
+  since?: string;
+}) {
+  const active = runtimeState !== "idle";
+  const sinceMs = since === undefined ? null : Date.parse(since);
+  const nowMs = useTickingNowMs(LIVE_RUNTIME_TICK_MS, active && sinceMs !== null);
+  const label =
+    runtimeState === "running_code"
+      ? "Running code"
+      : runtimeState === "idle"
+        ? "Idle"
+        : "Waiting for response";
+  const elapsed = active && sinceMs !== null ? formatElapsedSeconds(nowMs - sinceMs) : null;
+
+  return (
+    <span className="shrink-0 tabular-nums" data-testid="agent-runtime-status" title={since}>
+      {label}
+      {elapsed === null ? null : ` ${elapsed}`}
+    </span>
+  );
+}
+
+function AgentWaitingBadge({ waitingFor }: { waitingFor: AgentRecord["summary"]["waitingFor"] }) {
+  if (waitingFor === undefined) return null;
+  return (
+    <Badge variant="secondary" data-agent-waiting-for={waitingFor}>
+      {WAITING_FOR_LABEL[waitingFor]}
+    </Badge>
+  );
+}
+
 /**
- * The detail header is the one roomy surface: full activity and summary,
+ * The detail header is the one roomy surface: full activity and description,
  * runtime counts, the durable path, and exact timestamps — all as quiet text.
  */
 export function AgentDetailCard({
@@ -188,7 +257,7 @@ export function AgentDetailCard({
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(() => agentTitle(agent));
-  const displayState = deriveAgentDisplayState(agent.runtime, agent.metadata.waitingFor);
+  const displayState = deriveAgentDisplayState(agent.runtime, agent.summary.waitingFor);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const counts = runtimeCountSummaries(agent);
   const focusTitleInput = useCallback((node: HTMLInputElement | null) => node?.focus(), []);
@@ -285,14 +354,14 @@ export function AgentDetailCard({
               <TooltipContent>Rename agent</TooltipContent>
             </Tooltip>
           ) : null}
-          <PinButton pinned={agent.metadata.pinned} onToggle={onTogglePinned} size="icon-sm" />
+          <PinButton pinned={agent.summary.pinned} onToggle={onTogglePinned} size="icon-sm" />
         </div>
       </div>
-      {agent.metadata.activity === undefined ? null : (
-        <p className="max-w-3xl text-sm">{agent.metadata.activity}</p>
+      {agent.summary.activity === undefined ? null : (
+        <p className="max-w-3xl text-sm">{agent.summary.activity}</p>
       )}
-      {agent.metadata.summary === undefined ? null : (
-        <p className="max-w-3xl text-sm text-muted-foreground">{agent.metadata.summary}</p>
+      {agent.summary.description === undefined ? null : (
+        <p className="max-w-3xl text-sm text-muted-foreground">{agent.summary.description}</p>
       )}
       <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1">
@@ -336,7 +405,7 @@ export function AgentCommandPresentation({
 }) {
   const displayState = agentNodeDisplayState(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const activity = node.agent.metadata.activity;
+  const activity = node.agent.summary.activity;
   const childCount = node.aggregateAgentCount - 1;
   const hasChildren = node.children.length > 0;
   return (
@@ -378,11 +447,11 @@ export function AgentCommandPresentation({
       <span
         data-agent-pin
         className="-m-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted"
-        title={node.agent.metadata.pinned ? "Unpin agent (Shift+P)" : "Pin agent (Shift+P)"}
+        title={node.agent.summary.pinned ? "Unpin agent (Shift+P)" : "Pin agent (Shift+P)"}
         aria-hidden
       >
         <Star
-          className={cn("size-3.5", node.agent.metadata.pinned && "fill-amber-400 text-amber-500")}
+          className={cn("size-3.5", node.agent.summary.pinned && "fill-amber-400 text-amber-500")}
         />
       </span>
     </>
@@ -464,7 +533,7 @@ function DetailTimestamps({
   const entries = [
     ["Created", timestamps.createdAt],
     ["Last work", timestamps.lastWorkAt],
-    ["Metadata updated", timestamps.metadataUpdatedAt],
+    ["Summary updated", timestamps.summaryUpdatedAt],
     ["Activity updated", timestamps.activityUpdatedAt],
     ["Runtime updated", timestamps.runtimeUpdatedAt],
   ].filter((entry): entry is [string, string] => entry[1] !== undefined);
@@ -487,6 +556,7 @@ function DetailTimestamps({
 /** Self-only in-flight work, phrased as short "count noun" fragments. */
 function runtimeCountSummaries(agent: AgentRecord): string[] {
   const runtime = agent.runtime;
+  if (runtime === undefined) return [];
   const unreadyTriggers = Math.max(0, runtime.triggers.pending - runtime.triggers.runnable);
   const modelRequests = runtime.llmRequests.started + runtime.llmRequests.requested;
   const queued = runtime.llmRequests.scheduled + runtime.triggers.runnable;

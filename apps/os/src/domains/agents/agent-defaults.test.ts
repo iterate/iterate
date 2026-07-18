@@ -159,14 +159,28 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("installs both universal processor subscriptions in the same batch", () => {
+  test("installs processor wakes and the narrow collection push in the same batch", () => {
     const subscriptions = defaultsFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );
-    expect(subscriptions.map((event) => event.payload.delivery.processorSlug)).toEqual([
-      "agent",
-      "capability-host",
-    ]);
+    expect(
+      subscriptions.flatMap((event) =>
+        event.payload.delivery.mode === "wake" ? [event.payload.delivery.processorSlug] : [],
+      ),
+    ).toEqual(["agent", "capability-host"]);
+    expect(
+      subscriptions.find((event) => event.payload.delivery.mode === "push")?.payload,
+    ).toMatchObject({
+      subscriptionKey: "agent-collection",
+      deliver: "all",
+      selector: {
+        eventTypes: [
+          "events.iterate.com/agent/created",
+          "events.iterate.com/agent/summary-updated",
+        ],
+      },
+      delivery: { mode: "push", expression: ["agents", "processEvent"] },
+    });
   });
 
   test("keys every event on (projectId, agentPath) so exact retries dedupe", () => {

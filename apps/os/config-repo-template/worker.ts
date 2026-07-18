@@ -114,6 +114,37 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         },
       });
     }
+    if (app === "tanstack") {
+      // A real TanStack Start app living at apps/tanstack in this repo: the
+      // platform's "vite" pipeline runs ITS OWN `npm run build` and serves
+      // the built pages + client assets; its /api rides into the app's
+      // Durable Object (TanstackTodos — SQLite todos via sqlfu, live state
+      // over Cap'n Web). Pages are gated to project members HERE; /api is
+      // the unauthenticated Cap'n Web root that authenticates in-band from
+      // the app cookie, exactly like the internal app.
+      const tanstackSource = {
+        files: { type: "repo", repoPath: "/repos/config" },
+        options: { pipeline: "vite", rootDir: "apps/tanstack" },
+      } as const;
+      const url = new URL(req.url);
+      if (url.pathname === "/api") {
+        return this.fetchDynamicWorker(req, {
+          type: "stateful",
+          path: "/",
+          className: "TanstackTodos",
+          durableWorkerKey: "app-tanstack",
+          source: tanstackSource,
+        });
+      }
+      using itx = await this.env.ITX.get();
+      const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (authResponse) return authResponse;
+      return this.fetchDynamicWorker(req, {
+        type: "stateless",
+        path: "/",
+        source: tanstackSource,
+      });
+    }
     if (app === "counter") {
       return this.fetchDynamicWorker(req, {
         type: "stateful",
@@ -144,6 +175,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
+                <li><a href="${appUrl("tanstack")}">tanstack</a> (TanStack Start todos: SQLite Durable Object, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
                 <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor)</li>
               </ul>
@@ -363,12 +395,12 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
       },
     },
     {
-      type: "events.iterate.com/agent/metadata-changed",
-      idempotencyKey: "github-pr/metadata",
+      type: "events.iterate.com/agent/summary-updated",
+      idempotencyKey: "github-pr/summary",
       payload: {
         title: `PR #${number}`,
         activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,
-        summary: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,
+        description: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,
       },
     },
   );
@@ -632,14 +664,31 @@ export class CounterApp extends IterateDurableObject {
             <main>
               <p>count: <span id="n">${await this.current()}</span></p>
               <button id="b" disabled>increment</button>
-              <p id="s">connecting…</p>
+              <p id="s" aria-live="polite">connecting…</p>
             </main>
             <script>
               const button = document.getElementById("b");
-              button.onclick = () => fetch("${prefix}/increment", { method: "POST" });
+              const status = document.getElementById("s");
+              button.onclick = async () => {
+                button.disabled = true;
+                status.hidden = false;
+                status.textContent = "incrementing…";
+                try {
+                  const response = await fetch("${prefix}/increment", { method: "POST" });
+                  if (!response.ok) throw new Error("increment failed (" + response.status + ")");
+                } catch (error) {
+                  status.textContent = "increment failed";
+                  button.disabled = false;
+                  console.error(error);
+                }
+              };
               const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
-              ws.onopen = () => { button.disabled = false; document.getElementById("s").remove(); };
-              ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
+              ws.onopen = () => { button.disabled = false; status.hidden = true; };
+              ws.onmessage = (event) => {
+                document.getElementById("n").textContent = event.data;
+                button.disabled = false;
+                status.hidden = true;
+              };
             </script>
           </body>
         </html>`,

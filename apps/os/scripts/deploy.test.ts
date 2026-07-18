@@ -9,7 +9,11 @@ import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
 } from "../../../scripts/lib/deploy-helpers.ts";
-import { assertPreviewPetshopIntegrationConfigured, isExactOsProjectMiss } from "./deploy.ts";
+import {
+  assertPreviewPetshopIntegrationConfigured,
+  isExactOsProjectMiss,
+  posthogBuildEnv,
+} from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
@@ -28,6 +32,32 @@ describe("preview Petshop deployment invariant", () => {
   it("does not require the test fixture in production", () => {
     expect(() => assertPreviewPetshopIntegrationConfigured("prd", {})).not.toThrow();
   });
+});
+
+describe("PostHog source-map build credentials", () => {
+  it("passes the Doppler credentials to Vite without adding Worker secrets", () => {
+    expect(
+      posthogBuildEnv({
+        POSTHOG_PERSONAL_API_KEY: "phx_personal",
+        POSTHOG_PROJECT_ID: "123456",
+      }),
+    ).toEqual({
+      POSTHOG_PERSONAL_API_KEY: "phx_personal",
+      POSTHOG_PROJECT_ID: "123456",
+    });
+  });
+
+  it.each(["POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID"])(
+    "fails the deploy before building when %s is absent",
+    (missing) => {
+      const secrets = {
+        POSTHOG_PERSONAL_API_KEY: "phx_personal",
+        POSTHOG_PROJECT_ID: "123456",
+      };
+      delete secrets[missing as keyof typeof secrets];
+      expect(() => posthogBuildEnv(secrets)).toThrow(missing);
+    },
+  );
 });
 
 describe("forbidden auth service-token invariants (secret-leak protection)", () => {

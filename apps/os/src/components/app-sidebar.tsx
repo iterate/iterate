@@ -517,13 +517,13 @@ function ProjectSidebarGroup({
   const routeSearch = useSearch({ strict: false }) as { tasks?: boolean };
   const agents =
     useLiveState(
-      (itx) => itx.liveState,
+      (itx) => itx.agents.liveState,
       (state) => state.agents,
       [projectId],
       { slug: projectId ?? "", enabled: projectId !== null },
     ).value ?? {};
   const agentAttentionCount = Object.values(agents).filter(
-    (agent) => deriveAgentDisplayState(agent.runtime, agent.metadata.waitingFor) !== "idle",
+    (agent) => deriveAgentDisplayState(undefined, agent.summary.waitingFor) !== "idle",
   ).length;
   const isNewAgentActive = Boolean(
     matchRoute({
