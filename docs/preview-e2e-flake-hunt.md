@@ -55,20 +55,21 @@ invocation; the same logical run number is repeated after a bounded reclaim.
 
 ### Experiments
 
-| Experiment | Depot result | Peak test concurrency | Outcome                                                                                           |
-| ---------- | -----------: | --------------------: | ------------------------------------------------------------------------------------------------- |
-| 1          |         8m22 |                    17 | Regression baseline: the app lanes and OS sub-lanes had been serialized.                          |
-| 2          |         5m28 |                    17 | Parallel app deploys; 176 project creates all succeeded (median 5.972s, p95 7.266s, max 11.207s). |
-| 3          |         6m44 |                    17 | Exact Artifacts failure classification; unrelated latency remained.                               |
-| 4          |         5m42 |                    17 | Bounded shared/exclusive project pools introduced where fixture state permits reuse.              |
-| 5          |         4m27 |                    17 | Removed more serial barriers.                                                                     |
-| 6          |         3m50 |                    30 | Full fleet, zero retries.                                                                         |
-| 7          |         3m32 |                    30 | Full fleet; one reflection retry subsequently fixed.                                              |
-| 8          |         3m27 |                    38 | Full fleet; four retries exposed instead of being silent.                                         |
-| 9          |         4m37 |                    38 | Deterministic public stream-offset assertion was wrong by two; not load.                          |
-| 10         |         3m18 |                    38 | Full fleet, zero retries. OS test 92.8s, deploy 77.8s.                                            |
-| 11         |         4m18 |                    38 | Check green only by absorbing three retries; does not qualify.                                    |
-| 12         |         3m44 |                    38 | Failed: one shared-path race plus two post-deploy DO resets; does not qualify.                    |
+| Experiment | Depot result | Peak test concurrency | Outcome                                                                                            |
+| ---------- | -----------: | --------------------: | -------------------------------------------------------------------------------------------------- |
+| 1          |         8m22 |                    17 | Regression baseline: the app lanes and OS sub-lanes had been serialized.                           |
+| 2          |         5m28 |                    17 | Parallel app deploys; 176 project creates all succeeded (median 5.972s, p95 7.266s, max 11.207s).  |
+| 3          |         6m44 |                    17 | Exact Artifacts failure classification; unrelated latency remained.                                |
+| 4          |         5m42 |                    17 | Bounded shared/exclusive project pools introduced where fixture state permits reuse.               |
+| 5          |         4m27 |                    17 | Removed more serial barriers.                                                                      |
+| 6          |         3m50 |                    30 | Full fleet, zero retries.                                                                          |
+| 7          |         3m32 |                    30 | Full fleet; one reflection retry subsequently fixed.                                               |
+| 8          |         3m27 |                    38 | Full fleet; four retries exposed instead of being silent.                                          |
+| 9          |         4m37 |                    38 | Deterministic public stream-offset assertion was wrong by two; not load.                           |
+| 10         |         3m18 |                    38 | Full fleet, zero retries. OS test 92.8s, deploy 77.8s.                                             |
+| 11         |         4m18 |                    38 | Check green only by absorbing three retries; does not qualify.                                     |
+| 12         |         3m44 |                    38 | Failed: one shared-path race plus two post-deploy DO resets; does not qualify.                     |
+| 13         |         3m05 |                    38 | Full fleet green only via one browser retry after a route-asset connection loss; does not qualify. |
 
 Experiment 11 (head a2d850761, Depot job 4cr9hswz8t) is the most useful
 failure sample:
@@ -167,9 +168,42 @@ not an acceptance run because the new product code was not deployed from the
 same immutable head, but it proves the local orchestration now exercises the
 CI concurrency shape and supplies no evidence of project-create saturation.
 
-The focused lifecycle, stream RPC, generated-catalogue, and browser-chat tests,
-the full repository test suite, formatting, lint, and typecheck pass. Live
-Experiment 13 and both acceptance campaigns remain pending.
+Experiment 13 (head `fe3d3dee8`, Depot job `pvfl3z72wg`) completed the full
+fleet in **3m05s**: OS deploy took 66.0s and the parallel test phase took
+96.0s. It was green only because Playwright retried `reactivity page replays
+already appended events after reload`, so it is neither retry-clean nor under
+the three-minute SLA.
+
+The failed attempt never reached a stream action. Its server-rendered shell
+remained at `data-hydrated=false`. Cloudflare trace
+`b02133e182ebb06644a73e194ae1ac6d` recorded the corresponding
+`/assets/reactivity-C6qX5AhI.js` GET as `Network connection lost.` after
+1.397s. The chunk existed with identical content and ETag in the old and new
+worker versions. The route had passed the orchestrator's exact-version health
+barrier about 70 seconds earlier, so another deploy sleep would be
+probabilistic rather than a contract. This was a transient asset-binding
+connection loss, not project creation, Durable Object saturation, or shared
+fixture state.
+
+### Candidate after Experiment 13
+
+Experiment 14 adds bounded product recovery at Vite's public failure boundary:
+
+- an inline head script handles the cancelable `vite:preloadError` event before
+  module scripts execute and performs at most one full-page replacement with a
+  server-visible query marker;
+- successful hydration clears the marker and emits structured
+  `[boot-recovery]` telemetry. A second failed boot stops, logs an error, and
+  renders an accessible terminal state with an explicit manual retry;
+- Playwright records recovery annotations, and failure tracing now retains the
+  original failed attempt instead of preserving only a healthy retry;
+- a deterministic browser test injects the exact Vite event and proves recovery
+  without a test retry. Its retry-disabled local run passed in 3.6s; unit tests
+  cover the single-reload bound, post-hydration cleanup, and terminal state.
+
+The focused lifecycle, stream RPC, generated-catalogue, browser-chat, and boot
+recovery tests, the full repository test suite, formatting, lint, and typecheck
+pass locally. Live Experiment 14 and both acceptance campaigns remain pending.
 
 ## Round 4 (2026-07-13/14, PR #1938)
 

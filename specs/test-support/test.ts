@@ -12,8 +12,18 @@ import {
 } from "./forged-session.ts";
 import { screenshot } from "./screenshot.ts";
 
-const addPagePlugins = (page: Page, testInfo: TestInfo) =>
-  addPlugins({
+const addPagePlugins = (page: Page, testInfo: TestInfo) => {
+  // Product-level bundle recovery is intentionally not a test retry. Surface
+  // it in the CI log and JSON report so a passing test never hides how it got
+  // there; acceptance runs can distinguish clean boots from bounded recovery.
+  page.on("console", (message) => {
+    const text = message.text();
+    if (!text.startsWith("[boot-recovery]")) return;
+    testInfo.annotations.push({ type: "boot-recovery", description: text });
+    console.warn(`[browser ${testInfo.title}] ${text}`);
+  });
+
+  return addPlugins({
     page,
     testInfo,
     plugins: [
@@ -31,6 +41,7 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
     ],
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
   });
+};
 
 export const test = base.extend<{
   helpers: {

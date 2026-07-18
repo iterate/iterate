@@ -72,7 +72,11 @@ export default defineConfig({
     actionTimeout: videoMode ? 10_000 : SPEC_ACTION_TIMEOUT_MS,
     baseURL: osBaseUrl,
     screenshot: "only-on-failure",
-    trace: process.env.CI ? "on-first-retry" : "retain-on-failure",
+    // Record the original failed attempt, not merely its retry. The Experiment
+    // 13 hydration flake was an asset GET error on attempt one; on-first-retry
+    // preserved only the healthy replacement and discarded the useful network
+    // evidence. Successful attempts still discard their traces.
+    trace: "retain-on-failure",
     video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
   projects: [

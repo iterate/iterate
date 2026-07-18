@@ -293,12 +293,49 @@ not counted as Experiment 13 because source and deployed product were different
 heads, but it validates the test-side speed and concurrency changes without a
 retry or a project-create capacity signal.
 
-That run also exposed an independent resource leak in slot handover. Reset took
-131.3s and deleted only 100 AI Search instances before its 90s deadline. The
-namespace still held 498 instances immediately after reset and 551 after the
-tests. Every project birth eagerly provisions an instance, while test project
-disposal is currently a no-op. The slot fleet therefore accumulates resources
-faster than cleanup can delete them.
+Experiment 13 deployed that candidate at immutable head `fe3d3dee8`. The
+full-fleet check completed in **3m05s** ([Depot job
+`pvfl3z72wg`](https://depot.dev/orgs/0p91s0lz49/workflows/x9m8zd5nlb?job=pvfl3z72wg&attempt=79237459md)):
+OS deploy took 66.0s and the parallel test phase took 96.0s. All five app lanes
+passed, but Playwright retried `reactivity page replays already appended events
+after reload` once. The result therefore qualifies as neither retry-clean nor
+under three minutes; a clean browser pass would likely have crossed the SLA,
+but acceptance is based on measured results rather than that inference.
+
+The first attempt failed before executing any reactivity or stream operation.
+The SSR shell stayed at `data-hydrated=false`, and the hydration waiter expired
+after 30 seconds. Cloudflare trace `b02133e182ebb06644a73e194ae1ac6d`
+classified its `/assets/reactivity-C6qX5AhI.js` request as a GET error with
+`Network connection lost.` after 1.397s. The asset had identical content and
+ETag in both adjacent worker versions. The orchestrator had already observed
+the exact deployed version as healthy and stable for 10 seconds, and this
+request occurred about 70 seconds later. More rollout delay cannot establish a
+stronger invariant against a later one-off connection loss.
+
+Experiment 14 therefore keeps every independent lane parallel and handles the
+measured browser boundary directly. An inline script installed before Vite's
+module scripts listens for its cancelable `vite:preloadError` event and permits
+one full-page replacement with a server-visible query marker. Successful
+hydration removes the marker and emits classified `[boot-recovery]` telemetry;
+a second bundle failure stops rather than looping and renders an accessible
+terminal error with a manual retry. Playwright mirrors recovery into its JSON
+annotations and CI log. It also retains the original failed-attempt trace,
+fixing Experiment 13's evidence gap where `on-first-retry` preserved only the
+healthy retry trace. Unit tests prove the one-reload bound and terminal state,
+and a retry-disabled browser test injects Vite's exact public event and passed
+the complete reload/hydration path locally in 3.6s.
+
+This change is independent of project reuse. The 176-create load probe remains
+clean, Experiment 13 showed no creation rejection, and its only retry was an
+asset GET. Bounded family reuse remains appropriate where child identities and
+mutation ownership are isolated; fresh project birth stays covered separately.
+
+The retry-disabled local run also exposed an independent resource leak in slot
+handover. Reset took 131.3s and deleted only 100 AI Search instances before its
+90s deadline. The namespace still held 498 instances immediately after reset
+and 551 after the tests. Every project birth eagerly provisions an instance,
+while test project disposal is currently a no-op. The slot fleet therefore
+accumulates resources faster than cleanup can delete them.
 
 Cloudflare telemetry explained experiment 4's seeded-internal-app Playwright
 retry. The app request reached the dynamic-worker loader after project creation
@@ -637,7 +674,17 @@ observable.
   the family-reused chat proof took 15.7s. It validates the test topology but
   cannot count toward acceptance because the product changes were not deployed
   from the same head.
-- Next: run the parallel Experiment 13 candidate. Once one full-fleet run is
+- 2026-07-18: experiment 13 completed in 3m05s (OS deploy 66.0s; parallel tests
+  96.0s) but Playwright consumed one retry. The failed attempt never hydrated:
+  Cloudflare recorded its route chunk GET as `Network connection lost.` The
+  exact worker version had already been stable for about 70s and project
+  creation succeeded, so this was neither rollout waiting nor preview overload.
+- 2026-07-18: the experiment 14 candidate adds one bounded, observable
+  Vite-preload full-page recovery; a second failed boot becomes an explicit
+  terminal error. Playwright retains the original failed trace and records any
+  product recovery. A deterministic retry-disabled browser proof passed in
+  3.6s.
+- Next: run the parallel Experiment 14 candidate. Once one full-fleet run is
   clean and under three minutes, start the immutable-head 25-run proof, then
   the separate 15+ simultaneous preview-slot churn campaign. PR comments mirror
   each experiment and result rather than rewriting history here.

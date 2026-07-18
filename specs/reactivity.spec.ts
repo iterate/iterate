@@ -10,6 +10,33 @@ import { test } from "./test-support/test.ts";
 // 4dzf4jv6x1/nvbmgzlspl/91qtw6zt01 on 2026-07-10, one spec each time.
 const DELIVERY_WAIT = { timeout: 30_000 };
 
+test("reactivity page recovers one Vite preload failure without a test retry", async ({
+  helpers,
+  page,
+}) => {
+  await using projectFixture = await helpers.createFixture("reactivity-preload-recovery");
+  await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
+  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor();
+
+  // Vite's production preload helper emits this exact cancelable event after
+  // a route chunk or one of its dependencies fails to load. Schedule it from
+  // the page so evaluate returns before the handler replaces the document.
+  await page.evaluate(() => {
+    setTimeout(() => {
+      const event = Object.assign(new Event("vite:preloadError", { cancelable: true }), {
+        payload: new Error("injected route-chunk connection loss"),
+      });
+      window.dispatchEvent(event);
+    });
+  });
+
+  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor();
+  await expect
+    .poll(() => page.locator("html").getAttribute("data-boot-recovery"))
+    .toBe("recovered");
+  expect(page.url()).not.toContain("__iterate_vite_preload_recovery");
+});
+
 test("reactivity page repaints from a stream subscription after a page action", async ({
   helpers,
   page,
