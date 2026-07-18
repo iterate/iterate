@@ -187,6 +187,41 @@ describe("Agent presentation family", () => {
     expect(markup).toContain("Waiting for timer");
   });
 
+  test("a collapsed parent explains waiting attention from its subtree", () => {
+    const parent = record("/agents/release");
+    const child = record("/agents/release/approval", {
+      summary: { pinned: false, waitingFor: "user_input" },
+    });
+    const [node] = buildAgentForest({ [parent.path]: parent, [child.path]: child });
+    if (node === undefined) throw new Error("missing test node");
+
+    const collapsedMarkup = renderToStaticMarkup(
+      <AgentListRow
+        node={node}
+        nowMs={Date.parse(CREATED_AT)}
+        expanded={false}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        onToggleChildren={() => undefined}
+      />,
+    );
+    const expandedMarkup = renderToStaticMarkup(
+      <AgentListRow
+        node={node}
+        nowMs={Date.parse(CREATED_AT)}
+        expanded
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        onToggleChildren={() => undefined}
+      />,
+    );
+
+    expect(collapsedMarkup).toContain('data-agent-state="waiting_for_user_input"');
+    expect(collapsedMarkup).toContain('data-agent-waiting-for="user_input"');
+    expect(collapsedMarkup).toContain("Needs input");
+    expect(expandedMarkup).not.toContain('data-agent-waiting-for="user_input"');
+  });
+
   test("a binding stays in the right-aligned row tail without a waiting badge", () => {
     const agent = record("/agents/inbox", {
       binding: {

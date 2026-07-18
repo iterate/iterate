@@ -12,7 +12,12 @@ import {
   bindingLabel,
   bindingUrl,
 } from "./agent-presentation.ts";
-import { agentNodeDisplayState, agentTitle, type AgentTreeNode } from "./agent-tree.ts";
+import {
+  agentNodeDisplayState,
+  agentNodeWaitingFor,
+  agentTitle,
+  type AgentTreeNode,
+} from "./agent-tree.ts";
 import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
 import {
   deriveAgentDisplayState,
@@ -106,6 +111,7 @@ export function AgentListRow({
   const runtime = runtimeTransition?.runtime ?? node.aggregateRuntime;
   const runtimeState = deriveAgentRuntimeDisplayState(runtime);
   const displayState = runtimeState === "idle" ? agentNodeDisplayState(node) : runtimeState;
+  const waitingFor = expanded ? agent.summary.waitingFor : agentNodeWaitingFor(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const descendantCount = node.aggregateAgentCount - 1;
   const expandable = node.children.length > 0 && onToggleChildren !== undefined;
@@ -179,13 +185,13 @@ export function AgentListRow({
               · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
             </span>
           ) : null}
-          {agent.binding === undefined && agent.summary.waitingFor === undefined ? null : (
+          {agent.binding === undefined && waitingFor === undefined ? null : (
             <span
               className="relative z-10 ml-auto flex min-w-0 shrink-0 items-center gap-1.5"
               data-agent-row-tail
             >
               <BindingLink binding={agent.binding} className="max-w-48 shrink-0" />
-              <AgentWaitingBadge waitingFor={agent.summary.waitingFor} />
+              <AgentWaitingBadge waitingFor={waitingFor} />
             </span>
           )}
         </div>

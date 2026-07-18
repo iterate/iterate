@@ -150,10 +150,21 @@ export function agentNodeDisplayState(
 ) {
   const aggregateState = deriveAgentDisplayState(node.aggregateRuntime);
   if (aggregateState !== "idle") return aggregateState;
-  if (node.aggregateWaiting.userInput > 0) return "waiting_for_user_input";
-  if (node.aggregateWaiting.externalEvent > 0) return "waiting_for_external_event";
-  if (node.aggregateWaiting.timer > 0) return "waiting_for_timer";
+  const waitingFor = agentNodeWaitingFor(node);
+  if (waitingFor === "user_input") return "waiting_for_user_input";
+  if (waitingFor === "external_event") return "waiting_for_external_event";
+  if (waitingFor === "timer") return "waiting_for_timer";
   return "idle";
+}
+
+/** Highest-priority waiting requirement in a node's collapsed subtree. */
+export function agentNodeWaitingFor(
+  node: Pick<AgentTreeNode, "aggregateWaiting">,
+): AgentRecord["summary"]["waitingFor"] {
+  if (node.aggregateWaiting.userInput > 0) return "user_input";
+  if (node.aggregateWaiting.externalEvent > 0) return "external_event";
+  if (node.aggregateWaiting.timer > 0) return "timer";
+  return undefined;
 }
 
 function finalizeNode(node: AgentTreeNode): void {
