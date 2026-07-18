@@ -24,3 +24,17 @@ export type TodoListApi = {
   rename(id: string, title: string): Promise<void>;
   remove(id: string): Promise<void>;
 };
+
+/**
+ * One slug grammar for everything: the home form, the /l/$slug page, and the
+ * worker's /api/lists/<slug> route all normalize with this, so a URL typed by
+ * hand ("/l/MyList") reaches the same Durable Object the form navigation
+ * would have.
+ */
+export function normalizeListSlug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .slice(0, 64);
+}

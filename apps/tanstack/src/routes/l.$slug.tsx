@@ -1,11 +1,28 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTodoList } from "../lib/use-todo-list.ts";
+import { normalizeListSlug } from "../state.ts";
 
-export const Route = createFileRoute("/l/$slug")({ component: TodoList });
+export const Route = createFileRoute("/l/$slug")({ component: TodoListPage });
 
-function TodoList() {
-  const { slug } = Route.useParams();
+function TodoListPage() {
+  // A hand-typed URL ("/l/MyList") normalizes to the same list the home form
+  // would open; only a slug with nothing salvageable dead-ends.
+  const slug = normalizeListSlug(Route.useParams().slug);
+  if (!slug) {
+    return (
+      <main>
+        <p>Not a usable list name.</p>
+        <p>
+          <Link to="/">← lists</Link>
+        </p>
+      </main>
+    );
+  }
+  return <TodoList slug={slug} />;
+}
+
+function TodoList({ slug }: { slug: string }) {
   const { todos, api } = useTodoList(slug);
   const [draft, setDraft] = useState("");
 

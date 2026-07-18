@@ -202,8 +202,13 @@ export function workerBuildRecipe(input: {
               // committed worker waits on exactly this step. (NOT
               // --no-package-lock: that would also stop npm READING a
               // committed lockfile, and lockfiles are honored here.)
+              // nub carries its OWN inner 30s timeout so a hung nub cannot
+              // starve the fallback out of the step's shared budget — the
+              // fast lane either wins fast or yields. A host without
+              // coreutils `timeout` (macOS dev machines) fails the left side
+              // harmlessly into npm.
               command:
-                "{ command -v nub >/dev/null && nub install --ignore-scripts --prod --prefer-offline --node-linker hoisted; } || npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline",
+                "{ command -v nub >/dev/null && timeout -k 5 30 nub install --ignore-scripts --prod --prefer-offline --node-linker hoisted; } || npm install --ignore-scripts --no-audit --no-fund --omit=dev --prefer-offline",
               timeoutMs: NPM_INSTALL_TIMEOUT_MS,
             },
           ]
