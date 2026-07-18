@@ -213,6 +213,71 @@ describe("event queue handler", () => {
     expect(message.ack).toHaveBeenCalledOnce();
   });
 
+  test("fans out the whole batch before reusing one subscription snapshot", async () => {
+    const { appends, env } = createEnv({ cloudflareApiToken: "cf-token" });
+    const artifactNames = ["prj_first", "prj_second"].map((projectId) =>
+      RepoArtifactNameCodec.stringify({ path: "/", projectId }),
+    );
+    const messages = artifactNames.map((artifactName, index) =>
+      createMessage(
+        {
+          type: "cf.artifacts.repo.created",
+          source: { type: "artifacts", namespace: "os-prd-repos", repoName: artifactName },
+          payload: { repoId: `repo-${index + 1}` },
+        },
+        `msg-created-${index + 1}`,
+      ),
+    );
+    const calls: Array<{ method: string; path: string }> = [];
+    let appendCountAtFirstApiCall: number | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+        appendCountAtFirstApiCall ??= appends.length;
+        const path = new URL(String(url)).pathname + new URL(String(url)).search;
+        calls.push({ method: init?.method ?? "GET", path });
+        if (path === "/client/v4/accounts/account-1/queues?page=1&per_page=100") {
+          return Response.json({
+            success: true,
+            result: [{ queue_id: "queue-1", queue_name: "os-prd-events" }],
+          });
+        }
+        if (
+          path ===
+          "/client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100"
+        ) {
+          return Response.json({ success: true, result: [] });
+        }
+        if (
+          path === "/client/v4/accounts/account-1/event_subscriptions/subscriptions" &&
+          init?.method === "POST"
+        ) {
+          return Response.json({ success: true, result: { id: `subscription-${calls.length}` } });
+        }
+        return Response.json({ success: false, errors: [{ message: path }] }, { status: 404 });
+      }),
+    );
+
+    await handleEventQueueBatch(createBatch(messages), env);
+
+    // Both repo and global stream appends for both messages finish before the
+    // first account-level control-plane request begins.
+    expect(appendCountAtFirstApiCall).toBe(4);
+    expect(calls.filter((call) => call.path.endsWith("/queues?page=1&per_page=100"))).toHaveLength(
+      1,
+    );
+    expect(
+      calls.filter((call) =>
+        call.path.endsWith("/event_subscriptions/subscriptions?page=1&per_page=100"),
+      ),
+    ).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(2);
+    for (const message of messages) {
+      expect(message.ack).toHaveBeenCalledOnce();
+      expect(message.retry).not.toHaveBeenCalled();
+    }
+  });
+
   test("still routes created repo events when repo subscription setup fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { appends, env } = createEnv({ cloudflareApiToken: "cf-token" });
@@ -227,12 +292,23 @@ describe("event queue handler", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        Response.json(
+      vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname + new URL(String(url)).search;
+        if (path.endsWith("/queues?page=1&per_page=100")) {
+          return Response.json({
+            success: true,
+            result: [{ queue_id: "queue-1", queue_name: "os-prd-events" }],
+          });
+        }
+        if (path.endsWith("/event_subscriptions/subscriptions?page=1&per_page=100")) {
+          return Response.json({ success: true, result: [] });
+        }
+        expect(init?.method).toBe("POST");
+        return Response.json(
           { success: false, errors: [{ message: "temporary outage" }] },
           { status: 503 },
-        ),
-      ),
+        );
+      }),
     );
     const message = createMessage(cfEvent, "msg-created");
 

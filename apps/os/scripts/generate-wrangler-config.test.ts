@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
+import { workerEventsQueueName } from "../src/queue-names.ts";
 import {
   OS_CONTAINER_CLASS_NAMES,
   workerBuilderWorkerName,
@@ -78,6 +79,19 @@ it("gives every deployed env its own worker name derived from the service name",
   for (const [envName, envBlock] of Object.entries(config.env)) {
     expect(envBlock.name, envName).toMatch(/^os-/);
     expect(envBlock.name, envName).not.toBe(config.name);
+  }
+});
+
+it("bounds event-queue control-plane work without serializing project tests", () => {
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const consumer = envBlock.queues.consumers.find(
+      (candidate) => candidate.queue === workerEventsQueueName(envBlock.name),
+    );
+    expect(consumer, envName).toMatchObject({
+      max_batch_size: 10,
+      max_batch_timeout: 5,
+      max_concurrency: 4,
+    });
   }
 });
 

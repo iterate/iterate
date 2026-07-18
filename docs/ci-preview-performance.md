@@ -159,9 +159,12 @@ creep visible. If you see one:
 Depot CI bills per second per vCPU (no per-minute rounding), so the levers are
 core-count and run-count, not wall-clock padding:
 
-- **Preview job: 8 cores, not 16.** Metrics-backed right-sizing (see above)
-  halves the per-second cost with peak utilization still ~60%. Re-check with
-  `depot ci metrics` before changing the size in either direction.
+- **Preview job: 16 cores.** The eight-core baseline sustained 70–82% CPU, and
+  the 16-core full-concurrency attempt `8r42dtxkb0` still peaked at 68.4%
+  during local work before falling below 15% while it waited on remote queue
+  processing. More cores would not fix that remote wait; fewer would put the
+  local lanes back into host scheduler contention. Re-check with `depot ci
+metrics` before changing the size in either direction.
 - **Cleanup job: the small 2-core default runner.** It only runs a
   Doppler-wrapped destroy; it doesn't need the preview job's cores.
 - **`cancel-in-progress: true`** on the preview workflow cancels superseded

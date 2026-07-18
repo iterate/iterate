@@ -126,11 +126,22 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(workerSource?.content).toContain("export default class ProjectWorker");
   const tree = await project.repo.listFiles();
   expect(tree).toMatchObject({
-    paths: expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]),
+    paths: expect.arrayContaining([
+      "worker.ts",
+      "package.json",
+      "AGENTS.md",
+      "apps/tanstack/package.json",
+      "apps/tanstack/src/worker.ts",
+    ]),
   });
-  // The seed is ONE worker file — the example apps are named exports of it.
+  // The seed has one Vite app tree; every other app is a named worker.ts
+  // export and projects remain free to add more app directories.
   expect(tree.paths).not.toContain("sdk.ts");
-  expect(tree.paths.some((path: string) => path.startsWith("apps/"))).toBe(false);
+  expect(
+    tree.paths
+      .filter((path: string) => path.startsWith("apps/"))
+      .every((path: string) => path.startsWith("apps/tanstack/")),
+  ).toBe(true);
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
   // Unknown apps 404 in the router itself.

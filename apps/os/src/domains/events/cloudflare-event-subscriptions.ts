@@ -140,12 +140,19 @@ export async function queueIdForWorkerEventQueue(
 export function createCloudflareAccountApi(input: {
   accountId: string;
   apiToken: string;
+  requestTimeoutMs?: number;
 }): CloudflareAccountApi {
   return async <T>(path: string, init?: RequestInit): Promise<T> => {
+    const signal =
+      init?.signal ??
+      (input.requestTimeoutMs === undefined
+        ? undefined
+        : AbortSignal.timeout(input.requestTimeoutMs));
     const response = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${input.accountId}${path}`,
       {
         ...init,
+        signal,
         headers: {
           authorization: `Bearer ${input.apiToken}`,
           ...(init?.body && typeof init.body === "string"

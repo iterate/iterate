@@ -400,9 +400,14 @@ function workerBindings(input: {
       ],
       consumers: [
         {
+          // Artifact lifecycle bursts fan out to authoritative repo streams
+          // before their bounded Cloudflare subscription follow-ups. Four
+          // batches keep that queue moving without retaining an unbounded set
+          // of account-wide API listings and payloads in memory.
           queue: workerEventsQueueName(input.workerName),
           max_batch_size: 10,
           max_batch_timeout: 5,
+          max_concurrency: 4,
           max_retries: 3,
           retry_delay: 30,
         },

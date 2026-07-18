@@ -16,6 +16,12 @@ export const CLOUDFLARE_EVENT_RECEIVED_TYPE = "events.iterate.com/cloudflare/eve
 export const REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE =
   "events.iterate.com/repo/cloudflare-artifact-event-received";
 
+// Event delivery is authoritative; Cloudflare subscription provisioning is a
+// bounded control-plane follow-up. Keep enough concurrency to drain repo
+// creation bursts without turning one Queue batch into ten serial API waits.
+const SUBSCRIPTION_ENSURE_CONCURRENCY = 2;
+const SUBSCRIPTION_API_TIMEOUT_MS = 5_000;
+
 type EventQueueEnv = Pick<
   Env,
   "ARTIFACTS_ACCOUNT_ID" | "ARTIFACTS_NAMESPACE" | "STREAM" | "WORKER_SELF"
@@ -35,6 +41,12 @@ export async function handleEventQueueBatch(
     console.warn(`[event-queue] received batch from unexpected queue ${batch.queue}`);
   }
 
+  const repoNamesToSubscribe = new Set<string>();
+  const messagesToAck: Message[] = [];
+
+  // Finish the authoritative stream fanout for the whole batch before making
+  // any account-level control-plane calls. A slow subscription listing must
+  // never hold the other messages in the batch (and their projects) behind it.
   for (const message of batch.messages) {
     try {
       const cloudflareEvent = cloudflareEventFromMessageBody(message.body);
@@ -44,14 +56,29 @@ export async function handleEventQueueBatch(
         continue;
       }
 
-      await appendRepoArtifactEventIfAddressable({ env, message, event: cloudflareEvent });
+      const repoNameToSubscribe = await appendRepoArtifactEventIfAddressable({
+        env,
+        message,
+        event: cloudflareEvent,
+      });
       await appendCloudflareCapture({ env, message });
-      message.ack();
+      if (repoNameToSubscribe !== null) repoNamesToSubscribe.add(repoNameToSubscribe);
+      messagesToAck.push(message);
     } catch (error) {
       console.error(`[event-queue] failed to process message ${message.id}`, error);
       message.retry();
     }
   }
+
+  await ensureRepoEventSubscriptionsIfConfigured({
+    env,
+    repoNames: [...repoNamesToSubscribe],
+  });
+
+  // Provisioning failures are bounded and logged inside the helper. Preserve
+  // the previous best-effort semantics, but acknowledge only after the attempt
+  // so an interrupted invocation retries its idempotent stream appends.
+  for (const message of messagesToAck) message.ack();
 }
 
 function cloudflareEventFromMessageBody(body: unknown): Record<string, unknown> | null {
@@ -82,10 +109,10 @@ async function appendRepoArtifactEventIfAddressable(input: {
   env: EventQueueEnv;
   event: Record<string, unknown>;
   message: Message;
-}): Promise<void> {
+}): Promise<string | null> {
   const artifactRepo = artifactRepoReferenceFromCloudflareEvent(input.event);
-  if (artifactRepo === null) return;
-  if (artifactRepo.namespace !== input.env.ARTIFACTS_NAMESPACE) return;
+  if (artifactRepo === null) return null;
+  if (artifactRepo.namespace !== input.env.ARTIFACTS_NAMESPACE) return null;
 
   let streamAddress: { projectId: string | null; path: string };
   try {
@@ -95,7 +122,7 @@ async function appendRepoArtifactEventIfAddressable(input: {
       `[event-queue] artifact repo name is not addressable: ${artifactRepo.repoName}`,
       error,
     );
-    return;
+    return null;
   }
 
   const payload: Record<string, unknown> = {
@@ -106,25 +133,15 @@ async function appendRepoArtifactEventIfAddressable(input: {
   const cloudflareEventType = typeof input.event.type === "string" ? input.event.type : undefined;
   if (cloudflareEventType !== undefined) payload.cloudflareEventType = cloudflareEventType;
 
-  if (cloudflareEventType !== undefined && shouldEnsureRepoEventSubscription(cloudflareEventType)) {
-    try {
-      await ensureRepoEventSubscriptionIfConfigured({
-        env: input.env,
-        repoName: artifactRepo.repoName,
-      });
-    } catch (error) {
-      console.warn("[event-queue] failed to ensure artifact repo subscription", {
-        error,
-        repoName: artifactRepo.repoName,
-      });
-    }
-  }
-
   await appendToStream(input.env, streamAddress, {
     type: REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE,
     idempotencyKey: `cf-artifact-event:${input.message.id}`,
     payload,
   });
+
+  return cloudflareEventType !== undefined && shouldEnsureRepoEventSubscription(cloudflareEventType)
+    ? artifactRepo.repoName
+    : null;
 }
 
 function shouldEnsureRepoEventSubscription(cloudflareEventType: string): boolean {
@@ -135,31 +152,62 @@ function shouldEnsureRepoEventSubscription(cloudflareEventType: string): boolean
   ].includes(cloudflareEventType);
 }
 
-async function ensureRepoEventSubscriptionIfConfigured(input: {
+async function ensureRepoEventSubscriptionsIfConfigured(input: {
   env: EventQueueEnv;
-  repoName: string;
-}) {
+  repoNames: string[];
+}): Promise<void> {
+  if (input.repoNames.length === 0) return;
+
   const apiToken = input.env.APP_CONFIG_CLOUDFLARE__API_TOKEN?.trim();
   if (!apiToken) {
-    console.warn("[event-queue] Cloudflare API token unavailable; cannot subscribe repo events");
+    console.warn("[event-queue] Cloudflare API token unavailable; cannot subscribe repo events", {
+      repoCount: input.repoNames.length,
+    });
     return;
   }
 
   const api = createCloudflareAccountApi({
     accountId: input.env.ARTIFACTS_ACCOUNT_ID,
     apiToken,
+    requestTimeoutMs: SUBSCRIPTION_API_TIMEOUT_MS,
   });
-  const [queueId, existing, desired] = await Promise.all([
-    queueIdForWorkerEventQueue(api, input.env.WORKER_SELF),
-    listArtifactEventSubscriptions(api),
-    desiredArtifactRepoEventSubscription({
-      repoName: input.repoName,
-      workerName: input.env.WORKER_SELF,
-    }),
-  ]);
-  const result = await ensureArtifactEventSubscription(api, { desired, existing, queueId });
-  if (result !== "unchanged") {
-    console.log(`[event-queue] artifact repo subscription ${desired.name} ${result}`);
+
+  let queueId: string;
+  let existing: Awaited<ReturnType<typeof listArtifactEventSubscriptions>>;
+  try {
+    [queueId, existing] = await Promise.all([
+      queueIdForWorkerEventQueue(api, input.env.WORKER_SELF),
+      listArtifactEventSubscriptions(api),
+    ]);
+  } catch (error) {
+    console.warn("[event-queue] failed to load artifact subscription state", {
+      error,
+      repoCount: input.repoNames.length,
+    });
+    return;
+  }
+
+  for (let offset = 0; offset < input.repoNames.length; offset += SUBSCRIPTION_ENSURE_CONCURRENCY) {
+    const repoNames = input.repoNames.slice(offset, offset + SUBSCRIPTION_ENSURE_CONCURRENCY);
+    await Promise.all(
+      repoNames.map(async (repoName) => {
+        try {
+          const desired = await desiredArtifactRepoEventSubscription({
+            repoName,
+            workerName: input.env.WORKER_SELF,
+          });
+          const result = await ensureArtifactEventSubscription(api, { desired, existing, queueId });
+          if (result !== "unchanged") {
+            console.log(`[event-queue] artifact repo subscription ${desired.name} ${result}`);
+          }
+        } catch (error) {
+          console.warn("[event-queue] failed to ensure artifact repo subscription", {
+            error,
+            repoName,
+          });
+        }
+      }),
+    );
   }
 }
 
