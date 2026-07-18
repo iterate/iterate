@@ -52,8 +52,8 @@ export type CapabilityDescription = {
   providedAtOffset?: number;
   /**
    * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).
-   * Set when a scope reports capabilities it inherited from an enclosing scope,
-   * so the reader can tell a local mount from an inherited one. Absent on
+   * Set when a scope reports capabilities its fallback host contributed, so
+   * the reader can tell a local mount from an inherited one. Absent on
    * built-ins (they exist at every scope).
    */
   scope?: string;

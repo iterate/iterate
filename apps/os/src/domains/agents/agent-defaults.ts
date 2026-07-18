@@ -1,16 +1,22 @@
-// The platform's generic agent creation policy: an existence-only birth plus
-// the ordinary setup events every agent receives. Transport processors choose
-// their own system-context policy explicitly; the path never decides what
-// kind of processor exists on a stream.
+// Generic agent creation policy: an existence-only birth plus the ordinary
+// setup events every agent receives. Transport processors choose their own
+// system-context policy explicitly; the path never decides what kind of
+// processor exists on a stream.
 
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  capabilityFallbackForScope,
+} from "../capability-host/capability-host-processor-contract.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+  AGENT_SUMMARY_INSTRUCTION,
   AgentProcessorContract,
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -24,16 +30,21 @@ const TYPESCRIPT_FENCE_INSTRUCTION =
  * matching revision whenever the shipped event payload changes; the logical
  * context key still owns supersession inside the Agent projection.
  */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "1";
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "3";
 const AGENT_MODEL_POLICY_REVISION = "1";
-const AGENT_WORKSPACE_POLICY_REVISION = "1";
-const AGENT_BOOT_CONTEXT_REVISION = "1";
+const AGENT_WORKSPACE_POLICY_REVISION = "2";
+const AGENT_BOOT_CONTEXT_REVISION = "2";
 
-export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "1";
-export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "2";
-export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "1";
-export const MCP_AGENT_SYSTEM_PROMPT_REVISION = "1";
-export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "2";
+export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "3";
+export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "2";
+// The MCP and onboarding prompts EMBED the default prompt, so their event
+// bodies change whenever it does — their occurrence identity must move with
+// every constituent revision, or an existing stream rejects the re-append as
+// a different body under a reused key. The own component still covers their
+// own extension text (onboarding: also PROJECT_REPO_ONBOARDING_MD).
+export const MCP_AGENT_SYSTEM_PROMPT_REVISION = `1.${DEFAULT_AGENT_SYSTEM_PROMPT_REVISION}`;
+export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = `1.${DEFAULT_AGENT_SYSTEM_PROMPT_REVISION}`;
 
 type AgentSystemPromptPolicy = {
   content: string;
@@ -72,7 +83,7 @@ export function slackAgentSystemPrompt(connection: string): string {
     'If asked about GitHub, use `const octokit = itx.integrations.github.get().octokit`; this 99% path selects the first connected installation. Only inspect `await itx.integrations.list()` and pass its connection slug to `get(slug)` when a particular installation matters. `octokit` is the all-in-one client from the `octokit` package, with Iterate supplying installation auth and transport: use `octokit.rest.*` for routine endpoints or `octokit.graphql(query, variables)` when GraphQL is a better fit. Use the package types and https://github.com/octokit/octokit.js/; there is no direct `.rest` or `.graphql` on the connection. GitHub repo.data.permissions is a user-style view and can report every flag false for a GitHub App installation that can write; never call the installation read-only from that field—attempt the requested operation and use GitHub\'s actual error if denied. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.get().request(...)]) — so the thread is never silent while you fetch.`,
-    `Keep your live status current the same way: name the thread once its topic is clear — await itx.agent.setTitle("...") in the same Promise.all as your first reply — and update await itx.agent.setStatus({ shortStatus: "checking your calendar" }) as work moves (surfaces complete the sentence "<you> is ..."). Ending a turn to wait on a human (an answer, an approval, a key)? Mark it: await itx.agent.setStatus({ blocked: true, shortStatus: "waiting for the Acme API key" }) — the platform clears blocked when they reply.`,
+    AGENT_SUMMARY_INSTRUCTION,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
     `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call ${postMessage}. itx.scheduler.list() / cancel(key) manage schedules.`,
     'Use project capabilities on itx when they are relevant. TWO SEARCHES, ONE RULE — HOW: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities (word-overlap matching — synonyms buy recall; await itx.docs.get({ name }) fetches one). WHAT/WHEN: await itx.search.query({ q }) searches everything this project has accumulated — conversations, webhooks, events, files, repo — and every hit carries a ref back to the exact source; search before paging streams. await itx.__describe() works on every node, including provided capabilities.',
@@ -110,6 +121,7 @@ export function telegramAgentSystemPrompt(input: {
     `MEDIA: the raw webhook retains file_id. Use ${telegramConnection}.getFile, project egress with the connection's write-only bot-token secret, and itx.agent.addFiles.`,
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the chat in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${sendRequest(input.agentPath, '"Checking that now..."')}, itx.mcp.exa.web_search_exa({ query })]) — so the chat is never silent while you fetch.`,
+    AGENT_SUMMARY_INSTRUCTION,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
     `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this chat, bake the chat_id into it and call ${telegramConnection}.sendMessage (scheduled scripts outlive sessions, so use the direct call there, not a session send request). itx.scheduler.list() / cancel(key) manage schedules.`,
     'Use project capabilities on itx when they are relevant. TWO SEARCHES, ONE RULE — HOW: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities (word-overlap matching — synonyms buy recall; await itx.docs.get({ name }) fetches one). WHAT/WHEN: await itx.search.query({ q }) searches everything this project has accumulated — conversations, webhooks, events, files, repo — and every hit carries a ref back to the exact source; search before paging streams. await itx.__describe() works on every node, including provided capabilities.',
@@ -131,6 +143,7 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = [
   "ATTACHMENTS people email you are stored in project file storage and attached to your inputs automatically: images (png/jpeg/webp/svg) are directly visible to you — just look at them. Documents are NOT directly readable; convert them to markdown first with Cloudflare's converter: const bytes = await itx.files.get(path).bytes(); const [converted] = await itx.ai.toMarkdown([{ name: filename, blob: new Blob([bytes]) }]); converted.data is the markdown. Supported formats: PDF (.pdf), spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.csv/.ods/.numbers), Word documents (.docx/.odt), HTML, XML, and images. The stored `path` for each attachment is in your input's file list.",
   'To attach files when replying (PDFs, images, any type): store bytes as a project file first (await itx.files.get("/email/report.pdf").put({ data, contentType })), then reply({ text, attachments: [{ path: "/email/report.pdf" }] }). Limits: 32 files, 5 MiB total per email.',
   "Email is not chat: one complete, well-written reply per inbound message. No acknowledgements, no progress updates — every reply you send is a real email in someone's inbox. Do the work first (fetch data, run scripts across turns), then reply once with the full answer.",
+  AGENT_SUMMARY_INSTRUCTION,
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
   "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
@@ -189,9 +202,12 @@ export function agentSystemPromptContextEvent(input: { content: string; idempote
  */
 export function agentCreationForPath<
   const SiblingBirthCertificate extends StreamEventInput = never,
+  const InitialEvent extends StreamEventInput = never,
 >(input: {
   agentPath: string;
   projectId: string;
+  /** Events that must commit in the same creation batch. */
+  initialEvents?: readonly InitialEvent[];
   /**
    * Human-facing project facts from the directory, when the caller has them:
    * the very first question a real user asked their agent was "which project
@@ -200,8 +216,8 @@ export function agentCreationForPath<
    * have no directory at hand — the id-only line still works.
    */
   project?: { name: string; slug: string; workerUrl?: string };
-  /** Platform-owned execution policy; public `agent.create()` never exposes this. */
-  platformSystemPrompt?: AgentSystemPromptPolicy;
+  /** Initial execution policy for a routed agent. */
+  systemPromptPolicy?: AgentSystemPromptPolicy;
   sibling?: {
     birthCertificate: SiblingBirthCertificate;
     processorSlug: string;
@@ -209,7 +225,7 @@ export function agentCreationForPath<
 }) {
   const { agentPath, projectId, project } = input;
   const model = DEFAULT_AGENT_MODEL;
-  const systemPromptPolicy: AgentSystemPromptPolicy = input.platformSystemPrompt ?? {
+  const systemPromptPolicy: AgentSystemPromptPolicy = input.systemPromptPolicy ?? {
     content: DEFAULT_AGENT_SYSTEM_PROMPT,
     id: "default",
     revision: DEFAULT_AGENT_SYSTEM_PROMPT_REVISION,
@@ -224,7 +240,9 @@ export function agentCreationForPath<
   const capabilityHostBirthCertificate = CapabilityHostProcessorContract.buildEvent({
     type: "events.iterate.com/capability-host/created",
     idempotencyKey: `capability-host/created:${projectId}:${agentPath}`,
-    payload: { config: {} },
+    // A capability miss at the agent's scope re-resolves directly at the
+    // project root host — one hop, journaled at birth, no path walking.
+    payload: { config: {}, fallback: capabilityFallbackForScope(agentPath) },
   });
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per
@@ -238,9 +256,9 @@ export function agentCreationForPath<
       type: "itx-expression",
       expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
       instructions:
-        `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): an instant copy-on-write overlay over the config repo's latest main, living in a Durable Object filesystem — no container, no clone, always warm. ` +
-        'Reads see latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
-        "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
+        `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): a mount-routed, copy-on-write filesystem living in a Durable Object — no container, no clone, always warm. By default the config repo is mounted at "/", so reads see its latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/glob/listAllFiles; paths are absolute). ` +
+        "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the mounted repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps. " +
+        "More repos can be mounted into the tree (getConfig/configure: mount path → { repoPath, policy }); commits route per mount and never span mounts (pass { scope } when more than one mount is dirty).",
     },
   });
   const configured = AgentProcessorContract.buildEvent({
@@ -265,7 +283,7 @@ export function agentCreationForPath<
       role: "system",
       key: "agent/boot-context",
       content: [
-        "Platform context for this agent:",
+        "Context for this agent:",
         project === undefined
           ? `- Project id: ${projectId}`
           : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
@@ -274,7 +292,7 @@ export function agentCreationForPath<
         // between the two write doors — the model was repeating this line
         // verbatim to users as the repo's full contents.
         '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
-        "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
+        '- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace — the config repo mounted at "/", live at latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.',
         "- Delegate explicitly: const child = itx.agents.get('researcher'); await child.create(); await child.message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
         // Deliberate reinforcement of the prompt's FIND WORKING CODE
         // section — repetition is the one thing small prompts buy back.
@@ -294,6 +312,20 @@ export function agentCreationForPath<
     idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
     processor: ["capabilityHosts", ["get", agentPath], "processor"],
     processorSlug: CapabilityHostProcessorContract.slug,
+  });
+  const collectionSubscription = CoreProcessorContract.buildEvent({
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream/subscription-configured:${durableObjectName}#agent-collection`,
+    payload: {
+      subscriptionKey: "agent-collection",
+      description: "Project agent collection projection",
+      selector: {
+        eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],
+      },
+      delivery: { mode: "push", expression: ["agents", "processEvent"] },
+      // The subscription is configured in the same birth batch as created.
+      deliver: "all",
+    },
   });
   const siblingBirthCertificates: SiblingBirthCertificate[] =
     input.sibling === undefined ? [] : [input.sibling.birthCertificate];
@@ -315,6 +347,7 @@ export function agentCreationForPath<
     model,
     events: [
       birthCertificate,
+      ...(input.initialEvents ?? []),
       capabilityHostBirthCertificate,
       ...siblingBirthCertificates,
       configured,
@@ -323,6 +356,7 @@ export function agentCreationForPath<
       bootContext,
       agentSubscription,
       capabilityHostSubscription,
+      collectionSubscription,
       ...siblingSubscriptions,
     ],
   };

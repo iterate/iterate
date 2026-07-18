@@ -44,11 +44,6 @@ export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string 
   return "Waiting for a response";
 }
 
-/** Coarse busy-phase copy for roster / Slack when the agent did not set shortStatus. */
-export function agentBusyPhaseLabel(phase: "llm" | "script" | undefined): string {
-  return phase === "script" ? "running code" : "waiting for a response";
-}
-
 /** `950 B`, `1.5 KB`, `2.3 MB` — file size from bytes. */
 export function formatFileSize(size: number): string {
   if (size < 1024) return `${size} B`;

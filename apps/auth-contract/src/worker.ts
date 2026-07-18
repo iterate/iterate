@@ -59,6 +59,12 @@ export type ValidateProjectAppSessionInput = {
   token: string;
 };
 
+/** The actor proven by a project-app session after its live membership check. */
+export type ValidatedProjectAppSession = {
+  expiresAt: number;
+  userId: string;
+};
+
 /**
  * The RPC contract of auth's default Worker entrypoint. Auth also implements
  * public HTTP `fetch`, but it is deliberately absent from this client contract.
@@ -76,7 +82,7 @@ export abstract class AuthWorker<Env = unknown> extends WorkerEntrypoint<Env> {
   ): Promise<{ token: string } | null>;
   abstract validateProjectAppSession(
     input: ValidateProjectAppSessionInput,
-  ): Promise<{ expiresAt: number } | null>;
+  ): Promise<ValidatedProjectAppSession | null>;
   abstract mintProjectId(): Promise<{ id: string }>;
   abstract introspectAccessToken(
     input: InternalIntrospectOAuthAccessTokenInput,

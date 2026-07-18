@@ -6,7 +6,7 @@ export const SCHEDULER_PRIMARY_PATH = "/scheduler/primary";
 /**
  * Scheduler RPC and the Scheduler Durable Object both use stream paths as
  * durable identity. This guard keeps the `/scheduler/...` contract at the edge
- * where callers choose a path, mirroring `normalizeAgentPath`.
+ * where callers choose a path, mirroring `parseAgentPath`.
  */
 export function normalizeSchedulerPath(path: string): string {
   const normalized = normalizePath(path);

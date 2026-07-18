@@ -747,6 +747,25 @@ through a multi-element-safe `anySpinnerVisible()` using
 visible spinner counts as progress" is the plugin's intended semantic. Worth
 upstreaming to the middlewright package.
 
+### 23. spinner-to-content handoff can false-fail with a 1ms timeout
+
+**Signature:** `dashboard.spec.ts` reports `Timeout 1ms exceeded` waiting for
+the project link, while the failure screenshot and accessibility snapshot
+already contain that exact visible link. The page showed its route/query
+"Loading projects..." indicator continuously until the table replaced it.
+
+**Root cause:** middlewright first polls target readiness, then separately
+checks whether any spinner is visible. React can atomically commit the
+spinner-to-content replacement between those browser reads: the target was
+absent at the last poll, then the spinner was absent at its check. The waiter
+therefore took its no-spinner fast-fail path and gave the now-appearing target
+only 1ms. This is a test-waiter TOCTOU race, not missing product progress UI.
+
+**Fix:** `patches/middlewright@0.1.2.patch` gives the target one 100ms polling
+interval after observing no spinner. A genuine no-spinner failure still fails
+in about a second; an atomic loading-to-ready handoff can complete without a
+false failure.
+
 ### Round 3 targets
 
 The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two

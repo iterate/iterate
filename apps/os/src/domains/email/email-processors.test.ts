@@ -96,6 +96,7 @@ describe("EmailProcessor (thread router)", () => {
     const routed = network.eventsAt("/agents/email/t2");
     expect(routed.map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
+      "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/email-agent/created",
       "events.iterate.com/agent/configured",
@@ -105,17 +106,24 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
     ]);
-    expect(routed[4]).toMatchObject({
+    expect(routed[1]!.payload).toEqual({
+      type: "email_thread",
+      counterpart: "jonas@example.com",
+      subject: "Hello agent",
+      threadId: "2",
+    });
+    expect(routed[5]).toMatchObject({
       payload: {
         content: EMAIL_AGENT_SYSTEM_PROMPT,
         key: "agent/system-prompt",
         role: "system",
       },
     });
-    expect(routed[11]!.payload).toEqual(receivedPayload({}));
+    expect(routed[13]!.payload).toEqual(receivedPayload({}));
     expect(driver.state.threads).toEqual({ "2": "/agents/email/t2" });
     expect(driver.state.threadByMessageId).toEqual({ "msg-1@mail.example": "2" });
   });
@@ -342,12 +350,14 @@ describe("EmailProcessor (thread router)", () => {
     await driver.deliver();
     expect(routed.events.map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
+      "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/email-agent/created",
       "events.iterate.com/agent/configured",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/capability-host/capability-provided",
       "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",

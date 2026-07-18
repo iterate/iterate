@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { LiveStateRpcTarget } from "iterate/live-state";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
@@ -7,7 +8,6 @@ import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import {
   itxForScope,
-  LiveStateRpcTarget,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
@@ -58,7 +58,6 @@ import {
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
-import { AgentStatusDatabase, type AgentStatusTouchInput } from "./agent-status-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
@@ -73,11 +72,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // will use.
   #liveDemo: { count: number } = { count: 0 };
   // The project's streams index — a materialized view in the DO's own SQLite,
-  // touched from the processEventBatch fan-in (see touchStreamActivity).
+  // updated from the processEventBatch fan-in.
   readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
-  // The agents roster — every agent stream's merged status record, fed from
-  // the same fan-in (the status-changed patches ride the touch call).
-  readonly #agentStatusDatabase = new AgentStatusDatabase(this.ctx.storage.sql);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -101,7 +97,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return {
         reduced,
         streamsIndex: this.#streamDatabase.all(),
-        agents: this.#agentStatusDatabase.all(),
         liveDemo: this.#liveDemo,
       };
     },
@@ -291,38 +286,17 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Record stream activity in the index and push it to `itx.liveState`. Called
-   * from the project's `processEventBatch` fan-in (every project-scoped
-   * stream's events flow through it). Idempotent — `StreamDatabase.touch` only
-   * advances recency — so a redelivered batch is harmless.
+   * Update the live projections from one committed delivery before that
+   * delivery is acknowledged. Both reducers are idempotent, so spine retries
+   * are harmless; a storage/RPC failure rejects the batch instead of silently
+   * leaving live state stale.
    */
-  touchStreamActivity(input: TouchInput): void {
-    this.#streamDatabase.touch(input);
-    this.#registry.refreshLive();
-  }
-
-  /**
-   * Fold a batch's agent status-changed patches into the agents roster and
-   * push the change to `itx.liveState` watchers. Same envelope as
-   * touchStreamActivity: called from the processEventBatch fan-in, idempotent
-   * (event offsets guard redelivery), never load-bearing for delivery.
-   */
-  touchAgentStatus(input: AgentStatusTouchInput): void {
-    this.#agentStatusDatabase.touch(input);
-    this.#registry.refreshLive();
-  }
-
-  /**
-   * Replace one roster row from the agent journal's full status-changed
-   * history — the recovery lane for a dropped touch (merge patches cannot
-   * reconstruct a lost field from later patches; the journal can). Returns
-   * false when the snapshot lost a race with a newer touch and the caller
-   * must re-read the journal. See AgentStatusDatabase.rebuild.
-   */
-  rebuildAgentStatus(input: AgentStatusTouchInput): boolean {
-    const applied = this.#agentStatusDatabase.rebuild(input);
-    if (applied) this.#registry.refreshLive();
-    return applied;
+  indexCommittedBatchFacts(input: { stream: TouchInput }): void {
+    const streamsBefore = this.#streamDatabase.all();
+    this.#streamDatabase.touch(input.stream);
+    if (streamsBefore !== this.#streamDatabase.all()) {
+      this.#registry.refreshLive();
+    }
   }
 
   async fetch(request: Request): Promise<Response> {

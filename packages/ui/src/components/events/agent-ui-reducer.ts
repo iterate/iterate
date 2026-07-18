@@ -1,4 +1,4 @@
-import { AgentLlmRequestCancelReason } from "@iterate-com/shared/agent-events";
+import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
 import { z } from "zod";
 import type { Event } from "./types.ts";
@@ -68,10 +68,6 @@ export type AgentUiActivity = {
   steps: AgentUiStep[];
   startedAtMs: number;
   endedAtMs?: number;
-  /** Authoritative phase from the platform-authored busy status event. */
-  phase?: "llm" | "script";
-  /** When the current authoritative phase began, for the live elapsed clock. */
-  phaseStartedAtMs?: number;
 };
 
 export type AgentUiActivitySummary = {
@@ -183,10 +179,24 @@ export function formatAgentUiDuration(durationMs: number): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export function isAgentUiActivityWorking(activity: AgentUiActivity | null): boolean {
+export function isAgentRuntimeVisiblyActive(runtime: AgentRuntime | undefined): boolean {
+  return (
+    runtime !== undefined &&
+    (runtime.triggers.runnable > 0 ||
+      runtime.llmRequests.scheduled > 0 ||
+      runtime.llmRequests.requested > 0 ||
+      runtime.llmRequests.started > 0 ||
+      runtime.runningScripts > 0)
+  );
+}
+
+export function isAgentUiActivityWorking(
+  activity: AgentUiActivity | null,
+  runtime?: AgentRuntime,
+): boolean {
   return (
     activity != null &&
-    (activity.phase != null ||
+    (isAgentRuntimeVisiblyActive(runtime) ||
       activity.steps.some((step) => step.status === "running") ||
       summarizeAgentUiActivity(activity).restartPending)
   );
@@ -306,8 +316,6 @@ export type AgentUiState = {
   presence: AgentUiPresenceEntry[];
   /** Lifetime token totals + the latest report (context fullness). */
   tokenUsage: AgentUiTokenUsage;
-  /** Generation guard for platform-authored busy/idle status patches. */
-  statusSinceOffset: number | null;
   /**
    * Settled activities whose script outcome was inferred at a boundary rather
    * than supplied by a durable completion. A late completion replaces the
@@ -360,8 +368,6 @@ export const AgentUiActivitySchema = z.strictObject({
   steps: z.array(z.discriminatedUnion("kind", [AgentUiLlmStepSchema, AgentUiCodeStepSchema])),
   startedAtMs: z.number().finite(),
   endedAtMs: z.number().finite().optional(),
-  phase: z.enum(["llm", "script"]).optional(),
-  phaseStartedAtMs: z.number().finite().optional(),
 }) satisfies z.ZodType<AgentUiActivity>;
 
 const AgentUiFileAttachmentSchema = z.strictObject({
@@ -426,7 +432,6 @@ export const AgentUiStateSchema = z
     eventCount: z.number().int().nonnegative(),
     presence: z.array(AgentUiPresenceEntrySchema),
     tokenUsage: AgentUiTokenUsageSchema,
-    statusSinceOffset: z.number().int().nonnegative().nullable(),
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
   })
   .superRefine((state, context) => {
@@ -465,7 +470,6 @@ export function initialAgentUiState(): AgentUiState {
     eventCount: 0,
     presence: [],
     tokenUsage: initialAgentUiTokenUsage(),
-    statusSinceOffset: null,
     provisionalActivities: {},
   };
 }
@@ -485,6 +489,46 @@ export function reduceAgentUi(
   return { endState, items };
 }
 
+/**
+ * Exact runtime state exposed by the individual Agent processor. This is a
+ * live presentation boundary, deliberately not an event in the agent journal.
+ */
+export type AgentUiRuntimeTransition = {
+  runtime: AgentRuntime;
+  sinceOffset: number;
+  since: string;
+};
+
+/**
+ * Project the journal-reduced UI state through the Agent processor's current
+ * runtime. Callers render the returned items as a transient tail; the browser
+ * feed database remains a reduction of journal facts only.
+ */
+export function reduceAgentUiRuntime(
+  start: AgentUiState,
+  transition: AgentUiRuntimeTransition,
+): { endState: AgentUiState; items: AgentUiItem[] } {
+  const boundaryAtMs = Date.parse(transition.since);
+  if (!Number.isFinite(boundaryAtMs)) {
+    return { endState: start, items: [] };
+  }
+
+  if (isAgentRuntimeVisiblyActive(transition.runtime)) {
+    return {
+      endState: {
+        ...start,
+        live: ensureLive(start, transition.sinceOffset, boundaryAtMs),
+      },
+      items: [],
+    };
+  }
+
+  const items: AgentUiItem[] = [];
+  const expired = expireOverdueCodeSteps(start, boundaryAtMs);
+  const endState = flushDeferredMessages(settleLive(expired, boundaryAtMs, items), items);
+  return { endState, items };
+}
+
 /** Append a settled item in emission order. */
 function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem): AgentUiState {
   items.push(item);
@@ -499,7 +543,6 @@ const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-reques
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
 const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
-const AGENT_STATUS_CHANGED = "events.iterate.com/agent/status-changed";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
@@ -684,7 +727,7 @@ function reduceAgentUiEvent(
         isRecord(result?.error) && typeof result.error.message === "string"
           ? result.error.message
           : undefined;
-      const updated = updateLlmStep(state, llmRequestOffset, (step) =>
+      return updateLlmStep(state, llmRequestOffset, (step) =>
         step.outcome != null
           ? step
           : {
@@ -699,14 +742,13 @@ function reduceAgentUiEvent(
               ...(errorMessage == null ? {} : { errorMessage }),
             },
       );
-      return clearSettledPhase(updated, "llm");
     }
 
     case AGENT_LLM_REQUEST_CANCELLED: {
       const llmRequestOffset = readLlmRequestOffset(event);
       const cancelReason = readLlmCancelReason(event);
       if (llmRequestOffset == null) return state;
-      const updated = updateLlmStep(state, llmRequestOffset, (step) =>
+      return updateLlmStep(state, llmRequestOffset, (step) =>
         step.outcome != null
           ? step
           : {
@@ -717,7 +759,6 @@ function reduceAgentUiEvent(
               durationMs: Math.max(0, timestampMs - step.startedAtMs),
             },
       );
-      return clearSettledPhase(updated, "llm");
     }
 
     case SCRIPT_EXECUTION_REQUESTED: {
@@ -767,38 +808,7 @@ function reduceAgentUiEvent(
         return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
       }
       steps[index] = applyDurableCodeOutcome(step, outcome, timestampMs);
-      return clearSettledPhase({ ...state, live: { ...state.live, steps } }, "script");
-    }
-
-    case AGENT_STATUS_CHANGED: {
-      const payload = readPayloadRecord(event);
-      if (
-        typeof payload?.busy !== "boolean" ||
-        typeof payload.sinceOffset !== "number" ||
-        !Number.isSafeInteger(payload.sinceOffset) ||
-        payload.sinceOffset < 0
-      ) {
-        // Agent-authored title/note/shortStatus patches do not delimit work.
-        return state;
-      }
-      if (state.statusSinceOffset !== null && payload.sinceOffset < state.statusSinceOffset) {
-        // An idle debounce append can lose its race with a newer busy flip.
-        return state;
-      }
-      const next = { ...state, statusSinceOffset: payload.sinceOffset };
-      if (payload.busy) {
-        if (payload.phase !== "llm" && payload.phase !== "script") return state;
-        const live = ensureLive(next, event.offset, timestampMs);
-        return {
-          ...next,
-          live: { ...live, phase: payload.phase, phaseStartedAtMs: timestampMs },
-        };
-      }
-      // Idle is the authoritative run boundary. Request completion facts are
-      // durable, so a still-running step here is an explicit failed/unknown
-      // lifecycle rather than a successful-looking silent close.
-      const expired = expireOverdueCodeSteps(next, timestampMs);
-      return flushDeferredMessages(settleLive(expired, timestampMs, items), items);
+      return { ...state, live: { ...state.live, steps } };
     }
 
     case AGENT_TOKEN_USAGE_REPORTED: {
@@ -995,7 +1005,7 @@ function settleLiveIfIdle(
   endedAtMs: number,
   items: AgentUiItem[],
 ): AgentUiState {
-  if (isAgentUiActivityWorking(state.live)) return state;
+  if (isAgentUiActivityWorking(state.live, undefined)) return state;
   return settleLive(state, endedAtMs, items);
 }
 
@@ -1030,13 +1040,11 @@ function expireOverdueCodeSteps(state: AgentUiState, boundaryAtMs: number): Agen
   });
   if (!changed) return state;
 
-  const hasRunningStep = steps.some((step) => step.status === "running");
   return {
     ...state,
     live: {
       ...state.live,
       steps,
-      ...(hasRunningStep ? {} : { phase: undefined, phaseStartedAtMs: undefined }),
     },
   };
 }
@@ -1057,8 +1065,6 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
     ...state.live,
     status: "done",
     endedAtMs,
-    phase: undefined,
-    phaseStartedAtMs: undefined,
     steps: state.live.steps.map((step): AgentUiStep => {
       if (step.status !== "running") return step;
       const durationMs = Math.max(0, endedAtMs - step.startedAtMs);
@@ -1123,7 +1129,7 @@ function emitUserMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live)) {
+  if (isAgentUiActivityWorking(settled.live, undefined)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
@@ -1141,7 +1147,7 @@ function emitAssistantMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live)) {
+  if (isAgentUiActivityWorking(settled.live, undefined)) {
     return {
       ...settled,
       deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
@@ -1149,19 +1155,6 @@ function emitAssistantMessageItem(
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
   return emitItem(flushed, items, item);
-}
-
-function clearSettledPhase(state: AgentUiState, phase: "llm" | "script"): AgentUiState {
-  if (state.live?.phase !== phase) return state;
-  const hasRunningPhaseStep = state.live.steps.some(
-    (step) =>
-      step.status === "running" && (phase === "llm" ? step.kind === "llm" : step.kind === "code"),
-  );
-  if (hasRunningPhaseStep) return state;
-  return {
-    ...state,
-    live: { ...state.live, phase: undefined, phaseStartedAtMs: undefined },
-  };
 }
 
 function correctProvisionalCodeStep(

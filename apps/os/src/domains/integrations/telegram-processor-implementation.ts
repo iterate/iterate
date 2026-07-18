@@ -274,7 +274,21 @@ function telegramAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
-    platformSystemPrompt: {
+    initialEvents: [
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: `agent/binding:${input.projectId}:${input.path}`,
+        payload: {
+          type: "telegram_thread",
+          connection: input.connection,
+          chatId: input.chatId,
+          ...(input.messageThreadId === undefined
+            ? {}
+            : { messageThreadId: input.messageThreadId }),
+        },
+      },
+    ],
+    systemPromptPolicy: {
       content: telegramAgentSystemPrompt({
         agentPath: input.path,
         chatId: input.chatId,

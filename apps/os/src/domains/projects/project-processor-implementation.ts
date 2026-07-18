@@ -2,11 +2,14 @@ import { StreamProcessor } from "iterate/processors";
 import type { StreamEvent, StreamListItem } from "iterate/processors";
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { CONFIG_REPO_PATH } from "../repos/utils.ts";
+import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  capabilityFallbackForScope,
+} from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -57,8 +60,6 @@ export class ProjectProcessor extends StreamProcessor<
         return recordPhysicalStream(state, event.payload.path, event.createdAt);
       case "events.iterate.com/stream/child-stream-created":
         return recordPhysicalStream(state, event.payload.childPath, event.createdAt);
-      case "events.iterate.com/agent/created":
-        return recordDomainObject(state, "agents", event);
       case "events.iterate.com/repo/created":
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
@@ -138,7 +139,8 @@ export class ProjectProcessor extends StreamProcessor<
                 {
                   type: "events.iterate.com/capability-host/created",
                   idempotencyKey: `capability-host/created:${this.deps.itx.projectId}:/`,
-                  payload: { config: {} },
+                  // The root host ends capability resolution: no fallback.
+                  payload: { config: {}, fallback: capabilityFallbackForScope("/") },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
@@ -375,7 +377,6 @@ export class ProjectProcessor extends StreamProcessor<
 
 function recordPhysicalStream<
   State extends {
-    agents: StreamListItem[];
     repos: StreamListItem[];
     secrets: StreamListItem[];
     streams: StreamListItem[];
@@ -390,11 +391,10 @@ function recordPhysicalStream<
 
 function recordDomainObject<
   State extends {
-    agents: StreamListItem[];
     repos: StreamListItem[];
     secrets: StreamListItem[];
   },
-  Key extends "agents" | "repos" | "secrets",
+  Key extends "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
   const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
   if (path === undefined) return state;

@@ -82,16 +82,25 @@ describe("TelegramProcessor (webhook router)", () => {
 
     const path = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
     const allRouted = network.eventsAt(path);
-    expect(allRouted.slice(0, 3).map((event) => event.type)).toEqual([
+    expect(allRouted.slice(0, 7).map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
+      "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/telegram-agent/created",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/capability-host/capability-provided",
     ]);
+    expect(allRouted[1]!.payload).toEqual({
+      type: "telegram_thread",
+      chatId: String(CHAT_ID),
+      connection: CONNECTION,
+    });
     expect(
       allRouted.filter(
         (event) => event.type === "events.iterate.com/stream/subscription-configured",
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       allRouted.find(
         (event) =>
@@ -600,10 +609,14 @@ describe("TelegramProcessor (webhook router)", () => {
     await driver.deliver();
     await expect(driver.snapshot()).resolves.toMatchObject({ offset: 3 });
     const routedCount = routed.events.length;
-    expect(routed.events.slice(0, 3).map((event) => event.type)).toEqual([
+    expect(routed.events.slice(0, 7).map((event) => event.type)).toEqual([
       "events.iterate.com/agent/created",
+      "events.iterate.com/agent/binding-set",
       "events.iterate.com/capability-host/created",
       "events.iterate.com/telegram-agent/created",
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/capability-host/capability-provided",
     ]);
     expect(routed.events.at(-1)?.type).toBe("events.iterate.com/telegram/webhook-received");
 

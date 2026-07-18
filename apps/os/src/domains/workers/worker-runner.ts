@@ -38,6 +38,8 @@ type StatefulWorkerRpc = {
     ref: StatefulDynamicWorkerRef;
   }): Promise<unknown>;
   kill(): Promise<void>;
+  setAlarm(input: { atMs: number | null; ref: StatefulDynamicWorkerRef }): Promise<void>;
+  getAlarm(): Promise<number | null>;
 };
 
 /**
@@ -103,6 +105,25 @@ export class DynamicWorkerRunner {
   ): Promise<{ klass: T; resolved: ServedWorkerSource }> {
     const { resolved, worker } = await this.#load(ref, buildBudgetMs);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
+  }
+
+  /**
+   * Resolve a ref's CURRENT source version (building if needed) without
+   * materializing a Worker Loader isolate. The stale-while-rebuild background
+   * refresh must use this instead of {@link loadStatefulClass}: an isolate
+   * created inside a `waitUntil` context dies with it, and the loader CACHES
+   * isolates by key — a background-created isolate would poison every later
+   * mount of the same build (observed as persistent redacted "internal
+   * error"s on the swapped facet). The next real call creates the isolate in
+   * its own request context.
+   */
+  async resolveStatefulSourceCacheKey(ref: StatefulDynamicWorkerRef): Promise<string> {
+    const resolved = await resolveWorkerSource({
+      projectId: this.#projectId,
+      source: ref.source,
+      waitUntil: this.#waitUntil,
+    });
+    return resolved.cacheKey;
   }
 
   /**
@@ -243,6 +264,16 @@ export class DynamicWorkerRunner {
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
   async kill(ref: StatefulDynamicWorkerRef): Promise<void> {
     await this.#statefulWorker(ref).kill();
+  }
+
+  /** Arm (or with null, disarm) a stateful dynamic worker's durable alarm. */
+  async setAlarm(ref: StatefulDynamicWorkerRef, atMs: number | null): Promise<void> {
+    await this.#statefulWorker(ref).setAlarm({ atMs, ref });
+  }
+
+  /** The stateful dynamic worker's currently armed alarm time, if any. */
+  async getAlarm(ref: StatefulDynamicWorkerRef): Promise<number | null> {
+    return await this.#statefulWorker(ref).getAlarm();
   }
 
   async #load(

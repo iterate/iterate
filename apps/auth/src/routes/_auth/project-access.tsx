@@ -29,7 +29,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { slugify } from "@iterate-com/shared/slug";
-import { suggestOrganizationNameFromEmail } from "@iterate-com/shared/name-suggestions";
+import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
 import {
   Field,
   FieldDescription,
@@ -96,10 +96,14 @@ function RouteComponent() {
   const session = useSession();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | null>(null);
   const [organizationName, setOrganizationName] = useState(() =>
-    suggestOrganizationNameFromEmail(session.user.email ?? ""),
+    suggestOrganizationName({
+      name: session.user.name,
+      email: session.user.email,
+    }),
   );
-  // null = keep deriving the first project's slug from the organization name;
-  // a string means the user took over. Clearing the field hands control back.
+  // null = still deriving the first project's slug from the organization name.
+  // Once the user edits the field (including clearing it), we keep their
+  // value — empty string stays empty and does not snap back to the suggestion.
   const [projectSlugOverride, setProjectSlugOverride] = useState<string | null>(null);
   const [projectSlug, setProjectSlug] = useState("");
   const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
@@ -420,13 +424,13 @@ function RouteComponent() {
                     name="first-project-slug"
                     placeholder="acme"
                     value={firstProjectSlug}
-                    onChange={(event) => setProjectSlugOverride(event.target.value || null)}
+                    onChange={(event) => setProjectSlugOverride(event.target.value)}
                     aria-invalid={firstProjectSlugIssues.length > 0}
                     disabled={isSubmitting}
                   />
                   <FieldDescription>
                     Your project homepage will be under{" "}
-                    <span className="font-medium text-foreground">
+                    <span className="whitespace-nowrap font-medium text-foreground">
                       {firstProjectSlug || "your-project"}.{projectHostnameBase}
                     </span>
                   </FieldDescription>
@@ -794,7 +798,7 @@ function CreateProjectForm(props: {
           />
           <FieldDescription>
             Your project homepage will be under{" "}
-            <span className="font-medium text-foreground">
+            <span className="whitespace-nowrap font-medium text-foreground">
               {props.projectSlug || "your-project"}.{props.projectHostnameBase}
             </span>
           </FieldDescription>

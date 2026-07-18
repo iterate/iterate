@@ -1,4 +1,5 @@
 import {
+  BotIcon,
   CircleStopIcon,
   FilterIcon,
   HistoryIcon,
@@ -70,7 +71,7 @@ export function StreamViewHeader({
     reason: string | null;
     setPaused: (paused: boolean) => Promise<void>;
   };
-  streamKill: {
+  streamKill?: {
     kill: () => Promise<void>;
     pending: boolean;
   };
@@ -79,7 +80,7 @@ export function StreamViewHeader({
    * button that opens it (replacing mode tabs and filter, which live inside
    * the sheet instead).
    */
-  eventsToggle?: { eventCount: number };
+  eventsToggle?: { eventCount?: number };
   /** This browser's REAL measured metrics (see useBrowserStreamMetrics) — "—" until samples exist. */
   metrics: BrowserStreamMetricsView;
   presence: readonly AgentUiPresenceEntry[];
@@ -91,6 +92,7 @@ export function StreamViewHeader({
     focusedProcessorKey,
     focusProcessor,
     openProcessorsOverview,
+    openAgentDetails,
     eventsSheetOpen,
     openEventsSheet,
     closeEventsSheet,
@@ -182,9 +184,11 @@ export function StreamViewHeader({
           >
             <HistoryIcon className="size-3.5" />
             <span className="hidden sm:inline">Events</span>
-            <span className="font-mono text-[10px] text-muted-foreground">
-              {eventsToggle.eventCount.toLocaleString()}
-            </span>
+            {eventsToggle.eventCount == null ? null : (
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {eventsToggle.eventCount.toLocaleString()}
+              </span>
+            )}
           </Button>
         ) : (
           <>
@@ -219,6 +223,7 @@ export function StreamViewHeader({
             latencyLabel={latencyLabel}
             metrics={metrics}
             onFocusPresence={focusProcessor}
+            onOpenAgentDetails={agentPause == null ? undefined : openAgentDetails}
             onOpenStreamState={openProcessorsOverview}
             pause={agentPause}
           />
@@ -292,6 +297,7 @@ function StreamOverflowMenu({
   latencyLabel,
   metrics,
   onFocusPresence,
+  onOpenAgentDetails,
   onOpenStreamState,
   pause,
 }: {
@@ -299,13 +305,15 @@ function StreamOverflowMenu({
   connectedPresence: readonly AgentUiPresenceEntry[];
   focusedProcessorKey: string | null;
   isMobile: boolean;
-  kill: {
+  kill?: {
     kill: () => Promise<void>;
     pending: boolean;
   };
   latencyLabel: string;
   metrics: BrowserStreamMetricsView;
   onFocusPresence: (subscriptionKey: string) => void;
+  /** Present only on agent streams — opens the agent details sheet. */
+  onOpenAgentDetails?: () => void;
   onOpenStreamState: () => void;
   pause?: {
     paused: boolean;
@@ -379,11 +387,17 @@ function StreamOverflowMenu({
             )}
           </>
         ) : null}
-        {pause == null ? null : (
+        {pause == null || kill == null ? null : (
           <>
             {isMobile ? <DropdownMenuSeparator /> : null}
             <DropdownMenuGroup>
               <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
+              {onOpenAgentDetails == null ? null : (
+                <DropdownMenuItem closeOnClick onClick={onOpenAgentDetails}>
+                  <BotIcon />
+                  Agent details
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 closeOnClick
                 disabled={pause.pending}

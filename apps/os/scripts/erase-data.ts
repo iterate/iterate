@@ -23,8 +23,10 @@
  *     handover leaves the previous branch's classes behind. Killing the
  *     instances also stops orphaned scheduler DOs whose alarms kept running
  *     itx scripts (= real LLM spend) against erased projects. Exception:
- *     container-bearing classes (the sandboxes) survive as unreachable
- *     orphans — recreating them is broken upstream (do-reset.ts explains).
+ *     container-bearing classes still declared by this branch (the
+ *     sandboxes) survive as unreachable orphans — recreating them is broken
+ *     upstream. Container applications/classes left by another branch are
+ *     retired instead (do-reset.ts explains).
  *   - normally, the auth D1 database (identities, orgs, projects — the source
  *     of every project id) and project-directory KV. `--preserve-auth` keeps
  *     both for a planned production recreation: selected OS projects can then
@@ -52,6 +54,10 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import {
+  SANDBOX_INSTANCE_TYPE_BINDINGS,
+  SANDBOX_INSTANCE_TYPES,
+} from "../src/domains/sandboxes/instance-types.ts";
 import { COMPATIBILITY_DATE, RETIRED_WORKER_SECRETS } from "./generate-wrangler-config.ts";
 
 /** Erase ALL user data in a deployed environment; infrastructure stays (see file header). */
@@ -94,6 +100,9 @@ export default async function eraseData(options: {
       CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,
     },
     compatibilityDate: COMPATIBILITY_DATE,
+    containerClassNames: SANDBOX_INSTANCE_TYPES.map(
+      (instanceType) => SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+    ),
   });
 
   if (options.preserveAuth) {
@@ -119,7 +128,7 @@ export default async function eraseData(options: {
   }
 
   // Delete a batch of items with bounded concurrency and a deadline: this
-  // script runs inside the preview-slot cleanup job's 10-MINUTE ceiling, and
+  // script runs inside the preview-slot cleanup job's 15-MINUTE ceiling, and
   // an e2e-churned search-index bucket holds thousands of objects —
   // one-at-a-time REST deletes blew the ceiling on the first live run
   // (preview_6, 2026-07-14). The API's global rate limit (~1200 req/5min)
@@ -253,7 +262,7 @@ export default async function eraseData(options: {
   for (const bucket of bucketsToWalk) {
     // Per-bucket budget: a churn-refilled search-index must not starve the
     // files pass (Bugbot). 90s each + 90s instances stays well inside the
-    // cleanup job's 10-minute ceiling alongside the DO/D1/KV work.
+    // cleanup job's 15-minute ceiling alongside the DO/D1/KV work.
     const bucketDeadline = Date.now() + 90_000;
     try {
       let objectsDeleted = 0;
