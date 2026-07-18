@@ -4,10 +4,9 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { RepoArtifactNameCodec } from "../repos/utils.ts";
 import { workerEventsQueueName } from "../../queue-names.ts";
 import {
+  createOrEnsureArtifactEventSubscription,
   createCloudflareAccountApi,
   desiredArtifactRepoEventSubscription,
-  ensureArtifactEventSubscription,
-  listArtifactEventSubscriptions,
   queueIdForWorkerEventQueue,
 } from "./cloudflare-event-subscriptions.ts";
 
@@ -16,10 +15,6 @@ export const CLOUDFLARE_EVENT_RECEIVED_TYPE = "events.iterate.com/cloudflare/eve
 export const REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE =
   "events.iterate.com/repo/cloudflare-artifact-event-received";
 
-// Event delivery is authoritative; Cloudflare subscription provisioning is a
-// bounded control-plane follow-up. Keep enough concurrency to drain repo
-// creation bursts without turning one Queue batch into ten serial API waits.
-const SUBSCRIPTION_ENSURE_CONCURRENCY = 2;
 const SUBSCRIPTION_API_TIMEOUT_MS = 5_000;
 
 type EventQueueEnv = Pick<
@@ -249,42 +244,37 @@ async function ensureRepoEventSubscriptionsIfConfigured(input: {
   });
 
   let queueId: string;
-  let existing: Awaited<ReturnType<typeof listArtifactEventSubscriptions>>;
   try {
-    [queueId, existing] = await Promise.all([
-      queueIdForWorkerEventQueue(api, input.env.WORKER_SELF),
-      listArtifactEventSubscriptions(api),
-    ]);
+    queueId = await queueIdForWorkerEventQueue(api, input.env.WORKER_SELF);
   } catch (error) {
-    console.warn("[event-queue] failed to load artifact subscription state", {
+    console.warn("[event-queue] failed to load artifact event queue", {
       error,
       repoCount: input.repoNames.length,
     });
     return;
   }
 
-  for (let offset = 0; offset < input.repoNames.length; offset += SUBSCRIPTION_ENSURE_CONCURRENCY) {
-    const repoNames = input.repoNames.slice(offset, offset + SUBSCRIPTION_ENSURE_CONCURRENCY);
-    await Promise.all(
-      repoNames.map(async (repoName) => {
-        try {
-          const desired = await desiredArtifactRepoEventSubscription({
-            repoName,
-            workerName: input.env.WORKER_SELF,
-          });
-          const result = await ensureArtifactEventSubscription(api, { desired, existing, queueId });
-          if (result !== "unchanged") {
-            console.log(`[event-queue] artifact repo subscription ${desired.name} ${result}`);
-          }
-        } catch (error) {
-          console.warn("[event-queue] failed to ensure artifact repo subscription", {
-            error,
-            repoName,
-          });
+  // A Queue batch is at most ten messages. Each fresh repo is one independent
+  // Cloudflare POST, so start the entire bounded batch together.
+  await Promise.all(
+    input.repoNames.map(async (repoName) => {
+      try {
+        const desired = await desiredArtifactRepoEventSubscription({
+          repoName,
+          workerName: input.env.WORKER_SELF,
+        });
+        const result = await createOrEnsureArtifactEventSubscription(api, { desired, queueId });
+        if (result !== "unchanged") {
+          console.log(`[event-queue] artifact repo subscription ${desired.name} ${result}`);
         }
-      }),
-    );
-  }
+      } catch (error) {
+        console.warn("[event-queue] failed to ensure artifact repo subscription", {
+          error,
+          repoName,
+        });
+      }
+    }),
+  );
 }
 
 function artifactRepoReferenceFromCloudflareEvent(

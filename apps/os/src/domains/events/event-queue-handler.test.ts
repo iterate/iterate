@@ -189,10 +189,9 @@ describe("event queue handler", () => {
 
     expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       "GET /client/v4/accounts/account-1/queues?page=1&per_page=100",
-      "GET /client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100",
       "POST /client/v4/accounts/account-1/event_subscriptions/subscriptions",
     ]);
-    expect(calls[2]?.body).toMatchObject({
+    expect(calls[1]?.body).toMatchObject({
       destination: { queue_id: "queue-1", type: "queues.queue" },
       events: ["pushed", "cloned", "fetched"],
       name: expect.stringMatching(/^os-prd-artifact-repo-prj_123--Lw-[0-9a-f]{12}$/),
@@ -213,7 +212,70 @@ describe("event queue handler", () => {
     expect(message.ack).toHaveBeenCalledOnce();
   });
 
-  test("fans out the whole batch before reusing one subscription snapshot", async () => {
+  test("recovers an existing resource through a logarithmic name lookup", async () => {
+    const { env } = createEnv({ cloudflareApiToken: "cf-token" });
+    const artifactName = RepoArtifactNameCodec.stringify({ path: "/", projectId: "prj_123" });
+    const calls: string[] = [];
+    let desiredBody: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname + new URL(String(url)).search;
+        calls.push(`${init?.method ?? "GET"} ${path}`);
+        if (path.endsWith("/queues?page=1&per_page=100")) {
+          return Response.json({
+            success: true,
+            result: [{ queue_id: "queue-1", queue_name: "os-prd-events" }],
+          });
+        }
+        if (path.endsWith("/event_subscriptions/subscriptions") && init?.method === "POST") {
+          desiredBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+          return Response.json(
+            {
+              success: false,
+              errors: [
+                {
+                  message:
+                    "We currently do not support multiple subscriptions on the same resource.",
+                },
+              ],
+            },
+            { status: 405 },
+          );
+        }
+        if (
+          path.endsWith(
+            "/event_subscriptions/subscriptions?page=1&per_page=100&order=name&direction=asc",
+          )
+        ) {
+          return Response.json({
+            success: true,
+            result: [{ id: "subscription-1", ...desiredBody }],
+          });
+        }
+        return Response.json({ success: false, errors: [{ message: path }] }, { status: 404 });
+      }),
+    );
+    const message = createMessage(
+      {
+        type: "cf.artifacts.repo.created",
+        source: { type: "artifacts", namespace: "os-prd-repos", repoName: artifactName },
+      },
+      "msg-created",
+    );
+
+    await handleEventQueueBatch(createBatch([message]), env);
+
+    expect(calls).toEqual([
+      "GET /client/v4/accounts/account-1/queues?page=1&per_page=100",
+      "POST /client/v4/accounts/account-1/event_subscriptions/subscriptions",
+      "GET /client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100&order=name&direction=asc",
+    ]);
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+  });
+
+  test("fans out the whole batch before creating repo subscriptions concurrently", async () => {
     const { appends, env } = createEnv({ cloudflareApiToken: "cf-token" });
     const artifactNames = ["prj_first", "prj_second"].map((projectId) =>
       RepoArtifactNameCodec.stringify({ path: "/", projectId }),
@@ -230,6 +292,8 @@ describe("event queue handler", () => {
     );
     const calls: Array<{ method: string; path: string }> = [];
     let appendCountAtFirstApiCall: number | undefined;
+    let activePosts = 0;
+    let maxActivePosts = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
@@ -243,15 +307,13 @@ describe("event queue handler", () => {
           });
         }
         if (
-          path ===
-          "/client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100"
-        ) {
-          return Response.json({ success: true, result: [] });
-        }
-        if (
           path === "/client/v4/accounts/account-1/event_subscriptions/subscriptions" &&
           init?.method === "POST"
         ) {
+          activePosts += 1;
+          maxActivePosts = Math.max(maxActivePosts, activePosts);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          activePosts -= 1;
           return Response.json({ success: true, result: { id: `subscription-${calls.length}` } });
         }
         return Response.json({ success: false, errors: [{ message: path }] }, { status: 404 });
@@ -276,8 +338,9 @@ describe("event queue handler", () => {
       calls.filter((call) =>
         call.path.endsWith("/event_subscriptions/subscriptions?page=1&per_page=100"),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(calls.filter((call) => call.method === "POST")).toHaveLength(2);
+    expect(maxActivePosts).toBe(2);
     for (const message of messages) {
       expect(message.ack).toHaveBeenCalledOnce();
       expect(message.retry).not.toHaveBeenCalled();
@@ -350,9 +413,6 @@ describe("event queue handler", () => {
             success: true,
             result: [{ queue_id: "queue-1", queue_name: "os-prd-events" }],
           });
-        }
-        if (path.endsWith("/event_subscriptions/subscriptions?page=1&per_page=100")) {
-          return Response.json({ success: true, result: [] });
         }
         expect(init?.method).toBe("POST");
         return Response.json(

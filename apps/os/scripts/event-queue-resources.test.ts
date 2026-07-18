@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 
 import {
   ensureWorkerEventQueue,
+  findArtifactEventSubscriptionByName,
   listArtifactEventSubscriptions,
   listArtifactRepos,
 } from "../src/domains/events/cloudflare-event-subscriptions.ts";
@@ -104,4 +105,30 @@ it("paginates Cloudflare list endpoints with the accepted page size", async () =
     "/artifacts/namespaces/os-prd-repos/repos?page=1&per_page=100",
     "/artifacts/namespaces/os-prd-repos/repos?page=2&per_page=100",
   ]);
+});
+
+it("finds one subscription in a large name-sorted inventory logarithmically", async () => {
+  const calls: string[] = [];
+  const targetName = "subscription-017242";
+  const api = async <T>(path: string): Promise<T> => {
+    calls.push(path);
+    const match = /page=(\d+)&per_page=100&order=name&direction=asc$/.exec(path);
+    if (match === null) throw new Error(`unexpected Cloudflare call ${path}`);
+    const page = Number(match[1]);
+    if (page > 217) return [] as T;
+    const firstIndex = (page - 1) * 100;
+    return Array.from({ length: 100 }, (_, index) => {
+      const name = `subscription-${String(firstIndex + index).padStart(6, "0")}`;
+      return { id: name, name };
+    }) as T;
+  };
+
+  await expect(findArtifactEventSubscriptionByName(api, targetName)).resolves.toMatchObject({
+    id: targetName,
+    name: targetName,
+  });
+  expect(calls.length).toBeLessThanOrEqual(17);
+  expect(calls).not.toContain(
+    "/event_subscriptions/subscriptions?page=217&per_page=100&order=name&direction=asc",
+  );
 });

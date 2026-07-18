@@ -85,6 +85,95 @@ export async function listArtifactEventSubscriptions(api: CloudflareAccountApi) 
   );
 }
 
+/**
+ * Ensure a subscription from a resource-created event without listing the
+ * account's entire subscription inventory.
+ *
+ * Cloudflare permits only one event subscription per source resource. A new
+ * repo therefore takes one POST. An at-least-once delivery (including a crash
+ * after Cloudflare committed the POST) gets the explicit "already subscribed"
+ * response, then recovers the deterministic subscription by binary-searching
+ * the API's name-sorted pages. Recovery is O(log n); the ordinary path is O(1).
+ */
+export async function createOrEnsureArtifactEventSubscription(
+  api: CloudflareAccountApi,
+  input: {
+    desired: DesiredArtifactEventSubscription;
+    queueId: string;
+  },
+): Promise<"created" | "recreated" | "unchanged"> {
+  let alreadySubscribedError: CloudflareAccountApiError;
+  try {
+    return await ensureArtifactEventSubscription(api, { ...input, existing: [] });
+  } catch (error) {
+    if (!isResourceAlreadySubscribedError(error)) throw error;
+    alreadySubscribedError = error;
+  }
+
+  const current = await findArtifactEventSubscriptionByName(api, input.desired.name);
+  if (current === undefined) {
+    throw new Error(
+      `Cloudflare reports that ${JSON.stringify(input.desired.source)} is already subscribed, but deterministic subscription ${input.desired.name} was not found`,
+      { cause: alreadySubscribedError },
+    );
+  }
+  return await ensureArtifactEventSubscription(api, { ...input, existing: [current] });
+}
+
+/** Find one deterministic name without walking every account-level page. */
+export async function findArtifactEventSubscriptionByName(
+  api: CloudflareAccountApi,
+  name: string,
+): Promise<ArtifactEventSubscription | undefined> {
+  const pages = new Map<number, ArtifactEventSubscription[]>();
+  const loadPage = async (page: number) => {
+    let subscriptions = pages.get(page);
+    if (subscriptions === undefined) {
+      subscriptions = await api<ArtifactEventSubscription[]>(
+        `/event_subscriptions/subscriptions?page=${page}&per_page=100&order=name&direction=asc`,
+      );
+      pages.set(page, subscriptions);
+    }
+    return subscriptions;
+  };
+
+  // Discover an upper page bound exponentially. Cloudflare returns an empty
+  // successful page beyond the end of the collection.
+  let lowPage = 1;
+  let highPage = 1;
+  for (;;) {
+    const subscriptions = await loadPage(highPage);
+    if (
+      subscriptions.length === 0 ||
+      subscriptionName(subscriptions[subscriptions.length - 1]!) >= name
+    ) {
+      break;
+    }
+    lowPage = highPage + 1;
+    highPage *= 2;
+  }
+
+  while (lowPage <= highPage) {
+    const page = Math.floor((lowPage + highPage) / 2);
+    const subscriptions = await loadPage(page);
+    if (subscriptions.length === 0) {
+      highPage = page - 1;
+      continue;
+    }
+
+    const firstName = subscriptionName(subscriptions[0]!);
+    const lastName = subscriptionName(subscriptions[subscriptions.length - 1]!);
+    if (name < firstName) {
+      highPage = page - 1;
+    } else if (name > lastName) {
+      lowPage = page + 1;
+    } else {
+      return subscriptions.find((subscription) => subscription.name === name);
+    }
+  }
+  return undefined;
+}
+
 export async function ensureArtifactEventSubscription(
   api: CloudflareAccountApi,
   input: {
@@ -168,12 +257,29 @@ export function createCloudflareAccountApi(input: {
       success?: boolean;
     } | null;
     if (!response.ok || body?.success === false) {
-      throw new Error(
-        `Cloudflare API ${init?.method ?? "GET"} ${path} failed (${response.status}): ${JSON.stringify(body?.errors ?? body).slice(0, 500)}`,
-      );
+      throw new CloudflareAccountApiError({
+        errors: body?.errors ?? body,
+        method: init?.method ?? "GET",
+        path,
+        status: response.status,
+      });
     }
     return body?.result as T;
   };
+}
+
+export class CloudflareAccountApiError extends Error {
+  readonly errors: unknown;
+  readonly status: number;
+
+  constructor(input: { errors: unknown; method: string; path: string; status: number }) {
+    super(
+      `Cloudflare API ${input.method} ${input.path} failed (${input.status}): ${JSON.stringify(input.errors).slice(0, 500)}`,
+    );
+    this.name = "CloudflareAccountApiError";
+    this.errors = input.errors;
+    this.status = input.status;
+  }
 }
 
 function artifactEventSubscriptionMatches(
@@ -214,6 +320,28 @@ async function artifactEventSubscriptionsApi<T = unknown>(
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+function isResourceAlreadySubscribedError(error: unknown): error is CloudflareAccountApiError {
+  if (!(error instanceof CloudflareAccountApiError)) return false;
+  const messages = Array.isArray(error.errors)
+    ? error.errors.flatMap((candidate) => {
+        if (typeof candidate !== "object" || candidate === null || !("message" in candidate)) {
+          return [];
+        }
+        return typeof candidate.message === "string" ? [candidate.message] : [];
+      })
+    : [];
+  return messages.some((message) =>
+    message.toLowerCase().includes("do not support multiple subscriptions on the same resource"),
+  );
+}
+
+function subscriptionName(subscription: ArtifactEventSubscription): string {
+  if (typeof subscription.name !== "string") {
+    throw new Error(`Cloudflare returned event subscription ${subscription.id} without a name`);
+  }
+  return subscription.name;
 }
 
 type CloudflareAccountApi = <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
