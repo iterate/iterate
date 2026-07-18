@@ -505,6 +505,46 @@ describe("wake-handshake RPC ownership", () => {
     }
   });
 
+  test("snapshots the retained response before releasing the original RPC group", () => {
+    const order: string[] = [];
+    const responseReadError = new Error("subscriber getter failed");
+    const sink = remoteCallback<Parameters<ProcessEventBatch>[0], void>(() => {}, {
+      onDuplicateDispose: () => order.push("sink"),
+    });
+    const runtime = remoteCallback<void, object>(() => ({}), {
+      onDuplicateDispose: () => order.push("runtime"),
+    });
+    const ping = remoteCallback<{ t0: number }, { t0: number; t1: number; t2: number }>(
+      ({ t0 }) => ({ t0, t1: t0, t2: t0 }),
+      { onDuplicateDispose: () => order.push("ping") },
+    );
+    const value = Object.defineProperties(
+      {
+        checkpointOffset: 0,
+        sink: sink.raw as ProcessEventBatch,
+        getRuntimeState: runtime.raw as GetProcessorRuntimeState,
+        ping: ping.raw as StreamSubscriberPing,
+        [Symbol.dispose]: () => order.push("original"),
+      },
+      {
+        subscriber: {
+          enumerable: true,
+          get: () => {
+            throw responseReadError;
+          },
+        },
+      },
+    );
+
+    expect(() =>
+      retainWakeHandshakeResponse({
+        onDeliveryError: vi.fn(),
+        value,
+      }),
+    ).toThrow(responseReadError);
+    expect(order).toEqual(["ping", "runtime", "sink", "original"]);
+  });
+
   test("releases retained sidecars before the sink that carries their RPC chain", () => {
     const order: string[] = [];
     const sink = remoteCallback<Parameters<ProcessEventBatch>[0], void>(() => {}, {

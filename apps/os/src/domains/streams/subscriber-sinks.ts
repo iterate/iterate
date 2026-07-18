@@ -314,14 +314,20 @@ export function retainWakeHandshakeResponse(args: {
       onDeliveryError: args.onDeliveryError,
       onDisposing: releaseRetained,
     });
-    releaseOriginal();
-    return {
+    // Snapshot every response field while the original RPC result is still
+    // live. A proxy/getter failure belongs to handshake construction, so its
+    // retained group must unwind sidecars -> sink -> original just like a
+    // duplication failure; no response field may be read after ownership of
+    // the original group has been released.
+    const retainedResponse: RetainedWakeHandshakeResponse = {
       checkpointOffset: response.checkpointOffset,
       sink,
       subscriber: response.subscriber,
       getRuntimeState,
       ping,
     };
+    releaseOriginal();
+    return retainedResponse;
   } catch (error) {
     // This is failure CLEANUP, not the operation failure. Release the retained
     // group in dependency order, release the original result last, report any
