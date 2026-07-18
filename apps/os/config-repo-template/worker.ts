@@ -26,6 +26,10 @@ import {
   guestbookStreamPath,
 } from "./guestbook.ts";
 
+// The TanStack SSR example app lives in its own file; re-exported here so the
+// one-entryPoint build can serve it by entrypoint name (see fetch below).
+export { TanstackApp } from "./tanstack.tsx";
+
 // This is ordinary project policy. Every GitHub-linked project repository is
 // in scope; no platform GitHub code knows that pull-request agents exist.
 // Record keys are stable rule IDs: duplicate identities are structurally
@@ -114,6 +118,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         },
       });
     }
+    if (app === "tanstack") {
+      return this.fetchDynamicWorker(req, {
+        type: "stateless",
+        path: "/",
+        entrypoint: "TanstackApp",
+        source: {
+          files: { type: "repo", repoPath: "/repos/config" },
+          options: { entryPoint: "worker.ts" },
+        },
+      });
+    }
     if (app === "counter") {
       return this.fetchDynamicWorker(req, {
         type: "stateful",
@@ -144,6 +159,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
+                <li><a href="${appUrl("tanstack")}">tanstack</a> (React SSR, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
                 <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor)</li>
               </ul>

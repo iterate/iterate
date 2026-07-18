@@ -29,9 +29,15 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   };
   // The platform-injected modules deliberately leave their real shared
   // runtimes external: the guestbook and iterate/processors share one zod,
-  // while iterate/live-state and the user's RpcTargets share one Cap'n Web runtime.
+  // while iterate/live-state and the user's RpcTargets share one Cap'n Web
+  // runtime. React + TanStack Router back the tanstack SSR example app only —
+  // ordinary npm dependencies the worker build installs, nothing
+  // platform-injected.
   expect(templatePackageJson.dependencies).toEqual({
     "@iterate-com/capnweb": expect.any(String),
+    "@tanstack/react-router": expect.any(String),
+    react: expect.any(String),
+    "react-dom": expect.any(String),
     zod: expect.any(String),
   });
 });
