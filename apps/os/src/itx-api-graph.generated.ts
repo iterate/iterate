@@ -219,10 +219,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAuth",
     kind: "interface",
     sourceText:
-      "/** A partial fetch: return its response, or continue the app when it returns null. */\nexport interface ProjectAuth {\n  /** Bind a project-member gate to this itx's project. */\n  get(policy: ProjectAuthPolicy): ProjectAuth;\n  /**\n   * Exchange an exact-origin app cookie for its authenticated actor. An app's\n   * unauthenticated Cap'n Web root uses this to construct its own session\n   * RpcTarget; the browser never receives the project's itx.\n   */\n  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;\n  /**\n   * Own login, callback, logout, and the host-only cookie. Returns null only\n   * when this request belongs to a current project member. Like any partial\n   * fetch, a null result leaves the request body untouched for the app.\n   */\n  fetch(request: Request): Promise<Response | null>;\n}",
+      "/** A partial fetch: return its response, or continue the app when it returns null. */\nexport interface ProjectAuth {\n  /** Select the project-member policy for this project's auth gate. */\n  get(policy: ProjectAuthPolicy): ProjectAuth;\n  /**\n   * Exchange an exact-origin app cookie for its authenticated actor. An app's\n   * unauthenticated Cap'n Web root uses this to construct its own session\n   * RpcTarget; the browser never receives the project's itx.\n   */\n  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;\n  /**\n   * Own login, callback, logout, and the host-only cookie. Returns null only\n   * when this request belongs to a current project member. Like any partial\n   * fetch, a null result leaves the request body untouched for the app.\n   */\n  fetch(request: Request): Promise<Response | null>;\n}",
     summary: "A partial fetch: return its response, or continue the app when it returns null.",
     memberSummaries: {
-      get: "Bind a project-member gate to this itx's project.",
+      get: "Select the project-member policy for this project's auth gate.",
       authenticate: "Exchange an exact-origin app cookie for its authenticated actor.",
       fetch: "Own login, callback, logout, and the host-only cookie.",
     },

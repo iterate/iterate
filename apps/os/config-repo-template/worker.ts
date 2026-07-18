@@ -533,6 +533,7 @@ export class InternalApp extends IterateWorkerEntrypoint {
               const endpoint = new URL(${apiPath}, location.href);
               endpoint.protocol = location.protocol === "https:" ? "wss:" : "ws:";
               const publicApi = newWebSocketRpcSession(endpoint.toString());
+              addEventListener("pagehide", () => publicApi[Symbol.dispose](), { once: true });
 
               const showError = (error) => {
                 identity.textContent = error instanceof Error ? error.message : String(error);
@@ -554,7 +555,6 @@ export class InternalApp extends IterateWorkerEntrypoint {
                 addEventListener("pagehide", () => {
                   subscription[Symbol.dispose]();
                   session[Symbol.dispose]();
-                  publicApi[Symbol.dispose]();
                 }, { once: true });
               } catch (error) { showError(error); }
             </script>
@@ -576,9 +576,9 @@ export class InternalApp extends IterateWorkerEntrypoint {
     const snapshot = await itx.processor.snapshot();
     const events = await itx.streams.get("/").getEvents({
       afterOffset: Math.max(0, snapshot.offset - 25),
-      limit: 25,
+      limit: 500,
     });
-    return events.slice().reverse();
+    return events.slice(-25).reverse();
   }
 }
 

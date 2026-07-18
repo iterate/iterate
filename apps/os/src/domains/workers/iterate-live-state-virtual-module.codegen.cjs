@@ -1,14 +1,23 @@
-const { execFileSync } = require("node:child_process");
 const path = require("node:path");
 
 exports.iterateLiveStateVirtualModule = ({ meta }) => {
-  const script = path.resolve(
+  const entry = path.resolve(
     path.dirname(meta.filename),
-    "./iterate-live-state-virtual-module.build.mjs",
+    "../../../../../packages/iterate/src/live-state.ts",
   );
-  const code = execFileSync(process.execPath, [script], {
-    encoding: "utf8",
-    maxBuffer: 32 * 1024 * 1024,
+  const esbuild = require("esbuild");
+  const result = esbuild.buildSync({
+    alias: { capnweb: "@iterate-com/capnweb" },
+    bundle: true,
+    conditions: ["workerd", "worker", "import"],
+    entryPoints: [entry],
+    external: ["@iterate-com/capnweb", "cloudflare:workers"],
+    format: "esm",
+    legalComments: "none",
+    mainFields: ["module", "main"],
+    platform: "neutral",
+    write: false,
   });
+  const code = result.outputFiles[0].text;
   return `export const ITERATE_LIVE_STATE_VIRTUAL_MODULE = ${JSON.stringify(code)};`;
 };

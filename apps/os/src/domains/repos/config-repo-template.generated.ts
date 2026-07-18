@@ -960,6 +960,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              const endpoint = new URL(${apiPath}, location.href);\n" +
       "              endpoint.protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
       "              const publicApi = newWebSocketRpcSession(endpoint.toString());\n" +
+      "              addEventListener(\"pagehide\", () => publicApi[Symbol.dispose](), { once: true });\n" +
       "\n" +
       "              const showError = (error) => {\n" +
       "                identity.textContent = error instanceof Error ? error.message : String(error);\n" +
@@ -981,7 +982,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                addEventListener(\"pagehide\", () => {\n" +
       "                  subscription[Symbol.dispose]();\n" +
       "                  session[Symbol.dispose]();\n" +
-      "                  publicApi[Symbol.dispose]();\n" +
       "                }, { once: true });\n" +
       "              } catch (error) { showError(error); }\n" +
       "            </script>\n" +
@@ -1003,9 +1003,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    const snapshot = await itx.processor.snapshot();\n" +
       "    const events = await itx.streams.get(\"/\").getEvents({\n" +
       "      afterOffset: Math.max(0, snapshot.offset - 25),\n" +
-      "      limit: 25,\n" +
+      "      limit: 500,\n" +
       "    });\n" +
-      "    return events.slice().reverse();\n" +
+      "    return events.slice(-25).reverse();\n" +
       "  }\n" +
       "}\n" +
       "\n" +

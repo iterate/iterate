@@ -5355,7 +5355,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** Bind a project-member gate to this itx's project. */
+  /** Select the project-member policy for this project's auth gate. */
   get(policy: ProjectAuthPolicy): ProjectAuthRpcTarget {
     parseProjectAuthPolicy(policy);
     return this;

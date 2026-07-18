@@ -79,10 +79,9 @@ export async function authenticateProjectRequest(input: {
   ) {
     throw new ItxAuthenticationError();
   }
-  // This credential name is deliberately browser-specific. A WebSocket
-  // handshake supplies Origin; requiring it prevents a non-browser caller
-  // that somehow obtained the cookie from replaying it without proving the
-  // app origin the cookie was minted for.
+  // This credential name is deliberately browser-specific. Requiring the
+  // WebSocket handshake's exact Origin prevents a hostile site from using a
+  // member's browser to exchange this app's ambient cookie.
   if (input.request.headers.get("origin") === null || !isSameOriginBrowserRequest(input.request)) {
     throw new ItxAuthenticationError();
   }
