@@ -16,7 +16,7 @@ const CREATED_AT = "2026-07-17T10:00:00.000Z";
 function record(path: string, input: Partial<AgentRecord> = {}): AgentRecord {
   return {
     path,
-    metadata: { pinned: false },
+    summary: { pinned: false },
     runtime: ZERO_AGENT_RUNTIME,
     timestamps: { createdAt: CREATED_AT, lastWorkAt: CREATED_AT },
     ...input,
@@ -33,7 +33,7 @@ describe("Agent presentation family", () => {
         threadTs: "111.222",
         channelName: "research",
       },
-      metadata: { pinned: true, title: "Research", activity: "Reading papers" },
+      summary: { pinned: true, title: "Research", activity: "Reading papers" },
       runtime: {
         ...ZERO_AGENT_RUNTIME,
         llmRequests: { scheduled: 0, requested: 1, started: 0 },
@@ -66,11 +66,11 @@ describe("Agent presentation family", () => {
         threadId: "t-onboarding",
         subject: "Enterprise onboarding",
       },
-      metadata: {
+      summary: {
         pinned: true,
         title: "Customer inbox",
         activity: "Triaging customer mail",
-        summary: "A long summary that must never render in the sidebar.",
+        description: "A long description that must never render in the sidebar.",
       },
     });
     const [node] = buildAgentForest({ [agent.path]: agent });
@@ -89,7 +89,7 @@ describe("Agent presentation family", () => {
 
   test("a collapsed catalog row aggregates its subtree into the dot and a subagent count", () => {
     const parent = record("/agents/release", {
-      metadata: { pinned: false, title: "Release readiness", activity: "Waiting for approval" },
+      summary: { pinned: false, title: "Release readiness", activity: "Waiting for approval" },
     });
     const child = record("/agents/release/child", {
       runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
@@ -125,17 +125,17 @@ describe("Agent presentation family", () => {
 
   test("detail renders the complete path, self state, and every available exact timestamp", () => {
     const agent = record("/agents/a/long/and-readable/path", {
-      metadata: {
+      summary: {
         pinned: false,
         activity: "A complete current-condition sentence that may wrap across several lines.",
-        summary:
-          "A full two-sentence summary belongs in the roomy detail header. It must remain readable even when the viewport makes it wrap beyond two visual lines.",
+        description:
+          "A full two-sentence description belongs in the roomy detail header. It must remain readable even when the viewport makes it wrap beyond two visual lines.",
         waitingFor: "user_input",
       },
       timestamps: {
         createdAt: CREATED_AT,
         lastWorkAt: "2026-07-17T10:01:00.000Z",
-        metadataUpdatedAt: "2026-07-17T10:02:00.000Z",
+        summaryUpdatedAt: "2026-07-17T10:02:00.000Z",
         activityUpdatedAt: "2026-07-17T10:03:00.000Z",
         runtimeUpdatedAt: "2026-07-17T10:04:00.000Z",
       },
@@ -151,10 +151,10 @@ describe("Agent presentation family", () => {
     expect(markup).toContain(agent.path);
     expect(markup).toContain("Needs input");
     expect(markup).toContain("current-condition sentence");
-    expect(markup).toContain("two-sentence summary");
+    expect(markup).toContain("two-sentence description");
     expect(markup).toContain("Created");
     expect(markup).toContain("Last work");
-    expect(markup).toContain("Metadata updated");
+    expect(markup).toContain("Summary updated");
     expect(markup).toContain("Activity updated");
     expect(markup).toContain("Runtime updated");
     expect(markup).toContain("2026-07-17T10:04:00.000Z");

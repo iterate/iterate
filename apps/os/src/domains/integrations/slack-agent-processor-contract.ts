@@ -3,13 +3,14 @@
 //
 // Rewritten new-style for itx from the pre-migration (git history)
 // reference. The processor owns no event types of its own: Slack presentation
-// is a pure paint of the agent's canonical metadata and exact runtime counts.
+// is a pure paint of the agent's canonical summary and exact runtime counts.
 
 import { z } from "zod";
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import { defineProcessorContract, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { AgentMetadata } from "../agents/agent-presence.ts";
+import { AgentSummary } from "../agents/agent-presence.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";
 
@@ -32,11 +33,11 @@ import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-proc
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
-  version: "0.9.0",
+  version: "0.10.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     birthCertificate: SlackAgentBirthCertificate.nullable().default(null),
-    metadata: AgentMetadata.prefault({}),
+    summary: AgentSummary.prefault({}),
     botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),
@@ -68,7 +69,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/slack-agent/created",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
-    "events.iterate.com/agent/metadata-changed",
+    AGENT_SUMMARY_UPDATED_EVENT_TYPE,
     // The platform revival fact (core-owned, ONE type for every recovery-wired
     // processor; the payload's processorSlug names which). MUST be consumed
     // (the runner throws at construction otherwise): appended when an

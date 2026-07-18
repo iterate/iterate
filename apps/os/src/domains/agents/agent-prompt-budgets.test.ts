@@ -14,7 +14,10 @@ import {
   EXEC_TYPESCRIPT_DESCRIPTION,
   inboundMcpServerInstructions,
 } from "../inbound-mcp-server/exec-typescript-description.ts";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
+import {
+  AGENT_SUMMARY_INSTRUCTION,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "./agent-processor-contract.ts";
 import {
   EMAIL_AGENT_SYSTEM_PROMPT,
   agentCreationForPath,
@@ -28,19 +31,15 @@ const CHARS_PER_TOKEN = 4;
 // capabilities were the two key bits the diet had cut too deep to keep).
 // Still an order of magnitude under the 33k it replaced — the next raise
 // should be argued in a PR, not absorbed.
-// 3500 → 3600 (2026-07-14): the agent-metadata teach (title alongside the
-// first message, activity freshness, semantic waiting) was an explicit product ask
-// and did not fit the previous ceiling's ~15-token headroom.
-const DEFAULT_PROMPT_TOKEN_CEILING = 3_600;
+// 3500 → 3600 (2026-07-14): the original presentation teach was an explicit
+// product ask and did not fit the previous ceiling's ~15-token headroom.
+// 3600 → 3800 (2026-07-18): summary became an event-first lifecycle with
+// mandatory first-turn title, second-turn activity, and final-turn waiting.
+// Three short code patterns keep the lifecycle concrete.
+const DEFAULT_PROMPT_TOKEN_CEILING = 3_800;
 
-const CHANNEL_PROMPTS: Record<string, string> = {
+const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
-  // The inbound MCP instructions and tool description are prompts in all but
-  // name — they ride MCP client conversations, so they obey the same budget
-  // and name-resolution rules.
-  execTypescriptTool: EXEC_TYPESCRIPT_DESCRIPTION,
-  mcpServer: inboundMcpServerInstructions({ withAgent: false }),
-  mcpServerWithAgent: inboundMcpServerInstructions({ withAgent: true }),
   email: EMAIL_AGENT_SYSTEM_PROMPT,
   slack: slackAgentSystemPrompt("main-slack"),
   telegram: telegramAgentSystemPrompt({
@@ -50,10 +49,40 @@ const CHANNEL_PROMPTS: Record<string, string> = {
   }),
 };
 
+const CHANNEL_PROMPTS: Record<string, string> = {
+  ...AGENT_PROMPTS,
+  // The inbound MCP instructions and tool description are prompts in all but
+  // name — they ride MCP client conversations, so they obey the same budget
+  // and name-resolution rules.
+  execTypescriptTool: EXEC_TYPESCRIPT_DESCRIPTION,
+  mcpServer: inboundMcpServerInstructions({ withAgent: false }),
+  mcpServerWithAgent: inboundMcpServerInstructions({ withAgent: true }),
+};
+
 test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(
     DEFAULT_PROMPT_TOKEN_CEILING * CHARS_PER_TOKEN,
   );
+});
+
+test("every agent prompt teaches the summary turn lifecycle and append event", () => {
+  expect(AGENT_SUMMARY_INSTRUCTION.length).toBeLessThanOrEqual(1_200);
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("FIRST TURN:");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("SECOND TURN:");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("WHEN RETURNING NO VALUE / WAITING FOR USER:");
+  expect(AGENT_SUMMARY_INSTRUCTION.match(/await Promise\.all\(\[/g)).toHaveLength(3);
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain(
+    'payload: { title: "Short specific title", activity: "Starting work" }',
+  );
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("events.iterate.com/agent/summary-updated");
+  expect(AGENT_SUMMARY_INSTRUCTION).toContain("send your reply through this channel's reply API");
+  expect(AGENT_SUMMARY_INSTRUCTION).not.toContain("itx.chat.sendMessage");
+
+  for (const [channel, prompt] of Object.entries(AGENT_PROMPTS)) {
+    expect(prompt, `${channel} lacks the summary lifecycle block`).toContain(
+      AGENT_SUMMARY_INSTRUCTION,
+    );
+  }
 });
 
 test("no platform prompt embeds the type surface", () => {

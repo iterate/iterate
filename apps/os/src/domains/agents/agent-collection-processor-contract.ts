@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import { defineProcessorContract, type ProcessorState } from "iterate/processors";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentCatalogRecord, AgentPath } from "./agent-presence.ts";
@@ -17,8 +18,8 @@ const AgentDatabase = z.strictObject({
 
 export const AgentCollectionProcessorContract = defineProcessorContract({
   slug: "agent-collection",
-  version: "0.1.0",
-  description: "Folds the project's agent creation and metadata facts into its agent database.",
+  version: "0.2.0",
+  description: "Folds the project's agent creation and summary facts into its agent database.",
   stateSchema: AgentDatabase,
   events: {
     [AGENT_COLLECTION_CREATED_EVENT_TYPE]: {
@@ -31,7 +32,7 @@ export const AgentCollectionProcessorContract = defineProcessorContract({
   consumes: [
     AGENT_COLLECTION_CREATED_EVENT_TYPE,
     "events.iterate.com/agent/created",
-    "events.iterate.com/agent/metadata-changed",
+    AGENT_SUMMARY_UPDATED_EVENT_TYPE,
   ],
   emits: [AGENT_COLLECTION_CREATED_EVENT_TYPE],
 });

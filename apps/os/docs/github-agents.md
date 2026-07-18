@@ -101,7 +101,7 @@ project-controlled repo path:
 
 Only `pull_request:opened` or a trusted explicit mention calls the idempotent,
 zero-argument `agent.create()`. The router then uses `agent.append(...)` for
-the stable policy and presentation metadata consumed by the Agent processor.
+the stable policy and agent summary consumed by the Agent processor.
 It appends the GitHub binding, raw webhook copy, and referencing task
 atomically through `agent.stream.append`; the raw API is needed because the
 webhook sits outside the Agent processor's vocabulary, while valid binding and
@@ -111,7 +111,7 @@ create an agent by accident. A valid delivery can append the following groups
 of facts to the PR stream:
 
 - a keyed, versioned developer-policy context item;
-- stable presentation metadata and a GitHub pull-request binding;
+- a stable agent summary and a GitHub pull-request binding;
 - the complete webhook with explicit cross-post provenance; and
 - when appropriate, trusted developer instructions and one externally authored
   request that wakes or interrupts the agent.
