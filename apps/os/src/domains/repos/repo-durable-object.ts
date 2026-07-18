@@ -11,7 +11,6 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
-import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
 import {
