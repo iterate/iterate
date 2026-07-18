@@ -1,40 +1,40 @@
-// Auth test crypto + wiring: fake handler/middleware infra over
-// @iterate-com/auth, token-set builders, the session cookie shape, and a
-// real RS256 signer (Web Crypto, no golden strings) so verification paths
-// run against genuinely signed JWTs. Extracted from iterate-auth-login.test.ts
-// so new auth suites stop re-implementing base64url/JWKS plumbing.
+// Auth test crypto + wiring: fake handler/middleware infra, token-set
+// builders, the session cookie shape, and a real RS256 signer (Web Crypto,
+// no golden strings) so verification paths run against genuinely signed JWTs.
 
+import * as oauth from "oauth4webapi";
 import {
   createAuthHandler,
   createAuthMiddleware,
   type IterateAuthConfig,
-  type TokenSet,
-} from "@iterate-com/auth/server";
+  type OAuthInfra,
+} from "./server.ts";
+import type { TokenSet } from "./session.ts";
 
 export function testAuthHandler(
   authConfig: IterateAuthConfig,
-  overrides: Partial<Parameters<typeof createAuthHandler>[1]> = {},
+  overrides: Partial<OAuthInfra> = {},
 ) {
-  const infra = {
+  const infra: OAuthInfra = {
     ...baseInfra(authConfig),
     getAuthorizationServer: async () => ({
-      issuer: authConfig.issuer,
+      issuer: authConfig.issuer ?? "https://auth.iterate-dev.com/api/auth",
       authorization_endpoint: "https://auth.iterate-dev.com/api/auth/oauth2/authorize",
     }),
     toTokenSet: () => {
       throw new Error("not used by login tests");
     },
     ...overrides,
-  } as unknown as Parameters<typeof createAuthHandler>[1];
+  };
 
-  return createAuthHandler(authConfig, infra).handler;
+  return createAuthHandler(authConfig, infra);
 }
 
 export function testAuthMiddleware(
   authConfig: IterateAuthConfig,
-  overrides: Partial<Parameters<typeof createAuthMiddleware>[1]> = {},
+  overrides: Partial<OAuthInfra> = {},
 ) {
-  const infra = {
+  const infra: OAuthInfra = {
     ...baseInfra(authConfig),
     getAuthorizationServer: async () => {
       throw new Error("not used by middleware tests");
@@ -43,7 +43,7 @@ export function testAuthMiddleware(
       throw new Error("not used by middleware tests");
     },
     ...overrides,
-  } as unknown as Parameters<typeof createAuthMiddleware>[1];
+  };
 
   return createAuthMiddleware(authConfig, infra);
 }
@@ -138,12 +138,16 @@ function base64UrlEncode(value: string | ArrayBuffer) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
 }
 
-function baseInfra(authConfig: IterateAuthConfig) {
+function baseInfra(
+  authConfig: IterateAuthConfig,
+): Omit<OAuthInfra, "getAuthorizationServer" | "toTokenSet"> {
   return {
     issuerURL: new URL(authConfig.issuer ?? "https://auth.iterate-dev.com/api/auth"),
-    jwks: {},
+    jwks: async () => {
+      throw new Error("test JWKS not configured");
+    },
     oauthClient: { client_id: authConfig.clientId },
-    clientAuth: {},
+    clientAuth: oauth.ClientSecretBasic(authConfig.clientSecret),
     insecure: false,
     secureCookies: false,
     httpOptions: () => undefined,

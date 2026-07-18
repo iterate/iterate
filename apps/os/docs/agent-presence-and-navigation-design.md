@@ -15,7 +15,7 @@ project Durable Object.
 3. Every agent stream installs one push subscription in its creation batch.
    The subscription selects exactly:
    - events.iterate.com/agent/created
-   - events.iterate.com/agent/metadata-changed
+   - events.iterate.com/agent/summary-updated
 
 4. The collection DO runs AgentCollectionStreamProcessor over its own /agents
    stream.
@@ -30,7 +30,7 @@ project Durable Object.
 ```text
 agent stream /agents/<path>
   agent/created
-  agent/metadata-changed
+  agent/summary-updated
           |
           | push subscription
           | expression: ["agents", "processEvent"]
@@ -111,9 +111,9 @@ One catalog record contains only facts reducible from the narrow subscription:
 ```ts
 type AgentCatalogRecord = {
   path: AgentPath;
-  metadata: {
+  summary: {
     title?: string;
-    summary?: string;
+    description?: string;
     activity?: string;
     waitingFor?: "user_input" | "external_event" | "timer";
     pinned: boolean;
@@ -121,7 +121,7 @@ type AgentCatalogRecord = {
   timestamps: {
     createdAt: string;
     lastWorkAt: string;
-    metadataUpdatedAt?: string;
+    summaryUpdatedAt?: string;
     activityUpdatedAt?: string;
   };
 };
@@ -131,20 +131,33 @@ There is deliberately no runtime or integration binding in this database.
 Presentation code may use the wider AgentRecord shape for optional overlays,
 but the collection itself returns AgentCatalogRecord.
 
+Summary changes use the ordinary typed append surface:
+
+```ts
+await itx.agent.append({
+  type: "events.iterate.com/agent/summary-updated",
+  payload: { activity: "Researching booze" },
+});
+```
+
+There is no summary setter or metadata compatibility API. Agents, humans, and
+processors append the same event, and the Agent and collection reducers apply
+the same update semantics.
+
 ### Reduction rules
 
 - agent-collection/created creates the singleton processor.
 - A copied agent/created creates one row using the source path and event
   creation time.
-- A copied agent/metadata-changed merges the bounded metadata patch and
-  updates metadata timestamps.
-- A second creation for one path, metadata before creation, or copied agent
+- A copied agent/summary-updated merges the bounded summary update and
+  updates summary timestamps.
+- A second creation for one path, summary before creation, or copied agent
   facts without cross-post provenance are data-model violations and fail
   loudly.
 - Exact redelivery is handled by normal stream cross-post and processor
   idempotency.
 
-waitingFor clears use the metadata event family too. A processor-authored
+waitingFor clears use the summary event family too. A processor-authored
 clear has:
 
 ```ts
@@ -211,7 +224,7 @@ non-zero runtime opens or updates the transient work, and zero runtime settles
 it. The browser has no offset watermark, idle debounce, handoff window, or
 other policy that can reject or delay the live value.
 
-Collection views have only durable metadata. They can show semantic waiting
+Collection views have only the durable summary. They can show semantic waiting
 states, titles, activity, summaries, pins, ancestry, and catalog timestamps;
 they do not pretend to have project-wide transient runtime.
 
@@ -223,7 +236,7 @@ transition and current Slack reduced state directly to
 SlackAgentProcessor.presentRuntimeTransition.
 
 - Active runtime paints assistant-thread status immediately.
-- The current metadata activity is preferred; exact runtime supplies a factual
+- The current summary activity is preferred; exact runtime supplies a factual
   fallback.
 - Zero runtime clears status and the eyes reaction after Slack's one-second
   handoff window.
@@ -252,7 +265,7 @@ The implementation is guarded by tests that prove:
 
 - the agent creation batch installs the exact two-event selector and
   ["agents", "processEvent"] push expression;
-- the collection processor folds creation and metadata, retains source
+- the collection processor folds creation and summary, retains source
   provenance, rejects invalid ordering, and applies conditional waiting clears
   safely;
 - routed Slack, Telegram, and email agents receive the collection subscription

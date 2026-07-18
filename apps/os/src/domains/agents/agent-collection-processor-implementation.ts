@@ -1,5 +1,5 @@
 import { StreamProcessor } from "iterate/processors";
-import { AgentPath, applyAgentMetadataPatch } from "./agent-presence.ts";
+import { AgentPath, foldAgentSummaryUpdated } from "./agent-presence.ts";
 import {
   AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AgentCollectionProcessorContract,
@@ -35,7 +35,7 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
           ...state.agents,
           [path]: {
             path,
-            metadata: { pinned: false },
+            summary: { pinned: false },
             timestamps: { createdAt: source.createdAt, lastWorkAt: source.createdAt },
           },
         },
@@ -46,29 +46,18 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
     if (previous === undefined) {
       throw new Error(`agent collection received ${event.type} for ${path} before agent/created`);
     }
-    const waitingForSinceOffset = state.waitingForSinceOffsets[path];
-    if (
-      "clearWaitingForThroughOffset" in event.payload &&
-      (previous.metadata.waitingFor === undefined ||
-        waitingForSinceOffset === undefined ||
-        waitingForSinceOffset > event.payload.clearWaitingForThroughOffset)
-    ) {
-      return state;
-    }
-    const metadata = applyAgentMetadataPatch(previous.metadata, event.payload);
-    const nextWaitingForSinceOffset =
-      event.payload.waitingFor === undefined
-        ? waitingForSinceOffset
-        : event.payload.waitingFor === null
-          ? undefined
-          : source.offset;
-    if (metadata === previous.metadata && nextWaitingForSinceOffset === waitingForSinceOffset) {
-      return state;
-    }
-    const activityChanged = metadata.activity !== previous.metadata.activity;
+    const projection = foldAgentSummaryUpdated({
+      summary: previous.summary,
+      waitingForSinceOffset: state.waitingForSinceOffsets[path],
+      update: event.payload,
+      atOffset: source.offset,
+    });
+    if (projection === undefined) return state;
+    const { summary, waitingForSinceOffset } = projection;
+    const activityChanged = summary.activity !== previous.summary.activity;
     const waitingForSinceOffsets = { ...state.waitingForSinceOffsets };
-    if (nextWaitingForSinceOffset === undefined) delete waitingForSinceOffsets[path];
-    else waitingForSinceOffsets[path] = nextWaitingForSinceOffset;
+    if (waitingForSinceOffset === undefined) delete waitingForSinceOffsets[path];
+    else waitingForSinceOffsets[path] = waitingForSinceOffset;
     return {
       ...state,
       waitingForSinceOffsets,
@@ -76,10 +65,10 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
         ...state.agents,
         [path]: {
           ...previous,
-          metadata,
+          summary,
           timestamps: {
             ...previous.timestamps,
-            metadataUpdatedAt: source.createdAt,
+            summaryUpdatedAt: source.createdAt,
             ...(activityChanged
               ? { activityUpdatedAt: source.createdAt, lastWorkAt: source.createdAt }
               : {}),

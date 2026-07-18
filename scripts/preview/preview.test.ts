@@ -475,6 +475,22 @@ describe("preview test commands", () => {
     expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
   });
+
+  test("budgets the serialized OS preview lane from its measured green floor", () => {
+    expect(cloudflarePreviewApps.os).toMatchObject({
+      previewDeployBudgetMs: 115_000,
+      previewTestBudgetMs: 560_000,
+    });
+
+    const workflow = parseYaml(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ) as { jobs: { preview: { "timeout-minutes": number } } };
+    // 20, not the serialized lanes' measured 15: the sandbox-build pipeline
+    // adds real builder-pool container builds across the worker specs, and
+    // the ceiling must fit one retry of the slowest container-heavy spec
+    // (15 killed a 55/56-green run mid-retry and lost its artifacts).
+    expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
+  });
 });
 
 describe("preview readiness URLs", () => {

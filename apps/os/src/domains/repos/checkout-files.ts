@@ -1,6 +1,20 @@
 import { InMemoryFs } from "@cloudflare/shell";
+import { stableSha256 } from "../workers/utils.ts";
 
 const textEncoder = new TextEncoder();
+
+/**
+ * Whole-checkout content identity. Build keys hash this plus the ref's masks,
+ * so a commit touching only mask-excluded files still changes every build key
+ * for the repo — a spurious cache miss (correct output, one extra build), the
+ * accepted cost of getting fresh-seed artifact dedupe without per-mask hashes.
+ * Lives here (pure) because the deploy-time template seeder must compute the
+ * SAME hash the repo seed records in its head cache, or the seeded trusted
+ * artifact silently never matches (see scripts/lib/seed-template-worker-artifact.ts).
+ */
+export async function repoContentHash(files: Record<string, string>): Promise<string> {
+  return await stableSha256({ files, type: "repo-content" });
+}
 
 export async function readCheckoutFileBytes(
   filesystem: InMemoryFs,

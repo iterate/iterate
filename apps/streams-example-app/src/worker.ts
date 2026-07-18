@@ -1,4 +1,5 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { withAuthenticationResponseHeaders } from "@iterate-com/auth/server";
 import { env as workerEnv } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import type { Stream } from "iterate/sdk";
@@ -76,7 +77,7 @@ export default createServerEntry({
     const auth = createStreamsIterateAuth(config, request.url);
 
     // The relying-party handler (login/callback/logout/session/…).
-    const authResponse = auth?.handleRequest(request) ?? null;
+    const authResponse = (await auth?.fetch(request)) ?? null;
     if (authResponse) {
       return authResponse;
     }
@@ -92,26 +93,32 @@ export default createServerEntry({
       headers.set("authorization", `Bearer ${queryToken}`);
     }
     const admin = auth ? await resolveRequestAdmin({ auth, headers }) : null;
+    const withAuthHeaders = (response: Response) =>
+      admin ? withAuthenticationResponseHeaders(response, admin.responseHeaders) : response;
 
     if (url.pathname === "/api/streams") {
       if (auth && !admin?.isAdmin) {
-        return Response.json(
-          {
-            error: "unauthorized",
-            message:
-              "Authenticate with an iterate admin identity: sign in through /api/iterate-auth/login, or send an admin access token as `Authorization: Bearer <token>`.",
-          },
-          { status: 401 },
+        return withAuthHeaders(
+          Response.json(
+            {
+              error: "unauthorized",
+              message:
+                "Authenticate with an iterate admin identity: sign in through /api/iterate-auth/login, or send an admin access token as `Authorization: Bearer <token>`.",
+            },
+            { status: 401 },
+          ),
         );
       }
       const { projectId, path } = parseStreamRpcRequest({ url });
-      return newWorkersRpcResponse(
-        request,
-        new PlaygroundStreamRpcTarget({
-          auth: trustedInternalAuthContext(),
-          projectId,
-          path,
-        }),
+      return withAuthHeaders(
+        await newWorkersRpcResponse(
+          request,
+          new PlaygroundStreamRpcTarget({
+            auth: trustedInternalAuthContext(),
+            projectId,
+            path,
+          }),
+        ),
       );
     }
 
@@ -121,12 +128,14 @@ export default createServerEntry({
     if (auth && !admin?.isAdmin) {
       if (!admin?.authenticated) {
         const returnTo = `${url.pathname}${url.search}`;
-        return Response.redirect(
-          `${url.origin}/api/iterate-auth/login?${new URLSearchParams({ return_to: returnTo })}`,
-          302,
+        return withAuthHeaders(
+          Response.redirect(
+            `${url.origin}/api/iterate-auth/login?${new URLSearchParams({ return_to: returnTo })}`,
+            302,
+          ),
         );
       }
-      return notAnAdminResponse(admin.email);
+      return withAuthHeaders(notAnAdminResponse(admin.email));
     }
 
     // No COOP/COEP on purpose: the browser SQLite mirror uses wa-sqlite's OPFSCoopSyncVFS,
@@ -136,16 +145,6 @@ export default createServerEntry({
     // across Chrome, Edge, Safari and mobile Safari.
     const response = await handler.fetch(request, { context: {} });
 
-    // authenticate() may have refreshed an expiring session; hand the rotated
-    // cookie back to the browser or it keeps the stale token and refresh-token
-    // reuse eventually revokes the whole family. (Auth-less local dev has no
-    // admin object and nothing to merge.)
-    const setCookie = admin?.responseHeaders.get("set-cookie");
-    if (setCookie) {
-      const merged = new Response(response.body, response);
-      merged.headers.append("set-cookie", setCookie);
-      return merged;
-    }
-    return response;
+    return withAuthHeaders(response);
   },
 });

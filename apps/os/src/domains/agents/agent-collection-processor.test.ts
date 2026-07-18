@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEvent } from "iterate/processors";
 import { StreamProcessorRunner } from "iterate/processors";
 import type { Stream } from "../../itx-api.generated.ts";
@@ -47,7 +48,7 @@ function collectionCreated(): StreamEvent {
 
 function copiedAgentEvent(
   offset: number,
-  type: "events.iterate.com/agent/created" | "events.iterate.com/agent/metadata-changed",
+  type: "events.iterate.com/agent/created" | typeof AGENT_SUMMARY_UPDATED_EVENT_TYPE,
   payload: Record<string, unknown>,
   path = "/agents/researcher",
   sourceOffset = offset,
@@ -80,12 +81,12 @@ function copiedAgentEvent(
 }
 
 describe("AgentCollectionStreamProcessor", () => {
-  test("reduces created and metadata copies into the agent database", async () => {
+  test("reduces created and summary copies into the agent database", async () => {
     const driver = subject();
     await driver.deliver([
       collectionCreated(),
       copiedAgentEvent(2, "events.iterate.com/agent/created", {}),
-      copiedAgentEvent(3, "events.iterate.com/agent/metadata-changed", {
+      copiedAgentEvent(3, AGENT_SUMMARY_UPDATED_EVENT_TYPE, {
         title: "Release researcher",
         activity: "Checking CI",
       }),
@@ -97,7 +98,7 @@ describe("AgentCollectionStreamProcessor", () => {
         agents: {
           "/agents/researcher": {
             path: "/agents/researcher",
-            metadata: {
+            summary: {
               pinned: false,
               title: "Release researcher",
               activity: "Checking CI",
@@ -105,7 +106,7 @@ describe("AgentCollectionStreamProcessor", () => {
             timestamps: {
               createdAt: "2026-07-18T10:00:02.000Z",
               lastWorkAt: "2026-07-18T10:00:03.000Z",
-              metadataUpdatedAt: "2026-07-18T10:00:03.000Z",
+              summaryUpdatedAt: "2026-07-18T10:00:03.000Z",
             },
           },
         },
@@ -117,7 +118,7 @@ describe("AgentCollectionStreamProcessor", () => {
     const events = [
       collectionCreated(),
       copiedAgentEvent(2, "events.iterate.com/agent/created", {}),
-      copiedAgentEvent(3, "events.iterate.com/agent/metadata-changed", { pinned: true }),
+      copiedAgentEvent(3, AGENT_SUMMARY_UPDATED_EVENT_TYPE, { pinned: true }),
     ];
     const first = subject();
     const second = subject();
@@ -140,28 +141,28 @@ describe("AgentCollectionStreamProcessor", () => {
     ).rejects.toThrow("without cross-post provenance");
   });
 
-  test("a delayed conditional metadata clear cannot erase a newer wait", async () => {
+  test("a delayed conditional summary clear cannot erase a newer wait", async () => {
     const driver = subject();
     await driver.deliver([
       collectionCreated(),
       copiedAgentEvent(2, "events.iterate.com/agent/created", {}, "/agents/researcher", 1),
       copiedAgentEvent(
         3,
-        "events.iterate.com/agent/metadata-changed",
+        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         { waitingFor: "user_input" },
         "/agents/researcher",
         2,
       ),
       copiedAgentEvent(
         4,
-        "events.iterate.com/agent/metadata-changed",
+        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         { waitingFor: "timer" },
         "/agents/researcher",
         4,
       ),
       copiedAgentEvent(
         5,
-        "events.iterate.com/agent/metadata-changed",
+        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
         { waitingFor: null, clearWaitingForThroughOffset: 3 },
         "/agents/researcher",
         5,
@@ -171,18 +172,18 @@ describe("AgentCollectionStreamProcessor", () => {
     await expect(driver.snapshot()).resolves.toMatchObject({
       state: {
         agents: {
-          "/agents/researcher": { metadata: { waitingFor: "timer" } },
+          "/agents/researcher": { summary: { waitingFor: "timer" } },
         },
         waitingForSinceOffsets: { "/agents/researcher": 4 },
       },
     });
   });
 
-  test("contract consumes only collection birth, agent creation, and metadata", () => {
+  test("contract consumes only collection birth, agent creation, and summary", () => {
     expect(AgentCollectionProcessorContract.consumes).toEqual([
       AGENT_COLLECTION_CREATED_EVENT_TYPE,
       "events.iterate.com/agent/created",
-      "events.iterate.com/agent/metadata-changed",
+      AGENT_SUMMARY_UPDATED_EVENT_TYPE,
     ]);
   });
 });

@@ -68,6 +68,7 @@ export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
+export { WorkerBuilderDurableObject } from "./domains/workers/builder-pool-sandbox.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";

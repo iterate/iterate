@@ -68,8 +68,8 @@ export function agentCommandAccessibleLabel(node: AgentTreeNode, expanded: boole
       : expanded
         ? " Child agents expanded; press Left Arrow to collapse."
         : " Child agents collapsed; press Right Arrow to expand.";
-  const pinInstruction = node.agent.metadata.pinned
+  const pinInstruction = node.agent.summary.pinned
     ? " Pinned; press Shift+P to unpin."
     : " Press Shift+P to pin.";
-  return `${agentTitle(node.agent)}. ${state.label}. ${node.agent.metadata.activity ?? node.agent.path}.${childInstruction}${pinInstruction}`;
+  return `${agentTitle(node.agent)}. ${state.label}. ${node.agent.summary.activity ?? node.agent.path}.${childInstruction}${pinInstruction}`;
 }

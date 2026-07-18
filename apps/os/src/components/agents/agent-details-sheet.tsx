@@ -8,7 +8,7 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { AgentDetailCard, AgentListRow } from "./agent.tsx";
-import { patchAgentMetadata } from "./agent-metadata.ts";
+import { updateAgentSummary } from "./agent-summary.ts";
 import {
   agentTitle,
   buildAgentForest,
@@ -89,9 +89,9 @@ export function AgentDetailsSheet({
               agent={node.agent}
               nowMs={nowMs}
               onTogglePinned={() =>
-                patchAgentMetadata(projectId, path, { pinned: !node.agent.metadata.pinned })
+                updateAgentSummary(projectId, path, { pinned: !node.agent.summary.pinned })
               }
-              onRename={(title) => patchAgentMetadata(projectId, path, { title })}
+              onRename={(title) => updateAgentSummary(projectId, path, { title })}
             />
             {descendantCount > 0 ? (
               <div className="flex flex-col gap-1" aria-label="Subagents">
@@ -113,8 +113,8 @@ export function AgentDetailsSheet({
                           void navigate(linkOptionsForStreamPath(projectSlug, child.agent.path));
                         }}
                         onTogglePinned={() =>
-                          patchAgentMetadata(projectId, child.agent.path, {
-                            pinned: !child.agent.metadata.pinned,
+                          updateAgentSummary(projectId, child.agent.path, {
+                            pinned: !child.agent.summary.pinned,
                           })
                         }
                         onToggleChildren={() =>

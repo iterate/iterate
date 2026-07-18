@@ -19,12 +19,24 @@ import { CONFIG_REPO_PATH } from "./paths.ts";
 const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
 
 /**
- * Default masks for the default project worker's repo file source: build from
- * the whole repo, minus version control and generated/installed output. The
+ * Default masks for EVERY repo-backed worker file source: build from the
+ * whole repo, minus version control and generated/installed output. The
  * bundler only pulls modules reachable from the entry point, so a broad
  * include keeps user-added helper files importable without ref changes.
+ *
+ * Applied by the resolver whenever a repo source omits `exclude`
+ * (worker-loader.ts resolveFileSource), so a bare `{ type: "repo", repoPath }`
+ * ref — the template's app refs, most userland refs — and the canonical
+ * {@link defaultProjectWorkerRef} hash to the SAME build key and share one
+ * artifact (the deploy-time template seed included). A ref that genuinely
+ * wants those directories passes `exclude: []`.
  */
-const PROJECT_WORKER_SOURCE_EXCLUDE = [".git/**", "node_modules/**", "dist/**", "build/**"];
+export const DEFAULT_REPO_WORKER_SOURCE_EXCLUDE = [
+  ".git/**",
+  "node_modules/**",
+  "dist/**",
+  "build/**",
+];
 
 /**
  * THE canonical ref for a project's default worker: the seeded config repo,
@@ -38,7 +50,7 @@ export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
     path: "/",
     source: {
       files: {
-        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
+        exclude: DEFAULT_REPO_WORKER_SOURCE_EXCLUDE,
         repoPath: CONFIG_REPO_PATH,
         type: "repo",
       },

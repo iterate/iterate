@@ -429,14 +429,6 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Merge human-readable metadata for this agent. Omitted properties remain
-   * unchanged; null clears an optional property; pinned false unpins. Title is
-   * a stable identity, activity is the current-condition sentence updated as
-   * work moves through phases, summary is one or two durable sentences, and
-   * waitingFor declares a semantic dependency once current runtime is zero.
-   */
-  setMetadata(input: AgentMetadataPatch): Promise<StreamEvent>;
-  /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -2480,9 +2472,9 @@ export type AgentProcessorState = {
         since: string;
       }
     | undefined;
-  metadata: {
+  summary: {
     title?: string | undefined;
-    summary?: string | undefined;
+    description?: string | undefined;
     activity?: string | undefined;
     waitingFor?: "external_event" | "timer" | "user_input" | undefined;
     pinned: boolean;
@@ -2554,10 +2546,10 @@ export type AgentEventInput =
       { maxAutonomousTurns: number; reason: string; triggerOffset: number }
     >
   | TypedConsumedEventInput<
-      "events.iterate.com/agent/metadata-changed",
+      "events.iterate.com/agent/summary-updated",
       | {
           title?: string | null | undefined;
-          summary?: string | null | undefined;
+          description?: string | null | undefined;
           activity?: string | null | undefined;
           waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
           pinned?: boolean | undefined;
@@ -2800,15 +2792,6 @@ export type StreamEvent = {
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
-/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
-export type AgentMetadataPatch = {
-  title?: string | null | undefined;
-  summary?: string | null | undefined;
-  activity?: string | null | undefined;
-  waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-  pinned?: boolean | undefined;
-};
-
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
@@ -2839,9 +2822,9 @@ export type AgentCollectionProcessorState = {
     string,
     {
       path: string;
-      metadata: {
+      summary: {
         title?: string | undefined;
-        summary?: string | undefined;
+        description?: string | undefined;
         activity?: string | undefined;
         waitingFor?: "external_event" | "timer" | "user_input" | undefined;
         pinned: boolean;
@@ -2849,7 +2832,7 @@ export type AgentCollectionProcessorState = {
       timestamps: {
         createdAt: string;
         lastWorkAt: string;
-        metadataUpdatedAt?: string | undefined;
+        summaryUpdatedAt?: string | undefined;
         activityUpdatedAt?: string | undefined;
       };
     }
@@ -4325,45 +4308,20 @@ export type WorkerFileSource =
 /**
  * Build options for a dynamic worker.
  *
- * This mirrors Cloudflare's `CreateWorkerOptions` from
- * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
- * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language (drift fails typecheck via the assignability pin
- * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the
- * invariant is one OS materialization pipeline, not one bundled output file.
- * When the file map has a `package.json` with dependencies, the bundler
- * installs them from the npm registry at build time.
+ * Deliberately small: exactly what the build recipe (build-recipe.ts — real
+ * `npm install` plus wrangler's canonical bundling pipeline) expresses.
+ * When the file map has a `package.json`, dependencies are installed from
+ * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
  */
 export type WorkerBuildOptions = {
-  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  /** Entry point file path relative to the source root. Default: "worker.ts". */
   entryPoint?: string;
-  /** Bundle all dependencies into a single output file. Default: true. */
+  /** Bundle to loader-ready output (default: true). `bundle: false` is the
+   * run-script fast path: inline JavaScript that is ALREADY loader-ready
+   * skips the build pipeline entirely. */
   bundle?: boolean;
-  /** Modules kept external ("cloudflare:*" always is). */
-  externals?: string[];
-  /** Target environment. Default: "es2022". */
-  target?: string;
   minify?: boolean;
-  sourcemap?: boolean;
-  /** npm registry URL for dependency installs. */
-  registry?: string;
-  jsx?: "transform" | "preserve" | "automatic";
-  jsxImportSource?: string;
-  define?: Record<string, string>;
-  loader?: Record<string, WorkerBundlerLoader>;
-  conditions?: string[];
+  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
+   * runtime rides in this way). A source's own entry wins over the platform's. */
   virtualModules?: Record<string, string>;
 };
-
-/** Loader names accepted by Cloudflare's worker bundler `loader` option. */
-export type WorkerBundlerLoader =
-  | "js"
-  | "jsx"
-  | "ts"
-  | "tsx"
-  | "json"
-  | "css"
-  | "text"
-  | "binary"
-  | "base64"
-  | "dataurl";

@@ -7,7 +7,7 @@ import {
 
 export const AGENT_TITLE_MAX_LENGTH = 120;
 export const AGENT_ACTIVITY_MAX_LENGTH = 240;
-export const AGENT_SUMMARY_MAX_LENGTH = 600;
+export const AGENT_DESCRIPTION_MAX_LENGTH = 600;
 export const AGENT_PATH_MAX_LENGTH = 240;
 export const AGENT_BINDING_CONNECTION_MAX_LENGTH = 64;
 export const AGENT_BINDING_ID_MAX_LENGTH = 128;
@@ -34,39 +34,39 @@ export type AgentPath = z.infer<typeof AgentPath>;
 const AgentWaitingFor = z.enum(["user_input", "external_event", "timer"]);
 type AgentWaitingFor = z.infer<typeof AgentWaitingFor>;
 
-export const AgentMetadata = z.strictObject({
+export const AgentSummary = z.strictObject({
   title: boundedText(AGENT_TITLE_MAX_LENGTH).optional(),
-  summary: boundedText(AGENT_SUMMARY_MAX_LENGTH).optional(),
+  description: boundedText(AGENT_DESCRIPTION_MAX_LENGTH).optional(),
   activity: boundedText(AGENT_ACTIVITY_MAX_LENGTH).optional(),
   waitingFor: AgentWaitingFor.optional(),
   pinned: z.boolean().default(false),
 });
-export type AgentMetadata = z.infer<typeof AgentMetadata>;
+export type AgentSummary = z.infer<typeof AgentSummary>;
 
-export const AgentMetadataPatch = z
+export const AgentSummaryUpdate = z
   .strictObject({
     title: boundedText(AGENT_TITLE_MAX_LENGTH).nullable().optional(),
-    summary: boundedText(AGENT_SUMMARY_MAX_LENGTH).nullable().optional(),
+    description: boundedText(AGENT_DESCRIPTION_MAX_LENGTH).nullable().optional(),
     activity: boundedText(AGENT_ACTIVITY_MAX_LENGTH).nullable().optional(),
     waitingFor: AgentWaitingFor.nullable().optional(),
     pinned: z.boolean().optional(),
   })
-  .refine((patch) => Object.keys(patch).length > 0, {
-    message: "agent metadata patch must contain at least one property",
+  .refine((update) => Object.keys(update).length > 0, {
+    message: "agent summary update must contain at least one property",
   });
-/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
-export type AgentMetadataPatch = z.infer<typeof AgentMetadataPatch>;
+/** A partial agent-summary update; null clears an optional field and omission preserves it. */
+export type AgentSummaryUpdate = z.infer<typeof AgentSummaryUpdate>;
 
-/** Processor-authored metadata clear guarded by the source input which woke
- * the agent. Keeping this on metadata-changed lets every metadata projection
+/** Processor-authored summary clear guarded by the source input which woke
+ * the agent. Keeping this on summary-updated lets every summary projection
  * apply the same race rule without subscribing to another event type. */
 const AgentConditionalWaitingClear = z.strictObject({
   waitingFor: z.null(),
   clearWaitingForThroughOffset: z.number().int().positive(),
 });
 
-export const AgentMetadataChanged = z.union([AgentMetadataPatch, AgentConditionalWaitingClear]);
-export type AgentMetadataChanged = z.infer<typeof AgentMetadataChanged>;
+export const AgentSummaryUpdated = z.union([AgentSummaryUpdate, AgentConditionalWaitingClear]);
+export type AgentSummaryUpdated = z.infer<typeof AgentSummaryUpdated>;
 
 const BindingConnection = boundedText(AGENT_BINDING_CONNECTION_MAX_LENGTH);
 const BindingId = boundedText(AGENT_BINDING_ID_MAX_LENGTH);
@@ -127,17 +127,17 @@ export type AgentBinding = z.infer<typeof AgentBinding>;
 const AgentCatalogTimestamps = z.strictObject({
   createdAt: z.iso.datetime(),
   lastWorkAt: z.iso.datetime(),
-  metadataUpdatedAt: z.iso.datetime().optional(),
+  summaryUpdatedAt: z.iso.datetime().optional(),
   activityUpdatedAt: z.iso.datetime().optional(),
 });
 type AgentCatalogTimestamps = z.infer<typeof AgentCatalogTimestamps>;
 
 /** One entry in the collection processor's durable agent database. Every
  * field is reducible from the collection's deliberately narrow created +
- * metadata event subscription. */
+ * summary event subscription. */
 export const AgentCatalogRecord = z.strictObject({
   path: AgentPath,
-  metadata: AgentMetadata,
+  summary: AgentSummary,
   timestamps: AgentCatalogTimestamps,
 });
 export type AgentCatalogRecord = z.infer<typeof AgentCatalogRecord>;
@@ -176,15 +176,17 @@ export type AgentDisplayState =
   | "waiting_for_timer"
   | "idle";
 
-export function applyAgentMetadataPatch(
-  metadata: AgentMetadata,
-  patch: AgentMetadataPatch,
-): AgentMetadata {
-  const next = { ...metadata };
+export function applyAgentSummaryUpdate(
+  summary: AgentSummary,
+  update: AgentSummaryUpdate,
+): AgentSummary {
+  const next = { ...summary };
   let changed = false;
 
-  for (const key of ["title", "summary", "activity", "waitingFor"] as const) {
-    const value = patch[key];
+  for (const key of ["title", "description", "activity", "waitingFor"] satisfies ReadonlyArray<
+    keyof AgentSummaryUpdate
+  >) {
+    const value = update[key];
     if (value === undefined) continue;
     if (value === null) {
       if (next[key] !== undefined) {
@@ -199,12 +201,46 @@ export function applyAgentMetadataPatch(
     }
   }
 
-  if (patch.pinned !== undefined && next.pinned !== patch.pinned) {
-    next.pinned = patch.pinned;
+  if (update.pinned !== undefined && next.pinned !== update.pinned) {
+    next.pinned = update.pinned;
     changed = true;
   }
 
-  return changed ? next : metadata;
+  return changed ? next : summary;
+}
+
+/** Apply one summary event and its race-safe waiting offset as one projection. */
+export function foldAgentSummaryUpdated({
+  summary,
+  waitingForSinceOffset,
+  update,
+  atOffset,
+}: {
+  summary: AgentSummary;
+  waitingForSinceOffset?: number;
+  update: AgentSummaryUpdated;
+  atOffset: number;
+}): { summary: AgentSummary; waitingForSinceOffset: number | undefined } | undefined {
+  if (
+    "clearWaitingForThroughOffset" in update &&
+    (summary.waitingFor === undefined ||
+      waitingForSinceOffset === undefined ||
+      waitingForSinceOffset > update.clearWaitingForThroughOffset)
+  ) {
+    return undefined;
+  }
+
+  const nextSummary = applyAgentSummaryUpdate(summary, update);
+  const nextWaitingForSinceOffset =
+    update.waitingFor === undefined
+      ? waitingForSinceOffset
+      : update.waitingFor === null
+        ? undefined
+        : atOffset;
+  if (nextSummary === summary && nextWaitingForSinceOffset === waitingForSinceOffset) {
+    return undefined;
+  }
+  return { summary: nextSummary, waitingForSinceOffset: nextWaitingForSinceOffset };
 }
 
 type AgentRuntimeSource = {

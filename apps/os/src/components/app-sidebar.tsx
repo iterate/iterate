@@ -523,7 +523,7 @@ function ProjectSidebarGroup({
       { slug: projectId ?? "", enabled: projectId !== null },
     ).value ?? {};
   const agentAttentionCount = Object.values(agents).filter(
-    (agent) => deriveAgentDisplayState(undefined, agent.metadata.waitingFor) !== "idle",
+    (agent) => deriveAgentDisplayState(undefined, agent.summary.waitingFor) !== "idle",
   ).length;
   const isNewAgentActive = Boolean(
     matchRoute({

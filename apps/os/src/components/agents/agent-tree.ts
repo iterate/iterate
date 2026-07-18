@@ -56,7 +56,7 @@ export function buildAgentForest(records: Record<string, AgentRecord>): AgentTre
 export function pinnedAgentShortcuts(forest: readonly AgentTreeNode[]): AgentTreeNode[] {
   const nodes: AgentTreeNode[] = [];
   walkAgentForest(forest, (node) => {
-    if (node.agent.metadata.pinned) nodes.push(node);
+    if (node.agent.summary.pinned) nodes.push(node);
   });
   return nodes.toSorted(
     (left, right) =>
@@ -90,7 +90,7 @@ export function walkAgentForest(
 }
 
 export function agentTitle(agent: AgentRecord): string {
-  if (agent.metadata.title !== undefined) return agent.metadata.title;
+  if (agent.summary.title !== undefined) return agent.summary.title;
   const bindingTitle = agentBindingTitle(agent.binding);
   if (bindingTitle !== undefined) return bindingTitle;
   return agent.path.split("/").filter(Boolean).at(-1) ?? agent.path;
@@ -121,8 +121,8 @@ function agentSearchText(agent: AgentRecord): string {
   const binding = agent.binding === undefined ? [] : Object.values(agent.binding);
   return [
     agentTitle(agent),
-    agent.metadata.activity,
-    agent.metadata.summary,
+    agent.summary.activity,
+    agent.summary.description,
     agent.path,
     ...binding,
   ]
@@ -147,7 +147,7 @@ export function agentNodeDisplayState(
 function finalizeNode(node: AgentTreeNode): void {
   let runtime = node.agent.runtime ?? ZERO_AGENT_RUNTIME;
   const waiting = emptyWaitingAggregate();
-  addWaiting(waiting, node.agent.metadata.waitingFor);
+  addWaiting(waiting, node.agent.summary.waitingFor);
   let lastWorkAt = node.agent.timestamps.lastWorkAt;
   let agentCount = 1;
   let activeCount = deriveAgentDisplayState(node.agent.runtime) === "idle" ? 0 : 1;
@@ -216,7 +216,7 @@ function emptyWaitingAggregate(): AgentWaitingAggregate {
 
 function addWaiting(
   aggregate: AgentWaitingAggregate,
-  waitingFor: AgentRecord["metadata"]["waitingFor"],
+  waitingFor: AgentRecord["summary"]["waitingFor"],
 ): void {
   if (waitingFor === "user_input") aggregate.userInput += 1;
   if (waitingFor === "external_event") aggregate.externalEvent += 1;

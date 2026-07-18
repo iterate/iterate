@@ -127,6 +127,13 @@ export function sandboxPathFor(name: string): string {
   return assertSandboxPath(`${SANDBOX_PATH_PREFIX}/${name}`);
 }
 
+/** The catalogue idempotency key that claims a sandbox name — one
+ * `create-requested` per path, ever (`itx.sandboxes.create`,
+ * rpc-targets.ts). */
+export function sandboxCreateClaimKey(path: string): string {
+  return `sandbox-create-requested:${path}`;
+}
+
 /**
  * The sandbox path is durable identity (it becomes the Durable Object name).
  * This VALIDATES and never rewrites: the path a caller uses is exactly the
