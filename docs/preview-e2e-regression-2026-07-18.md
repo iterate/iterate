@@ -127,6 +127,29 @@ before becoming ready; its bounded wait passed without rerolling the project.
 Experiment 7 therefore moves both known slow families to the front while
 preserving the same bounded aggregate concurrency and all coverage.
 
+Experiment 7 cut the check to **3m32s**
+([Depot run `qqg3fq44h1`](https://depot.dev/orgs/0p91s0lz49/workflows/23w2dqwd36?job=0zx161np8j&attempt=hm89j4zts2)).
+OS deploy took 73.2s and the OS test phase 113.6s; smoke, TUI, Playwright,
+and Vitest took 26s, 18s, 85s, and 114s. Starting the four resilience cases
+first cut Playwright by 40s without removing or duplicating a test. The run is
+not an acceptance run: Vitest retried `Agent scripts can send web-chat
+messages (with file attachments) and call project tools` once.
+
+That retry was not capacity weather. The same test retried 29 times and still
+failed 7 times in the three-day inventory. Both experiment-7 attempts created
+the agent, mounted the live project capability, ran the script, emitted both
+messages, stored the attachment, completed both event waits, and settled the
+script successfully. The persisted first-attempt stream exposes the exact
+race: `script-run-settled` landed at offset 28, while the independent
+chat-to-context reflection for the attached message landed later at offset 30.
+The test read history between them and asserted that both were already there.
+The second attempt happened to receive reflection at offset 29 and settlement
+at offset 30. The test now waits for both durable consequences explicitly
+before reading history; a retry-disabled focused preview proof passed in
+14.4s. Experiment 8 raises Vitest from eight to twelve workers (24 concurrent
+tests; aggregate configured peak 38) to remove the remaining Vitest critical
+path while exercising the fixed assertion.
+
 That run also exposed an independent resource leak in slot handover. Reset took
 131.3s and deleted only 100 AI Search instances before its 90s deadline. The
 namespace still held 498 instances immediately after reset and 551 after the
@@ -291,6 +314,7 @@ observable.
 | A project can be reported ready before every fresh app ingress can read its Artifacts repo. | Confirmed / partial fix     | Experiment 4's exact request returned HTTP 500 because Workers RPC dropped `FORK_IN_PROGRESS` and preserved only the service-authored materialization message.                                         | Classify the exact message to building 503, then strengthen or narrow the `project/ready` contract; reject raw errors. |
 | `project/ready` implies every named seeded app is already warm.                             | Refuted / modelled          | Experiment 5's sole retry followed successful project birth; the first `hello` app fetch returned the exact documented marked building 503.                                                            | Poll only the marked cold-build response at the app boundary; never reroll the whole fresh project.                    |
 | Counter click can be torn down before its fire-and-forget fetch leaves the browser.         | Confirmed / pending preview | Experiment 4 had a successful page and WebSocket but no increment POST; the failure artifact showed count 0, an enabled button, and no progress UI when the 1ms guard fired.                           | Keep `incrementing…` visible until the WebSocket repaint; surface fetch/socket failure as product error UI.            |
+| Agent-script chat reflection is ordered relative to script settlement.                      | Refuted / fixed             | Experiment 7's first attempt settled at offset 28 and reflected the attached chat message at offset 30; the test read between them. Both service paths otherwise succeeded.                            | Await both durable events, then inspect history. Never rely on independent event ordering or absorb the race in retry. |
 
 ## Immediate experiment order
 
@@ -320,10 +344,14 @@ observable.
    experiment 6 passed every app with zero retries in 3m50s.** Preserve every
    lane's separate watchdog, logs, and exit status.
 8. Queue the known 60-78s Vitest and Playwright families first so their fixed
-   waits overlap the ordinary suite rather than tail it.
-9. Remove tests from the deployed lane where the asserted behavior is
-   deterministic/local.
-10. Re-run until the whole check is under 3m repeatedly with zero retry telemetry
+   waits overlap the ordinary suite rather than tail it. **Complete:
+   experiment 7 cut Playwright from 125s to 85s and the full check to 3m32s,
+   but exposed a historical agent assertion race.**
+9. Fix that race and step Vitest from eight to twelve workers (configured
+   aggregate peak 38); audit every retry, error outcome, and post-run state.
+10. Remove tests from the deployed lane where the asserted behavior is
+    deterministic/local.
+11. Re-run until the whole check is under 3m repeatedly with zero retry telemetry
     and coherent post-run state.
 
 ## Cost and architecture watchpoints
@@ -391,10 +419,16 @@ observable.
 - 2026-07-18: experiment 6 completed in 3m50s (OS deploy 71.2s; OS tests
   131.5s; smoke 19s; TUI 17s; Vitest 120s; Playwright 125s) at configured peak 30. Every app passed with zero retry telemetry and no capacity error. The
   only infrastructure warning was an unrelated Depot cache-service miss.
-- Next: run the long reconnect/resume Playwright project first and refresh
-  Vitest's longest-first ranking from experiment 6. Audit every retry and trace
-  before expanding concurrency or reuse further. PR comments mirror each
-  experiment and result rather than rewriting history here.
+- 2026-07-18: experiment 7 completed in 3m32s (OS deploy 73.2s; OS tests
+  113.6s; smoke 26s; TUI 18s; Vitest 114s; Playwright 85s). It retained all 56
+  Playwright tests exactly once, but Vitest retried the agent-script chat test.
+  Traces and both persisted streams proved an assertion race between successful
+  script settlement and asynchronous chat-to-context reflection. The test now
+  awaits both; its focused retry-disabled preview proof passed in 14.4s.
+- Next: run twelve Vitest workers at configured aggregate peak 38, audit every
+  retry/error and post-run state, then repeat sub-three-minute clean runs. PR
+  comments mirror each experiment and result rather than rewriting history
+  here.
 
 <details>
 <summary>All 162 failed preview attempts</summary>

@@ -177,6 +177,24 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     predicate: (event) => event.payload?.message === "string form with files",
     timeoutMs: 30_000,
   });
+  // Script settlement and chat-to-context reflection are independent durable
+  // consequences of the script. Their offsets can land in either order, so
+  // reading history after only the web-message events races the reflection.
+  const reflectedFilesReply = agent.stream.waitForEvent({
+    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
+    predicate: (event) =>
+      event.payload?.role === "assistant" &&
+      event.payload.content ===
+        "The assistant sent this visible web-chat message: string form with files",
+    timeoutMs: 30_000,
+  });
+  const scriptSettled = agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+    predicate: (event) =>
+      (event.payload as { settlement?: { status?: string } } | undefined)?.settlement?.status ===
+      "succeeded",
+    timeoutMs: 30_000,
+  });
 
   const { llmRequestOffset } = await appendSyntheticProviderOutput(
     agent.stream,
@@ -195,16 +213,26 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     ),
   );
 
-  expect(await projectToolReply).toMatchObject({
+  const [
+    projectToolReplyEvent,
+    filesOptionReplyEvent,
+    reflectedFilesReplyEvent,
+    scriptSettledEvent,
+  ] = await Promise.all([projectToolReply, filesOptionReply, reflectedFilesReply, scriptSettled]);
+
+  expect(projectToolReplyEvent).toMatchObject({
     type: AGENT_WEB_MESSAGE_SENT_TYPE,
     payload: { message: "project tool saw project-capability" },
   });
-  expect(await filesOptionReply).toMatchObject({
+  expect(filesOptionReplyEvent).toMatchObject({
     type: AGENT_WEB_MESSAGE_SENT_TYPE,
     payload: {
       message: "string form with files",
       files: [{ contentType: "text/plain", filename: "note.txt", size: 5 }],
     },
+  });
+  expect(scriptSettledEvent).toMatchObject({
+    payload: { settlement: { status: "succeeded" } },
   });
 
   const events = await agent.stream.getEvents();
@@ -227,15 +255,8 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     ]),
   );
 
-  const reflectedFilesReply = events.find(
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      event.payload?.role === "assistant" &&
-      event.payload.content ===
-        "The assistant sent this visible web-chat message: string form with files",
-  );
-  expect(reflectedFilesReply?.payload).toMatchObject({ role: "assistant" });
-  expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
+  expect(reflectedFilesReplyEvent.payload).toMatchObject({ role: "assistant" });
+  expect(reflectedFilesReplyEvent.payload).not.toHaveProperty("llmRequestOffset");
 });
 
 test("Agent create replays its earlier birth and setup events through its subscriptions", async () => {

@@ -114,7 +114,7 @@ export default defineConfig({
     // independent.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // 8 workers × maxConcurrency 2 = peak ~16 concurrent tests. History of
+    // 12 workers × maxConcurrency 2 = peak ~24 concurrent tests. History of
     // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
     // (DO-storage timeouts), 4×3 = ~12 still produced rotating
     // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
@@ -124,12 +124,16 @@ export default defineConfig({
     // lower concurrency were product lifecycle defects, not evidence that the
     // preview slot needed protection from independent tests. The preview
     // runner overlaps this peak with Playwright's twelve workers, one TUI test,
-    // and the one-project onboarding smoke: aggregate peak 30. Experiment 5
+    // and the one-project onboarding smoke: aggregate peak 38. Experiment 5
     // cut Vitest from 210s to 138s at six workers; its only retry was a traced,
     // explicitly marked cold-build response rather than a capacity rejection.
-    // Keep that load visible; project reuse removes needless births, while
-    // fresh-project lifecycle tests still exercise it.
-    maxWorkers: 8,
+    // Experiment 6 then ran the aggregate peak of 30 with zero retries and no
+    // capacity failures. Experiment 7's one retry was a proven assertion race:
+    // the test read history before an independently projected context event,
+    // despite every service operation succeeding. Keep that load visible;
+    // project reuse removes needless births, while fresh-project lifecycle
+    // tests still exercise project creation.
+    maxWorkers: 12,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
     passWithNoTests: true,
@@ -165,8 +169,9 @@ export default defineConfig({
           testTimeout: E2E_TEST_TIMEOUT_MS,
           // One retry in CI, the only retry layer in the whole lane
           // (docs/testing.md#retries-and-timeouts): tests are self-contained
-          // (fresh project per test), so a rare platform blip re-rolls in
-          // seconds. A burst that defeats the single retry fails the run —
+          // through a fresh project, unique resource names, or an exclusive
+          // family-pool lease, so a rare platform blip can re-run without
+          // colliding with another test. A burst that defeats the single retry fails the run —
           // deliberately: platform weather should be visible, not absorbed
           // (the 50-run marathon audit saw zero second retries; the
           // RetryTelemetryReporter above counts the first ones).
