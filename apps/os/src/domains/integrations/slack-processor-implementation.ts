@@ -171,7 +171,19 @@ function slackAgentCreationEvents(input: {
   const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
-    platformSystemPrompt: {
+    initialEvents: [
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: `agent/binding:${input.projectId}:${input.path}`,
+        payload: {
+          type: "slack_thread",
+          connection: input.connection,
+          channelId: input.channel,
+          threadTs: input.threadTs,
+        },
+      },
+    ],
+    systemPromptPolicy: {
       content: slackAgentSystemPrompt(input.connection),
       id: "slack",
       revision: SLACK_AGENT_SYSTEM_PROMPT_REVISION,

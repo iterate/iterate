@@ -608,7 +608,12 @@ export function loadResolvedWorker({
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    env: bindings,
+    // ITERATE_WORKER_VERSION is the worker's own build identity — the same
+    // content-addressed key this loader caches by. Its one job is to change
+    // exactly when the worker's source does: the SDK's processor registry
+    // uses it as the deploy version whose change resets a crash-looping
+    // keepalive's backoff budget (the "antidote deploy" lane).
+    env: { ...bindings, ITERATE_WORKER_VERSION: resolved.cacheKey },
     globalOutbound,
     mainModule: resolved.mainModule,
     modules: resolved.modules,

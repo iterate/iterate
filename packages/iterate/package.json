@@ -19,7 +19,7 @@
     "orpc"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.15"
   },
   "bin": {
     "iterate": "./bin/iterate.js"

@@ -2,7 +2,6 @@ import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
   itxProjectStream,
-  withStatefulWorkerAlarms,
   type Project,
   type StreamEvent,
   type StreamEventInput,
@@ -240,8 +239,9 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
   };
   // The copied webhook is durable agent-stream history but is deliberately
   // outside the Agent processor's consumed vocabulary. Its companion tasks
-  // may therefore share this raw stream batch; processor-owned setup below
-  // goes through the typed Agent append door.
+  // may therefore share this raw stream batch. The typed append below is only
+  // a schema-validating convenience; either append API has identical reducer
+  // meaning for a valid Agent event.
   const agentEvents: StreamEventInput[] = [
     {
       type: event.type,
@@ -347,12 +347,30 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
       },
     },
     {
-      type: "events.iterate.com/agent/status-changed",
-      idempotencyKey: "github-pr/status",
-      payload: { icon: "github", title: `PR #${number}` },
+      type: "events.iterate.com/agent/metadata-changed",
+      idempotencyKey: "github-pr/metadata",
+      payload: {
+        title: `PR #${number}`,
+        activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,
+        summary: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,
+      },
     },
   );
-  await agent.stream.append(...agentEvents);
+  await agent.stream.append(
+    {
+      type: "events.iterate.com/agent/binding-set",
+      idempotencyKey: "github-pr/binding",
+      payload: {
+        type: "github_pull_request",
+        connection: route.connection,
+        installationId: route.installationId,
+        owner: repository.owner,
+        repo: repository.repo,
+        number,
+      },
+    },
+    ...agentEvents,
+  );
 }
 
 type GithubWebhookPayload = {
@@ -530,22 +548,18 @@ export class GuestbookApp extends IterateDurableObject {
     if (this.#host === undefined) {
       this.ctx.storage.kv.put("guestbook:project-id", projectId);
       const stream = itxProjectStream(this.env, guestbookStreamPath);
-      // withStatefulWorkerAlarms: this class is hosted as a workerd facet,
-      // and facet storage has no alarms — the wrapper routes the standard
-      // `ctx.storage` alarm API through the platform Durable Object hosting
-      // this worker, whose fire calls `alarm()` below.
-      const registry = createStreamProcessorRegistry(
-        withStatefulWorkerAlarms(this.ctx, this.env, guestbookAppRef),
-        {
-          path: guestbookStreamPath,
-          projectId,
-          stream,
-          // The crash-loop budget's deploy-reset lane: a facet has no build
-          // identity to hand here yet, so a broken-then-fixed worker waits
-          // out the keepalive backoff instead of resetting on deploy.
-          version: "0",
-        },
-      );
+      // this.ctx carries working durable alarms (IterateDurableObject routes
+      // them through the platform Durable Object hosting this facet), so the
+      // registry's keepalive can arm; its fire calls `alarm()` below.
+      const registry = createStreamProcessorRegistry(this.ctx, {
+        path: guestbookStreamPath,
+        projectId,
+        stream,
+        // The worker's own build identity: a version change resets a
+        // crash-looping keepalive's backoff budget, so a broken-then-fixed
+        // worker recovers on its next build (the antidote deploy).
+        version: this.env.ITERATE_WORKER_VERSION,
+      });
       const guestbook = registry.register(
         new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),
         // Keepalive recovery: if an eviction kills this object while it owes
@@ -558,9 +572,9 @@ export class GuestbookApp extends IterateDurableObject {
     return this.#host;
   }
 
-  /** The hosting Durable Object's alarm fire, replayed into this class (see
-   * withStatefulWorkerAlarms above). Route it to the registry: each keepalive
-   * self-gates on its own persisted record, so a stale fire is a no-op. */
+  /** The hosting Durable Object's alarm fire, delivered here like a native
+   * one. Route it to the registry: each keepalive self-gates on its own
+   * persisted record, so a stale fire is a no-op. */
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     // A fire can be a cold incarnation's first event, so don't depend on a
     // live loopback dial: any prior contact cached the project id durably

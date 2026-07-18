@@ -36,20 +36,23 @@ seconds and run alongside OS.
   but instead of waiting for auth to finish first, the OS deploy _polls_ the
   slot's auth worker for JWKS (`bakeStaticAuthJwks` in `apps/os/scripts/deploy.ts`). All
   apps deploy at once.
-- **File-level parallelism.** Every e2e test provisions its own project, so
-  files are independent; CI runs them in parallel (`fileParallelism`,
-  `maxWorkers: 4`, `retry: 1` in `apps/os/e2e/vitest.config.ts`). Intra-file
-  concurrency (`sequence.concurrent`) would go faster still, but the deployed
-  slot — not the runner — is the bottleneck: ~4 concurrent project creates is
-  the ceiling before "Durable Object storage operation exceeded timeout". The
-  real speedup for the slow itx suite is splitting its monolith file so
-  file-level parallelism covers it (`tasks/raise-e2e-maxconcurrency.md`).
-- **All test lanes run concurrently.** The `pnpm e2e` vitest suite (its `node`
-  project — engine e2e + itx catalogue matrix in one config) and the root
-  Playwright specs run at the same time against the slot, and the four apps'
-  suites run concurrently too (`scripts/preview/preview.ts`).
-- **Playwright runs 6 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
-  — every spec creates its own fixture project.
+- **Parallelism is capped per deployed slot, not per runner process.** The OS
+  Vitest catalogue uses four workers with at most two concurrent tests each;
+  Playwright uses eight fully-parallel workers. Each suite therefore peaks at
+  eight remote tests. The TUI, Vitest, and Playwright suites run sequentially
+  against one OS preview slot: overlapping the two eight-wide worker pools
+  produced project-processor self-pull timeouts even though each suite was
+  clean in isolation. The four apps' independent preview suites may still run
+  concurrently (`scripts/preview/preview.ts`).
+- **File-level parallelism plus bounded intra-file concurrency.** Every Vitest
+  test provisions its own project, so files are independent (`fileParallelism`,
+  `maxWorkers: 4`, `sequence.concurrent`, `maxConcurrency: 2`, `retry: 1` in
+  `apps/os/e2e/vitest.config.ts`). The deployed slot — not the Depot runner —
+  is the bottleneck. The real speedup for the slow itx suite is splitting its
+  monolith file so file-level parallelism covers it.
+- **Playwright runs 8 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
+  — every spec creates its own fixture project, and the suite owns the slot
+  while it runs.
 - **One sequential create-saga smoke runs before the burst.** The first real
   project create pays the genuine cold-start costs (cold DO chain, repo seed,
   worker probe) once, sequentially, instead of surfacing as rotating timeout

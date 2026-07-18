@@ -20,6 +20,7 @@ import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browse
 import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
 import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
+import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";
 import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
@@ -37,7 +38,7 @@ import {
 import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
 import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
+import { useBrowserStreamMetrics, type BrowserStreamMetricsView } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
   streamViewMode,
@@ -47,35 +48,10 @@ import {
 
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
-/**
- * The stream view: every domain page's main pane. Renders mode-owned feed
- * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
- * with the composer below and standard right-edge sheets (inspectors and
- * processor state) on top.
- *
- * This component is the orchestrator: it owns the two browser-hosted
- * processors that mirror the stream into local SQLite (the raw `events` log
- * and the single `feed_items` projection) and hands their stores/databases to
- * focused child components. All view state (mode, filters, open panels) lives in the URL —
- * see ~/lib/stream-view-search.ts — so children read it themselves; the
- * component stays mounted across ⌘K stream switches (the switcher navigates
- * with an empty search, resetting the view to the new stream's defaults).
- */
-export function ProjectStreamView({
-  autoFocusMessageComposer = false,
-  defaultComposerMode,
-  emptyLabel = "No events in this stream yet.",
-  layout = "split",
-  messageComposer,
-  panel,
-  projectId,
-  projectSlug,
-  resetStreamSourceTransport,
-  showHeader = true,
-  streamSource,
-  streamPath,
-}: {
+type ProjectStreamViewProps = {
   autoFocusMessageComposer?: boolean;
+  /** Domain identity shown directly below the generic stream header. */
+  contextHeader?: ReactNode;
   defaultComposerMode?: "message" | "raw";
   emptyLabel?: string;
   /**
@@ -104,83 +80,90 @@ export function ProjectStreamView({
   showHeader?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
-}) {
-  const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  // The stream mirror rides the ONE shared session socket — the same connection
-  // the page's ordinary queries use. It can page tens of thousands of historical
-  // events and owns an aggressive reconnect loop, but it NEVER closes the shared
-  // socket itself: on a suspected half-open transport it REPORTS the suspicion to
-  // the socket-owned verifier ({@link reportTransportSuspicion}), the only thing
-  // that may retire the shared socket — and only after two failed probes against
-  // the same generation. That is what lets the mirror share the socket without
-  // re-introducing the failure where resetting the mirror rejected a concurrent
-  // Repo.readFile and blanked the whole task board.
-  //
-  // Resolve the session PER CALL (never `useItx()`): the stream view's shell —
-  // header, tabs, composer, panel — must paint before the socket connects (a
-  // hook read here would suspend the whole view), and the runtimes this source
-  // feeds outlive the render — a captured capnweb stub pins whatever transport
-  // it was born on, so after a suspend/resume killed that socket every reconnect
-  // would ride the corpse and the feed would wedge until a reload (the repro in
-  // specs/stream-resume-after-suspend.spec.ts). `connectIterateSession()` returns the
-  // CURRENT generation each call.
-  const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () =>
-      streamSource ??
-      (async (path) =>
-        projectId == null
-          ? (await connectIterateSession()).streams.get(path)
-          : (await connectItx(projectId)).streams.get(path)),
-    [projectId, streamSource],
-  );
-  const streamClientFactory = useMemo(() => {
-    if (streamSource !== undefined) {
-      // Custom source: its own transport, so no default suspicion wiring — the
-      // runtime falls back to resetStreamSourceTransport.
-      return async (input: { streamPath: string }) => {
-        const stub = await streamSource(input.streamPath);
-        // The stub's REAL dispose, so every reconnect releases its stream export
-        // instead of stranding one per reconnect in the cap table on both sides.
-        return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
-      };
-    }
-    return async (input: { streamPath: string }) => {
-      const stub =
-        projectId == null
-          ? (await connectIterateSession()).streams.get(input.streamPath)
-          : (await connectItx(projectId)).streams.get(input.streamPath);
-      return asBrowserStreamClient(
-        stub,
-        () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
-        // Report suspicion — NEVER close the shared socket directly. The
-        // socket-owned verifier retires it only if it is genuinely half-open.
-        reportTransportSuspicion,
-      );
-    };
-  }, [projectId, streamSource]);
-  // Half-open recovery: a suspended page's socket can die without a close frame,
-  // so per-call dialing alone can't recover it. When the runtimes' probes/dials
-  // time out they call this, which reports the suspicion to the shared socket's
-  // verifier rather than evicting anything itself. A custom streamSource brings
-  // its own resetTransport (or none).
-  const resetTransport = useMemo(
-    () =>
-      resetStreamSourceTransport ??
-      (streamSource === undefined ? reportTransportSuspicion : undefined),
-    [resetStreamSourceTransport, streamSource],
-  );
+};
 
-  // The stream mirror: one download of this stream into the shared per-path
-  // SQLite mirror, fanned out to the canonical processors — the verbatim
-  // raw-event `events` log (also the composer's append target) and the
-  // browser-feed projector, whose single `feed_items` table backs every mode
-  // (pretty chat rows and raw rows in one total order) and whose reduced state
-  // carries the live activity + presence the header derives presence/busy from.
-  // All four tables live in the one `store.streamDatabase`.
-  const { store, snapshot } = useStreamMirror({
-    createStreamClient: streamClientFactory,
-    ...(resetTransport === undefined ? {} : { resetTransport }),
-    projectId: streamRuntimeProjectKey,
+const EMPTY_STREAM_METRICS: BrowserStreamMetricsView = {
+  spark: [],
+  transportRttMs: null,
+  subscriber: undefined,
+};
+
+/**
+ * The stream view: every domain page's main pane. Renders mode-owned feed
+ * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
+ * with the composer below and standard right-edge sheets (inspectors and
+ * processor state) on top.
+ *
+ * This component is the orchestrator: it owns the two browser-hosted
+ * processors that mirror the stream into local SQLite (the raw `events` log
+ * and the single `feed_items` projection) and hands their stores/databases to
+ * focused child components. All view state (mode, filters, open panels) lives in the URL —
+ * see ~/lib/stream-view-search.ts — so children read it themselves; the
+ * component stays mounted across ⌘K stream switches (the switcher navigates
+ * with an empty search, resetting the view to the new stream's defaults).
+ */
+export function ProjectStreamView(props: ProjectStreamViewProps) {
+  if (props.layout === "fullPanel") return <FullPanelProjectStreamView {...props} />;
+  return <MirroredProjectStreamView {...props} />;
+}
+
+/**
+ * Full-panel domain pages keep their stream available as a secondary Events
+ * sheet without paying for its historical download, SQLite mirror, or live
+ * subscription while that sheet is closed.
+ */
+function FullPanelProjectStreamView({
+  contextHeader,
+  panel,
+  streamPath,
+  ...mirrorProps
+}: ProjectStreamViewProps) {
+  const panels = useStreamViewPanels();
+  const mirrorActive = panels.eventsSheetOpen || panels.processorsPanelOpen;
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col bg-background">
+      <StreamViewHeader
+        agentBusy={false}
+        eventsToggle={{}}
+        metrics={EMPTY_STREAM_METRICS}
+        presence={[]}
+        streamPath={streamPath}
+      />
+      {contextHeader}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
+      <DeferredSurface active={mirrorActive}>
+        <MirroredProjectStreamView
+          {...mirrorProps}
+          contextHeader={contextHeader}
+          layout="fullPanel"
+          panel={panel}
+          streamPath={streamPath}
+        />
+      </DeferredSurface>
+    </section>
+  );
+}
+
+function MirroredProjectStreamView({
+  autoFocusMessageComposer = false,
+  defaultComposerMode,
+  emptyLabel = "No events in this stream yet.",
+  contextHeader,
+  layout = "split",
+  messageComposer,
+  panel,
+  projectId,
+  projectSlug,
+  resetStreamSourceTransport,
+  showHeader = true,
+  streamSource,
+  streamPath,
+}: ProjectStreamViewProps) {
+  const { resolvedStreamSource, store, snapshot } = useProjectStreamMirror({
+    projectId,
+    resetStreamSourceTransport,
+    streamSource,
     streamPath,
   });
 
@@ -237,7 +220,10 @@ export function ProjectStreamView({
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy = isAgentUiActivityWorking(agentUiState?.live ?? null);
+  const agentBusy = isAgentUiActivityWorking(
+    agentUiState?.live ?? null,
+    agentUiState?.runtimeChange?.runtime,
+  );
   const presence = agentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,
@@ -357,23 +343,13 @@ export function ProjectStreamView({
 
   if (layout === "fullPanel") {
     return (
-      <section className="flex min-h-0 flex-1 flex-col bg-background">
-        <StreamViewHeader
-          agentBusy={agentBusy}
-          agentPause={agentPauseControl}
-          eventsToggle={{ eventCount }}
-          metrics={metrics}
-          presence={presence}
-          streamKill={streamKillControl}
-          streamPath={streamPath}
-        />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
+      <>
         {streamStateSheet}
         <StreamEventsSheet streamPath={streamPath}>
           {filterRow}
           {feedColumn}
         </StreamEventsSheet>
-      </section>
+      </>
     );
   }
 
@@ -389,6 +365,7 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
       ) : null}
+      {showHeader ? contextHeader : null}
       {showHeader ? filterRow : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
@@ -402,6 +379,73 @@ export function ProjectStreamView({
       {streamStateSheet}
     </section>
   );
+}
+
+/** Owns transport generation, recovery, and the one local mirror for a stream. */
+function useProjectStreamMirror({
+  projectId,
+  resetStreamSourceTransport,
+  streamSource,
+  streamPath,
+}: Pick<
+  ProjectStreamViewProps,
+  "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
+>) {
+  const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
+  // The stream mirror rides the ONE shared session socket — the same connection
+  // the page's ordinary queries use. It can page tens of thousands of historical
+  // events and owns an aggressive reconnect loop, but it NEVER closes the shared
+  // socket itself: on a suspected half-open transport it REPORTS the suspicion to
+  // the socket-owned verifier ({@link reportTransportSuspicion}), the only thing
+  // that may retire the shared socket — and only after two failed probes against
+  // the same generation.
+  //
+  // Resolve the session PER CALL (never `useItx()`): these runtimes outlive the
+  // render, so capturing a capnweb stub would pin a dead transport after resume.
+  const resolvedStreamSource = useMemo<ItxStreamSource>(
+    () =>
+      streamSource ??
+      (async (path) =>
+        projectId == null
+          ? (await connectIterateSession()).streams.get(path)
+          : (await connectItx(projectId)).streams.get(path)),
+    [projectId, streamSource],
+  );
+  const streamClientFactory = useMemo(() => {
+    if (streamSource !== undefined) {
+      return async (input: { streamPath: string }) => {
+        const stub = await streamSource(input.streamPath);
+        return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
+      };
+    }
+    return async (input: { streamPath: string }) => {
+      const stub =
+        projectId == null
+          ? (await connectIterateSession()).streams.get(input.streamPath)
+          : (await connectItx(projectId)).streams.get(input.streamPath);
+      return asBrowserStreamClient(
+        stub,
+        () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
+        // Report suspicion; the socket-owned verifier alone may retire the
+        // shared socket, and only after proving it is genuinely half-open.
+        reportTransportSuspicion,
+      );
+    };
+  }, [projectId, streamSource]);
+  const resetTransport = useMemo(
+    () =>
+      resetStreamSourceTransport ??
+      (streamSource === undefined ? reportTransportSuspicion : undefined),
+    [resetStreamSourceTransport, streamSource],
+  );
+  // One download fans out into the raw-event mirror and browser-feed projector.
+  const mirror = useStreamMirror({
+    createStreamClient: streamClientFactory,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
+    projectId: streamRuntimeProjectKey,
+    streamPath,
+  });
+  return { resolvedStreamSource, ...mirror };
 }
 
 /**

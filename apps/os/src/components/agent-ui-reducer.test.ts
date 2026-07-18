@@ -4,6 +4,7 @@
 // items and live active-work tail the agent feed renders.
 
 import { describe, expect, test } from "vitest";
+import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
@@ -59,6 +60,13 @@ function llmEvent(
         : lifecycle === "completed"
           ? { llmRequestOffset: offset, result: { status: "success" } }
           : { phase: "requested", llmRequestOffset: offset, reason },
+  };
+}
+
+function settledRuntime(sinceOffset: number) {
+  return {
+    type: "events.iterate.com/agent/runtime-changed",
+    payload: { sinceOffset, runtime: ZERO_AGENT_RUNTIME },
   };
 }
 
@@ -309,10 +317,7 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/capability-host/script-run-settled",
         payload: { executionId: "agent-output:11", settlement: { status: "succeeded" } },
       },
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 20 },
-      },
+      settledRuntime(20),
     ]);
 
     expect(completed.live).toBeNull();
@@ -494,10 +499,7 @@ describe("agent-ui reducer", () => {
           result: { status: "success" },
         },
       },
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 8 },
-      },
+      settledRuntime(8),
     ]);
 
     expect(state.live).toBeNull();
@@ -524,10 +526,7 @@ describe("agent-ui reducer", () => {
           expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
         },
       },
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 8 },
-      },
+      settledRuntime(8),
     ]);
 
     const activity = state.items[0];
@@ -559,10 +558,7 @@ describe("agent-ui reducer", () => {
           expiresAt: SCRIPT_EXPIRES_AT,
         },
       },
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 10 },
-      },
+      settledRuntime(10),
       {
         type: "events.iterate.com/capability-host/script-run-settled",
         payload: {
@@ -617,10 +613,7 @@ describe("agent-ui reducer", () => {
           expiresAt: SCRIPT_EXPIRES_AT,
         },
       },
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 11 },
-      },
+      settledRuntime(11),
       {
         type: "events.iterate.com/capability-host/script-run-settled",
         payload: { executionId: "late-a", settlement: { status: "succeeded", result: "a" } },
@@ -655,10 +648,9 @@ describe("agent-ui reducer", () => {
           },
         },
         {
-          type: "events.iterate.com/agent/status-changed",
+          ...settledRuntime(requestedOffset),
           offset: requestedOffset + 1,
           createdAt: new Date(baseMs + (requestedOffset + 1) * 1_000).toISOString(),
-          payload: { busy: false, sinceOffset: requestedOffset },
         },
       ];
     }).flat();
@@ -672,17 +664,17 @@ describe("agent-ui reducer", () => {
     expect(state.provisionalActivities[`activity-${(eventCount - 1) * 2 + 1}`]).toBeDefined();
   });
 
-  test("does not guess a phase from a malformed busy status event", () => {
+  test("rejects a malformed runtime event", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agent/status-changed",
+        type: "events.iterate.com/agent/runtime-changed",
         offset: 7,
-        payload: { busy: true, sinceOffset: 6 },
+        payload: { sinceOffset: 6 },
       },
     ]);
 
     expect(state.live).toBeNull();
-    expect(state.statusSinceOffset).toBeNull();
+    expect(state.runtimeChange).toBeNull();
   });
 
   test("queues a user message that arrives mid-turn", () => {
@@ -1096,10 +1088,7 @@ describe("agent-ui reducer", () => {
         payload: { role: "user", content: "queued" },
       },
       llmEvent("requested", 16),
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 17 },
-      },
+      settledRuntime(17),
     ]);
 
     expect(state.live).toBeNull();
@@ -1129,10 +1118,7 @@ describe("agent-ui reducer", () => {
       llmEvent("requested", 6),
       llmEvent("completed", 6),
       llmEvent("cancelled", 6),
-      {
-        type: "events.iterate.com/agent/status-changed",
-        payload: { busy: false, sinceOffset: 8 },
-      },
+      settledRuntime(8),
     ]);
 
     const activity = state.items[0];
