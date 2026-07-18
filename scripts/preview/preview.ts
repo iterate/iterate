@@ -1356,6 +1356,10 @@ export type PreviewRetrySummary = {
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
 /** Same JSON shape, written by the Microsoft TUI Test wrapper. */
 const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
+/** Auth's Vitest retry telemetry, unique so parallel app lanes cannot race. */
+const authVitestRetryTelemetryFile = "/tmp/os-preview-auth-vitest-retries.json";
+/** Semaphore's Vitest retry telemetry, unique so parallel app lanes cannot race. */
+const semaphoreVitestRetryTelemetryFile = "/tmp/os-preview-semaphore-vitest-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
 const streamsExampleVitestRetryTelemetryFile =
   "/tmp/os-preview-streams-example-vitest-retries.json";
@@ -1430,9 +1434,10 @@ async function readPlaywrightRetryTelemetry(
 }
 
 /**
- * Reads one sub-lane's telemetry, treating a missing file as "no retries"
- * (the sub-lane may have died before writing) and logging anything else —
- * telemetry must never fail the lane.
+ * Reads one sub-lane's telemetry. Collection never replaces the lane's own
+ * outcome, but every unreadable or missing artifact is loud: without the
+ * artifact, a passed run cannot prove that it absorbed zero retries. The
+ * strict marathon treats this diagnostic as a non-qualifying run.
  */
 async function readRetryTelemetryLane(
   label: string,
@@ -1441,9 +1446,7 @@ async function readRetryTelemetryLane(
   try {
     return await read();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(`[preview] retry telemetry unreadable for ${label}:`, error);
-    }
+    console.error(`[preview] retry telemetry unreadable for ${label}:`, error);
     return [];
   }
 }
@@ -1681,7 +1684,20 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // handout order — the exact semantics this preview machinery's own slot
     // leasing depends on — and was previously invoked by NOTHING
     // (docs/testing.md#lanes).
-    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      [
+        "set -euo pipefail",
+        `rm -f ${semaphoreVitestRetryTelemetryFile}`,
+        `env -u SEMAPHORE_API_TOKEN E2E_RETRY_TELEMETRY_FILE=${semaphoreVitestRetryTelemetryFile} pnpm test:e2e`,
+      ].join("; "),
+    ],
+    collectRetryTelemetry: async () => ({
+      retried: await readRetryTelemetryLane("semaphore vitest lane", () =>
+        readVitestRetryTelemetry(semaphoreVitestRetryTelemetryFile),
+      ),
+    }),
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -1707,7 +1723,20 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // doppler wrap supplies APP_CONFIG_SERVICE_AUTH_TOKEN for the internal.*
     // seeding procedures; preview auth bakes the fixed test OTP the suite
     // signs in with.
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      [
+        "set -euo pipefail",
+        `rm -f ${authVitestRetryTelemetryFile}`,
+        `E2E_RETRY_TELEMETRY_FILE=${authVitestRetryTelemetryFile} pnpm test:e2e`,
+      ].join("; "),
+    ],
+    collectRetryTelemetry: async () => ({
+      retried: await readRetryTelemetryLane("auth vitest lane", () =>
+        readVitestRetryTelemetry(authVitestRetryTelemetryFile),
+      ),
+    }),
   },
   "streams-example-app": {
     slug: "streams-example-app",

@@ -59,6 +59,7 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 const OS_DEPLOY_LABEL = "apps/os";
+const OS_APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** Preview OS always runs its first-party integration proof against the
  * sibling dummy Petshop. Keep the formerly optional deployment setting from
@@ -124,7 +125,7 @@ export default async function deploy(
   } = {},
 ) {
   await deployApp({
-    appRoot: fileURLToPath(new URL("..", import.meta.url)),
+    appRoot: OS_APP_ROOT,
     appLabel: OS_DEPLOY_LABEL,
     envs,
     dopplerProject: "os",
@@ -134,7 +135,7 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
-    prepare: async (ctx, secretValues, credentials) => {
+    prepare: async (ctx, secretValues, _credentials) => {
       // These are permanent fail-closed invariants, not a migration path.
       // Omitted Wrangler secrets survive code uploads, so check the current
       // Worker before any sidecar or OS version can be deployed.
@@ -191,20 +192,26 @@ export default async function deploy(
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
 
-      // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER
+      // writeWranglerConfig is a build input, so it stays in the serial
+      // prepare phase. Vite calls the same write-if-changed generator again;
+      // both see the identical environment-specific config.
+      writeWranglerConfig();
+    },
+    prepareForUpload: async (ctx, _secretValues, credentials) => {
+      // The sidecars deploy before the main upload: the os worker's BUILDER/TYPECHECKER
       // service bindings are by name, and a binding to a not-yet-existing
       // script fails the deploy. They are independent of each other and of
-      // the queue/R2/container prerequisites, so all preparation runs in one
-      // parallel phase. Sidecars have no secrets and no vite build — wrangler
-      // bundles their entries directly (the toolchain wasm rides as a wasm
-      // module). Builder skew window: between this deploy and the os deploy
-      // (or if the os deploy fails), a bundler/schema-version bump means the
-      // os worker hashes the OLD key prefix while the builder writes the new
-      // one — the cache runs cold (correct output via by-value returns, every
-      // request rebuilds) until the os deploy lands. If "cache never hits"
-      // appears mid-rollout, finish the deploy.
-      writeWranglerConfig();
-      const appRoot = fileURLToPath(new URL("..", import.meta.url));
+      // the queue/R2/container prerequisites. None writes Vite inputs, so the
+      // shared deploy pipeline overlaps this measured ~10s remote phase with
+      // the main build, then joins both before upload. Sidecars have no
+      // secrets and no Vite build — wrangler bundles their entries directly
+      // (the toolchain wasm rides as a wasm module). Builder skew window:
+      // between this deploy and the os deploy (or if the os deploy fails), a
+      // bundler/schema-version bump means the os worker hashes the OLD key
+      // prefix while the builder writes the new one — the cache runs cold
+      // (correct output via by-value returns, every request rebuilds) until
+      // the os deploy lands. If "cache never hits" appears mid-rollout,
+      // finish the deploy.
       await Promise.all([
         // Wrangler validates these bindings at upload, so every resource must
         // exist before deployApp uploads the main OS version.
@@ -234,7 +241,7 @@ export default async function deploy(
             runAsync(
               "pnpm",
               ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name],
-              { cwd: appRoot, env: credentials },
+              { cwd: OS_APP_ROOT, env: credentials },
             ),
           ),
         ),

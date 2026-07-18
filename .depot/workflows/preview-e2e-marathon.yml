@@ -1,5 +1,5 @@
 # Runs the preview e2e lane N times CONSECUTIVELY on Depot CI infra against a
-# leased preview slot, to prove the lane is stable (the goal: 50 green in a
+# leased preview slot, to prove the lane is stable (the goal: 25 clean in a
 # row). One Depot job: deploy the slot once (flake-hunt-loop.sh's preflight),
 # optionally warm it, then loop `pnpm preview test`, FAILING FAST on the first
 # failure. This is the same lane cloudflare-previews.yml runs once per push —
@@ -25,20 +25,20 @@ on:
       pull-request-number:
         description: PR whose preview slot to marathon
         required: false
-        default: "1850"
+        default: "2116"
       runs:
-        description: consecutive green runs required
+        description: consecutive clean sub-3-minute runs required
         required: false
-        # 15, not 50: every lane run drives ~15 gpt-5.5 agent turns at ~34k
-        # prompt tokens each — a 50-run marathon materially dents the Workers
-        # AI daily spend cap (the 2026-07-10 2041 fleet outage was exactly
-        # that). 15 consecutive greens is strong stability evidence; run it
-        # twice on different days for more.
-        default: "15"
+        # Every lane run drives real agent turns, so this is an explicit,
+        # on-demand cost. Twenty-five is the acceptance bar for this incident;
+        # do not silently lower it or split the streak across heads.
+        default: "25"
       warmup-runs:
         description: uncounted priming runs before counting starts
         required: false
-        default: "1"
+        # A freshly deployed/cold slot is part of the contract. Warmups remain
+        # available for diagnosis, but acceptance starts cold by default.
+        default: "0"
 
 jobs:
   marathon:
@@ -46,7 +46,7 @@ jobs:
     # 8-core mirrors cloudflare-previews.yml: the lane is network-bound (waiting
     # on the deployed slot), not CPU-bound.
     runs-on: depot-ubuntu-24.04-8
-    # A 50-run marathon of a ~2-4 min lane is a couple of hours; give it real
+    # A 25-run marathon of a ~2-4 min lane is over an hour; give it real
     # headroom above that but bounded (a wedged run is caught by the loop's own
     # fail-fast watchdog long before this).
     timeout-minutes: 300
@@ -72,9 +72,9 @@ jobs:
           # flake-hunt-loop.sh's `pnpm preview deploy/test` default their token
           # to GITHUB_TOKEN (resolveGithubToken in preview.ts).
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          PR_NUMBER: ${{ inputs.pull-request-number || '1850' }}
-          RUNS: ${{ inputs.runs || '15' }}
-          WARMUP_RUNS: ${{ inputs.warmup-runs || '1' }}
+          PR_NUMBER: ${{ inputs.pull-request-number || '2116' }}
+          RUNS: ${{ inputs.runs || '25' }}
+          WARMUP_RUNS: ${{ inputs.warmup-runs || '0' }}
           LOG_DIR: /tmp/marathon
         # flake-hunt-loop.sh: preflight full-fleet deploy, warm, then loop the
         # lane, exiting non-zero (failing the job) on the first FAIL / SKIP /

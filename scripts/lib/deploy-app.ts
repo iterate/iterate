@@ -55,7 +55,8 @@ export async function runTimedDeployPhase<T>(
  *
  *   resolve --env → assert resources provisioned → collect secrets →
  *   app-specific prepare (migrations, seeds, config preflight) →
- *   build → deploy code+secrets in one version → smoke-probe → ✅
+ *   build + independent upload prerequisites →
+ *   deploy code+secrets in one version → smoke-probe → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
@@ -109,6 +110,17 @@ export async function deployApp<E extends DeployableEnv>(input: {
     secretValues: Record<string, string>,
     credentials: Record<string, string>,
   ) => Promise<void> | void;
+  /**
+   * Remote prerequisites that do not affect the build, but must finish before
+   * the main upload (resource ensures, independently deployed sidecars).
+   * Runs concurrently with a Vite build to keep control-plane latency off the
+   * critical path. Anything that writes build inputs belongs in `prepare`.
+   */
+  prepareForUpload?: (
+    ctx: EnvContext<E>,
+    secretValues: Record<string, string>,
+    credentials: Record<string, string>,
+  ) => Promise<void> | void;
   /** Runs after a healthy deploy (e.g. auth's OAuth client seeding). */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
   smokes: (env: E) => SmokeProbe[];
@@ -140,19 +152,30 @@ export async function deployApp<E extends DeployableEnv>(input: {
     );
   }
 
+  const prepareForUpload = input.prepareForUpload;
+  const uploadPreparation = prepareForUpload
+    ? runTimedDeployPhase(input.appLabel, "prepare for upload", () =>
+        prepareForUpload(ctx, secretValues, credentials),
+      )
+    : Promise.resolve();
+
   let builtConfig: string;
   let extraDeployArgs: string[] | undefined;
   if (input.build === "checked-in-config") {
+    await uploadPreparation;
     builtConfig = "wrangler.jsonc";
     extraDeployArgs = ["--env", ctx.name];
   } else {
-    await runTimedDeployPhase(input.appLabel, "build", () => {
-      rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
-      run("pnpm", ["exec", "vite", "build"], {
-        cwd: input.appRoot,
-        env: { CLOUDFLARE_ENV: ctx.name, ...input.buildEnv?.(ctx) },
-      });
-    });
+    await Promise.all([
+      runTimedDeployPhase(input.appLabel, "build", () => {
+        rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
+        run("pnpm", ["exec", "vite", "build"], {
+          cwd: input.appRoot,
+          env: { CLOUDFLARE_ENV: ctx.name, ...input.buildEnv?.(ctx) },
+        });
+      }),
+      uploadPreparation,
+    ]);
     builtConfig = findBuiltWranglerConfig(input.appRoot);
   }
 

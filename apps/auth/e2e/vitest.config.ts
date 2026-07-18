@@ -1,5 +1,9 @@
 import { defineConfig } from "vitest/config";
-import { E2E_CI_RETRIES, E2E_TEST_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-policy";
+import {
+  E2E_CI_RETRIES,
+  E2E_TEST_TIMEOUT_MS,
+  RetryTelemetryReporter,
+} from "@iterate-com/shared/test-support/e2e-policy";
 
 export default defineConfig({
   test: {
@@ -15,5 +19,8 @@ export default defineConfig({
     // object retry form (delay landed in 4.1). Fine here — like semaphore's,
     // this suite is a plain HTTP contract check against a live worker.
     retry: process.env.CI ? E2E_CI_RETRIES : 0,
+    // A passed-after-retry test is still a failure signal. Preview CI supplies
+    // E2E_RETRY_TELEMETRY_FILE and folds this reporter's JSON into the PR.
+    reporters: ["default", new RetryTelemetryReporter()],
   },
 });

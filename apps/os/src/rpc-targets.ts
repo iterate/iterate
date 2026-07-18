@@ -187,6 +187,7 @@ import {
   rethrowStreamUnavailable,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
+import { createSandboxWithLifecycleRetry } from "./domains/sandboxes/create-lifecycle-retry.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -1717,13 +1718,27 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
               value ?? undefined,
             ]),
           );
-    return await this.#stub(path, instanceType).create({
+    const createInput = {
       env: claimedEnv,
       instanceType,
       keepAlive: parsedClaim.payload.keepAlive,
       path,
       projectId: this.props.projectId,
       sleepAfter: parsedClaim.payload.sleepAfter,
+    };
+    return await createSandboxWithLifecycleRetry({
+      create: async () => await this.#stub(path, instanceType).create(createInput),
+      onRetry: ({ attempt, error, maxAttempts }) => {
+        console.info("sandbox create retrying after Durable Object lifecycle reset", {
+          attempt,
+          error,
+          maxAttempts,
+          path,
+          projectId: this.props.projectId,
+        });
+      },
+      resume: async () =>
+        await this.#stub(path, instanceType).resumeCreateAfterLifecycleReset(createInput),
     });
   }
 

@@ -134,7 +134,7 @@ for (const example of MATRIX_EXAMPLES) {
       // ExampleRunContext.attemptSalt.
       const attemptSalt = crypto.randomUUID().slice(0, 8);
       try {
-        for (const runtime of runtimes) {
+        const runRuntime = async (runtime: (typeof runtimes)[number]) => {
           const ctx = {
             attemptSalt,
             marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
@@ -146,6 +146,7 @@ for (const example of MATRIX_EXAMPLES) {
               code: example.code,
               id: example.id,
               projectId,
+              timeoutMs: exampleCase.completionTimeoutMs ?? 90_000,
               vars,
             });
             exampleCase.assert(result, ctx, expect);
@@ -157,6 +158,13 @@ for (const example of MATRIX_EXAMPLES) {
               { cause: error },
             );
           }
+        };
+        if (exampleCase.runtimeExecution === "serial") {
+          for (const runtime of runtimes) {
+            await runRuntime(runtime);
+          }
+        } else {
+          await Promise.all(runtimes.map(runRuntime));
         }
       } finally {
         // In a FINALLY: the failed attempts are precisely the ones whose

@@ -536,6 +536,59 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   /**
+   * Resume the same catalogue claim after the collection observed an exact
+   * Durable Object lifecycle rejection. Unlike public create semantics, a
+   * completed record is success here: the first incarnation may have durably
+   * finished and lost only its acknowledgement during a rollout reset.
+   * Pending and absent records re-enter create's idempotent birth sequence.
+   */
+  async resumeCreateAfterLifecycleReset(input: {
+    env?: Record<string, string | undefined>;
+    instanceType: SandboxInstanceType;
+    keepAlive?: boolean;
+    path: string;
+    projectId: string;
+    sleepAfter?: string | number;
+  }): Promise<{ createdAt: string; instanceType: SandboxInstanceType; path: string }> {
+    if (input.instanceType !== this.#instanceType()) {
+      throw new Error(
+        'sandbox instance-type mismatch: this namespace hosts "' +
+          this.#instanceType() +
+          '" sandboxes, got "' +
+          input.instanceType +
+          '"',
+      );
+    }
+    if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
+    this.#ensureIdentity({ path: input.path, projectId: input.projectId });
+    const existing = this.#record();
+    if (existing?.destroyedAt !== undefined) {
+      throw new Error(
+        'sandbox "' +
+          input.path +
+          '" was destroyed and its name cannot be reused — create one with a new name',
+      );
+    }
+    if (existing?.instanceType !== undefined && existing.instanceType !== input.instanceType) {
+      throw new Error(
+        'sandbox instance-type mismatch while resuming creation: expected "' +
+          existing.instanceType +
+          '", got "' +
+          input.instanceType +
+          '"',
+      );
+    }
+    if (existing !== undefined && existing.creationPending !== true) {
+      return {
+        createdAt: existing.createdAt,
+        instanceType: existing.instanceType,
+        path: this.#identity().path,
+      };
+    }
+    return await this.create(input);
+  }
+
+  /**
    * What `itx.sandboxes.get(path)` awaits before handing out the stub:
    * getting a sandbox never creates one, so a path that was never created (or
    * was destroyed) is refused here. Also verifies identity — see

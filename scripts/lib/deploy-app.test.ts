@@ -1,8 +1,38 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runTimedDeployPhase } from "./deploy-app.ts";
+import { deployApp, runTimedDeployPhase } from "./deploy-app.ts";
+
+const mocks = vi.hoisted(() => ({
+  assertProvisioned: vi.fn(),
+  collectSecrets: vi.fn(() => ({})),
+  deployWithSecrets: vi.fn(async () => undefined),
+  findBuiltWranglerConfig: vi.fn(() => "/app/dist/wrangler.json"),
+  resolveEnvContext: vi.fn(async () => ({
+    cf: vi.fn(),
+    cfV4: vi.fn(),
+    env: { cloudflareAccountId: "account", dopplerConfig: "preview_1" },
+    name: "preview_1",
+    secrets: { CLOUDFLARE_API_TOKEN: "token" },
+  })),
+  run: vi.fn(),
+  smoke: vi.fn(async () => undefined),
+}));
+
+vi.mock("./deploy-helpers.ts", () => ({
+  collectSecrets: mocks.collectSecrets,
+  deployWithSecrets: mocks.deployWithSecrets,
+  findBuiltWranglerConfig: mocks.findBuiltWranglerConfig,
+  run: mocks.run,
+  smoke: mocks.smoke,
+}));
+
+vi.mock("./env-context.ts", () => ({
+  assertProvisioned: mocks.assertProvisioned,
+  resolveEnvContext: mocks.resolveEnvContext,
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.clearAllMocks();
 });
 
 describe("runTimedDeployPhase", () => {
@@ -32,5 +62,50 @@ describe("runTimedDeployPhase", () => {
     expect(log.mock.calls.at(-1)?.[0]).toMatch(
       /^\[deploy:apps\/example\] phase finish: upload \(\d+\.\d+s, failed\)$/,
     );
+  });
+});
+
+describe("deployApp upload preparation", () => {
+  it("starts independent remote preparation before build and joins both before upload", async () => {
+    const events: string[] = [];
+    const preparation = Promise.withResolvers<void>();
+    mocks.run.mockImplementation(() => {
+      events.push("build");
+    });
+    mocks.deployWithSecrets.mockImplementation(async () => {
+      events.push("upload");
+    });
+
+    const deployment = deployApp({
+      appLabel: "apps/example",
+      appRoot: "/app",
+      dopplerProject: "example",
+      env: "preview_1",
+      envs: {
+        preview_1: { cloudflareAccountId: "account", dopplerConfig: "preview_1" },
+      },
+      prepareForUpload: async () => {
+        events.push("prepare-start");
+        await preparation.promise;
+        events.push("prepare-finish");
+      },
+      servingUrl: () => "https://example.test",
+      smokes: () => [],
+      workerName: () => "example-preview-1",
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toEqual(["prepare-start", "build"]);
+    });
+    expect(mocks.deployWithSecrets).not.toHaveBeenCalled();
+
+    preparation.resolve();
+    await deployment;
+
+    expect(events).toEqual(["prepare-start", "build", "prepare-finish", "upload"]);
+    expect(mocks.run).toHaveBeenCalledWith("pnpm", ["exec", "vite", "build"], {
+      cwd: "/app",
+      env: { CLOUDFLARE_ENV: "preview_1" },
+    });
   });
 });

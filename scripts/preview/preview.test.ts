@@ -155,8 +155,8 @@ describe("preview workflow scope", () => {
       appPath: "apps/auth",
       previewReadyUrlPath: "/api/auth/ok",
       previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-      previewTestCommandArgs: ["pnpm", "test:e2e"],
     });
+    expect(cloudflarePreviewApps.auth.previewTestCommandArgs.join(" ")).toContain("pnpm test:e2e");
   });
 
   test("runs the dummy-petshop live e2e against its deployed preview", async () => {

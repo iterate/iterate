@@ -11,8 +11,8 @@ import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 const videoMode = process.env.VIDEO_MODE === "1";
 // Preview is the latency-sensitive full suite. Give its deliberately long
 // reconnect/resume proofs their own first project so Playwright queues those
-// test groups before the ordinary web catalogue and overlaps their fixed
-// 25-35s probe windows with useful work. Outside preview, keep the public
+// test groups before the ordinary web catalogue and overlaps their real
+// outage/recovery windows with useful work. Outside preview, keep the public
 // `web` / `mobile` project interface unchanged.
 const previewSlowFirst = process.env.PLAYWRIGHT_PREVIEW_SLOW_FIRST === "1";
 const resumeAfterSuspendSpec = "**/stream-resume-after-suspend.spec.ts";
@@ -49,8 +49,8 @@ export default defineConfig({
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
   // Twelve is this suite's explicit deployed-slot share. Preview CI overlaps
-  // it with Vitest's sixteen in-flight tests, one TUI workflow, and the
-  // one-project onboarding smoke (aggregate peak 30). The trace audit found no
+  // it with Vitest's 24 in-flight tests, one TUI workflow, and the one-project
+  // onboarding smoke (aggregate peak 38). The trace audit found no
   // capacity rejection under the overlapping lanes; lane timing and retry
   // telemetry keep any future saturation visible.
   workers: process.env.CI ? 12 : 1,

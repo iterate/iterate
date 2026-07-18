@@ -9,6 +9,14 @@ PR_NUMBER="${PR_NUMBER:-1664}"
 RUNS="${RUNS:-5}"
 LOG_DIR="${LOG_DIR:-/tmp/flake-hunt}"
 START_AT="${START_AT:-1}"
+MAX_CLEAN_RUN_SECS="${MAX_CLEAN_RUN_SECS:-180}"
+EXPECTED_HEAD_SHA="${EXPECTED_HEAD_SHA:-$(git rev-parse HEAD)}"
+
+if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "EXPECTED_HEAD_SHA must be a full lowercase git sha; got $EXPECTED_HEAD_SHA" >&2
+  exit 64
+fi
+EXPECTED_SHORT_SHA="${EXPECTED_HEAD_SHA:0:7}"
 
 # macOS idle-sleeps ~15 minutes into an unattended loop; a sleeping laptop
 # freezes tests mid-flight (14-16 minute "hangs", dropped WebSockets) that
@@ -31,6 +39,11 @@ fi
 export CI=true
 
 mkdir -p "$LOG_DIR"
+LEDGER_FILE="${LEDGER_FILE:-$LOG_DIR/run-ledger.tsv}"
+if [ ! -f "$LEDGER_FILE" ]; then
+  printf 'attempt\trun\thead\tstarted_at\tfinished_at\tduration_secs\texit_code\tfull_fleet\tretry_clean\tstatus\tlog\n' >"$LEDGER_FILE"
+fi
+echo "acceptance contract: head=$EXPECTED_HEAD_SHA, max=${MAX_CLEAN_RUN_SECS}s, ledger=$LEDGER_FILE"
 # Watchdog for one whole run — it fails, it never retries, per the policy
 # (docs/testing.md#retries-and-timeouts). Sized to ~2x a healthy full-fleet
 # run (a few minutes), deliberately NOT to the worst-case retry stack: it MAY
@@ -59,6 +72,10 @@ deploy_full_fleet() {
     echo "$label: an app failed to deploy — see $dlog"
     return 1
   fi
+  if ! grep -Fq "[preview] deploy for PR #$PR_NUMBER (head $EXPECTED_SHORT_SHA)" "$dlog"; then
+    echo "$label: deployed output did not prove expected head $EXPECTED_HEAD_SHA — see $dlog"
+    return 1
+  fi
   echo "$label: deploy OK"
 }
 
@@ -70,7 +87,7 @@ deploy_full_fleet() {
 # changed apps and every run trips the full-fleet guard (exit 3) — or worse,
 # would count a partial lane as green if that guard were absent. `--all-apps`
 # forces the full fleet regardless of the diff, which reunifies the head.
-# So before a fresh marathon (START_AT=1) we run one deploy and assert all four
+# So before a fresh marathon (START_AT=1) we run one deploy and assert all five
 # apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
 # bypass (e.g. resuming a marathon whose fleet is already unified).
 if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
@@ -134,9 +151,12 @@ fi
 
 i="$START_AT"
 last_run=$((START_AT + RUNS - 1))
+attempt=0
 while [ "$i" -le "$last_run" ]; do
+  attempt=$((attempt + 1))
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
-  started=$(date -u +%H:%M:%S)
+  started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  started_epoch=$(date +%s)
   doppler run --project _shared --config prd -- pnpm preview test \
     --pull-request-number "$PR_NUMBER" >"$log" 2>&1 &
   run_pid=$!
@@ -160,7 +180,32 @@ while [ "$i" -le "$last_run" ]; do
   exit_code=$?
   kill "$watchdog_pid" 2>/dev/null
   wait "$watchdog_pid" 2>/dev/null
-  finished=$(date -u +%H:%M:%S)
+  finished_epoch=$(date +%s)
+  finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  duration_secs=$((finished_epoch - started_epoch))
+  full_fleet=no
+  retry_clean=yes
+  if grep -qiE '\[retry-telemetry\]|Preview e2e retries|retry telemetry (collection failed|unreadable)' "$log"; then
+    retry_clean=no
+  fi
+  record_run() {
+    local status=$1 recorded_log=${2:-$log}
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$attempt" "$i" "$EXPECTED_HEAD_SHA" "$started" "$finished" "$duration_secs" \
+      "$exit_code" "$full_fleet" "$retry_clean" "$status" "$recorded_log" >>"$LEDGER_FILE"
+  }
+  # "no longer belongs to" is the ownership-guard refusal from preview.ts
+  # (describeLostSlotOwnership). No tests ran, so this physical invocation is
+  # auditable but uncounted; reclaim and repeat the same logical run number.
+  if grep -q "no longer belongs to" "$log"; then
+    stolen_log="$LOG_DIR/run-$(printf '%03d' "$i")-slot-stolen-$((slot_reclaims + 1)).log"
+    mv "$log" "$stolen_log"
+    record_run "SLOT_STOLEN_UNCOUNTED" "$stolen_log"
+    echo "run $i: SLOT CLAIMED EXTERNALLY — re-claiming a slot and re-running run $i uncounted (${duration_secs}s, $started-$finished) $stolen_log"
+    if reclaim_and_warm; then continue; fi
+    echo "run $i: FAIL — slot re-claim budget (MAX_SLOT_RECLAIMS=$MAX_SLOT_RECLAIMS) exhausted"
+    exit 1
+  fi
   # `preview test` exits 0 but skips (no app recorded at this head, nothing
   # deployed) without running anything — a skip must not count as a green
   # run. A stolen slot does NOT skip: preview.ts refuses with a non-zero exit
@@ -168,7 +213,13 @@ while [ "$i" -le "$last_run" ]; do
   # a unit test on describeLostSlotOwnership), which the FAIL branch below
   # surfaces.
   if grep -q "skipped: true" "$log"; then
-    echo "run $i: SKIPPED — not a real run ($started-$finished UTC) $log"
+    record_run "SKIPPED"
+    echo "run $i: SKIPPED — not a real run (${duration_secs}s, $started-$finished) $log"
+    exit 2
+  fi
+  if ! grep -Fq "[preview] test for PR #$PR_NUMBER (head $EXPECTED_SHORT_SHA)" "$log"; then
+    record_run "HEAD_MISMATCH"
+    echo "run $i: HEAD MISMATCH — expected immutable head $EXPECTED_HEAD_SHA (${duration_secs}s) $log"
     exit 2
   fi
   # A push touching one app leaves the others' recorded states at an older
@@ -179,28 +230,32 @@ while [ "$i" -le "$last_run" ]; do
   # full-fleet green run as PARTIAL).
   testable_line=$(grep -m1 "testable apps:" "$log" || true)
   missing=""
-  for app in os semaphore auth streams-example-app; do
+  for app in os semaphore auth streams-example-app dummy-petshop; do
     case "$testable_line" in *"$app"*) ;; *) missing="$missing $app" ;; esac
   done
   if [ -z "$testable_line" ] || [ -n "$missing" ]; then
-    echo "run $i: PARTIAL — not all apps testable (missing:${missing:- unknown}) ($started-$finished UTC) $log"
+    record_run "PARTIAL"
+    echo "run $i: PARTIAL — not all apps testable (missing:${missing:- unknown}) (${duration_secs}s, $started-$finished) $log"
     exit 3
   fi
+  full_fleet=yes
   if [ "$exit_code" -ne 0 ]; then
-    # "no longer belongs to" is the ownership-guard refusal from preview.ts
-    # (describeLostSlotOwnership) — grep for the dialed-by-name string
-    # there before rewording it.
-    if grep -q "no longer belongs to" "$log"; then
-      echo "run $i: SLOT CLAIMED EXTERNALLY — re-claiming a slot and re-running run $i uncounted ($started-$finished UTC) $log"
-      mv "$log" "$LOG_DIR/run-$(printf '%03d' "$i")-slot-stolen-$((slot_reclaims + 1)).log"
-      if reclaim_and_warm; then continue; fi
-      echo "run $i: FAIL — slot re-claim budget (MAX_SLOT_RECLAIMS=$MAX_SLOT_RECLAIMS) exhausted"
-      exit 1
-    fi
-    echo "run $i: FAIL exit=$exit_code ($started-$finished UTC) $log"
+    record_run "FAILED"
+    echo "run $i: FAIL exit=$exit_code (${duration_secs}s, $started-$finished) $log"
     exit 1
   fi
-  echo "run $i: PASS ($started-$finished UTC) $log"
+  if [ "$retry_clean" != yes ]; then
+    record_run "RETRY_TELEMETRY"
+    echo "run $i: FAIL — retry telemetry is not a clean run (${duration_secs}s) $log"
+    exit 5
+  fi
+  if [ "$duration_secs" -ge "$MAX_CLEAN_RUN_SECS" ]; then
+    record_run "TOO_SLOW"
+    echo "run $i: FAIL — ${duration_secs}s is not under ${MAX_CLEAN_RUN_SECS}s $log"
+    exit 6
+  fi
+  record_run "PASS"
+  echo "run $i: PASS (${duration_secs}s, $started-$finished) $log"
   i=$((i + 1))
 done
-echo "all $RUNS runs green"
+echo "all $RUNS runs clean, full-fleet, immutable-head, and under ${MAX_CLEAN_RUN_SECS}s (ledger: $LEDGER_FILE)"

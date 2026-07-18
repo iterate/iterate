@@ -127,8 +127,9 @@ export default defineConfig({
     // and the one-project onboarding smoke: aggregate peak 38. Experiment 5
     // cut Vitest from 210s to 138s at six workers; its only retry was a traced,
     // explicitly marked cold-build response rather than a capacity rejection.
-    // Experiment 6 then ran the aggregate peak of 30 with zero retries and no
-    // capacity failures. Experiment 7's one retry was a proven assertion race:
+    // Experiment 6 ran an aggregate peak of 30 with zero retries and no
+    // capacity failures; Experiments 8 and 10 ran the configured peak of 38.
+    // Experiment 7's one retry was a proven assertion race:
     // the test read history before an independently projected context event,
     // despite every service operation succeeding. Keep that load visible;
     // project reuse removes needless births, while fresh-project lifecycle

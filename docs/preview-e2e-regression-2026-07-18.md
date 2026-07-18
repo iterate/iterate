@@ -225,6 +225,31 @@ meet the sub-three-minute acceptance bar. The next run adds phase-level deploy
 timings before choosing between upload/control-plane work and test-fixture
 reuse; no lane will be serialized to mask the overrun.
 
+Experiment 11 added those deploy timings. It passed in **4m18s** only after
+three retries and therefore qualifies as neither a clean run nor an SLA run
+([Depot job `4cr9hswz8t`](https://depot.dev/orgs/0p91s0lz49/workflows/w0s3xj7hm6?job=4cr9hswz8t)).
+OS Vitest was the long pole at 160s. One catalogue runtime hit the old blanket
+120s matrix deadline, one project completed creation and then timed out writing
+its directory entry to KV, and one sandbox create crossed a Durable Object code
+update. There was still no project-create rejection or capacity signal. The OS
+deploy took 73.5s: resource/sidecar preparation consumed about 10s, the Vite
+build 8.6s, and upload plus Cloudflare reconciliation 37.9s. Those first two
+phases had been unnecessarily serial.
+
+The Experiment 12 candidate therefore preserves full parallelism and changes
+the measured contracts instead of protecting the preview from load. Remote
+resource/sidecar preparation overlaps the local build; independent catalogue
+runtimes run concurrently with their own named deadlines; only `sandbox-exec`
+is serial because its four variants intentionally lease one warm container.
+Sandbox create gets a bounded, lifecycle-reset-only resume path, fixed
+post-outage Playwright sleeps become condition waits, and auth/semaphore join
+the retry telemetry already emitted by OS, streams, and Playwright. Three
+mutation-heavy tests now use unique project identities. A shared mutable
+project pool is deliberately not introduced: the 176-create load probe was
+clean, while cross-test identity reuse has already produced stale-state flakes.
+If later evidence shows creation itself saturating, the safe reuse design is a
+bounded pool partitioned by test family, never one global project.
+
 That run also exposed an independent resource leak in slot handover. Reset took
 131.3s and deleted only 100 AI Search instances before its 90s deadline. The
 namespace still held 498 instances immediately after reset and 551 after the
@@ -550,10 +575,18 @@ observable.
   3m18s (OS deploy 77.8s; OS tests 92.8s; smoke 22s; TUI 18s; Vitest 75s;
   Playwright 87s). This is the first clean merged-main baseline, but it misses
   the SLA by 18s. All app lanes and OS sublanes remained parallel.
-- Next: instrument the OS deploy phases, remove the measured critical-path
-  waste, then start the 25-run clean sub-three-minute proof and the separate
-  15+ simultaneous preview-slot churn campaign. PR comments mirror each
-  experiment and result rather than rewriting history here.
+- 2026-07-18: experiment 11 passed in 4m18s only after three retries: one
+  blanket matrix timeout, one post-create project-directory KV timeout, and one
+  sandbox-create deployment reset. OS deploy instrumentation measured 10.1s
+  preparation, 8.6s build, and 37.9s upload/reconciliation; OS Vitest took
+  160s. This is not a qualifying run and still supplies no evidence of project
+  creation overload.
+- Next: run the parallel Experiment 12 candidate with overlapping deploy prep,
+  per-runtime deadlines, bounded sandbox-create recovery, condition-based
+  resume assertions, and complete retry telemetry. Once one full-fleet run is
+  clean and under three minutes, start the immutable-head 25-run proof, then
+  the separate 15+ simultaneous preview-slot churn campaign. PR comments mirror
+  each experiment and result rather than rewriting history here.
 
 <details>
 <summary>All 162 failed preview attempts</summary>

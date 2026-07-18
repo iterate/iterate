@@ -81,6 +81,11 @@ export type ExampleCase = {
    */
   completionTimeoutMs?: number;
   /**
+   * Runtimes are independent and run concurrently by default. Use serial only
+   * when they intentionally lease one exclusive external resource.
+   */
+  runtimeExecution?: "parallel" | "serial";
+  /**
    * Post-assertion teardown, run by every runner with a project-scoped itx.
    * For examples that create real slot-level resources (sandbox containers):
    * back-to-back e2e runs otherwise accumulate instances until Cloudflare's
@@ -299,6 +304,10 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // their watchdogs (2026-07-10 marathon j3tqdhncb6 run 2: one 5.1m boot
     // stalled the spec AND examples-matrix; the retry passed in 14.8s).
     completionTimeoutMs: 150_000,
+    // Four runtimes intentionally lease one warm container for this attempt.
+    // The sandbox is the bounded resource pool; serial access avoids four
+    // simultaneous cold boots without throttling any unrelated example.
+    runtimeExecution: "serial",
     vars: ({ attemptSalt }) => ({ sandboxName: `example-${attemptSalt}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });

@@ -14,7 +14,13 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "dynamic-worker-project" });
+  // This test rewrites the config repo and creates durable worker facets. A
+  // constant slug made repeat/marathon runs address an old project's durable
+  // state even though each create returned a new handle. Keep the lifecycle
+  // proof isolated instead of serializing unrelated project creation.
+  using project = itx.projects.create({
+    slug: `dynamic-worker-${crypto.randomUUID().slice(0, 8)}`,
+  });
   const description = await project.__describe();
 
   // The seeded root worker now routes via x-iterate-app (static homepage
@@ -246,7 +252,9 @@ test("deleting the main worker file makes the next project worker build fail", a
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "deleted-worker-source" });
+  using project = itx.projects.create({
+    slug: `deleted-worker-source-${crypto.randomUUID().slice(0, 8)}`,
+  });
   // The seeded root worker serves a static homepage; this warm-up only needs
   // proof the seeded worker.ts is live before we delete it.
   const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
@@ -517,7 +525,9 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "worker-capability-matrix" });
+  using project = itx.projects.create({
+    slug: `worker-capability-matrix-${crypto.randomUUID().slice(0, 8)}`,
+  });
   const { projectId } = await project.__describe();
   const agentPath = `/agents/worker-capability-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);

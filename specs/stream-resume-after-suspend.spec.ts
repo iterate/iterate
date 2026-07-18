@@ -21,12 +21,6 @@ const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
-// Two liveness-probe intervals (LIVENESS_PROBE_INTERVAL_MS = 10s): a clean
-// socket close is invisible to the runtime (the view's factory never wires
-// onConnectionStatusChange), so only the probe notices the dead session —
-// a rejection reconnects on the first probe, timeouts need two strikes.
-const PROBE_NOTICE_MS = 25_000;
-
 // Fresh streams' first post-subscribe delivery can stall and needs the ~10s
 // probe self-heal (see reactivity.spec.ts's DELIVERY_WAIT rationale), so the
 // healthy-path window is 30s, not the theoretical "instant".
@@ -102,11 +96,10 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
 
-  // Give the liveness probe two intervals to notice and enter its reconnect loop.
-  await page.waitForTimeout(PROBE_NOTICE_MS);
-  console.log("--- after probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
+  // Append while the browser is disconnected. Delivery of this durable
+  // backlog marker proves that the liveness probe noticed the dead session,
+  // re-dialed, re-subscribed, and caught up; polling finishes at actual
+  // recovery instead of paying a fixed probe sleep before starting the proof.
   const [marker] = await agent.stream.append({
     type: MARKER_EVENT_TYPE,
     payload: { marker: "after-socket-death" },
@@ -161,19 +154,16 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
   await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
   await page.context().setOffline(true);
+  // The admin connection is Node-side and remains live while Chromium is
+  // frozen/offline. Queue the proof during the outage so the thaw must replay
+  // backlog, rather than waiting for recovery and only then appending.
+  const [marker] = await agent.stream.append({
+    type: MARKER_EVENT_TYPE,
+    payload: { marker: "during-freeze" },
+  });
   await page.waitForTimeout(25_000);
   await page.context().setOffline(false);
   await cdp.send("Page.setWebLifecycleState", { state: "active" });
-
-  // Timers were suspended while frozen: the probe strikes only start now.
-  await page.waitForTimeout(PROBE_NOTICE_MS);
-  console.log("--- after thaw + probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
-  const [marker] = await agent.stream.append({
-    type: MARKER_EVENT_TYPE,
-    payload: { marker: "after-freeze" },
-  });
   const { delivered, snapshot } = await pollDelivered(
     page,
     keys,
@@ -255,14 +245,13 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     await page.getByRole("button", { name: "Send message" }).click();
   });
 
-  // Two probe intervals + two probe timeouts before the transport is evicted.
-  await page.waitForTimeout(PROBE_NOTICE_MS + 10_000);
-  console.log("--- after half-open probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
+  // Queue a durable marker immediately while the browser still holds the
+  // muted corpse. It cannot arrive until the two probe strikes evict that
+  // transport and a successor subscribes, so its delivery is the probe proof
+  // and its poll naturally waits exactly as long as recovery takes.
   const [marker] = await agent.stream.append({
     type: MARKER_EVENT_TYPE,
-    payload: { marker: "after-half-open" },
+    payload: { marker: "during-half-open" },
   });
   const { delivered, snapshot } = await pollDelivered(
     page,

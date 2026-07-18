@@ -39,17 +39,17 @@ seconds and run alongside OS.
   it does not order their deploys. Reserve `previewDeployAfter` for a real
   start-after constraint that cannot be represented by a readiness barrier.
 - **Parallelism is explicit per deployed slot, not accidental.** The OS
-  Vitest catalogue uses eight workers with at most two concurrent tests each;
+  Vitest catalogue uses twelve workers with at most two concurrent tests each;
   Playwright uses twelve fully-parallel workers. The create/onboarding smoke,
   TUI, Vitest, and Playwright overlap against one OS slot for an aggregate
-  configured peak of 30. Each sublane emits start/finish timing markers and
+  configured peak of 38. Each sublane emits start/finish timing markers and
   retry telemetry. A capacity failure must stay visible and be fixed;
   serializing independent suites made a clean OS phase exceed six minutes. The
-  four apps' independent preview suites also run concurrently
+  five apps' independent preview suites also run concurrently
   (`scripts/preview/preview.ts`).
 - **File-level parallelism plus bounded intra-file concurrency.** Every Vitest
   file either uses unique state or leases from a bounded family-owned project
-  pool, so files are independent (`fileParallelism`, `maxWorkers: 8`,
+  pool, so files are independent (`fileParallelism`, `maxWorkers: 12`,
   `sequence.concurrent`, `maxConcurrency: 2`, `retry: 1` in
   `apps/os/e2e/vitest.config.ts`). The deployed slot — not the Depot runner —
   is the bottleneck. The real speedup for the slow itx suite is splitting its

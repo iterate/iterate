@@ -77,6 +77,7 @@ describe("retries live in exactly one layer", () => {
       "playwright.config.ts",
       "apps/os/e2e/tui-test/tui-test.config.ts",
       "apps/os/e2e/vitest.config.ts",
+      "apps/auth/e2e/vitest.config.ts",
       "apps/semaphore/e2e/vitest.config.ts",
       "apps/streams-example-app/vitest.config.ts",
       "apps/streams-example-app/playwright.config.ts",
@@ -87,6 +88,26 @@ describe("retries live in exactly one layer", () => {
       expect(source, `${config} must not hardcode a CI retry count`).not.toMatch(
         /retr(?:y|ies):\s*(?:process\.env\.CI|ci)\s*\?\s*\d/,
       );
+    }
+  });
+
+  it("every retry-enabled Vitest preview lane reports absorbed retries", () => {
+    const configs = [
+      "apps/os/e2e/vitest.config.ts",
+      "apps/auth/e2e/vitest.config.ts",
+      "apps/semaphore/e2e/vitest.config.ts",
+      "apps/streams-example-app/vitest.config.ts",
+    ];
+    for (const config of configs) {
+      expect(readFileSync(resolve(repoRoot, config), "utf8"), config).toContain(
+        "RetryTelemetryReporter",
+      );
+    }
+
+    for (const app of ["auth", "semaphore"] as const) {
+      const runtime = cloudflarePreviewApps[app];
+      expect(runtime.previewTestCommandArgs.join(" "), app).toContain("E2E_RETRY_TELEMETRY_FILE");
+      expect(runtime.collectRetryTelemetry, app).toBeTypeOf("function");
     }
   });
 
@@ -132,6 +153,18 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(source).toContain(
       `RUN_TIMEOUT_SECS="\${RUN_TIMEOUT_SECS:-${PREVIEW_RUN_WATCHDOG_SECS}}"`,
     );
+  });
+
+  it("makes marathon acceptance immutable, retry-clean, full-fleet, and sub-three-minute", () => {
+    const source = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
+    expect(source).toContain('MAX_CLEAN_RUN_SECS="${MAX_CLEAN_RUN_SECS:-180}"');
+    expect(source).toContain('EXPECTED_HEAD_SHA="${EXPECTED_HEAD_SHA:-$(git rev-parse HEAD)}"');
+    expect(source).toContain("[preview] test for PR #$PR_NUMBER (head $EXPECTED_SHORT_SHA)");
+    expect(source).toContain("run-ledger.tsv");
+    expect(source).toContain("\\[retry-telemetry\\]|");
+    for (const app of ["os", "semaphore", "auth", "streams-example-app", "dummy-petshop"]) {
+      expect(source).toContain(app);
+    }
   });
 });
 

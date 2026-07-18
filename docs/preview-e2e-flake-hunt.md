@@ -5,9 +5,12 @@
 > retry telemetry) lives in [testing.md → Retries and
 > timeouts](testing.md#retries-and-timeouts).
 
-Goal: run the full preview e2e lane against a real preview environment 50
-times in a row without a single flake, fixing and documenting every failure
-encountered along the way.
+Historical goal: run the full preview e2e lane against a real preview
+environment 50 times in a row without a single flake, fixing and documenting
+every failure encountered along the way. Round 5 has a stricter current bar:
+25 consecutive full-fleet runs on one immutable head, each under three
+minutes and with zero absorbed retries, followed by explicit 15+-PR preview
+slot churn/contention proof.
 
 Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
 Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
@@ -28,6 +31,102 @@ sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
 launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml`.
 Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
 bar is measured on Depot.
+
+## Round 5 (2026-07-17/18, PR #2116)
+
+### Contract
+
+The incident started with preview e2e taking more than ten minutes and
+failing often. A green check is no longer enough. Acceptance requires:
+
+- every independent app lane and every safe in-app runtime lane starts in
+  parallel;
+- one complete deploy + full-fleet test check is under three minutes;
+- 25 consecutive full-fleet test runs use the exact same committed head,
+  each finishes under 180 seconds, and none consumes a Vitest/Playwright
+  retry;
+- a separate campaign proves that at least 15 simultaneously eligible PRs,
+  including slot loss/reclaim churn, cannot cross-contaminate a run.
+
+scripts/preview/flake-hunt-loop.sh now writes run-ledger.tsv and rejects
+partial fleets, head drift, skips, absorbed-retry telemetry, and runs at or
+over 180 seconds. A stolen slot is recorded as an uncounted physical
+invocation; the same logical run number is repeated after a bounded reclaim.
+
+### Experiments
+
+| Experiment | Depot result | Peak test concurrency | Outcome                                                                                           |
+| ---------- | -----------: | --------------------: | ------------------------------------------------------------------------------------------------- |
+| 1          |         8m22 |                    17 | Regression baseline: the app lanes and OS sub-lanes had been serialized.                          |
+| 2          |         5m28 |                    17 | Parallel app deploys; 176 project creates all succeeded (median 5.972s, p95 7.266s, max 11.207s). |
+| 3          |         6m44 |                    17 | Exact Artifacts failure classification; unrelated latency remained.                               |
+| 4          |         5m42 |                    17 | Bounded shared/exclusive project pools introduced where fixture state permits reuse.              |
+| 5          |         4m27 |                    17 | Removed more serial barriers.                                                                     |
+| 6          |         3m50 |                    30 | Full fleet, zero retries.                                                                         |
+| 7          |         3m32 |                    30 | Full fleet; one reflection retry subsequently fixed.                                              |
+| 8          |         3m27 |                    38 | Full fleet; four retries exposed instead of being silent.                                         |
+| 9          |         4m37 |                    38 | Deterministic public stream-offset assertion was wrong by two; not load.                          |
+| 10         |         3m18 |                    38 | Full fleet, zero retries. OS test 92.8s, deploy 77.8s.                                            |
+| 11         |         4m18 |                    38 | Check green only by absorbing three retries; does not qualify.                                    |
+
+Experiment 11 (head a2d850761, Depot job 4cr9hswz8t) is the most useful
+failure sample:
+
+- the catalogue dynamic-worker-stateless example exhausted a blanket
+  120-second matrix timeout, then passed in about 11 seconds on retry;
+- project directory priming hit its client-side KV write deadline twice
+  (10 seconds per attempt);
+- sandbox creation was interrupted by Durable Object code rollout and passed
+  on the test retry;
+- OS Vitest therefore took 160 seconds. Playwright took 88 seconds and OS
+  deploy took 73.5 seconds.
+
+The deploy trace split the OS path into about 10 seconds of preparation,
+8.6 seconds of Vite build, and 37.9 seconds of main upload/reconciliation.
+Resource ensures plus the builder/typechecker sidecars are independent of the
+Vite build, so the candidate overlaps them and joins both before upload.
+
+### Project creation and reuse finding
+
+The data does not support a preview-overload explanation. Experiment 2 made
+176 creates successfully under load, and the clean Experiment 10 ran 38 test
+operations concurrently. The Experiment 11 project failure was the
+PROJECT_DIRECTORY KV client's bounded write deadline, not a project-create
+capacity rejection.
+
+Reuse is still valuable where ownership is explicit:
+
+- the catalogue matrix creates and bakes one project per run, then all
+  examples reuse it with per-runtime markers;
+- stateful test families use one-project-per-family fixtures;
+- mutation-heavy families use concurrency-sized exclusive project pools.
+
+A global mutable project would replace create traffic with state collisions
+and stale Durable Object identity. Constant slugs in mutation tests are also
+not reuse: they can repoint the slug directory while old durable state still
+exists. Those tests use unique identities instead.
+
+### Candidate after Experiment 11
+
+- auth and semaphore now emit the same retry telemetry as the other Vitest
+  lanes; compatibility was exercised against their pinned Vitest 4.0.15;
+- example runtimes execute concurrently by default, with a named per-runtime
+  deadline. The CLI process is killed on timeout. sandbox-exec is the one
+  explicit serial exception because its four runtimes intentionally lease
+  one warm container;
+- sandbox create has a three-attempt operation-level lifecycle-reset repair:
+  the first create stays strict, while only an exact workerd lifecycle flag
+  may resume the same idempotent catalogue claim. Application errors and
+  duplicate creates are never retried;
+- the long stream-resume browser probes poll actual recovery instead of
+  waiting an additional fixed 25 or 35 seconds after the outage condition is
+  already established;
+- OS remote upload prerequisites overlap the Vite build;
+- the full marathon default is 25 cold-start runs on one immutable head.
+
+The candidate is locally typechecked, formatted, linted, and covered by the
+focused deploy, retry-policy, preview-orchestration, and sandbox-lifecycle
+tests. Live Experiment 12 and both acceptance campaigns remain pending.
 
 ## Round 4 (2026-07-13/14, PR #1938)
 
