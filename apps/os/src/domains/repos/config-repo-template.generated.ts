@@ -419,7 +419,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  RouterProvider,\n" +
       "} from \"@tanstack/react-router\";\n" +
       "import { renderToString } from \"react-dom/server\";\n" +
-      "import { IterateWorkerEntrypoint, type ProjectAuthActor } from \"iterate/sdk\";\n" +
+      "import { IterateWorkerEntrypoint } from \"iterate/sdk\";\n" +
       "\n" +
       "// A tiny server-rendered TanStack + React app behind project-member auth,\n" +
       "// served at tanstack--<project>.<base>. Every request builds a router and\n" +
@@ -435,7 +435,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// TanStack `Register` (the OS dashboard's router, in the repo this template\n" +
       "// typechecks inside), and without client-side routing `Link` renders an\n" +
       "// anchor anyway.\n" +
-      "function buildRouter(input: { actor: ProjectAuthActor; pathname: string; projectId: string }) {\n" +
+      "function buildRouter(input: { pathname: string; projectId: string; projectName: string }) {\n" +
       "  const rootRoute = createRootRoute({\n" +
       "    component: () => (\n" +
       "      <main>\n" +
@@ -453,8 +453,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    component: () => (\n" +
       "      <section>\n" +
       "        <p>\n" +
-      "          Signed in as <strong>{input.actor.userId}</strong> on project{\" \"}\n" +
-      "          <code>{input.projectId}</code>.\n" +
+      "          Serving project <strong>{input.projectName}</strong> (<code>{input.projectId}</code>) to a\n" +
+      "          signed-in member.\n" +
       "        </p>\n" +
       "        <p>This page is React, routed by TanStack Router and rendered in your project worker.</p>\n" +
       "      </section>\n" +
@@ -480,24 +480,29 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "// A project-member-only SSR app. The auth partial owns login/callback/logout\n" +
       "// exactly as in InternalApp (worker.ts); a null result means this request is\n" +
-      "// a current project member, whose actor the page renders.\n" +
+      "// a current project member. WHO the member is deliberately stays out of the\n" +
+      "// page lane: `auth.authenticate` is the explicit exchange for an app's\n" +
+      "// Cap'n Web root and requires a browser handshake's Origin header, which\n" +
+      "// top-level GET navigations never send — see InternalApp's /api for that\n" +
+      "// pattern.\n" +
       "export class TanstackApp extends IterateWorkerEntrypoint {\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    using itx = await this.env.ITX.get();\n" +
       "    const gate = itx.auth.get({ policy: \"project-member\" });\n" +
       "    const authResponse = await gate.fetch(request);\n" +
       "    if (authResponse) return authResponse;\n" +
-      "    const [actor, identity] = await Promise.all([\n" +
-      "      gate.authenticate(request, { type: \"from-server-cookie\" }),\n" +
-      "      itx.identity(),\n" +
-      "    ]);\n" +
+      "    const identity = await itx.identity();\n" +
       "\n" +
       "    const url = new URL(request.url);\n" +
       "    const prefix = request.headers.get(\"x-iterate-url-prefix\") ?? \"\";\n" +
       "    const pathname = url.pathname.startsWith(prefix)\n" +
       "      ? url.pathname.slice(prefix.length) || \"/\"\n" +
       "      : url.pathname;\n" +
-      "    const router = buildRouter({ actor, pathname, projectId: identity.projectId });\n" +
+      "    const router = buildRouter({\n" +
+      "      pathname,\n" +
+      "      projectId: identity.projectId,\n" +
+      "      projectName: identity.name,\n" +
+      "    });\n" +
       "    await router.load();\n" +
       "\n" +
       "    const body = renderToString(<RouterProvider router={router} />);\n" +

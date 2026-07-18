@@ -142,7 +142,7 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 120_000 });
   await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
   await page.getByRole("heading", { name: "TanStack on Iterate" }).waitFor({ timeout: 30_000 });
-  await page.getByText(/^Signed in as/).waitFor();
+  await page.getByText(/^Serving project .* to a signed-in member/).waitFor();
 
   // Server-side routing proof: the about link is a plain anchor — no client
   // bundle exists, so this navigation is a full request the worker's router
