@@ -5,7 +5,6 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
-    "start:go": "expo start --go",
     "start:web": "expo start --web",
     "ios": "expo run:ios",
     "build:development:ios": "pnpm dlx eas-cli@21.0.1 build --platform ios --profile development",
