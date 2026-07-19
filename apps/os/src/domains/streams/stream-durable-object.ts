@@ -45,6 +45,15 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
+
+function isStreamPausedError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    error.message.startsWith(STREAM_PAUSED_ERROR_PREFIX)
+  );
+}
 
 /**
  * Observe fire-and-forget stream-core work without handing a rejected promise
@@ -56,6 +65,12 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
   try {
     await work();
   } catch (error) {
+    if (isStreamPausedError(error)) {
+      console.info("stream core background work reached a paused stream", {
+        message: error.message,
+      });
+      return;
+    }
     if (isDurableObjectLifecycleError(error)) {
       console.info("stream core background work interrupted by durable object lifecycle", {
         message: error instanceof Error ? error.message : String(error),
@@ -610,7 +625,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-parked":
         return;
       default:
-        throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
+        throw new Error(
+          `${STREAM_PAUSED_ERROR_PREFIX}${args.state.pauseReason ?? "unknown reason"}`,
+        );
     }
   }
 

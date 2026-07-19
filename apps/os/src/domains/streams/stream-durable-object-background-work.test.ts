@@ -52,6 +52,21 @@ describe("settleStreamCoreBackgroundWork", () => {
     expect(error).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith("stream core background work failed", failure);
   });
+
+  it("classifies an explicit paused-stream rejection outside error telemetry", async () => {
+    const paused = new Error("stream paused: operator maintenance");
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(
+      settleStreamCoreBackgroundWork(() => Promise.reject(paused)),
+    ).resolves.toBeUndefined();
+
+    expect(info).toHaveBeenCalledWith("stream core background work reached a paused stream", {
+      message: paused.message,
+    });
+    expect(error).not.toHaveBeenCalled();
+  });
 });
 
 describe("StreamDeliveryAlarmBoundary", () => {
