@@ -14,8 +14,10 @@ import {
 const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState => ({
   birthCertificate: { config: { slug: "test" } },
   customDomains: [],
+  devices: [],
   egressRules: [],
   humanApprovalKeys: [],
+  notificationReady: false,
   onboardingActive: false,
   onboardingCompletedAt: null,
   repos: [],

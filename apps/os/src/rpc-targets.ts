@@ -89,6 +89,7 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
+import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
@@ -333,6 +334,11 @@ import type {
   SecretCreateInput,
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
+import type {
+  DeviceAppendInput,
+  DeviceDescription,
+  DeviceEnrollInput,
+} from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
@@ -2202,6 +2208,114 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
       () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
     );
+  }
+}
+
+/** Enrolled mobile installations within one project. */
+class DeviceCollectionRpcTarget extends IterateRpcTarget<"DeviceCollection"> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Enrolled phone devices: list() discovers safe metadata; get(deviceId) returns the durable device whose append() requests notifications.",
+      children: {
+        get: "Get one device by stable installation id.",
+        list: "List enrolled devices without exposing push credentials.",
+      },
+      parent: "a project itx (itx.devices)",
+    });
+  }
+
+  get(deviceId: string): DeviceRpcTarget {
+    assertDeviceId(deviceId);
+    return new DeviceRpcTarget({
+      auth: this.props.auth,
+      deviceId,
+      projectId: this.props.projectId,
+    });
+  }
+
+  async list(): Promise<DeviceDescription[]> {
+    const devices = (await projectProcessorState(this.props.projectId)).devices;
+    return await Promise.all(
+      devices.map((device) =>
+        this.get(device.path.replace(/^\/devices\//, "")).durableObjectStub.describe(),
+      ),
+    );
+  }
+}
+
+/** One enrolled installation. Push credentials enter only through enroll(). */
+class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
+  constructor(readonly props: { auth: ItxAuth; deviceId: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description & DeviceDescription> {
+    const state = await this.durableObjectStub.describe();
+    return describeNode({
+      instructions:
+        `Device ${this.props.deviceId}: append a device/notification-requested event to notify it. ` +
+        "enroll/revoke are authenticated phone lifecycle operations; no push credential is readable.",
+      children: {
+        append: "Append one or more typed notification request/opened facts.",
+        enroll: "Enroll or rotate this authenticated user's Expo push token.",
+        kill: "Restart the server-side device object.",
+        revoke: "Disable push for this authenticated user's installation.",
+      },
+      parent: "itx.devices.get(deviceId)",
+      ...state,
+    });
+  }
+
+  /** @internal */
+  get durableObjectStub() {
+    return env.DEVICE.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: `/devices/${this.props.deviceId}`,
+      }),
+    );
+  }
+
+  enroll(input: DeviceEnrollInput): Promise<DeviceDescription> {
+    return this.durableObjectStub.enroll({ ...input, ownerId: this.props.auth.principal });
+  }
+
+  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]> {
+    return this.durableObjectStub.append(this.props.auth.principal, ...events);
+  }
+
+  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent> {
+    return this.durableObjectStub.revoke(this.props.auth.principal, reason);
+  }
+
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
+  }
+
+  get processor(): WakeableStreamProcessorRpc<DeviceDescription> {
+    return new ProcessorRelayRpcTarget<DeviceDescription>({
+      auth: this.props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  get liveState(): LiveStateRpc<DeviceDescription> {
+    return new LiveStateRelayRpcTarget<DeviceDescription>(
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<DeviceDescription>,
+    );
+  }
+}
+
+function assertDeviceId(deviceId: string): void {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(deviceId)) {
+    throw new Error("deviceId must contain 1-128 letters, digits, underscores, or hyphens");
   }
 }
 
@@ -4977,6 +5091,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
                 },
               },
             },
+            NotificationProcessorContract.buildEvent({
+              type: "events.iterate.com/notification/created",
+              idempotencyKey: `notification-created:${registered.projectId}`,
+              payload: { config: {} },
+            }),
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName: streamDurableObjectName({
                 projectId: registered.projectId,
@@ -4984,6 +5103,14 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
               }),
               processor: ["processor"],
               processorSlug: ProjectProcessorContract.slug,
+            }),
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: streamDurableObjectName({
+                projectId: registered.projectId,
+                path: "/",
+              }),
+              processor: ["notificationProcessor"],
+              processorSlug: NotificationProcessorContract.slug,
             }),
           ),
         (error) => {
@@ -5439,6 +5566,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   capabilityHosts:
     'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
   debug: "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
+  devices:
+    "Enrolled phone devices: list() discovers safe metadata; get(deviceId).append(...) requests a push notification.",
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
@@ -5510,6 +5639,7 @@ type ProjectRpcTargetProps = {
  */
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
+  notificationProcessor: PromiseLike<StreamProcessorRpc>;
   incrementLiveDemo(): Promise<void>;
   indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
 };
@@ -5676,6 +5806,18 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProcessorRelayRpcTarget<ProjectProcessorState>({
       auth: this.#props.auth,
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** @internal Wake door for the notification-policy processor hosted beside
+   * the public project processor. Persisted stream delivery resolves this
+   * member through the project itx, but generated user APIs must not expose
+   * processor-host plumbing as a product capability. */
+  get notificationProcessor(): WakeableStreamProcessorRpc {
+    return new ProcessorRelayRpcTarget({
+      auth: this.#props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      processorFacade: (host) => (host as unknown as ProjectDurableObjectRpc).notificationProcessor,
     });
   }
 
@@ -5859,6 +6001,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Repo catalog by path. */
   get repos(): ProjectRepoCollectionRpcTarget {
     return new ProjectRepoCollectionRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
+  }
+
+  /** Enrolled phone installations and their durable notification journals. */
+  get devices(): DeviceCollectionRpcTarget {
+    return new DeviceCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
     });
