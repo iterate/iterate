@@ -7,6 +7,7 @@ import {
   PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
   removeWorkerSecrets,
+  runAsync,
   SANDBOX_BACKUP_EXPIRY_RULE,
   SANDBOX_BACKUP_TTL_SECONDS_PRD,
   smokeResponse,
@@ -18,6 +19,20 @@ afterEach(() => vi.unstubAllGlobals());
 const workerName = "os-prd";
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 const listPath = `/workers/scripts/${workerName}/secrets`;
+
+describe("runAsync", () => {
+  it("resolves only after the child exits successfully", async () => {
+    await expect(
+      runAsync(process.execPath, ["--eval", "process.exit(0)"], { cwd: process.cwd() }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a nonzero child exit", async () => {
+    await expect(
+      runAsync(process.execPath, ["--eval", "process.exit(7)"], { cwd: process.cwd() }),
+    ).rejects.toThrow("exited with 7");
+  });
+});
 
 describe("assertWorkerSecretAbsent", () => {
   it("accepts a Worker without the forbidden binding", async () => {

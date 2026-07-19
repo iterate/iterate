@@ -223,17 +223,6 @@ export default async function deploy(
         compatibilityDate: COMPATIBILITY_DATE,
       });
 
-      // Prebuild the deterministic project template's root worker and Vite
-      // app under trusted content-only keys. Fresh projects then avoid
-      // request-scoped container builds; edited projects get new keys and
-      // continue through the project-scoped runtime builder.
-      await seedTemplateWorkerArtifacts({
-        accountId: ctx.env.cloudflareAccountId,
-        apiToken: credentials.CLOUDFLARE_API_TOKEN!,
-        iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
-        kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
-      });
-
       // The typechecker sidecar deploys FIRST: the os worker's TYPECHECKER
       // service binding is by name, and a binding to a not-yet-existing
       // script fails the deploy. The sidecar has no secrets and no vite
@@ -248,6 +237,18 @@ export default async function deploy(
           env: credentials,
         },
       );
+    },
+    // Prebuild the deterministic project template's root worker and Vite apps
+    // under trusted content-only keys. This work is independent of the OS Vite
+    // build, and deployApp joins both before uploading the new worker version:
+    // fresh projects can never observe a version before its artifacts exist.
+    concurrentBuildWork: async (ctx, secretValues, credentials) => {
+      await seedTemplateWorkerArtifacts({
+        accountId: ctx.env.cloudflareAccountId,
+        apiToken: credentials.CLOUDFLARE_API_TOKEN!,
+        iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
+        kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
+      });
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {
