@@ -12,7 +12,6 @@ import {
 } from "./onboarding-agent.ts";
 
 const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState => ({
-  agents: [],
   birthCertificate: { config: { slug: "test" } },
   customDomains: [],
   devices: [],

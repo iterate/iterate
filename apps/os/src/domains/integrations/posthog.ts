@@ -75,20 +75,20 @@ function normalizeEventTimestamp(createdAt: string): string {
   return new Date(createdAt).toISOString();
 }
 
-function projectGroupIdentifyEvent(args: {
+function projectBirthEvents(args: {
   batch: StreamPushEventBatch;
   distinctId: string;
   projectId: string;
   workerName: string;
 }) {
   const { batch, distinctId, projectId, workerName } = args;
-  // Only the authentic root birth certificate owns the complete first-class
-  // project group record. Pre-rollout projects intentionally get no partial
-  // compatibility record or mutable directory lookup here.
+  // Only the authentic root birth certificate owns the first-class group
+  // records. Ordinary stream births must not repeatedly overwrite metadata.
   const projectBirth = batch.events.find((event) => {
     if (
       batch.path !== "/" ||
       event.path !== "/" ||
+      event.ephemeral === true ||
       event.type !== "events.iterate.com/project/created" ||
       event.idempotencyKey !== `project-created:${projectId}`
     ) {
@@ -96,35 +96,49 @@ function projectGroupIdentifyEvent(args: {
     }
     return ProjectGroupBirthPayload.safeParse(event.payload).success;
   });
-  if (projectBirth === undefined) return undefined;
+  if (projectBirth === undefined) return [];
 
   const project = ProjectGroupBirthPayload.parse(projectBirth.payload);
-
   const timestamp = normalizeEventTimestamp(projectBirth.createdAt);
-  // PostHog recommends an immutable ID as the group key and uses `name` as
-  // the UI label. This value is explicitly the slug at project creation;
-  // project slugs can change independently later.
-  // https://posthog.com/docs/product-analytics/group-analytics
-  return {
-    event: "$groupidentify",
-    properties: {
-      $geoip_disable: true,
-      $group_key: projectId,
-      $group_set: { id: projectId, name: project.config.slug, slug: project.config.slug },
-      $group_type: "project",
-      $is_server: true,
-      distinct_id: distinctId,
-    },
-    timestamp,
-    uuid: posthogUuid([
-      "project-group-v1",
-      workerName,
-      projectId,
-      batch.path,
-      projectBirth.offset,
+
+  return [
+    {
+      event: "$groupidentify",
+      properties: {
+        $geoip_disable: true,
+        $group_key: projectId,
+        $group_set: {
+          id: projectId,
+          name: project.config.slug,
+          slug: project.config.slug,
+        },
+        $group_type: "project",
+        $is_server: true,
+        distinct_id: distinctId,
+      },
       timestamp,
-    ]),
-  };
+      uuid: posthogUuid([
+        "project-group-v1",
+        workerName,
+        projectId,
+        batch.path,
+        projectBirth.offset,
+        timestamp,
+      ]),
+    },
+    {
+      event: "$set",
+      properties: {
+        $geoip_disable: true,
+        $groups: { project: projectId },
+        $is_server: true,
+        $set: { name: `project:${project.config.slug}` },
+        distinct_id: distinctId,
+      },
+      timestamp,
+      uuid: posthogUuid(["project-person-v1", workerName, projectId]),
+    },
+  ];
 }
 
 function posthogEvents(args: {
@@ -133,16 +147,17 @@ function posthogEvents(args: {
   workerName: string;
 }) {
   const { batch, projectId, workerName } = args;
-  // PostHog requires identified events for group linkage. Keep one synthetic
-  // identity per deployment/project: this avoids creating identities per stream
-  // while preventing one project's distinct-id limiter from stalling every
-  // project's durable feed.
+  // PostHog requires an identified event for Group Analytics linkage. One
+  // synthetic identity per deployment/project lets machine-authored facts join
+  // the same project group as browser activity without pretending that an
+  // arbitrary human authored them. Do not resolve an organization for every
+  // event: project is the stream feed's complete grouping boundary.
   const distinctId = `iterate-os-project:${posthogUuid([
     "project-identity-v1",
     workerName,
     projectId,
   ])}`;
-  const streamId = posthogUuid(["stream-v1", workerName, projectId, batch.path]);
+  const groups = { project: projectId };
   // Capture-side filter is deliberate defense in depth: subscriptions born
   // before includeEphemeral flipped to false may still deliver ephemeral rows.
   // Never index those in PostHog.
@@ -155,31 +170,23 @@ function posthogEvents(args: {
       offset: event.offset,
     });
     return {
-      event: "stream:append",
+      event: `append:${event.type}`,
       properties: {
         $geoip_disable: true,
-        $groups: { project: projectId },
+        $groups: groups,
         $is_server: true,
         // PostHog's batch API documents distinct_id inside properties. A
         // malformed event can receive HTTP 200 but still be rejected later by
         // asynchronous ingestion, so keep the wire shape exact.
         distinct_id: distinctId,
-        project_id: projectId,
-        stream_event_created_at: createdAt,
-        stream_event_ephemeral: event.ephemeral === true,
-        stream_event_offset: event.offset,
-        stream_event_type: event.type,
-        stream_event_uuid: eventUuid,
         // This first-party feed mirrors the committed event rather than an
         // allowlist. Only an event above the explicit JSON byte boundary is
         // deterministically chopped, with that loss indexed alongside it.
         stream_event: streamEvent.value,
         stream_event_original_json_bytes: streamEvent.originalBytes,
         stream_event_truncated: streamEvent.truncated,
-        stream_max_offset: batch.streamMaxOffset,
-        stream_id: streamId,
+        stream_event_type: event.type,
         stream_path: batch.path,
-        worker_name: workerName,
       },
       // Source commit time is part of the occurrence identity. Keeping it
       // stable across retries matters because PostHog's deduplication sort
@@ -188,8 +195,7 @@ function posthogEvents(args: {
       uuid: eventUuid,
     };
   });
-  const groupIdentify = projectGroupIdentifyEvent({ batch, distinctId, projectId, workerName });
-  return groupIdentify === undefined ? occurrences : [groupIdentify, ...occurrences];
+  return [...projectBirthEvents({ batch, distinctId, projectId, workerName }), ...occurrences];
 }
 
 /**
@@ -231,7 +237,7 @@ export async function capturePosthogStreamEventBatch(
     // keeping it observable prevents a future regression from appearing as
     // unexplained time in the parent Stream.append invocation.
     const events = posthogEvents(args);
-    const durableCount = events.filter((event) => event.event === "stream:append").length;
+    const durableCount = events.filter((event) => event.event.startsWith("append:")).length;
     span.setAttribute("iterate.stream.durable_event_count", durableCount);
     // An all-ephemeral delivery (or one that yields no PostHog rows) is a
     // successful no-op — do not fail the subscriber or call the capture API.

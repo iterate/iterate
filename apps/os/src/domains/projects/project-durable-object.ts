@@ -58,7 +58,6 @@ import {
 } from "./openai-ai-gateway-egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
-import { AgentDatabase, type AgentTouchInput } from "./agent-database.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -76,9 +75,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // The project's streams index — a materialized view in the DO's own SQLite,
   // updated from the processEventBatch fan-in.
   readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
-  // The complete agent catalog — metadata, exact runtime counts, binding,
-  // and timestamps reduced from every agent stream's committed facts.
-  readonly #agentDatabase = new AgentDatabase(this.ctx.storage.sql);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -99,11 +95,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // Reconcile any catalog stream missing an index row (cheap when none are),
       // so newly-created quiet streams show up in ⌘K without waiting for events.
       this.#streamDatabase.seedMissing(reduced.streams);
-      this.#agentDatabase.seedMissing(reduced.agents);
       return {
         reduced,
         streamsIndex: this.#streamDatabase.all(),
-        agents: this.#agentDatabase.all(),
         liveDemo: this.#liveDemo,
       };
     },
@@ -312,15 +306,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * are harmless; a storage/RPC failure rejects the batch instead of silently
    * leaving live state stale.
    */
-  indexCommittedBatchFacts(input: { stream: TouchInput; agent?: AgentTouchInput }): void {
+  indexCommittedBatchFacts(input: { stream: TouchInput }): void {
     const streamsBefore = this.#streamDatabase.all();
-    const agentsBefore = this.#agentDatabase.all();
     this.#streamDatabase.touch(input.stream);
-    if (input.agent !== undefined) this.#agentDatabase.touch(input.agent);
-    if (
-      streamsBefore !== this.#streamDatabase.all() ||
-      agentsBefore !== this.#agentDatabase.all()
-    ) {
+    if (streamsBefore !== this.#streamDatabase.all()) {
       this.#registry.refreshLive();
     }
   }

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { CreateWorkerOptions } from "@cloudflare/worker-bundler";
 import type { StreamPushEventBatch } from "iterate/processors";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
@@ -45,49 +44,39 @@ export type WorkerFileSource =
       exclude?: string[];
     };
 
-/** Loader names accepted by Cloudflare's worker bundler `loader` option. */
-export type WorkerBundlerLoader =
-  | "js"
-  | "jsx"
-  | "ts"
-  | "tsx"
-  | "json"
-  | "css"
-  | "text"
-  | "binary"
-  | "base64"
-  | "dataurl";
-
 /**
  * Build options for a dynamic worker.
  *
- * This mirrors Cloudflare's `CreateWorkerOptions` from
- * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
- * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language (drift fails typecheck via the assignability pin
- * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the
- * invariant is one OS materialization pipeline, not one bundled output file.
- * When the file map has a `package.json` with dependencies, the bundler
- * installs them from the npm registry at build time.
+ * Deliberately small: exactly what the build recipe (build-recipe.ts — real
+ * `npm install` plus wrangler's canonical bundling pipeline) expresses.
+ * When the file map has a `package.json`, dependencies are installed from
+ * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
  */
 export type WorkerBuildOptions = {
-  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  /** Entry point file path relative to the source root. Default: "worker.ts". */
   entryPoint?: string;
-  /** Bundle all dependencies into a single output file. Default: true. */
+  /** Bundle to loader-ready output (default: true). `bundle: false` is the
+   * run-script fast path: inline JavaScript that is ALREADY loader-ready
+   * skips the build pipeline entirely. */
   bundle?: boolean;
-  /** Modules kept external ("cloudflare:*" always is). */
-  externals?: string[];
-  /** Target environment. Default: "es2022". */
-  target?: string;
   minify?: boolean;
-  sourcemap?: boolean;
-  /** npm registry URL for dependency installs. */
-  registry?: string;
-  jsx?: "transform" | "preserve" | "automatic";
-  jsxImportSource?: string;
-  define?: Record<string, string>;
-  loader?: Record<string, WorkerBundlerLoader>;
-  conditions?: string[];
+  /**
+   * Which build pipeline turns the source into loader-ready modules.
+   * "wrangler" (default): the platform's own bundle — npm install + wrangler
+   * dry-run, source code is PARSED but never executed. "vite": the source's
+   * OWN `npm run build` (a real Vite/TanStack-Start app) — install includes
+   * devDependencies and the build EXECUTES project code in the builder, so
+   * runtime artifacts stay project-scoped and the output is collected from
+   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +
+   * dist/client assets, served by a generated wrapper entry).
+   */
+  pipeline?: "wrangler" | "vite";
+  /** Build from this subdirectory of the resolved source: files outside it
+   * are dropped and paths are re-rooted, so a repo can host an app at e.g.
+   * `apps/tanstack/` with its own package.json and config. */
+  rootDir?: string;
+  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
+   * runtime rides in this way). A source's own entry wins over the platform's. */
   virtualModules?: Record<string, string>;
 };
 
@@ -262,47 +251,14 @@ const WorkerFileSource = z.discriminatedUnion("type", [
   }),
 ]) satisfies z.ZodType<WorkerFileSource, unknown>;
 
-const WorkerBundlerLoader = z.enum([
-  "js",
-  "jsx",
-  "ts",
-  "tsx",
-  "json",
-  "css",
-  "text",
-  "binary",
-  "base64",
-  "dataurl",
-]);
-
 export const WorkerBuildOptions = z.strictObject({
   bundle: z.boolean().optional(),
-  conditions: z.array(z.string()).optional(),
-  define: z.record(z.string(), z.string()).optional(),
   entryPoint: z.string().optional(),
-  externals: z.array(z.string()).optional(),
-  jsx: z.enum(["transform", "preserve", "automatic"]).optional(),
-  jsxImportSource: z.string().optional(),
-  loader: z.record(z.string(), WorkerBundlerLoader).optional(),
   minify: z.boolean().optional(),
-  registry: z.string().optional(),
-  sourcemap: z.boolean().optional(),
-  target: z.string().optional(),
+  pipeline: z.enum(["wrangler", "vite"]).optional(),
+  rootDir: z.string().optional(),
   virtualModules: z.record(z.string(), z.string()).optional(),
 }) satisfies z.ZodType<WorkerBuildOptions, unknown>;
-
-// The public build options are Cloudflare's `CreateWorkerOptions` minus
-// `files` (OS supplies files from the selected file source) and minus the
-// explicitly-not-semver esbuild-plugin escape hatch (not serializable into a
-// durable worker recipe). This assignability pin means a bundler option
-// reshape fails typecheck here instead of silently forking the two shapes.
-type CloudflareWorkerBuildOptions = Omit<
-  CreateWorkerOptions,
-  "files" | "__dangerouslyUseEsBuildPluginsDoNotUseOrYouWillBeFired"
->;
-export const workerBuildOptionsMatchCloudflare = (
-  options: WorkerBuildOptions,
-): CloudflareWorkerBuildOptions => options;
 
 export const DynamicWorkerSource = z.strictObject({
   files: WorkerFileSource,

@@ -208,6 +208,11 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
   reads<P extends RegisterableProcessor>(
     processor: P,
   ): RegisteredProcessorReads<RegisteredProcessorState<P>>;
+  /** Observe committed fold changes for one registered processor. */
+  observeStateChanges<P extends RegisterableProcessor>(
+    processor: P,
+    observer: (snapshot: { offset: number; state: RegisteredProcessorState<P> }) => void,
+  ): () => void;
   /**
    * Wire this to the host DO's wakeStreamSubscriber RPC method. Resolves the
    * poked runner (by the request's `processorSlug`, or the only registered
@@ -506,6 +511,22 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // the registered instance's contract carries it, and `reads()` promised
       // it in the signature.
       return reads as RegisteredProcessorReads<RegisteredProcessorState<typeof processor>>;
+    },
+
+    observeStateChanges(processor, observer) {
+      const entry = requireEntry(processor.contract.slug);
+      if (entry.processor !== processor) {
+        throw new Error(
+          `stream processor "${processor.contract.slug}" is registered on this registry, ` +
+            "but observeStateChanges() was passed a DIFFERENT instance",
+        );
+      }
+      // The identity check above restores the relationship erased by the
+      // registry's heterogeneous entry map: this runner and observer share the
+      // state type carried by the exact registered processor instance.
+      return entry.runner.observeStateChanges(
+        observer as (snapshot: { offset: number; state: unknown }) => void,
+      );
     },
 
     catchUp,

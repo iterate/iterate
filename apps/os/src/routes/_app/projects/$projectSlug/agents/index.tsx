@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useLiveState } from "iterate/react";
 import { AgentCatalog } from "~/components/agents/agent-catalog.tsx";
-import { patchAgentMetadata } from "~/components/agents/agent-metadata.ts";
+import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -30,7 +30,7 @@ function ProjectAgentsIndexContent() {
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
   const agents = useLiveState(
-    (projectItx) => projectItx.liveState,
+    (projectItx) => projectItx.agents.liveState,
     (state) => state.agents,
     [],
   ).value;
@@ -41,10 +41,11 @@ function ProjectAgentsIndexContent() {
       panel={
         <AgentCatalog
           agents={agents}
+          projectId={project.id}
           projectSlug={params.projectSlug}
           onOpen={(path) => void navigate(linkOptionsForStreamPath(params.projectSlug, path))}
           onTogglePinned={(agent) =>
-            patchAgentMetadata(project.id, agent.path, { pinned: !agent.metadata.pinned })
+            updateAgentSummary(project.id, agent.path, { pinned: !agent.summary.pinned })
           }
         />
       }

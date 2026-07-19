@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
 import { StreamProcessorRunner } from "iterate/processors";
@@ -14,26 +13,8 @@ import {
 const TEAM_ID = "T0TEAM";
 const CONNECTION = "nustom";
 
-function metadataChanged(payload: Record<string, unknown>) {
-  return { type: "events.iterate.com/agent/metadata-changed" as const, payload };
-}
-
-function runtimeChanged(sinceOffset: number, work: "idle" | "llm" | "script" = "idle") {
-  return {
-    type: "events.iterate.com/agent/runtime-changed" as const,
-    payload: {
-      sinceOffset,
-      runtime:
-        work === "script"
-          ? { ...ZERO_AGENT_RUNTIME, runningScripts: 1 }
-          : work === "llm"
-            ? {
-                ...ZERO_AGENT_RUNTIME,
-                llmRequests: { scheduled: 0, requested: 1, started: 0 },
-              }
-            : ZERO_AGENT_RUNTIME,
-    },
-  };
+function summaryUpdated(payload: Record<string, unknown>) {
+  return { type: "events.iterate.com/agent/summary-updated" as const, payload };
 }
 
 function newSlackRouter(input: ConstructorParameters<typeof SlackProcessor>[0]): SlackProcessor {
@@ -182,7 +163,7 @@ describe("SlackProcessor (webhook router)", () => {
     ]);
     expect(
       routed.filter((event) => event.type === "events.iterate.com/stream/subscription-configured"),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       routed.find(
         (event) =>
@@ -882,298 +863,6 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
-  it("paints exact active runtime and clears Slack when runtime settles", async () => {
-    const { deliver, slackCalls, stream } = setup();
-
-    // Establish thread context first.
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    await stream.append(runtimeChanged(1, "llm"));
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: {
-          channel_id: "D123",
-          thread_ts: "111.222",
-          status: "Waiting for the model…",
-          loading_messages: ["Waiting for the model…"],
-        },
-      },
-    ]);
-
-    slackCalls.length = 0;
-    await stream.append(runtimeChanged(2));
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("keeps Slack Assistant thread APIs out of ordinary channel threads", async () => {
-    const { deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    await stream.append(
-      metadataChanged({ title: "Production incident", activity: "Investigating" }),
-      runtimeChanged(1, "llm"),
-    );
-    await deliver();
-
-    expect(slackCalls).toEqual([]);
-
-    await stream.append(runtimeChanged(2));
-    await deliver();
-
-    expect(slackCalls).toEqual([
-      {
-        method: "reactions.remove",
-        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("dedupes unchanged activity across exact runtime generations", async () => {
-    const { deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    await stream.append(runtimeChanged(1, "llm"));
-    await deliver();
-    slackCalls.length = 0;
-
-    await stream.append(runtimeChanged(2, "llm"));
-    await deliver();
-
-    expect(slackCalls).toEqual([]);
-  });
-
-  it("clears a channel acknowledgement when completion is delivered stale", async () => {
-    const { clock, deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    await stream.append(runtimeChanged(1, "llm"));
-    await deliver();
-    expect(slackCalls).toEqual([]);
-
-    await stream.append(runtimeChanged(2));
-    clock.now += 16 * 60_000;
-    await deliver();
-
-    expect(slackCalls).toEqual([
-      {
-        method: "reactions.remove",
-        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("reports an unexpected activity-paint failure once without wedging the checkpoint", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const { deliver, slackCalls, stream } = setup({
-        callSlackApi: async ({ method }) => {
-          if (method === "assistant.threads.setStatus") throw new Error("slack status failed");
-        },
-      });
-
-      await stream.append({
-        type: "events.iterate.com/slack/webhook-received",
-        payload: assistantMessageWebhookPayload(),
-      });
-      await deliver();
-      slackCalls.length = 0;
-
-      await stream.append(runtimeChanged(1, "llm"));
-      await deliver();
-
-      expect(slackCalls).toEqual([
-        {
-          method: "assistant.threads.setStatus",
-          body: {
-            channel_id: "D123",
-            thread_ts: "111.222",
-            status: "Waiting for the model…",
-            loading_messages: ["Waiting for the model…"],
-          },
-        },
-      ]);
-      expect(error).toHaveBeenCalledWith(
-        "[slack-agent] Slack side effect failed",
-        expect.objectContaining({ method: "assistant.threads.setStatus" }),
-      );
-
-      slackCalls.length = 0;
-      await deliver();
-      expect(slackCalls).toEqual([]);
-    } finally {
-      error.mockRestore();
-    }
-  });
-
-  it("treats an already-absent eyes reaction as an idempotent success", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const { deliver, slackCalls, stream } = setup({
-        callSlackApi: async ({ method }) => {
-          if (method === "reactions.remove") {
-            throw new Error("Slack Web API reactions.remove failed: no_reaction");
-          }
-        },
-      });
-
-      await stream.append({
-        type: "events.iterate.com/slack/webhook-received",
-        payload: humanMessageWebhookPayload({}),
-      });
-      await deliver();
-      slackCalls.length = 0;
-
-      await stream.append(runtimeChanged(1));
-      await deliver();
-
-      expect(slackCalls).toEqual([
-        {
-          method: "reactions.remove",
-          body: { channel: "C123", name: "eyes", timestamp: "111.222" },
-        },
-      ]);
-      expect(error).not.toHaveBeenCalled();
-    } finally {
-      error.mockRestore();
-    }
-  });
-
-  it("repaints presence once per batch from the latest runtime", async () => {
-    const { deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    // Busy and idle land in ONE batch: the status is a repaint of current
-    // truth, so only the final (cleared) status reaches Slack — no transient
-    // "is thinking..." call for work that already finished.
-    await stream.append(runtimeChanged(1, "llm"), runtimeChanged(2));
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("a fresh incarnation clears settled runtime even when metadata is the last batch fact", async () => {
-    const { clock, deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    // The webhook is historical to this replacement incarnation, but the
-    // settlement and following metadata patch are fresh. Slack may still
-    // carry the status painted by the dead incarnation.
-    clock.now += 16 * 60_000;
-    await stream.append(runtimeChanged(1), metadataChanged({ activity: "Finished" }));
-    await deliver();
-
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("paints authored activity verbatim and title via setTitle", async () => {
-    const { deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    // Metadata and factual runtime land in the same batch. One title paint
-    // and one activity paint are derived from the complete at-head fold.
-    await stream.append(
-      metadataChanged({ title: "Trip planning", activity: "Comparing flights" }),
-      runtimeChanged(2, "llm"),
-    );
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setTitle",
-        body: { channel_id: "D123", thread_ts: "111.222", title: "Trip planning" },
-      },
-      {
-        method: "assistant.threads.setStatus",
-        body: {
-          channel_id: "D123",
-          thread_ts: "111.222",
-          status: "Comparing flights…",
-          loading_messages: ["Comparing flights…"],
-        },
-      },
-    ]);
-
-    // An unchanged title never repaints; an activity change repaints status.
-    slackCalls.length = 0;
-    await stream.append(metadataChanged({ activity: "Booking the winner" }));
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: {
-          channel_id: "D123",
-          thread_ts: "111.222",
-          status: "Booking the winner…",
-          loading_messages: ["Booking the winner…"],
-        },
-      },
-    ]);
-  });
-
   it("reports an unexpected title-paint failure once without wedging the checkpoint", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
@@ -1190,7 +879,7 @@ describe("SlackAgentProcessor", () => {
       await deliver();
       slackCalls.length = 0;
 
-      await stream.append(metadataChanged({ title: "Trip planning" }));
+      await stream.append(summaryUpdated({ title: "Trip planning" }));
       await deliver();
 
       expect(slackCalls).toEqual([
@@ -1199,7 +888,7 @@ describe("SlackAgentProcessor", () => {
           body: { channel_id: "D123", thread_ts: "111.222", title: "Trip planning" },
         },
       ]);
-      expect(runner.currentState.metadata).toMatchObject({ title: "Trip planning" });
+      expect(runner.currentState.summary).toMatchObject({ title: "Trip planning" });
       expect(error).toHaveBeenCalledWith(
         "[slack-agent] Slack side effect failed",
         expect.objectContaining({ method: "assistant.threads.setTitle" }),
@@ -1221,11 +910,11 @@ describe("SlackAgentProcessor", () => {
       payload: assistantMessageWebhookPayload(),
     });
     await deliver();
-    await stream.append(metadataChanged({ title: "Trip planning" }));
+    await stream.append(summaryUpdated({ title: "Trip planning" }));
     await deliver();
     slackCalls.length = 0;
 
-    await stream.append(metadataChanged({ title: null }));
+    await stream.append(summaryUpdated({ title: null }));
     await deliver();
     expect(slackCalls).toEqual([
       {
@@ -1235,7 +924,7 @@ describe("SlackAgentProcessor", () => {
     ]);
 
     slackCalls.length = 0;
-    await stream.append(metadataChanged({ activity: "Waiting for a choice" }));
+    await stream.append(summaryUpdated({ activity: "Waiting for a choice" }));
     await deliver();
     expect(slackCalls).toEqual([]);
   });
@@ -1256,11 +945,11 @@ describe("SlackAgentProcessor", () => {
         payload: assistantMessageWebhookPayload(),
       });
       await deliver();
-      await stream.append(metadataChanged({ title: "Trip planning" }));
+      await stream.append(summaryUpdated({ title: "Trip planning" }));
       await deliver();
       slackCalls.length = 0;
 
-      await stream.append(metadataChanged({ title: null }));
+      await stream.append(summaryUpdated({ title: null }));
       await deliver();
       expect(slackCalls).toEqual([
         {
@@ -1288,7 +977,7 @@ describe("SlackAgentProcessor", () => {
         type: "events.iterate.com/slack/webhook-received",
         payload: assistantMessageWebhookPayload(),
       },
-      metadataChanged({ title: "Trip planning" }),
+      summaryUpdated({ title: "Trip planning" }),
     );
     setCase.clock.now += 16 * 60_000;
     await setCase.deliver();
@@ -1305,8 +994,8 @@ describe("SlackAgentProcessor", () => {
         type: "events.iterate.com/slack/webhook-received",
         payload: assistantMessageWebhookPayload(),
       },
-      metadataChanged({ title: "Trip planning" }),
-      metadataChanged({ title: null }),
+      summaryUpdated({ title: "Trip planning" }),
+      summaryUpdated({ title: null }),
     );
     clearCase.clock.now += 16 * 60_000;
     await clearCase.deliver();
@@ -1314,88 +1003,6 @@ describe("SlackAgentProcessor", () => {
       {
         method: "assistant.threads.setTitle",
         body: { channel_id: "D123", thread_ts: "111.222", title: "" },
-      },
-    ]);
-  });
-
-  it("paints script runtime but clears for semantic waiting", async () => {
-    const { deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    await stream.append(runtimeChanged(1, "script"));
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: {
-          channel_id: "D123",
-          thread_ts: "111.222",
-          status: "Running code…",
-          loading_messages: ["Running code…"],
-        },
-      },
-    ]);
-
-    // A semantic dependency remains durable in Iterate, but Slack's typing
-    // status is strictly transient runtime and must come down.
-    slackCalls.length = 0;
-    await stream.append(
-      metadataChanged({
-        activity: "Waiting for your Acme API key",
-        waitingFor: "user_input",
-      }),
-      runtimeChanged(2),
-    );
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("clears eyes from the acknowledged mention after a newer ambient follow-up", async () => {
-    const { deliver, runner, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({ ts: "111.222" }),
-    });
-    await deliver();
-    expect(runner.currentState.eyesReactionMessageTs).toBe("111.222");
-
-    await stream.append(runtimeChanged(1, "script"));
-    await deliver();
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({
-        mentionBot: false,
-        text: "one more detail",
-        threadTs: "111.222",
-        ts: "111.333",
-      }),
-    });
-    await deliver();
-    expect(runner.currentState.eyesReactionMessageTs).toBe("111.222");
-
-    slackCalls.length = 0;
-    await stream.append(runtimeChanged(2));
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "reactions.remove",
-        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
       },
     ]);
   });
@@ -1433,7 +1040,7 @@ describe("SlackAgentProcessor", () => {
     expect(runner.currentState.eyesReactionMessageTs).toBe("111.444");
   });
 
-  it("a metadata-only patch paints the title but clears no transient status", async () => {
+  it("a summary-only update paints the title but clears no transient status", async () => {
     const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
@@ -1445,7 +1052,7 @@ describe("SlackAgentProcessor", () => {
 
     // The agent set its title before any runtime was announced. That says
     // nothing about work: no status clear, and the 👀 ack MUST survive.
-    await stream.append(metadataChanged({ title: "Trip planning" }));
+    await stream.append(summaryUpdated({ title: "Trip planning" }));
     await deliver();
 
     expect(slackCalls).toEqual([
@@ -1454,183 +1061,6 @@ describe("SlackAgentProcessor", () => {
         body: { channel_id: "D123", thread_ts: "111.222", title: "Trip planning" },
       },
     ]);
-  });
-
-  it("ignores a stale settled runtime that lost its race with newer work", async () => {
-    const { deliver, runner, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    await stream.append(runtimeChanged(5, "llm"));
-    await deliver();
-    slackCalls.length = 0;
-
-    // A delayed zero can land after newer work. Its older generation folds
-    // to nothing and the repaint keeps active truth instead of clearing it.
-    await stream.append(runtimeChanged(3));
-    await deliver();
-
-    expect(runner.currentState.runtimeChange).toMatchObject({
-      sinceOffset: 5,
-      runtime: { llmRequests: { requested: 1 } },
-    });
-    expect(slackCalls).toEqual([]);
-  });
-
-  it("carries a behind-head runtime change to the at-head repaint", async () => {
-    // readPageSize 1 makes one catch-up deliver the idle announcement in a
-    // frame stamped BEHIND the head (a trailing event follows it — the
-    // wake-lane shape) while the frame that reaches head contains no
-    // announcements at all. The repaint must not lose it OR run per behind
-    // frame: exactly one title reset plus the status clear pair, painted at
-    // the at-head pulse. Without the carry, Slack keeps stale presentation
-    // from the dead incarnation.
-    // The at-head pulse is `processEvent` under `delivery.caughtUp`. This
-    // scenario uses a consumed revival fact, so it exercises the normal
-    // per-event pass; an unconsumed tail would exercise the runner's eventless
-    // at-head pass and repaint from the same final fold.
-    const { deliver, slackCalls, stream } = setup({ readPageSize: 1 });
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    slackCalls.length = 0;
-
-    await stream.append(runtimeChanged(1), {
-      // Consumed by slack-agent but carrying no announcement: the revival
-      // fact's ordinary delivery is the at-head pulse the repaint rides.
-      type: "events.iterate.com/stream/processor-revived",
-      payload: { processorSlug: "slack-agent", revivals: 1, version: "2026-07-14.1" },
-    });
-    await deliver();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setTitle",
-        body: { channel_id: "D123", thread_ts: "111.222", title: "" },
-      },
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("clears activity this incarnation painted even when settlement delivery is stale", async () => {
-    const { clock, deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    await stream.append(runtimeChanged(1, "llm"));
-    await deliver();
-    slackCalls.length = 0;
-
-    // The zero runtime exists but is only DELIVERED past the freshness
-    // horizon (the host slept through it). A status we ourselves painted must
-    // still come down — the alternative is "is thinking..." forever.
-    await stream.append(runtimeChanged(2));
-    clock.now += 16 * 60_000;
-    await deliver();
-
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("a fresh incarnation clears stale accepted-zero runtime", async () => {
-    const { clock, deliver, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    await stream.append(runtimeChanged(1, "llm"));
-    await deliver();
-    slackCalls.length = 0;
-
-    // The settled runtime exists but is only DELIVERED past the freshness
-    // horizon (the host slept through it). A status we ourselves painted must
-    // still come down — the alternative is "is thinking..." forever.
-    await stream.append(runtimeChanged(2));
-    clock.now += 16 * 60_000;
-    await deliver();
-
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("settles failed accepted-zero cleanup without replaying it", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const { deliver, slackCalls, stream } = setup({
-        callSlackApi: async ({ body, method }) => {
-          if (method === "assistant.threads.setStatus" && body.status === "") {
-            throw new Error("slack status clear failed");
-          }
-        },
-      });
-
-      await stream.append({
-        type: "events.iterate.com/slack/webhook-received",
-        payload: assistantMessageWebhookPayload(),
-      });
-      await deliver();
-      await stream.append(runtimeChanged(1, "llm"));
-      await deliver();
-      slackCalls.length = 0;
-
-      await stream.append(runtimeChanged(2));
-      await deliver();
-      expect(slackCalls).toEqual([
-        {
-          method: "assistant.threads.setStatus",
-          body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-        },
-        {
-          method: "reactions.remove",
-          body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-        },
-      ]);
-      expect(error).toHaveBeenCalledWith(
-        "[slack-agent] Slack side effect failed",
-        expect.objectContaining({ method: "assistant.threads.setStatus" }),
-      );
-
-      slackCalls.length = 0;
-      await deliver();
-      expect(slackCalls).toEqual([]);
-    } finally {
-      error.mockRestore();
-    }
   });
 
   it("skips the stale 👀 ack on a late wake but still lands the agent context", async () => {
@@ -1652,55 +1082,7 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 
-  it("refold: replaying the full journal performs only convergent cleanup", async () => {
-    // THE refold test (docs/writing-stream-processors.md, "Refold safety"):
-    // a state-schema deploy discards the checkpoint and replays the journal
-    // from offset 0 into a fresh instance. Durable lanes dedupe via
-    // idempotency keys; acknowledgement/cosmetic lanes must not re-fire.
-    const { clock, deliver, runner, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: assistantMessageWebhookPayload(),
-    });
-    await deliver();
-    await stream.append(runtimeChanged(1, "llm"));
-    await deliver();
-    await stream.append(runtimeChanged(2));
-    await deliver();
-    expect(slackCalls.length).toBeGreaterThan(0);
-    const journalBeforeRefold = stream.events.length;
-
-    clock.now += 60 * 60_000;
-    const refoldCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
-    const refolded = newSlackAgent({
-      stream,
-      path: stream.path,
-      projectId: null,
-      callSlackApi: async ({ body, method }) => {
-        refoldCalls.push({ body, method });
-      },
-      now: () => clock.now,
-    });
-    const refoldRunner = new StreamProcessorRunner({ processor: refolded, stream });
-    await refoldRunner.catchUp();
-
-    expect(refoldCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "D123", thread_ts: "111.222", status: "" },
-      },
-      {
-        method: "reactions.remove",
-        body: { channel: "D123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-    expect(stream.events).toHaveLength(journalBeforeRefold);
-    // The refolded state converged to the live processor's.
-    expect(refoldRunner.currentState).toEqual(runner.currentState);
-  });
-
-  it("captures route context as a typed Slack binding without authoring metadata", async () => {
+  it("captures route context as a typed Slack binding without authoring a summary", async () => {
     const { deliver, runner, slackCalls, stream } = setup({
       fetchSlackChannelName: async () => "trip-planning",
     });
@@ -1720,10 +1102,10 @@ describe("SlackAgentProcessor", () => {
       streamPath: "/agents/slack/nustom/c123/ts-111-222",
       threadTs: "111.222",
     });
-    const metadata = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/metadata-changed",
+    const summaries = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/summary-updated",
     );
-    expect(metadata).toHaveLength(0);
+    expect(summaries).toHaveLength(0);
     const bindings = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/binding-set",
     );

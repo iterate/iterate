@@ -3,9 +3,11 @@
 // system-context policy explicitly; the path never decides what kind of
 // processor exists on a stream.
 
+import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import {
   CapabilityHostProcessorContract,
@@ -14,6 +16,7 @@ import {
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+  AGENT_SUMMARY_INSTRUCTION,
   AgentProcessorContract,
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -22,22 +25,19 @@ import {
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
 
-const AGENT_METADATA_INSTRUCTION =
-  'Keep Iterate\'s agent UI current with itx.agent.setMetadata(...): set title once when the topic is clear and do not rewrite a good title; update activity on almost every working turn; keep summary to one or two sentences and change it only when durable purpose or conclusions change. When settled on a dependency, set waitingFor to "user_input", "external_event", or "timer"; runtime counts are normally emitted automatically and a qualifying wake clears the old wait. Never set pinned unless a human explicitly asks.';
-
 /**
  * These revisions identify exact, retryable setup occurrences. Change the
  * matching revision whenever the shipped event payload changes; the logical
  * context key still owns supersession inside the Agent projection.
  */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "2";
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "3";
 const AGENT_MODEL_POLICY_REVISION = "1";
 const AGENT_WORKSPACE_POLICY_REVISION = "2";
 const AGENT_BOOT_CONTEXT_REVISION = "2";
 
-export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "1";
-export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "1";
-export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "1";
+export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "2";
+export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "3";
+export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "2";
 // The MCP and onboarding prompts EMBED the default prompt, so their event
 // bodies change whenever it does — their occurrence identity must move with
 // every constituent revision, or an existing stream rejects the re-append as
@@ -83,7 +83,7 @@ export function slackAgentSystemPrompt(connection: string): string {
     'If asked about GitHub, use `const octokit = itx.integrations.github.get().octokit`; this 99% path selects the first connected installation. Only inspect `await itx.integrations.list()` and pass its connection slug to `get(slug)` when a particular installation matters. `octokit` is the all-in-one client from the `octokit` package, with Iterate supplying installation auth and transport: use `octokit.rest.*` for routine endpoints or `octokit.graphql(query, variables)` when GraphQL is a better fit. Use the package types and https://github.com/octokit/octokit.js/; there is no direct `.rest` or `.graphql` on the connection. GitHub repo.data.permissions is a user-style view and can report every flag false for a GitHub App installation that can write; never call the installation read-only from that field—attempt the requested operation and use GitHub\'s actual error if denied. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.get().request(...)]) — so the thread is never silent while you fetch.`,
-    AGENT_METADATA_INSTRUCTION,
+    AGENT_SUMMARY_INSTRUCTION,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
     `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call ${postMessage}. itx.scheduler.list() / cancel(key) manage schedules.`,
     'Use project capabilities on itx when they are relevant. TWO SEARCHES, ONE RULE — HOW: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities (word-overlap matching — synonyms buy recall; await itx.docs.get({ name }) fetches one). WHAT/WHEN: await itx.search.query({ q }) searches everything this project has accumulated — conversations, webhooks, events, files, repo — and every hit carries a ref back to the exact source; search before paging streams. await itx.__describe() works on every node, including provided capabilities.',
@@ -118,10 +118,10 @@ export function telegramAgentSystemPrompt(input: {
     `THREADS: this stream is one conversation session — /new from the user rotates the chat to a fresh session stream. When an input carries a reply-hint note (the user REPLIED to a message from a different thread, its stream path is in the note), or the user references earlier conversation you don't have, READ the referenced thread FIRST — before any repo/workspace exploration: await itx.streams.get(path).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] }). Those two event types ARE the transcript (user text in payload.body.message.text, your replies in payload.text); do NOT call getEvents unfiltered — the first page is subscriber/llm plumbing, not conversation — and if exactly 500 events come back, page with afterOffset: events.at(-1).offset to reach the recent end. Only then answer: INTO that thread by appending your send request to that stream instead of your own, or here — your judgement. No reply-hint and no idea which session? Search instead of paging: await itx.search.query({ q: <what the user referenced>, source: "streams" }) — hits carry a ref to the exact events.`,
     `For any other Bot API call (sendPhoto, sendDocument, editMessageText, answerCallbackQuery, …) use ${telegramConnection}.<method>(params) with ONE params object (https://core.telegram.org/bots/api) — these are immediate calls, not journaled sends, so pass chat_id yourself.`,
     'Messages are plain text by default. For formatting pass parse_mode: "HTML" with simple tags (<b>, <i>, <code>, <pre>, <a href>) — Telegram does NOT render markdown headings or tables, so prefer short plain-text replies.',
-    "v1 limitation: photos/voice/stickers people send arrive only as bracketed placeholders like [photo] — you cannot view them yet; say so if asked about one.",
+    `MEDIA: the raw webhook retains file_id. Use ${telegramConnection}.getFile, project egress with the connection's write-only bot-token secret, and itx.agent.addFiles.`,
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the chat in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${sendRequest(input.agentPath, '"Checking that now..."')}, itx.mcp.exa.web_search_exa({ query })]) — so the chat is never silent while you fetch.`,
-    AGENT_METADATA_INSTRUCTION,
+    AGENT_SUMMARY_INSTRUCTION,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
     `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this chat, bake the chat_id into it and call ${telegramConnection}.sendMessage (scheduled scripts outlive sessions, so use the direct call there, not a session send request). itx.scheduler.list() / cancel(key) manage schedules.`,
     'Use project capabilities on itx when they are relevant. TWO SEARCHES, ONE RULE — HOW: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities (word-overlap matching — synonyms buy recall; await itx.docs.get({ name }) fetches one). WHAT/WHEN: await itx.search.query({ q }) searches everything this project has accumulated — conversations, webhooks, events, files, repo — and every hit carries a ref back to the exact source; search before paging streams. await itx.__describe() works on every node, including provided capabilities.',
@@ -143,7 +143,7 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = [
   "ATTACHMENTS people email you are stored in project file storage and attached to your inputs automatically: images (png/jpeg/webp/svg) are directly visible to you — just look at them. Documents are NOT directly readable; convert them to markdown first with Cloudflare's converter: const bytes = await itx.files.get(path).bytes(); const [converted] = await itx.ai.toMarkdown([{ name: filename, blob: new Blob([bytes]) }]); converted.data is the markdown. Supported formats: PDF (.pdf), spreadsheets (.xlsx/.xlsm/.xlsb/.xls/.csv/.ods/.numbers), Word documents (.docx/.odt), HTML, XML, and images. The stored `path` for each attachment is in your input's file list.",
   'To attach files when replying (PDFs, images, any type): store bytes as a project file first (await itx.files.get("/email/report.pdf").put({ data, contentType })), then reply({ text, attachments: [{ path: "/email/report.pdf" }] }). Limits: 32 files, 5 MiB total per email.',
   "Email is not chat: one complete, well-written reply per inbound message. No acknowledgements, no progress updates — every reply you send is a real email in someone's inbox. Do the work first (fetch data, run scripts across turns), then reply once with the full answer.",
-  AGENT_METADATA_INSTRUCTION,
+  AGENT_SUMMARY_INSTRUCTION,
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
   "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
@@ -313,6 +313,20 @@ export function agentCreationForPath<
     processor: ["capabilityHosts", ["get", agentPath], "processor"],
     processorSlug: CapabilityHostProcessorContract.slug,
   });
+  const collectionSubscription = CoreProcessorContract.buildEvent({
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream/subscription-configured:${durableObjectName}#agent-collection`,
+    payload: {
+      subscriptionKey: "agent-collection",
+      description: "Project agent collection projection",
+      selector: {
+        eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],
+      },
+      delivery: { mode: "push", expression: ["agents", "processEvent"] },
+      // The subscription is configured in the same birth batch as created.
+      deliver: "all",
+    },
+  });
   const siblingBirthCertificates: SiblingBirthCertificate[] =
     input.sibling === undefined ? [] : [input.sibling.birthCertificate];
   const siblingSubscriptions =
@@ -342,6 +356,7 @@ export function agentCreationForPath<
       bootContext,
       agentSubscription,
       capabilityHostSubscription,
+      collectionSubscription,
       ...siblingSubscriptions,
     ],
   };

@@ -230,7 +230,7 @@ describe("ProjectProcessor bootstrap", () => {
 });
 
 describe("ProjectProcessor catalogs", () => {
-  it("keeps physical paths separate from explicitly created domain objects", async () => {
+  it("catalogs physical paths without folding agent collection facts", async () => {
     const { driver, network, stream } = makeHarness();
     await stream.append(PROJECT_CREATED);
     await driver.deliver();
@@ -259,12 +259,9 @@ describe("ProjectProcessor catalogs", () => {
     );
     await driver.deliver();
 
-    await expect(driver.snapshot()).resolves.toMatchObject({
-      state: {
-        agents: [{ path: "/agents/slack/main/C123/ts-1" }],
-        streams: [{ path: "/agents/slack" }],
-      },
-    });
+    const snapshot = await driver.snapshot();
+    expect(snapshot.state).toMatchObject({ streams: [{ path: "/agents/slack" }] });
+    expect(snapshot.state).not.toHaveProperty("agents");
     expect(network.eventsAt("/agents/slack")).toEqual([]);
   });
 });

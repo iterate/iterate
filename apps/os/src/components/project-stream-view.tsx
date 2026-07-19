@@ -5,13 +5,19 @@ import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/shee
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
   isAgentUiActivityWorking,
+  reduceAgentUiRuntime,
   type AgentUiLlmStep,
+  type AgentUiRuntimeTransition,
   type AgentUiState,
   type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/react";
+import {
+  connectItx,
+  connectIterateSession,
+  reportTransportSuspicion,
+  useLiveState,
+} from "iterate/react";
 import type { Stream } from "../itx-api.generated.ts";
-import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useStreamMirror } from "~/domains/streams/client-libraries/browser/hooks/use-stream-mirror.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
@@ -26,10 +32,7 @@ import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel
 import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
 import { ScriptExecutionInspectorContent } from "~/components/script-execution-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
-import {
-  StreamStatePanel,
-  type StreamRuntimeDebugState,
-} from "~/components/stream-state-panel.tsx";
+import { StreamStatePanel } from "~/components/stream-state-panel.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
@@ -49,6 +52,12 @@ import {
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 type ProjectStreamViewProps = {
+  /**
+   * Runtime supplied by a parent which already owns the selected agent's live
+   * subscription. `undefined` lets this generic stream view subscribe itself;
+   * `null` means the parent has no transition yet.
+   */
+  agentRuntimeTransition?: AgentUiRuntimeTransition | null;
   autoFocusMessageComposer?: boolean;
   /** Domain identity shown directly below the generic stream header. */
   contextHeader?: ReactNode;
@@ -146,6 +155,7 @@ function FullPanelProjectStreamView({
 }
 
 function MirroredProjectStreamView({
+  agentRuntimeTransition: suppliedAgentRuntimeTransition,
   autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
@@ -196,8 +206,34 @@ function MirroredProjectStreamView({
     void store.nudge();
   }, [store]);
 
+  const subscribedAgentRuntimeTransition = useLiveState(
+    (itx) => itx.agents.get(streamPath).liveState,
+    (state) => state.runtimeChange,
+    [streamPath],
+    {
+      slug: projectId ?? "",
+      enabled:
+        suppliedAgentRuntimeTransition === undefined &&
+        projectId !== null &&
+        streamPath.startsWith("/agents/"),
+    },
+  ).value;
+  const agentRuntimeTransition =
+    suppliedAgentRuntimeTransition === undefined
+      ? subscribedAgentRuntimeTransition
+      : (suppliedAgentRuntimeTransition ?? undefined);
+  const agentPresentation = useMemo(() => {
+    if (agentUiState == null || agentRuntimeTransition == null) {
+      return { state: agentUiState, transientItems: [] };
+    }
+    const projected = reduceAgentUiRuntime(agentUiState, agentRuntimeTransition);
+    return { state: projected.endState, transientItems: projected.items };
+  }, [agentUiState, agentRuntimeTransition]);
+  const presentedAgentUiState = agentPresentation.state;
+  const agentRuntime = agentRuntimeTransition?.runtime;
+
   const runningLlmRequestId =
-    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
+    presentedAgentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
   const interrupt = useAgentInterrupt({
     onInterrupt: messageComposer?.onInterrupt,
     runningLlmRequestId,
@@ -210,9 +246,8 @@ function MirroredProjectStreamView({
     window.location.reload();
   }
 
-  const { getProcessorRuntimeState, getStreamRuntimeState } = useProcessorsPanelDebugState({
+  const { getProcessorRuntimeState } = useProcessorsPanelDebugState({
     resolvedStreamSource,
-    store,
     streamPath,
   });
 
@@ -220,11 +255,8 @@ function MirroredProjectStreamView({
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy = isAgentUiActivityWorking(
-    agentUiState?.live ?? null,
-    agentUiState?.runtimeChange?.runtime,
-  );
-  const presence = agentUiState?.presence ?? [];
+  const agentBusy = isAgentUiActivityWorking(presentedAgentUiState?.live ?? null, agentRuntime);
+  const presence = presentedAgentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,
     resolvedStreamSource,
@@ -261,7 +293,9 @@ function MirroredProjectStreamView({
           : null,
         raw: caps.rawFeed ? rawFilter : null,
       }}
-      liveState={caps.agentFeed ? agentUiState : null}
+      liveState={caps.agentFeed ? presentedAgentUiState : null}
+      transientAgentItems={caps.agentFeed ? agentPresentation.transientItems : []}
+      runtime={agentRuntime}
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
       {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
@@ -271,7 +305,9 @@ function MirroredProjectStreamView({
     />
   );
 
-  const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
+  const queuedUserMessages = caps.agentFeed
+    ? (presentedAgentUiState?.queuedUserMessages ?? [])
+    : [];
 
   // The feed column — mode body with inspectors on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
@@ -281,7 +317,7 @@ function MirroredProjectStreamView({
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {modeBody}
         <StreamInspectorSheet
-          agentUiState={agentUiState}
+          agentUiState={presentedAgentUiState}
           caps={caps}
           panels={panels}
           database={store.streamDatabase}
@@ -335,9 +371,9 @@ function MirroredProjectStreamView({
       onClose={panels.closeProcessorsPanel}
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
-      getStreamRuntimeState={getStreamRuntimeState}
+      projectId={projectId}
       streamPath={streamPath}
-      tokenUsage={caps.agentFeed ? (agentUiState?.tokenUsage ?? null) : null}
+      tokenUsage={caps.agentFeed ? (presentedAgentUiState?.tokenUsage ?? null) : null}
     />
   );
 
@@ -654,41 +690,23 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
 }
 
 /**
- * The processors sheet's on-demand debug accessors: server-side runtime state
- * for one processor subscription (plus the stream's max offset for lag math)
- * and for the stream itself. Dialed fresh per call — debug reads must see the
- * server's CURRENT state, not a cached snapshot.
+ * The processors sheet's one on-demand debug accessor: reduced state for the
+ * focused processor. Stream runtime diagnostics arrive separately through
+ * the LiveState subscription, including the head offset used for lag math.
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;
-  store: StreamBrowserStore;
   streamPath: string;
 }) {
-  const { resolvedStreamSource, store, streamPath } = args;
+  const { resolvedStreamSource, streamPath } = args;
   const getProcessorRuntimeState = useCallback(
     async (subscriptionKey: string) => {
       const stream = await resolvedStreamSource(streamPath);
-      const [runtimeState, streamRuntimeState] = await Promise.all([
-        stream.getProcessorRuntimeState({ subscriptionKey }),
-        stream.runtimeState(),
-      ]);
-      return {
-        runtimeState,
-        // The itx Stream.runtimeState() types coreProcessorState as
-        // unknown; parse out the slice this panel needs.
-        streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
-          .maxOffset,
-      };
+      return stream.getProcessorRuntimeState({ subscriptionKey });
     },
     [resolvedStreamSource, streamPath],
   );
-  // Through the store's leader socket, not a fresh dial: the same call then
-  // doubles as a transport-RTT sample for the header/panel metrics.
-  const getStreamRuntimeState = useCallback(
-    (): Promise<StreamRuntimeDebugState> => store.debugRuntimeState(),
-    [store],
-  );
-  return { getProcessorRuntimeState, getStreamRuntimeState };
+  return { getProcessorRuntimeState };
 }
 
 /**

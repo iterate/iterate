@@ -63,8 +63,6 @@ export class ProjectProcessor extends StreamProcessor<
         return recordPhysicalStream(state, event.payload.path, event.createdAt);
       case "events.iterate.com/stream/child-stream-created":
         return recordPhysicalStream(state, event.payload.childPath, event.createdAt);
-      case "events.iterate.com/agent/created":
-        return recordDomainObject(state, "agents", event);
       case "events.iterate.com/device/created":
         return recordDomainObject(state, "devices", event);
       case "events.iterate.com/repo/created":
@@ -421,7 +419,6 @@ export class ProjectProcessor extends StreamProcessor<
 
 function recordPhysicalStream<
   State extends {
-    agents: StreamListItem[];
     repos: StreamListItem[];
     secrets: StreamListItem[];
     streams: StreamListItem[];
@@ -436,12 +433,11 @@ function recordPhysicalStream<
 
 function recordDomainObject<
   State extends {
-    agents: StreamListItem[];
     devices: StreamListItem[];
     repos: StreamListItem[];
     secrets: StreamListItem[];
   },
-  Key extends "agents" | "devices" | "repos" | "secrets",
+  Key extends "devices" | "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
   const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
   if (path === undefined) return state;

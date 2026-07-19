@@ -1,6 +1,7 @@
 import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import { DefaultNotFoundComponent } from "@iterate-com/ui/components/route-defaults";
+import { capturePosthogException } from "@iterate-com/ui/components/posthog";
 import { createIterateQueryClient } from "iterate/react";
 import { RoutePending } from "./components/route-pending.tsx";
 import { routeTree } from "./routeTree.gen.ts";
@@ -20,6 +21,9 @@ export function getRouter() {
     context: { queryClient },
     defaultPreload: "intent",
     defaultNotFoundComponent: () => <DefaultNotFoundComponent />,
+    // TanStack catches at the nearest route match; the router default is the
+    // app-wide hook (a root-route onCatch would miss child route failures).
+    defaultOnCatch: capturePosthogException,
     // Without a default pending component, an `ssr: false` route subtree (the
     // whole project layout) renders a BLANK outlet in the SSR shell and again
     // while `beforeLoad`/`loader` run on the client — for a direct hit on

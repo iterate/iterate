@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * JSON/YAML schema validation: a well-known file (here `package.json`, mapped
@@ -29,7 +30,7 @@ test("flags a package.json schema violation with a red squiggle", async ({
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
-  await page.locator('[data-item-path="package.json"]').click();
+  await openRepoTreeFile(page, "package.json");
   await page.locator(".cm-content").filter({ hasText: '"name": 123' }).waitFor();
 
   // Once the schema loads, the invalid value gets the lint squiggle. The

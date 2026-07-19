@@ -1,9 +1,4 @@
-import {
-  AgentLlmRequestCancelReason,
-  AgentRuntimeChange,
-  mergeAgentRuntimeChange,
-  type AgentRuntime,
-} from "@iterate-com/shared/agent-events";
+import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
 import { z } from "zod";
 import type { Event } from "./types.ts";
@@ -321,8 +316,6 @@ export type AgentUiState = {
   presence: AgentUiPresenceEntry[];
   /** Lifetime token totals + the latest report (context fullness). */
   tokenUsage: AgentUiTokenUsage;
-  /** Latest exact runtime counts and their monotonic generation. */
-  runtimeChange: AgentRuntimeChange | null;
   /**
    * Settled activities whose script outcome was inferred at a boundary rather
    * than supplied by a durable completion. A late completion replaces the
@@ -439,7 +432,6 @@ export const AgentUiStateSchema = z
     eventCount: z.number().int().nonnegative(),
     presence: z.array(AgentUiPresenceEntrySchema),
     tokenUsage: AgentUiTokenUsageSchema,
-    runtimeChange: AgentRuntimeChange.nullable(),
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
   })
   .superRefine((state, context) => {
@@ -478,7 +470,6 @@ export function initialAgentUiState(): AgentUiState {
     eventCount: 0,
     presence: [],
     tokenUsage: initialAgentUiTokenUsage(),
-    runtimeChange: null,
     provisionalActivities: {},
   };
 }
@@ -498,6 +489,46 @@ export function reduceAgentUi(
   return { endState, items };
 }
 
+/**
+ * Exact runtime state exposed by the individual Agent processor. This is a
+ * live presentation boundary, deliberately not an event in the agent journal.
+ */
+export type AgentUiRuntimeTransition = {
+  runtime: AgentRuntime;
+  sinceOffset: number;
+  since: string;
+};
+
+/**
+ * Project the journal-reduced UI state through the Agent processor's current
+ * runtime. Callers render the returned items as a transient tail; the browser
+ * feed database remains a reduction of journal facts only.
+ */
+export function reduceAgentUiRuntime(
+  start: AgentUiState,
+  transition: AgentUiRuntimeTransition,
+): { endState: AgentUiState; items: AgentUiItem[] } {
+  const boundaryAtMs = Date.parse(transition.since);
+  if (!Number.isFinite(boundaryAtMs)) {
+    return { endState: start, items: [] };
+  }
+
+  if (isAgentRuntimeVisiblyActive(transition.runtime)) {
+    return {
+      endState: {
+        ...start,
+        live: ensureLive(start, transition.sinceOffset, boundaryAtMs),
+      },
+      items: [],
+    };
+  }
+
+  const items: AgentUiItem[] = [];
+  const expired = expireOverdueCodeSteps(start, boundaryAtMs);
+  const endState = flushDeferredMessages(settleLive(expired, boundaryAtMs, items), items);
+  return { endState, items };
+}
+
 /** Append a settled item in emission order. */
 function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem): AgentUiState {
   items.push(item);
@@ -512,7 +543,6 @@ const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-reques
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
 const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
-const AGENT_RUNTIME_CHANGED = "events.iterate.com/agent/runtime-changed";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
@@ -781,23 +811,6 @@ function reduceAgentUiEvent(
       return { ...state, live: { ...state.live, steps } };
     }
 
-    case AGENT_RUNTIME_CHANGED: {
-      const parsed = AgentRuntimeChange.safeParse(event.payload);
-      if (!parsed.success) return state;
-      const current = state.runtimeChange ?? undefined;
-      const runtimeChange = mergeAgentRuntimeChange(current, parsed.data);
-      if (runtimeChange === current) return state;
-      const next = { ...state, runtimeChange };
-      if (isAgentRuntimeVisiblyActive(runtimeChange.runtime)) {
-        return { ...next, live: ensureLive(next, event.offset, timestampMs) };
-      }
-      // A settled runtime is the authoritative run boundary. Request completion facts are
-      // durable, so a still-running step here is an explicit failed/unknown
-      // lifecycle rather than a successful-looking silent close.
-      const expired = expireOverdueCodeSteps(next, timestampMs);
-      return flushDeferredMessages(settleLive(expired, timestampMs, items), items);
-    }
-
     case AGENT_TOKEN_USAGE_REPORTED: {
       const model = readString(event, "model");
       const maxContextTokens = readNumber(event, "maxContextTokens");
@@ -992,7 +1005,7 @@ function settleLiveIfIdle(
   endedAtMs: number,
   items: AgentUiItem[],
 ): AgentUiState {
-  if (isAgentUiActivityWorking(state.live, state.runtimeChange?.runtime)) return state;
+  if (isAgentUiActivityWorking(state.live, undefined)) return state;
   return settleLive(state, endedAtMs, items);
 }
 
@@ -1116,7 +1129,7 @@ function emitUserMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live, settled.runtimeChange?.runtime)) {
+  if (isAgentUiActivityWorking(settled.live, undefined)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
   const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
@@ -1134,7 +1147,7 @@ function emitAssistantMessageItem(
   item: AgentUiMessageItem,
 ): AgentUiState {
   const settled = settleActivityAtBoundary(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live, settled.runtimeChange?.runtime)) {
+  if (isAgentUiActivityWorking(settled.live, undefined)) {
     return {
       ...settled,
       deferredAssistantMessages: [...settled.deferredAssistantMessages, item],

@@ -56,6 +56,7 @@ import {
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
+import { seedTemplateWorkerArtifacts } from "./lib/seed-template-worker-artifact.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 
@@ -71,6 +72,20 @@ export function assertPreviewPetshopIntegrationConfigured(
       `${envName} requires ${PREVIEW_PETSHOP_CONFIG} so OS preview e2e can exercise the deployed dummy Petshop.`,
     );
   }
+}
+
+/** Build-only PostHog credentials: available to Vite, never shipped as Worker bindings. */
+export function posthogBuildEnv(secrets: Record<string, string | undefined>) {
+  return {
+    POSTHOG_PERSONAL_API_KEY: requiredBuildSecret(secrets, "POSTHOG_PERSONAL_API_KEY"),
+    POSTHOG_PROJECT_ID: requiredBuildSecret(secrets, "POSTHOG_PROJECT_ID"),
+  };
+}
+
+function requiredBuildSecret(secrets: Record<string, string | undefined>, name: string) {
+  const value = secrets[name]?.trim();
+  if (!value) throw new Error(`${name} is required to upload OS source maps`);
+  return value;
 }
 
 function osSmokes(env: DeployedEnv) {
@@ -133,6 +148,7 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
+    buildEnv: (ctx) => posthogBuildEnv(ctx.secrets),
     prepare: async (ctx, secretValues, credentials) => {
       // These are permanent fail-closed invariants, not a migration path.
       // Omitted Wrangler secrets survive code uploads, so check the current
@@ -207,23 +223,31 @@ export default async function deploy(
         compatibilityDate: COMPATIBILITY_DATE,
       });
 
-      // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER
-      // service bindings are by name, and a binding to a not-yet-existing
-      // script fails the deploy. Sidecars have no secrets and no vite build —
-      // wrangler bundles their entries directly (the toolchain wasm rides as
-      // a wasm module). Builder skew window: between this deploy and the os
-      // deploy (or if the os deploy fails), a bundler/schema-version bump
-      // means the os worker hashes the OLD key prefix while the builder
-      // writes the new one — the cache runs cold (correct output via
-      // by-value returns, every request rebuilds) until the os deploy lands.
-      // If "cache never hits" appears mid-rollout, finish the deploy.
+      // Prebuild the deterministic project template's root worker and Vite
+      // app under trusted content-only keys. Fresh projects then avoid
+      // request-scoped container builds; edited projects get new keys and
+      // continue through the project-scoped runtime builder.
+      await seedTemplateWorkerArtifacts({
+        accountId: ctx.env.cloudflareAccountId,
+        apiToken: credentials.CLOUDFLARE_API_TOKEN!,
+        iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
+        kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
+      });
+
+      // The typechecker sidecar deploys FIRST: the os worker's TYPECHECKER
+      // service binding is by name, and a binding to a not-yet-existing
+      // script fails the deploy. The sidecar has no secrets and no vite
+      // build — wrangler bundles its entry directly (the compiler wasm rides
+      // as a wasm module).
       writeWranglerConfig();
-      for (const sidecarConfig of ["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"]) {
-        run("pnpm", ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name], {
+      run(
+        "pnpm",
+        ["exec", "wrangler", "deploy", "--config", "wrangler.typechecker.jsonc", "--env", ctx.name],
+        {
           cwd: fileURLToPath(new URL("..", import.meta.url)),
           env: credentials,
-        });
-      }
+        },
+      );
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {

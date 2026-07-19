@@ -17,9 +17,11 @@ It combines:
   — and as the **project directory**: OS has no database of its own; slug →
   project id resolution goes through the auth worker with a `PROJECT_DIRECTORY`
   KV cache in front. All other durable state lives in Durable Object SQLite.
-- **One deployed worker** (plus the builder sidecar for dynamic worker
-  builds) — dashboard, itx API, and every Durable Object class in a single
-  script. See [docs/worker-topology.md](./docs/worker-topology.md).
+- **One deployed worker** (plus the typechecker sidecar) — dashboard, itx
+  API, and every Durable Object class in a single script. Dynamic workers
+  build in the deployment's builder pool of sandbox containers
+  (`src/domains/workers/builder-pool-sandbox.ts`). See
+  [docs/worker-topology.md](./docs/worker-topology.md).
 
 Integrations are connections at fully qualified paths
 (`/integrations/<slug>/<connection>`): built-ins (Slack, Google) are named
@@ -177,8 +179,8 @@ Project-scoped and platform-wide operator browser sessions are documented in
 
 - `src/` — **itx**: `types.ts` (public contract),
   `rpc-targets.ts` (all RpcTargets), `auth.ts`, `domains/*` (DOs + stream
-  processors), `worker.ts` (the worker entry), `builder.ts` (the builder
-  sidecar entry). See [src/README.md](./src/README.md).
+  processors), `worker.ts` (the worker entry). See
+  [src/README.md](./src/README.md).
 - `src/itx/` — the client-side itx surface (browser hooks now live in the\n `iterate` package — `iterate/client` + `iterate/react`):
   `browser-repl.ts` (REPL compiler), `examples.ts` (the example catalogue),
   `e2e/` (the example matrix). itx itself lives in `src/`.

@@ -2,6 +2,7 @@ import {
   isAuthHandlerRequest,
   type AuthenticatedSession,
   type AuthenticateErrorEvent,
+  withAuthenticationResponseHeaders,
 } from "@iterate-com/auth/server";
 import { createMiddleware } from "@tanstack/react-start";
 import type { RequestContext } from "~/request-context.ts";
@@ -13,11 +14,8 @@ import {
   authenticateOperatorSession,
   type AuthenticatedOperatorSession,
 } from "~/auth/operator-session.ts";
-import {
-  principalFromAccessToken,
-  principalFromSession,
-  type Principal,
-} from "~/auth/principal.ts";
+import { getUserPrincipal, principalFromIdentity, type Principal } from "~/auth/principal.ts";
+import { withPosthogExceptionCapture } from "~/observability/posthog.ts";
 
 // Registered as requestMiddleware in src/start.ts — `type: "request"` makes
 // early `Response` returns part of the contract (and the context it passes to
@@ -26,10 +24,8 @@ import {
 export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {
     const auth = createOsIterateAuth(context.config, request.url);
-    const authHandlerResponse = auth?.handleRequest(request) ?? null;
-    if (authHandlerResponse) {
-      return authHandlerResponse;
-    }
+    const authHandlerResponse = (await auth?.fetch(request)) ?? null;
+    if (authHandlerResponse) return authHandlerResponse;
     if (!auth && isAuthHandlerRequest(request)) {
       return new Response("Iterate auth is not configured.", { status: 503 });
     }
@@ -56,24 +52,66 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
 
     const resolvedAuth = await resolveRequestAuth({ auth, context, request });
 
-    const result = await next({
-      context: {
-        principal: resolvedAuth.principal,
-        operatorSession: resolvedAuth.operatorSession,
-        iterateAuthSession: resolvedAuth.session,
-        iterateAuthError: resolvedAuth.error,
-        rawRequest: request,
+    const user = getUserPrincipal(resolvedAuth.principal);
+    const result = await withPosthogExceptionCapture(
+      {
+        config: context.config,
+        distinctId: user?.userId ?? resolvedAuth.operatorSession?.grant.operatorId,
+        operation: context.executionCtx,
+        projectId:
+          resolvedAuth.operatorSession?.grant.kind === "project"
+            ? resolvedAuth.operatorSession.grant.project.id
+            : requestProjectId(request, user?.projects ?? []),
+        request,
+        waitUntil: context.waitUntil,
       },
-    });
+      () =>
+        next({
+          context: {
+            principal: resolvedAuth.principal,
+            operatorSession: resolvedAuth.operatorSession,
+            iterateAuthSession: resolvedAuth.session,
+            iterateAuthError: resolvedAuth.error,
+            rawRequest: request,
+          },
+        }),
+    );
 
-    const setCookie = resolvedAuth.responseHeaders.get("set-cookie");
-    if (setCookie) {
-      result.response.headers.append("set-cookie", setCookie);
-    }
-
-    return result;
+    const response = withAuthenticationResponseHeaders(
+      result.response,
+      resolvedAuth.responseHeaders,
+    );
+    return response === result.response ? result : { ...result, response };
   },
 );
+
+export function requestProjectId(request: Request, projects: Array<{ id: string; slug: string }>) {
+  const requestUrl = new URL(request.url);
+  const pathnames = [requestUrl.pathname];
+  const projectIdBySlug = new Map(projects.map((project) => [project.slug, project.id]));
+  const referrer = request.headers.get("referer");
+  if (referrer) {
+    try {
+      const referrerUrl = new URL(referrer);
+      if (referrerUrl.origin === requestUrl.origin) pathnames.push(referrerUrl.pathname);
+    } catch {
+      // A malformed/spoofed referrer is not analytics identity.
+    }
+  }
+
+  for (const pathname of pathnames) {
+    const encodedSlug = /^\/projects\/([^/]+)/u.exec(pathname)?.[1];
+    if (!encodedSlug) continue;
+    try {
+      const slug = decodeURIComponent(encodedSlug);
+      const projectId = projectIdBySlug.get(slug);
+      if (projectId) return projectId;
+    } catch {
+      // Keep looking; malformed percent escapes cannot identify a project.
+    }
+  }
+  return undefined;
+}
 
 /** GET/HEAD requests under the client build's asset prefix (including sourcemaps). */
 export function isPublicAssetRequest(request: Request): boolean {
@@ -92,10 +130,10 @@ async function resolveRequestAuth(input: {
   operatorSession: AuthenticatedOperatorSession | null;
   responseHeaders: Headers;
 }> {
-  const adminApiPrincipal = authenticateAdminApiSecret(input.context, input.request);
-  if (adminApiPrincipal) {
+  const adminPrincipal = authenticateAdminApiSecret(input.context, input.request);
+  if (adminPrincipal) {
     return {
-      principal: adminApiPrincipal,
+      principal: adminPrincipal,
       session: null,
       error: undefined,
       operatorSession: null,
@@ -117,83 +155,41 @@ async function resolveRequestAuth(input: {
     };
   }
 
-  const sessionAuth = await authenticateSession({
-    auth: input.auth,
-    context: input.context,
-    headers: input.request.headers,
-    request: input.request,
-  });
-  if (sessionAuth.principal) {
-    return { ...sessionAuth, operatorSession: null };
-  }
-
-  const bearerPrincipal = await authenticateBearerPrincipal({
-    auth: input.auth,
-    headers: input.request.headers,
-  });
-  return {
-    principal: bearerPrincipal,
-    session: sessionAuth.session,
-    error: sessionAuth.error,
-    operatorSession: null,
-    responseHeaders: sessionAuth.responseHeaders,
-  };
-}
-
-async function authenticateSession(input: {
-  auth: OsIterateAuth | null;
-  context: Pick<RequestContext, "config" | "log">;
-  headers: Headers;
-  request: Request;
-}): Promise<{
-  principal: Principal | null;
-  session: AuthenticatedSession | null;
-  error?: SignInAuthError;
-  responseHeaders: Headers;
-}> {
   if (!input.auth) {
     return {
       principal: null,
       session: null,
       error: undefined,
+      operatorSession: null,
       responseHeaders: new Headers(),
     };
   }
 
   let authError: AuthenticateErrorEvent | null = null;
-  const result = await input.auth.authenticate({
-    headers: input.headers,
-    includeUserInfo: false,
+  const authentication = await input.auth.authenticate({
+    headers: input.request.headers,
     onError: (event) => {
       authError = event;
     },
   });
-  const hasSessionCookie = /(?:^|;\s*)iterate_session=/u.test(input.headers.get("cookie") ?? "");
+  const hasSessionCookie = /(?:^|;\s*)iterate_session=/u.test(
+    input.request.headers.get("cookie") ?? "",
+  );
   const error =
-    !result.session && authError && hasSessionCookie ? "session_verification_failed" : undefined;
-  if (authError && error) {
-    logAuthSessionVerificationFailure({
-      context: input.context,
-      error: authError,
-    });
-  }
+    authentication.credential !== "session" && authError && hasSessionCookie
+      ? "session_verification_failed"
+      : undefined;
+  if (authError && error)
+    logAuthSessionVerificationFailure({ context: input.context, error: authError });
 
   return {
-    principal: result.session ? principalFromSession(result.session) : null,
-    session: result.session,
+    principal:
+      authentication.credential === null ? null : principalFromIdentity(authentication.identity),
+    session: authentication.credential === "session" ? authentication.session : null,
     error,
-    responseHeaders: result.responseHeaders,
+    operatorSession: null,
+    responseHeaders: authentication.responseHeaders,
   };
-}
-
-async function authenticateBearerPrincipal(input: {
-  auth: OsIterateAuth | null;
-  headers: Headers;
-}): Promise<Principal | null> {
-  if (!input.auth) return null;
-
-  const accessToken = await input.auth.authenticateBearer({ headers: input.headers });
-  return accessToken ? principalFromAccessToken(accessToken) : null;
 }
 
 function logAuthSessionVerificationFailure(input: {

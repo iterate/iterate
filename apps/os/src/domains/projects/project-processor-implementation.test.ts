@@ -38,7 +38,6 @@ function projectState(
   customDomains: CustomDomainReduceInput["state"]["customDomains"] = [],
 ): CustomDomainReduceInput["state"] {
   return {
-    agents: [],
     devices: [],
     birthCertificate: { config: { slug: project.slug } },
     customDomains,

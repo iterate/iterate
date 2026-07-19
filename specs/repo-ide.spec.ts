@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * The repos mini IDE golden path: a repo page is a small vscode — pierre file
@@ -25,7 +26,7 @@ test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
   // Open a seeded file from the tree (pierre renders rows in a shadow root;
   // playwright locators pierce it — target the exact path, the template also
   // ships an integrations/waitrose/README.md) and edit it.
-  await page.locator('[data-item-path="README.md"]').click();
+  await openRepoTreeFile(page, "README.md");
   await page.locator(".cm-content").click();
   // Select-all + ArrowRight parks the cursor at the end of the document on
   // every platform (Cmd/Ctrl+End bindings differ between mac and linux).

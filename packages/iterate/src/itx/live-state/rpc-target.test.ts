@@ -46,4 +46,26 @@ describe("LiveStateRpcTarget", () => {
 
     await expect(new LiveStateRpcTarget(live).get()).resolves.toEqual({ count: 1 });
   });
+
+  it("registers the first observer without yielding after a synchronous refresh", async () => {
+    vi.useFakeTimers();
+    let sourceCount = 0;
+    const live = new LiveState({ count: -1 }, { debounceMs: 0 });
+    const store = createLiveStateStore<{ count: number }>();
+    const target = new LiveStateRpcTarget({
+      live,
+      loadAndRefreshLive() {
+        live.setState({ count: sourceCount });
+        queueMicrotask(() => {
+          sourceCount += 1;
+          if (live.observed) live.setState({ count: sourceCount });
+        });
+      },
+    });
+
+    using _subscription = await target.subscribe((update) => store.apply(update, vi.fn()));
+    await vi.runAllTimersAsync();
+
+    expect(store.getState()).toEqual({ count: 1 });
+  });
 });

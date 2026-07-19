@@ -202,6 +202,10 @@ function extractPublicConfigSchemaInternal(schema: z.ZodTypeAny): z.ZodTypeAny |
     return publicInnerSchema ? publicInnerSchema.optional() : null;
   }
 
+  if (schema instanceof z.ZodDefault) {
+    return extractPublicConfigSchemaInternal(schema.unwrap() as z.ZodTypeAny);
+  }
+
   if (schema instanceof z.ZodArray) {
     const publicElementSchema = extractPublicConfigSchemaInternal(schema.element as z.ZodTypeAny);
     if (!publicElementSchema) {

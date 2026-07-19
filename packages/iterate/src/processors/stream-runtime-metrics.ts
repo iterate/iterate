@@ -157,10 +157,12 @@ export type ThroughputReport = {
   series: ThroughputSeries;
 };
 
-/** What `runtimeState()` reports for the stream's own throughput. */
+/** What a stream runtime snapshot reports for the stream's own throughput. */
 export type StreamThroughputMetrics = {
   /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
   measuredSince: string;
+  /** ISO timestamp anchoring the trailing windows and final series bucket. */
+  reportedAt: string;
   /** Appends committed (all producers). */
   ingress: ThroughputReport;
   /** Deliveries dispatched (all lanes, all subscribers). */
@@ -189,10 +191,51 @@ export class StreamRuntimeMetrics {
     };
     return {
       measuredSince: new Date(this.#measuredSinceMs).toISOString(),
+      reportedAt: new Date(nowMs).toISOString(),
       ingress: direction(this.ingress),
       egress: direction(this.egress),
     };
   }
+}
+
+/**
+ * Age an event-driven throughput snapshot against the local wall clock. This
+ * keeps trailing windows truthful during silence without polling the stream.
+ */
+export function ageStreamThroughputMetrics(
+  metrics: StreamThroughputMetrics,
+  nowMs: number,
+): StreamThroughputMetrics {
+  const reportedAtMs = Date.parse(metrics.reportedAt);
+  if (!Number.isFinite(reportedAtMs)) return metrics;
+
+  const elapsedSeconds = Math.max(0, Math.floor(nowMs / 1_000) - Math.floor(reportedAtMs / 1_000));
+  if (elapsedSeconds === 0) return metrics;
+
+  const age = (report: ThroughputReport): ThroughputReport => {
+    const shift = (values: number[]) => {
+      const seconds = Math.min(values.length, elapsedSeconds);
+      return [...values.slice(seconds), ...new Array<number>(seconds).fill(0)];
+    };
+    const counts = shift(report.series.counts);
+    const bytes = shift(report.series.bytes);
+    const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+    const count = sum(counts);
+    const byteCount = sum(bytes);
+
+    return {
+      perSecond5s: sum(counts.slice(-5)) / 5,
+      bytesPerSecond5s: sum(bytes.slice(-5)) / 5,
+      lastMinute: { count, bytes: byteCount, perSecond: count / 60 },
+      series: { counts, bytes },
+    };
+  };
+
+  return {
+    ...metrics,
+    ingress: age(metrics.ingress),
+    egress: age(metrics.egress),
+  };
 }
 
 /**

@@ -8,7 +8,7 @@ import {
   posthogSubscriptionEvent,
 } from "./posthog.ts";
 
-const POSTHOG_STREAM_EVENT = "stream:append";
+const posthogEventName = (event: StreamEvent) => `append:${event.type}`;
 const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
@@ -109,7 +109,7 @@ describe("first-party PostHog stream integration", () => {
     ).not.toThrow();
   });
 
-  it("captures the complete durable committed event and raw stream path", async () => {
+  it("captures the raw durable event with only useful indexed dimensions", async () => {
     const durable = streamEvent();
     const requests: CapturedRequest[] = [];
     const captureFetch = acceptingFetch(requests);
@@ -125,20 +125,20 @@ describe("first-party PostHog stream integration", () => {
     expect(new Headers(init?.headers).has("Authorization")).toBe(false);
     expect(requests[0]).toMatchObject({ api_key: "phc_test" });
     expect(requests[0]!.batch).toHaveLength(1);
-    expect(requests[0]!.batch[0]).toMatchObject({
-      event: POSTHOG_STREAM_EVENT,
-      properties: {
-        $groups: { project: "prj_123" },
-        distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
-        project_id: "prj_123",
-        stream_path: "/agents/ada",
-        stream_event: durable,
-        stream_event_original_json_bytes: jsonBytes(durable),
-        stream_event_truncated: false,
-        stream_event_ephemeral: false,
-        stream_event_type: durable.type,
-        stream_event_uuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
-      },
+    const occurrence = requests[0]!.batch[0]!;
+    expect(occurrence).toMatchObject({
+      event: posthogEventName(durable),
+    });
+    expect(occurrence.properties).toEqual({
+      $geoip_disable: true,
+      $groups: { project: "prj_123" },
+      $is_server: true,
+      distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
+      stream_event: durable,
+      stream_event_original_json_bytes: jsonBytes(durable),
+      stream_event_truncated: false,
+      stream_event_type: durable.type,
+      stream_path: "/agents/ada",
     });
   });
 
@@ -168,10 +168,9 @@ describe("first-party PostHog stream integration", () => {
     expect(mixedFetch).toHaveBeenCalledOnce();
     expect(mixed[0]!.batch).toHaveLength(1);
     expect(mixed[0]!.batch[0]).toMatchObject({
-      event: POSTHOG_STREAM_EVENT,
+      event: posthogEventName(durable),
       properties: {
         stream_event: durable,
-        stream_event_ephemeral: false,
       },
     });
 
@@ -184,7 +183,7 @@ describe("first-party PostHog stream integration", () => {
     expect(onlyEphemeral).toEqual([]);
   });
 
-  it("bounds an oversized committed event without filtering its indexed coordinates", async () => {
+  it("bounds an oversized committed event while retaining its useful dimensions", async () => {
     const oversized = streamEvent({
       payload: {
         answer: 42,
@@ -199,9 +198,8 @@ describe("first-party PostHog stream integration", () => {
 
     const occurrence = requests[0]!.batch[0]!;
     const properties = occurrence.properties as Record<string, unknown>;
-    expect(occurrence.event).toBe(POSTHOG_STREAM_EVENT);
+    expect(occurrence.event).toBe(posthogEventName(oversized));
     expect(properties).toMatchObject({
-      project_id: "prj_123",
       stream_event_original_json_bytes: jsonBytes(oversized),
       stream_event_truncated: true,
       stream_event_type: oversized.type,
@@ -216,7 +214,7 @@ describe("first-party PostHog stream integration", () => {
     });
   });
 
-  it("models one project group by immutable id and its creation slug without filtering payload", async () => {
+  it("identifies the project group from the authentic project birth", async () => {
     const created = streamEvent({
       type: "events.iterate.com/project/created",
       path: "/",
@@ -238,19 +236,44 @@ describe("first-party PostHog stream integration", () => {
 
     await capturePosthogStreamEventBatch(args, { fetch: acceptingFetch(requests) });
 
+    expect(requests[0]!.batch).toHaveLength(3);
     expect(requests[0]!.batch[0]).toMatchObject({
       event: "$groupidentify",
       properties: {
         $group_key: "prj_123",
-        $group_set: { id: "prj_123", name: "gold-path", slug: "gold-path" },
+        $group_set: {
+          id: "prj_123",
+          name: "gold-path",
+          slug: "gold-path",
+        },
         $group_type: "project",
         distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
       },
     });
     expect(requests[0]!.batch[1]).toMatchObject({
-      event: POSTHOG_STREAM_EVENT,
-      properties: { stream_event: JSON.parse(JSON.stringify(created)) },
+      event: "$set",
+      properties: {
+        $groups: { project: "prj_123" },
+        $set: { name: "project:gold-path" },
+        distinct_id: expect.stringMatching(/^iterate-os-project:[0-9a-f-]{36}$/),
+      },
     });
+    const capturedBirth = requests[0]!.batch[2]!;
+    expect(capturedBirth).toMatchObject({
+      event: posthogEventName(created),
+      properties: {
+        $groups: { project: "prj_123" },
+      },
+    });
+    expect(JSON.stringify((capturedBirth.properties as Record<string, unknown>).stream_event)).toBe(
+      JSON.stringify(created),
+    );
+
+    const ephemeralFetch = acceptingFetch();
+    const ephemeralArgs = captureArgs([{ ...created, ephemeral: true }]);
+    ephemeralArgs.batch.path = "/";
+    await capturePosthogStreamEventBatch(ephemeralArgs, { fetch: ephemeralFetch });
+    expect(ephemeralFetch).not.toHaveBeenCalled();
   });
 
   it("does not overwrite project group metadata from ordinary stream births", async () => {
@@ -269,10 +292,13 @@ describe("first-party PostHog stream integration", () => {
     });
 
     expect(requests[0]!.batch).toHaveLength(1);
-    expect(requests[0]!.batch[0]).toMatchObject({
-      event: POSTHOG_STREAM_EVENT,
-      properties: { stream_event: JSON.parse(JSON.stringify(created)) },
+    const capturedBirth = requests[0]!.batch[0]!;
+    expect(capturedBirth).toMatchObject({
+      event: posthogEventName(created),
     });
+    expect(JSON.stringify((capturedBirth.properties as Record<string, unknown>).stream_event)).toBe(
+      JSON.stringify(created),
+    );
   });
 
   it("keeps source identity stable on retry", async () => {
@@ -287,6 +313,11 @@ describe("first-party PostHog stream integration", () => {
 
     expect(first[0]!.batch[0]!.uuid).toBe(retry[0]!.batch[0]!.uuid);
     expect(first[0]!.batch[0]!.timestamp).toBe(retry[0]!.batch[0]!.timestamp);
+    const retryProperties = retry[0]!.batch[0]!.properties as Record<string, unknown>;
+    expect(first[0]!.batch[0]!.properties).toMatchObject({
+      $groups: { project: "prj_123" },
+      distinct_id: retryProperties.distinct_id,
+    });
   });
 
   it("rejects malformed source timestamps and non-2xx capture responses", async () => {

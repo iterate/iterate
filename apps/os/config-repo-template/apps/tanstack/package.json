@@ -1,0 +1,29 @@
+{
+  "name": "project-tanstack",
+  "private": true,
+  "type": "module",
+  "description": "The project's TanStack Start todo app: pages built by Vite (the platform's vite worker-build pipeline runs `npm run build`), todos stored in this app's own Durable Object SQLite via sqlfu, every open tab converging over Cap'n Web live state.",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@iterate-com/capnweb": "0.10.0",
+    "@tanstack/react-router": "1.170.15",
+    "@tanstack/react-start": "1.168.18",
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "sqlfu": "0.1.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.43.0",
+    "@tailwindcss/vite": "4.3.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "tailwindcss": "4.3.2",
+    "typescript": "5.9.3",
+    "vite": "8.0.16",
+    "wrangler": "4.107.0"
+  }
+}

@@ -465,8 +465,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   #db: ReturnType<
     typeof SqliteSubscriptionCursorStore.db<ReturnType<typeof createDurableObjectClient>>
   >;
+  readonly #onMutation: () => void;
 
-  constructor(sql: SqlStorage) {
+  constructor(sql: SqlStorage, options: { onMutation?: () => void } = {}) {
+    this.#onMutation = options.onMutation ?? (() => undefined);
     // {sql} without transactionSync: this store only holds SqlStorage. That
     // forgoes sqlfu's per-migration transaction, which is fine here — the
     // constructor is await-free, and Durable Object SQLite commits all writes
@@ -500,6 +502,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       epoch: this.#nextEpoch(),
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
@@ -509,6 +512,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     } else {
       this.#db.ackFenced({ ...params, epoch });
     }
+    this.#onMutation();
   }
 
   advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
@@ -517,6 +521,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       ackedOffset,
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   nack(
@@ -531,6 +536,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       error: args.error.slice(0, 2_000),
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
@@ -540,10 +546,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       epoch: this.#nextEpoch(),
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   delete(subscriptionKey: string): void {
     this.#db.delete({ subscriptionKey });
+    this.#onMutation();
   }
 
   minNextAttemptAt(): number | null {

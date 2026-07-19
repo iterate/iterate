@@ -1,7 +1,6 @@
 import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
-  itxProjectStream,
   type ItxBinding,
   type Project,
   type ProjectAuthActor,
@@ -11,20 +10,7 @@ import {
 } from "iterate/sdk";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
-import {
-  type StreamSubscriberWakeRequest,
-  type StreamSubscriberWakeResponse,
-} from "iterate/processors";
-import {
-  createStreamProcessorRegistry,
-  type StreamProcessorRegistry,
-} from "iterate/processors/cloudflare";
-import {
-  guestbookAppRef,
-  guestbookCreationEvents,
-  GuestbookProcessor,
-  guestbookStreamPath,
-} from "./guestbook.ts";
+import { guestbookAppRef } from "./apps/guestbook/src/guestbook-ref.ts";
 
 // This is ordinary project policy. Every GitHub-linked project repository is
 // in scope; no platform GitHub code knows that pull-request agents exist.
@@ -84,8 +70,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       default:
         // The guestbook needs no lane here: its events reach GuestbookApp
         // through the durable WAKE subscription its creation batch configures
-        // (see guestbookCreationEvents) — the stream spine dials the app
-        // directly.
+        // (guestbookCreationEvents in apps/guestbook/src/guestbook.ts) — the
+        // stream spine dials the app directly.
         break;
     }
   }
@@ -114,6 +100,37 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         },
       });
     }
+    if (app === "tanstack") {
+      // A real TanStack Start app living at apps/tanstack in this repo: the
+      // platform's "vite" pipeline runs ITS OWN `npm run build` and serves
+      // the built pages + client assets; its /api rides into the app's
+      // Durable Object (TanstackTodos — SQLite todos via sqlfu, live state
+      // over Cap'n Web). Pages are gated to project members HERE; /api is
+      // the unauthenticated Cap'n Web root that authenticates in-band from
+      // the app cookie, exactly like the internal app.
+      const tanstackSource = {
+        files: { type: "repo", repoPath: "/repos/config" },
+        options: { pipeline: "vite", rootDir: "apps/tanstack" },
+      } as const;
+      const url = new URL(req.url);
+      if (url.pathname === "/api") {
+        return this.fetchDynamicWorker(req, {
+          type: "stateful",
+          path: "/",
+          className: "TanstackTodos",
+          durableWorkerKey: "app-tanstack",
+          source: tanstackSource,
+        });
+      }
+      using itx = await this.env.ITX.get();
+      const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (authResponse) return authResponse;
+      return this.fetchDynamicWorker(req, {
+        type: "stateless",
+        path: "/",
+        source: tanstackSource,
+      });
+    }
     if (app === "counter") {
       return this.fetchDynamicWorker(req, {
         type: "stateful",
@@ -127,7 +144,23 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       });
     }
     if (app === "guestbook") {
-      return this.fetchDynamicWorker(req, guestbookAppRef);
+      // A second TanStack Start app at apps/guestbook, and a second SHAPE of
+      // state: where the tanstack todo app keeps rows in its Durable Object's
+      // SQLite, the guestbook's state is a stream-processor FOLD of durable
+      // events at /guestbook. The imported ref is the ONE identity the wake
+      // subscription persists too (guestbook-ref.ts), so ingress and the
+      // stream spine always dial the same Durable Object and the same build.
+      // The guestbook is deliberately public: anyone can read and sign, so
+      // no auth partial gates the pages and /api needs no authenticate step.
+      const url = new URL(req.url);
+      if (url.pathname === "/api") {
+        return this.fetchDynamicWorker(req, guestbookAppRef);
+      }
+      return this.fetchDynamicWorker(req, {
+        type: "stateless",
+        path: "/",
+        source: guestbookAppRef.source,
+      });
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
@@ -144,8 +177,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
+                <li><a href="${appUrl("tanstack")}">tanstack</a> (TanStack Start todos: SQLite Durable Object, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
-                <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor)</li>
+                <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor + TanStack Start, public)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
             </main>
@@ -363,12 +397,12 @@ export async function handleGithubPullRequestWebhook(itx: Project, event: Stream
       },
     },
     {
-      type: "events.iterate.com/agent/metadata-changed",
-      idempotencyKey: "github-pr/metadata",
+      type: "events.iterate.com/agent/summary-updated",
+      idempotencyKey: "github-pr/summary",
       payload: {
         title: `PR #${number}`,
         activity: `Reviewing ${repository.owner}/${repository.repo}#${number}`,
-        summary: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,
+        description: `Reviewing pull request #${number} in ${repository.owner}/${repository.repo} and reporting findings on GitHub.`,
       },
     },
   );
@@ -632,14 +666,31 @@ export class CounterApp extends IterateDurableObject {
             <main>
               <p>count: <span id="n">${await this.current()}</span></p>
               <button id="b" disabled>increment</button>
-              <p id="s">connecting…</p>
+              <p id="s" aria-live="polite">connecting…</p>
             </main>
             <script>
               const button = document.getElementById("b");
-              button.onclick = () => fetch("${prefix}/increment", { method: "POST" });
+              const status = document.getElementById("s");
+              button.onclick = async () => {
+                button.disabled = true;
+                status.hidden = false;
+                status.textContent = "incrementing…";
+                try {
+                  const response = await fetch("${prefix}/increment", { method: "POST" });
+                  if (!response.ok) throw new Error("increment failed (" + response.status + ")");
+                } catch (error) {
+                  status.textContent = "increment failed";
+                  button.disabled = false;
+                  console.error(error);
+                }
+              };
               const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "${prefix}/ws");
-              ws.onopen = () => { button.disabled = false; document.getElementById("s").remove(); };
-              ws.onmessage = (event) => { document.getElementById("n").textContent = event.data; };
+              ws.onopen = () => { button.disabled = false; status.hidden = true; };
+              ws.onmessage = (event) => {
+                document.getElementById("n").textContent = event.data;
+                button.disabled = false;
+                status.hidden = true;
+              };
             </script>
           </body>
         </html>`,
@@ -656,156 +707,6 @@ export class CounterApp extends IterateDurableObject {
 
   async current(): Promise<number> {
     return this.ctx.storage.kv.get<number>("n") ?? 0;
-  }
-}
-
-// A stream-processor-backed app: where CounterApp keeps its number in Durable
-// Object storage, the guestbook's state is a FOLD of durable events on the
-// project stream at /guestbook, driven by the platform's own processor
-// machinery (`iterate/processors`; the processor + contract live in
-// guestbook.ts). This Durable Object is only the HOST: it wires a registry to
-// an itx-dialed stream handle, and the stream's own delivery spine wakes it —
-// the creation batch (guestbookCreationEvents) configures a durable wake
-// subscription whose expression names this app's `processor` getter, so the
-// platform performs the same handshake here that it performs against its own
-// domain Durable Objects and pushes event frames straight into the runner.
-// Delete this object's storage and replay rebuilds everything.
-export class GuestbookApp extends IterateDurableObject {
-  #host: { guestbook: GuestbookProcessor; registry: StreamProcessorRegistry } | undefined;
-
-  // Hosting is constructed lazily, not in the constructor: the registry and
-  // the processor's provenance stamps need the owning project's id, which
-  // arrives with the wake request or is read from the project stub on first
-  // fetch — and is cached durably so an alarm fire needs no dial.
-  #ensureHost(projectId: string): {
-    guestbook: GuestbookProcessor;
-    registry: StreamProcessorRegistry;
-  } {
-    if (this.#host === undefined) {
-      this.ctx.storage.kv.put("guestbook:project-id", projectId);
-      const stream = itxProjectStream(this.env, guestbookStreamPath);
-      // this.ctx carries working durable alarms (IterateDurableObject routes
-      // them through the platform Durable Object hosting this facet), so the
-      // registry's keepalive can arm; its fire calls `alarm()` below.
-      const registry = createStreamProcessorRegistry(this.ctx, {
-        path: guestbookStreamPath,
-        projectId,
-        stream,
-        // The worker's own build identity: a version change resets a
-        // crash-looping keepalive's backoff budget, so a broken-then-fixed
-        // worker recovers on its next build (the antidote deploy).
-        version: this.env.ITERATE_WORKER_VERSION,
-      });
-      const guestbook = registry.register(
-        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),
-        // Keepalive recovery: if an eviction kills this object while it owes
-        // work, the alarm fires, the keepalive journals a revival fact, and
-        // its wake delivery re-runs the at-head reconcile.
-        { recovery: true },
-      );
-      this.#host = { guestbook, registry };
-    }
-    return this.#host;
-  }
-
-  /** The hosting Durable Object's alarm fire, delivered here like a native
-   * one. Route it to the registry: each keepalive self-gates on its own
-   * persisted record, so a stale fire is a no-op. */
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    // A fire can be a cold incarnation's first event, so don't depend on a
-    // live loopback dial: any prior contact cached the project id durably
-    // (an alarm can only exist after a delivery armed it).
-    let projectId = this.ctx.storage.kv.get<string>("guestbook:project-id");
-    if (projectId === undefined) {
-      using project = await this.env.ITX.get();
-      projectId = await project.projectId;
-    }
-    const { registry } = this.#ensureHost(projectId);
-    await registry.handleAlarm(alarmInfo);
-  }
-
-  /** The wake door the stream spine dials — the subscription's persisted
-   * expression is `workers.get(ref).processor.wakeStreamSubscriber`, which
-   * the platform's dynamic capability dispatch flattens into an
-   * invokeCapability walk that lands here. The request carries the stream's
-   * coordinates, so the host can construct itself before answering the
-   * handshake (checkpoint + a live sink the stream then delivers frames to). */
-  get processor() {
-    return {
-      wakeStreamSubscriber: async (
-        request: StreamSubscriberWakeRequest,
-      ): Promise<StreamSubscriberWakeResponse> => {
-        if (request.stream.projectId === null) {
-          throw new Error("the guestbook subscribes on project streams only");
-        }
-        const { registry } = this.#ensureHost(request.stream.projectId);
-        return await registry.wakeStreamSubscriber(request);
-      },
-    };
-  }
-
-  async fetch(req: Request): Promise<Response> {
-    const prefix = req.headers.get("x-iterate-url-prefix") ?? "";
-    const url = new URL(req.url);
-    using project = await this.env.ITX.get();
-    // Awaited on purpose: `project` is an RPC stub, so the property read is
-    // a promise — and #ensureHost caches its first construction, so passing
-    // it unawaited would permanently wire the host with a non-string id.
-    const { guestbook, registry } = this.#ensureHost(await project.projectId);
-
-    if (req.method === "POST" && url.pathname === "/sign") {
-      const form = await req.formData();
-      const name = String(form.get("name") ?? "").trim();
-      const message = String(form.get("message") ?? "").trim();
-      if (name !== "" && message !== "") {
-        // One atomic batch: the idempotency-keyed creation events (birth +
-        // wake subscription — every signer offers them; the stream dedupes
-        // to one of each) plus this entry. Raw appends — the app is the
-        // CREATOR here; the processor only ever emits milestone facts.
-        await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), {
-          type: "events.iterate.com/guestbook/entry-signed",
-          payload: { message, name },
-          idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
-        });
-      }
-      return new Response(null, { headers: { location: `${prefix}/` }, status: 303 });
-    }
-
-    // Read-your-writes before every render: wake delivery is asynchronous,
-    // so pull the runner to head and read the fold through the registry's
-    // runner-backed snapshot. Two passes: a milestone the first pass's
-    // at-head reconcile journals lands AFTER the scan that pass already
-    // finished, so only the second pass folds it (the unit tests deliver
-    // twice for the same reason). One extra pass is a fixed point —
-    // folding a milestone never emits another.
-    await registry.catchUp("guestbook");
-    await registry.catchUp("guestbook");
-    const { state } = await registry.reads(guestbook).snapshot();
-    const title = escapeHtml(state.birthCertificate?.config.title ?? "Guestbook");
-    const entries = state.entries
-      .map(
-        (entry) =>
-          `<li><strong>${escapeHtml(entry.name)}</strong>: ${escapeHtml(entry.message)}</li>`,
-      )
-      .join("\n");
-    return new Response(
-      `<!doctype html>
-        <html>
-          <body>
-            <main>
-              <h1>${title}</h1>
-              <p>${state.entries.length} signatures — last milestone: ${state.lastMilestone}</p>
-              <ul>${entries}</ul>
-              <form method="post" action="${prefix}/sign">
-                <input name="name" placeholder="name" required />
-                <input name="message" placeholder="message" required />
-                <button>sign</button>
-              </form>
-            </main>
-          </body>
-        </html>`,
-      { headers: { "content-type": "text/html; charset=utf-8" } },
-    );
   }
 }
 

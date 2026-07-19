@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import {
   guestbookCreationEvents,
   guestbookStreamPath,
-} from "../../config-repo-template/guestbook.ts";
+} from "../../config-repo-template/apps/guestbook/src/guestbook.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // The proof that a USERSPACE Durable Object is a first-class stream-spine

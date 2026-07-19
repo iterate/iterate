@@ -386,6 +386,8 @@ export interface Agent {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** The agent stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<AgentProcessorState>;
+  /** The agent's transient runtime as a push-driven live-state surface. */
+  liveState: LiveStateRpc<AgentLiveState>;
   /** The agent's own event stream. */
   stream: Stream;
   /**
@@ -402,10 +404,11 @@ export interface Agent {
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
-   * Create the generic agent machinery on this stream and wait until both
-   * processors have consumed the birth batch. Configuration, context, and
-   * tasks are separate events: append processor-consumed events through
-   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Create the generic agent machinery on this stream and wait until the
+   * agent, capability-host, and singleton collection processors have reduced
+   * the birth. Configuration, context, and tasks are separate events: append
+   * processor-consumed events through `agent.append()` or use a typed helper
+   * such as `message()` after creation.
    */
   create(): Promise<void>;
   /**
@@ -427,14 +430,6 @@ export interface Agent {
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
         },
   ): Promise<StreamEvent>;
-  /**
-   * Merge human-readable metadata for this agent. Omitted properties remain
-   * unchanged; null clears an optional property; pinned false unpins. Title is
-   * a stable identity, activity is the current-condition sentence updated as
-   * work moves through phases, summary is one or two durable sentences, and
-   * waitingFor declares a semantic dependency once current runtime is zero.
-   */
-  setMetadata(input: AgentMetadataPatch): Promise<StreamEvent>;
   /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -577,6 +572,10 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
+  processor: WakeableStreamProcessorRpc<AgentCollectionProcessorState>;
+  liveState: LiveStateRpc<AgentCollectionProcessorState>;
+  /** Stateless push sink: forwarding and authorization are its entire job. */
+  processEvent(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
@@ -588,7 +587,7 @@ export interface AgentCollection {
    * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
    */
   get(path: string): Agent;
-  /** Known agents, read from the project processor's reduced state. */
+  /** Known agents, read from the collection processor's reduced database. */
   list(): Promise<StreamListItem[]>;
 }
 
@@ -1397,18 +1396,11 @@ export interface Stream {
    * been collecting); latency stats fields are absent until a real sample
    * exists — no value is ever synthesized. Calling this also requests a
    * throttled mutual-ping round over the live connections (observer-driven
-   * sampling), so a polling debug UI sees RTTs populate.
+   * sampling); live debug surfaces should subscribe through `liveState`.
    */
-  runtimeState(): Promise<{
-    coreProcessorState: unknown;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  }>;
+  runtimeState(): Promise<StreamRuntimeDebugState>;
+  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
@@ -1836,7 +1828,6 @@ export type ProjectProcessorState = {
   ready: boolean;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
-  agents: { createdAt: string; path: string }[];
   devices: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
@@ -1885,8 +1876,6 @@ export type ProjectProcessorState = {
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
- * - `agents` — every agent's metadata, exact runtime facts, external binding,
- *   and meaningful timestamps, in the same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -1897,8 +1886,6 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
-  /** The complete agent catalog keyed by agent path. */
-  agents: Record<string, AgentRecord>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };
@@ -2122,72 +2109,6 @@ export type StreamIndexRow = {
   lastType: string;
   /** How many events we've observed on the stream. */
   eventCount: number;
-};
-
-/** The project catalog's complete current projection for one explicitly created agent. */
-export type AgentRecord = {
-  path: string;
-  metadata: {
-    title?: string | undefined;
-    summary?: string | undefined;
-    activity?: string | undefined;
-    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
-    pinned: boolean;
-  };
-  runtime: {
-    triggers: { pending: number; runnable: number };
-    llmRequests: { scheduled: number; requested: number; started: number };
-    runningScripts: number;
-  };
-  binding?:
-    | {
-        type: "slack_thread";
-        connection: string;
-        channelId: string;
-        threadTs: string;
-        channelName?: string | undefined;
-        url?: string | undefined;
-      }
-    | {
-        type: "telegram_thread";
-        connection: string;
-        chatId: string;
-        messageThreadId?: string | undefined;
-      }
-    | {
-        type: "email_thread";
-        threadId: string;
-        subject?: string | undefined;
-        counterpart?: string | undefined;
-      }
-    | {
-        type: "github_pull_request";
-        connection: string;
-        installationId: string;
-        owner: string;
-        repo: string;
-        number: number;
-        url?: string | undefined;
-      }
-    | {
-        type: "github_check_run";
-        connection: string;
-        installationId: string;
-        owner: string;
-        repo: string;
-        number: number;
-        checkRunId?: number | undefined;
-        headSha?: string | undefined;
-        url?: string | undefined;
-      }
-    | undefined;
-  timestamps: {
-    createdAt: string;
-    lastWorkAt: string;
-    metadataUpdatedAt?: string | undefined;
-    activityUpdatedAt?: string | undefined;
-    runtimeUpdatedAt?: string | undefined;
-  };
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
@@ -2557,28 +2478,18 @@ export type AgentProcessorState = {
   activeScriptExecutionIds: string[];
   runtimeChange?:
     | {
-        sinceOffset: number;
         runtime: {
           triggers: { pending: number; runnable: number };
           llmRequests: { scheduled: number; requested: number; started: number };
           runningScripts: number;
         };
+        sinceOffset: number;
         since: string;
       }
     | undefined;
-  announcedRuntime?:
-    | {
-        sinceOffset: number;
-        runtime: {
-          triggers: { pending: number; runnable: number };
-          llmRequests: { scheduled: number; requested: number; started: number };
-          runningScripts: number;
-        };
-      }
-    | undefined;
-  metadata: {
+  summary: {
     title?: string | undefined;
-    summary?: string | undefined;
+    description?: string | undefined;
     activity?: string | undefined;
     waitingFor?: "external_event" | "timer" | "user_input" | undefined;
     pinned: boolean;
@@ -2590,6 +2501,21 @@ export type AgentProcessorState = {
     totalCachedInputTokens: number;
     totalReasoningOutputTokens: number;
   };
+};
+
+/** The transient runtime state pushed by one Agent durable object. */
+export type AgentLiveState = {
+  runtimeChange?:
+    | {
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        sinceOffset: number;
+        since: string;
+      }
+    | undefined;
 };
 
 /** Append input accepted by the Agent processor, derived from its `consumes` contract. */
@@ -2635,25 +2561,15 @@ export type AgentEventInput =
       { maxAutonomousTurns: number; reason: string; triggerOffset: number }
     >
   | TypedConsumedEventInput<
-      "events.iterate.com/agent/metadata-changed",
-      {
-        title?: string | null | undefined;
-        summary?: string | null | undefined;
-        activity?: string | null | undefined;
-        waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-        pinned?: boolean | undefined;
-      }
-    >
-  | TypedConsumedEventInput<
-      "events.iterate.com/agent/runtime-changed",
-      {
-        sinceOffset: number;
-        runtime: {
-          triggers: { pending: number; runnable: number };
-          llmRequests: { scheduled: number; requested: number; started: number };
-          runningScripts: number;
-        };
-      }
+      "events.iterate.com/agent/summary-updated",
+      | {
+          title?: string | null | undefined;
+          description?: string | null | undefined;
+          activity?: string | null | undefined;
+          waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+          pinned?: boolean | undefined;
+        }
+      | { waitingFor: null; clearWaitingForThroughOffset: number }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/token-usage-reported",
@@ -2667,7 +2583,6 @@ export type AgentEventInput =
         reasoningOutputTokens?: number | undefined;
       }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/waiting-cleared", { throughOffset: number }>
   | TypedConsumedEventInput<
       "events.iterate.com/agents/context-added",
       | {
@@ -2892,15 +2807,6 @@ export type StreamEvent = {
  */
 export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
 
-/** A partial presentation-metadata update; null clears an optional field and omission preserves it. */
-export type AgentMetadataPatch = {
-  title?: string | null | undefined;
-  summary?: string | null | undefined;
-  activity?: string | null | undefined;
-  waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
-  pinned?: boolean | undefined;
-};
-
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
@@ -2923,6 +2829,31 @@ export type ItxExpression = ItxExpressionStep[];
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
+
+/** The singleton agent collection processor's reduced database state. */
+export type AgentCollectionProcessorState = {
+  birthCertificate: Record<string, never> | null;
+  agents: Record<
+    string,
+    {
+      path: string;
+      summary: {
+        title?: string | undefined;
+        description?: string | undefined;
+        activity?: string | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+        pinned: boolean;
+      };
+      timestamps: {
+        createdAt: string;
+        lastWorkAt: string;
+        summaryUpdatedAt?: string | undefined;
+        activityUpdatedAt?: string | undefined;
+      };
+    }
+  >;
+  waitingForSinceOffsets: Record<string, number>;
+};
 
 /**
  * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
@@ -3624,71 +3555,17 @@ export type ProcessorRuntimeState<State = unknown> = {
   runtime?: Record<string, unknown>;
 };
 
-/** Serializable debug view of one live connection, for `runtimeState()`. */
-export type ConnectionRuntimeState = {
-  subscriptionType: StreamSubscriptionType;
-  startedAt: string;
-  cursor: number;
-  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
-  lag: number;
-  batchesSent: number;
-  eventsSent: number;
-  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
-  bytesSent: number;
-  lastDeliveredAt?: string;
-  /**
-   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the pulled batch result settling (the subscriber's
-   * ingest resolved). Durable (wake) lane only — ephemeral results are
-   * disposed unpulled, so ephemeral consumption is self-reported by the host
-   * through `getRuntimeState` instead. Absent until a sample exists.
-   */
-  settleLatencyMs?: LatencyStats;
-  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
-  pingRttMs?: LatencyStats;
-  /**
-   * The connect-time identity descriptor. The runtime table is the ONLY home
-   * for ephemeral identity — ephemeral connections don't fold into the
-   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
-   * read who's connected from here.
-   */
-  subscriber?: StreamSubscriberDescriptor;
-  /**
-   * True while the last batch handed to this connection's sink is unsettled —
-   * exactly the signal idle teardown consults to classify a sink as wedged.
-   */
-  hasPendingDelivery: boolean;
-};
-
-/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
-export type SubscriptionRuntimeState = {
-  mode: SubscriptionDelivery["mode"];
-  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
-  ackedOffset: number;
-  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
-  lag: number;
-  attempt: number;
-  nextAttemptAt: number | null;
-  lastError: string | null;
-  parkedAtOffset: number | null;
-  /** Whether a live delivery connection currently exists (wake mode). */
-  connected: boolean;
-  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
-  bytesSent?: number;
-  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
-  settleLatencyMs?: LatencyStats;
-  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
-  deliveryDurationMs?: LatencyStats;
-};
-
-/** What `runtimeState()` reports for the stream's own throughput. */
-export type StreamThroughputMetrics = {
-  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
-  measuredSince: string;
-  /** Appends committed (all producers). */
-  ingress: ThroughputReport;
-  /** Deliveries dispatched (all lanes, all subscribers). */
-  egress: ThroughputReport;
+/** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
+export type StreamRuntimeDebugState = {
+  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */
+  coreProcessorState: unknown;
+  runtime: {
+    connections: Record<string, ConnectionRuntimeState>;
+    subscriptions: Record<string, SubscriptionRuntimeState>;
+    metrics: StreamThroughputMetrics;
+    /** SQLite database size in bytes (event log + spine rows + chunks). */
+    storageSizeBytes: number;
+  };
 };
 
 /**
@@ -4110,55 +3987,73 @@ export type EditWorkspaceFileResult = {
   path: string;
 };
 
-/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
-export type StreamSubscriptionType = "configured" | "ephemeral";
-
-/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
-export type LatencyStats = {
-  /** Most recent sample (ms). */
-  last: number;
-  p50: number;
-  p95: number;
-  /** Samples currently in the ring (caps at the ring size). */
-  samples: number;
-  /** Epoch ms of the most recent sample. */
-  lastAt: number;
+/** Serializable debug view of one live connection, for `runtimeState()`. */
+export type ConnectionRuntimeState = {
+  subscriptionType: StreamSubscriptionType;
+  startedAt: string;
+  cursor: number;
+  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
+  lag: number;
+  batchesSent: number;
+  eventsSent: number;
+  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
+  bytesSent: number;
+  lastDeliveredAt?: string;
+  /**
+   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
+   * event in a batch → the pulled batch result settling (the subscriber's
+   * ingest resolved). Durable (wake) lane only — ephemeral results are
+   * disposed unpulled, so ephemeral consumption is self-reported by the host
+   * through `getRuntimeState` instead. Absent until a sample exists.
+   */
+  settleLatencyMs?: LatencyStats;
+  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
+  pingRttMs?: LatencyStats;
+  /**
+   * The connect-time identity descriptor. The runtime table is the ONLY home
+   * for ephemeral identity — ephemeral connections don't fold into the
+   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
+   * read who's connected from here.
+   */
+  subscriber?: StreamSubscriberDescriptor;
+  /**
+   * True while the last batch handed to this connection's sink is unsettled —
+   * exactly the signal idle teardown consults to classify a sink as wedged.
+   */
+  hasPendingDelivery: boolean;
 };
 
-/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
-export type StreamSubscriberDescriptor = {
-  description?: string | undefined;
-  processor?:
-    | {
-        announcement: {
-          slug: string;
-          version: string;
-          description: string;
-          consumes: string[];
-          emits: string[];
-          ownedEvents: { type: string; description?: string | undefined }[];
-        };
-      }
-    | undefined;
+/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
+export type SubscriptionRuntimeState = {
+  mode: SubscriptionDelivery["mode"];
+  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
+  ackedOffset: number;
+  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  lag: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  parkedAtOffset: number | null;
+  /** Whether a live delivery connection currently exists (wake mode). */
+  connected: boolean;
+  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  bytesSent?: number;
+  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
+  settleLatencyMs?: LatencyStats;
+  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  deliveryDurationMs?: LatencyStats;
 };
 
-/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
-export type SubscriptionDelivery =
-  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
-  | { mode: "push"; expression: ItxExpression }
-  | { mode: "webhook"; url: string };
-
-/**
- * One direction's throughput report: a responsive trailing-5s rate (the
- * number UIs show), the full-minute totals, and the raw 1s series for graphs.
- */
-export type ThroughputReport = {
-  /** Events per second over the trailing 5 seconds. */
-  perSecond5s: number;
-  /** Payload bytes per second over the trailing 5 seconds. */
-  bytesPerSecond5s: number;
-  lastMinute: MinuteWindow;
-  series: ThroughputSeries;
+/** What a stream runtime snapshot reports for the stream's own throughput. */
+export type StreamThroughputMetrics = {
+  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
+  measuredSince: string;
+  /** ISO timestamp anchoring the trailing windows and final series bucket. */
+  reportedAt: string;
+  /** Appends committed (all producers). */
+  ingress: ThroughputReport;
+  /** Deliveries dispatched (all lanes, all subscribers). */
+  egress: ThroughputReport;
 };
 
 /**
@@ -4331,20 +4226,55 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
-/** One rolling-minute throughput window. */
-export type MinuteWindow = {
-  /** Events in the last 60 seconds. */
-  count: number;
-  /** Payload bytes in the last 60 seconds. */
-  bytes: number;
-  /** `count / 60` — the "events/s over the last minute" number. */
-  perSecond: number;
+/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
+export type StreamSubscriptionType = "configured" | "ephemeral";
+
+/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
+export type LatencyStats = {
+  /** Most recent sample (ms). */
+  last: number;
+  p50: number;
+  p95: number;
+  /** Samples currently in the ring (caps at the ring size). */
+  samples: number;
+  /** Epoch ms of the most recent sample. */
+  lastAt: number;
 };
 
-/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
-export type ThroughputSeries = {
-  counts: number[];
-  bytes: number[];
+/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
+export type StreamSubscriberDescriptor = {
+  description?: string | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
+};
+
+/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
+export type SubscriptionDelivery =
+  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
+  | { mode: "push"; expression: ItxExpression }
+  | { mode: "webhook"; url: string };
+
+/**
+ * One direction's throughput report: a responsive trailing-5s rate (the
+ * number UIs show), the full-minute totals, and the raw 1s series for graphs.
+ */
+export type ThroughputReport = {
+  /** Events per second over the trailing 5 seconds. */
+  perSecond5s: number;
+  /** Payload bytes per second over the trailing 5 seconds. */
+  bytesPerSecond5s: number;
+  lastMinute: MinuteWindow;
+  series: ThroughputSeries;
 };
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
@@ -4402,6 +4332,22 @@ export type WorkspaceChange = {
   path: string;
 };
 
+/** One rolling-minute throughput window. */
+export type MinuteWindow = {
+  /** Events in the last 60 seconds. */
+  count: number;
+  /** Payload bytes in the last 60 seconds. */
+  bytes: number;
+  /** `count / 60` — the "events/s over the last minute" number. */
+  perSecond: number;
+};
+
+/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
+export type ThroughputSeries = {
+  counts: number[];
+  bytes: number[];
+};
+
 /**
  * Where a dynamic worker's source files come from.
  *
@@ -4433,45 +4379,35 @@ export type WorkerFileSource =
 /**
  * Build options for a dynamic worker.
  *
- * This mirrors Cloudflare's `CreateWorkerOptions` from
- * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
- * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language (drift fails typecheck via the assignability pin
- * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the
- * invariant is one OS materialization pipeline, not one bundled output file.
- * When the file map has a `package.json` with dependencies, the bundler
- * installs them from the npm registry at build time.
+ * Deliberately small: exactly what the build recipe (build-recipe.ts — real
+ * `npm install` plus wrangler's canonical bundling pipeline) expresses.
+ * When the file map has a `package.json`, dependencies are installed from
+ * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
  */
 export type WorkerBuildOptions = {
-  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  /** Entry point file path relative to the source root. Default: "worker.ts". */
   entryPoint?: string;
-  /** Bundle all dependencies into a single output file. Default: true. */
+  /** Bundle to loader-ready output (default: true). `bundle: false` is the
+   * run-script fast path: inline JavaScript that is ALREADY loader-ready
+   * skips the build pipeline entirely. */
   bundle?: boolean;
-  /** Modules kept external ("cloudflare:*" always is). */
-  externals?: string[];
-  /** Target environment. Default: "es2022". */
-  target?: string;
   minify?: boolean;
-  sourcemap?: boolean;
-  /** npm registry URL for dependency installs. */
-  registry?: string;
-  jsx?: "transform" | "preserve" | "automatic";
-  jsxImportSource?: string;
-  define?: Record<string, string>;
-  loader?: Record<string, WorkerBundlerLoader>;
-  conditions?: string[];
+  /**
+   * Which build pipeline turns the source into loader-ready modules.
+   * "wrangler" (default): the platform's own bundle — npm install + wrangler
+   * dry-run, source code is PARSED but never executed. "vite": the source's
+   * OWN `npm run build` (a real Vite/TanStack-Start app) — install includes
+   * devDependencies and the build EXECUTES project code in the builder, so
+   * runtime artifacts stay project-scoped and the output is collected from
+   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +
+   * dist/client assets, served by a generated wrapper entry).
+   */
+  pipeline?: "wrangler" | "vite";
+  /** Build from this subdirectory of the resolved source: files outside it
+   * are dropped and paths are re-rooted, so a repo can host an app at e.g.
+   * `apps/tanstack/` with its own package.json and config. */
+  rootDir?: string;
+  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
+   * runtime rides in this way). A source's own entry wins over the platform's. */
   virtualModules?: Record<string, string>;
 };
-
-/** Loader names accepted by Cloudflare's worker bundler `loader` option. */
-export type WorkerBundlerLoader =
-  | "js"
-  | "jsx"
-  | "ts"
-  | "tsx"
-  | "json"
-  | "css"
-  | "text"
-  | "binary"
-  | "base64"
-  | "dataurl";

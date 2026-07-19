@@ -6,7 +6,7 @@ import {
   SidebarGroupLabel,
 } from "@iterate-com/ui/components/sidebar";
 import { AgentSidebarRow } from "./agent.tsx";
-import { buildAgentForest, pinnedAgentShortcuts } from "./agent-tree.ts";
+import { buildAgentForest, sidebarAgentShortcuts } from "./agent-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
@@ -15,7 +15,7 @@ const ROOT_LIMIT = 8;
 
 /**
  * The sidebar is navigation, not a dashboard: a short list of two-line
- * shortcuts, pinned first, then the busiest roots. The full catalog is the
+ * shortcuts, always ordered by their latest activity. The full catalog is the
  * /agents nav item above; pinning, trees, and counts live there and in the
  * agent details sheet.
  */
@@ -28,14 +28,8 @@ export function SidebarAgents({
 }) {
   const navigate = useNavigate();
   const forest = useMemo(() => buildAgentForest(agents), [agents]);
-  const rows = useMemo(() => {
-    // Pinned shortcuts first, then the top unpinned roots. Pinned agents
-    // beyond PINNED_LIMIT drop out of the sidebar entirely (their roots are
-    // filtered too); the /agents catalog keeps them one click away.
-    const pinned = pinnedAgentShortcuts(forest).slice(0, PINNED_LIMIT);
-    const roots = forest.filter((node) => !node.agent.metadata.pinned).slice(0, ROOT_LIMIT);
-    return [...pinned, ...roots];
-  }, [forest]);
+  // Pins govern which shortcuts survive the cap, never their display order.
+  const rows = useMemo(() => sidebarAgentShortcuts(forest, PINNED_LIMIT, ROOT_LIMIT), [forest]);
 
   if (rows.length === 0) return null;
   return (

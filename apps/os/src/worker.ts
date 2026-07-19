@@ -44,6 +44,7 @@ import {
 import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
+import { withPosthogExceptionCapture } from "./observability/posthog.ts";
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
@@ -51,6 +52,7 @@ const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
+export { AgentCollectionDurableObject } from "./domains/agents/agent-collection-durable-object.ts";
 export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
 export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
@@ -67,6 +69,7 @@ export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
+export { WorkerBuilderDurableObject } from "./domains/workers/builder-pool-sandbox.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
@@ -87,33 +90,47 @@ export default {
     // set by our own routing below. Strip whatever the outside world sent so
     // downstream code can rely on them.
     const request = stripInternalHeaders(inbound);
-    return await runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx));
+    const config = parseConfig(env);
+    return await withPosthogExceptionCapture(
+      { config, operation: ctx, request, waitUntil: (promise) => ctx.waitUntil(promise) },
+      () => runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx, config)),
+    );
   },
 
-  async queue(batch: MessageBatch, env: Env) {
-    if (isWorkerEventsQueue(batch.queue, env)) {
-      await handleEventQueueBatch(batch, env);
-      return;
-    }
+  async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext) {
+    const config = parseConfig(env);
+    await withPosthogExceptionCapture(
+      { config, operation: ctx, waitUntil: (promise) => ctx.waitUntil(promise) },
+      async () => {
+        if (isWorkerEventsQueue(batch.queue, env)) {
+          await handleEventQueueBatch(batch, env);
+          return;
+        }
 
-    console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
+        console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
+      },
+    );
   },
 
   // Inbound project email: Cloudflare Email Routing's catch-all rule for each
   // project hostname base (e.g. `*@iterate.app`) delivers here. setReject is
   // the permanent-failure channel; a thrown error is a temporary failure the
   // sending MTA retries — so infra errors deliberately propagate.
-  async email(message: ForwardableEmailMessage) {
-    await handleInboundEmail(message);
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
+    const config = parseConfig(env);
+    await withPosthogExceptionCapture(
+      { config, operation: ctx, waitUntil: (promise) => ctx.waitUntil(promise) },
+      () => handleInboundEmail(message),
+    );
   },
 };
 
-async function fetchWithoutWideLog(request: Request, env: Env, ctx: ExecutionContext) {
-  // Parse config per request, not at module scope: workerd may reuse an
-  // isolate across binding-only deploys, so a module-scope copy can serve
-  // stale secrets after a rotation. Parsing is pure and cheap.
-  const config = parseConfig(env);
-
+async function fetchWithoutWideLog(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  config: AppConfig,
+) {
   const mcpRequest = rewriteMcpHostRequest({ config, request });
   if (mcpRequest) {
     wideLogger.set({ ingress: { lane: "mcp" } });

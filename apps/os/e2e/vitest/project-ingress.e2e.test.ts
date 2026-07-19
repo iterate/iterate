@@ -125,9 +125,9 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(tree).toMatchObject({
     paths: expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]),
   });
-  // The seed is ONE worker file — the example apps are named exports of it.
+  // The hello/counter examples are named exports; TanStack is a real app tree.
   expect(tree.paths).not.toContain("sdk.ts");
-  expect(tree.paths.some((path: string) => path.startsWith("apps/"))).toBe(false);
+  expect(tree.paths).toContain("apps/tanstack/package.json");
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
   // Unknown apps 404 in the router itself.

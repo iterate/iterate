@@ -19,7 +19,17 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   // workflow is userspace code in worker.ts.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  expect(paths.filter((path) => path.startsWith("apps/"))).toEqual([]);
+  // The seeded apps: the TanStack Start todo app at apps/tanstack and the
+  // guestbook at apps/guestbook (each its own package.json/vite build — the
+  // platform's "vite" worker pipeline). Everything else under apps/ is still
+  // the project's to grow.
+  const appPaths = paths.filter((path) => path.startsWith("apps/"));
+  expect(appPaths.length).toBeGreaterThan(0);
+  expect(
+    appPaths.every(
+      (path) => path.startsWith("apps/tanstack/") || path.startsWith("apps/guestbook/"),
+    ),
+  ).toBe(true);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
   expect(paths).not.toContain("github-reviews.ts");
@@ -28,11 +38,13 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
     dependencies: Record<string, string>;
   };
   // The platform-injected modules deliberately leave their real shared
-  // runtimes external: the guestbook and iterate/processors share one zod,
-  // while iterate/live-state and the user's RpcTargets share one Cap'n Web runtime.
+  // runtimes external: iterate/live-state and the user's RpcTargets share
+  // one Cap'n Web runtime, so the root worker build installs it. Everything
+  // the seeded apps need (react, tanstack, zod for the guestbook's processor
+  // contract) lives in THEIR manifests — each app's vite build installs its
+  // own tree.
   expect(templatePackageJson.dependencies).toEqual({
     "@iterate-com/capnweb": expect.any(String),
-    zod: expect.any(String),
   });
 });
 

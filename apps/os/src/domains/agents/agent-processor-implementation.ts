@@ -6,8 +6,7 @@
 //   processEvent — per-event side effects (one switch) AND, under
 //                  `delivery.caughtUp` (this event was the observed head), the
 //                  at-head reconcile: drive or settle open LLM obligations,
-//                  derive the next scheduling decision, then announce
-//                  runtime snapshot changes.
+//                  then derive the next scheduling decision.
 //
 // Everything below the class is a pure helper one of the lanes calls: the
 // fold switch, chat-request building, and codemode script-result rendering.
@@ -17,15 +16,12 @@
 
 import { z } from "zod";
 import {
-  AGENT_METADATA_CHANGED_EVENT_TYPE,
-  AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-  AGENT_WAITING_CLEARED_EVENT_TYPE,
+  AGENT_SUMMARY_UPDATED_EVENT_TYPE,
   agentRuntimesEqual,
   isAgentRuntimeZero,
-  mergeAgentRuntimeChange,
 } from "@iterate-com/shared/agent-events";
 import type { StreamEvent } from "iterate/processors";
-import { StreamProcessor, type ProcessorReads } from "iterate/processors";
+import { StreamProcessor } from "iterate/processors";
 import {
   cachedEventSchema,
   getConsumedEventDefinition,
@@ -40,13 +36,12 @@ import {
   AgentConfig,
   AgentContextAddedPayload,
   AgentProcessorContract,
-  DEFAULT_AGENT_RUNTIME_IDLE_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
-import { applyAgentMetadataPatch, deriveAgentRuntime } from "./agent-presence.ts";
+import { deriveAgentRuntime, foldAgentSummaryUpdated } from "./agent-presence.ts";
 import {
   extractChunkText,
   jsonCompatible,
@@ -59,22 +54,9 @@ import {
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
-
-/**
- * RUNNER-backed reads of the committed fold. Under registry drive the runner
- * owns both cursors and the processor instance's internal checkpoint never
- * advances, so the one fold read the agent makes OUTSIDE a hook's own args —
- * the idle debounce timer's fire-time staleness check — must go through the
- * runner's committed progress. The hosting DO wires this to
- * `registry.reads(processor)` (lazily — `reads()` needs the registered
- * processor); the unit harness wires it to the driving StreamProcessorRunner.
- */
-export type AgentProcessorReads = Pick<ProcessorReads<AgentState>, "snapshot">;
-
 /**
  * Host-provided deps beyond the stream plumbing.
  *
- * - `reads` — runner-backed fold reads; see {@link AgentProcessorReads}.
  * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
  *   Optional so a host without one fails requests with a journaled error
  *   instead of crashing at construction.
@@ -97,17 +79,12 @@ export type AgentProcessorReads = Pick<ProcessorReads<AgentState>, "snapshot">;
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored attachment URL.
- * - `runtimeIdleDebounceMs` scales the trailing delay before a zero runtime
- *   snapshot is announced (default DEFAULT_AGENT_RUNTIME_IDLE_DEBOUNCE_MS);
- *   tests shrink it.
  */
 type AgentProcessorDeps = {
-  reads: AgentProcessorReads;
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
   llmRetryBackoffBaseMs?: number;
-  runtimeIdleDebounceMs?: number;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
 };
@@ -128,10 +105,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * hands back to the model as its "response so far". Incarnation-local best
    * effort: an eviction loses it, and the crash-cancel path never had it. */
   readonly #partialLlmResponseTexts = new Map<number, string>();
-  /** The armed zero-runtime debounce, keyed by the transition's offset;
-   * `cancel()` disarms without firing. A lost timer costs nothing durable:
-   * the snapshot is still in state and the reconciler re-arms it. */
-  #idleRuntimeAnnouncement: { cancel: () => void; sinceOffset: number } | undefined;
   /** Newest over-threshold report observed before this batch yields. Per-event
    * blocking work starts concurrently, so a microtask boundary lets one batch
    * coalesce several reports onto the newest request instead of compacting an
@@ -192,23 +165,13 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   protected override processEvent(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): undefined {
-    const { append, appendTo, blockProcessorWhile, event, previousState, runInBackground, state } =
-      args;
-    if (event !== null && event.type === "events.iterate.com/agent/created") {
-      blockProcessorWhile(() =>
-        appendTo("/", {
-          type: "events.iterate.com/agent/created",
-          idempotencyKey: this.idempotencyKey("catalog-created", event),
-          payload: event.payload,
-        }),
-      );
-    }
+    const { append, blockProcessorWhile, event, previousState, runInBackground, state } = args;
     if (state.birthCertificate === null) return;
     // AT-HEAD reconcile: `delivery.caughtUp` means `state` is the whole
     // observed fold. The signal rides the last consumed event, or an eventless
     // pass when the raw tail contains nothing this processor consumes. Drive
     // or settle open LLM obligations, derive the next
-    // scheduling decision, then announce runtime changes. ONE blocking closure
+    // scheduling decision. ONE blocking closure
     // so the whole pass is awaited as this head event's own work before its
     // deferred commit; a failure fails the frame and the transport replays it.
     // A mid-catch-up fold never reaches this branch, so nothing dials env.AI
@@ -220,7 +183,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       args.blockProcessorWhileCaughtUp(async () => {
         await this.#reconcileLlmObligations(args);
         await this.#reconcileLlmScheduling(args);
-        await this.#reconcileRuntimeAnnouncement(args);
       });
     }
     // Event-less at-head pass: no per-event work, only the caughtUp reconcile
@@ -254,14 +216,17 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // reconcile lane. User/developer items may interrupt a request; an
         // assistant item may contain the one codemode script to execute.
         if (
-          previousState.metadata.waitingFor !== undefined &&
+          previousState.summary.waitingFor !== undefined &&
           contextClearsWaitingFor(event.payload)
         ) {
           blockProcessorWhile(() =>
             append({
-              type: AGENT_WAITING_CLEARED_EVENT_TYPE,
-              idempotencyKey: this.idempotencyKey("waiting-cleared", event),
-              payload: { throughOffset: event.offset },
+              type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+              idempotencyKey: this.idempotencyKey("waiting-clear", event),
+              payload: {
+                waitingFor: null,
+                clearWaitingForThroughOffset: event.offset,
+              },
             }),
           );
         }
@@ -602,100 +567,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   // triggering delivery's), so every settle lane — attempt, backstop, expiry,
   // crash-cancel — collapses to one durable outcome across revivals.
   // ---------------------------------------------------------------------------
-
-  /**
-   * Announce exact runtime snapshots for downstream surfaces. A
-   * non-zero change publishes immediately; zero trails by one second so the
-   * one-append gaps inside LLM→script and script→LLM hand-offs never flicker
-   * idle. The transition offset guards every consumer against a delayed zero
-   * append that lost a race with newer work.
-   */
-  async #reconcileRuntimeAnnouncement(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
-  ): Promise<void> {
-    const transition = args.state.runtimeChange;
-    // Genesis zero is not news, so a never-active agent has no transition.
-    if (transition === undefined) return;
-    const announced = args.state.announcedRuntime;
-    const zero = isAgentRuntimeZero(transition.runtime);
-    const announcementDue = zero
-      ? announced !== undefined && !isAgentRuntimeZero(announced.runtime)
-      : announced === undefined ||
-        announced.sinceOffset !== transition.sinceOffset ||
-        !agentRuntimesEqual(announced.runtime, transition.runtime);
-    if (!announcementDue) {
-      this.#cancelIdleRuntimeAnnouncement();
-      return;
-    }
-    const appendAnnouncement = () =>
-      args.append({
-        type: AGENT_RUNTIME_CHANGED_EVENT_TYPE,
-        idempotencyKey: this.idempotencyKey(`runtime-changed@${transition.sinceOffset}`),
-        payload: {
-          sinceOffset: transition.sinceOffset,
-          runtime: transition.runtime,
-        },
-      });
-    const debounceMs = this.deps.runtimeIdleDebounceMs ?? DEFAULT_AGENT_RUNTIME_IDLE_DEBOUNCE_MS;
-    const delay = zero ? Math.max(0, Date.parse(transition.since) + debounceMs - this.#now()) : 0;
-    if (delay === 0) {
-      // Inline await, not a nested blockProcessorWhile: this runs inside the
-      // head event's blocking closure already (see #reconcileLlmObligations).
-      this.#cancelIdleRuntimeAnnouncement();
-      await appendAnnouncement();
-      return;
-    }
-    if (this.#idleRuntimeAnnouncement?.sinceOffset === transition.sinceOffset) return;
-    this.#cancelIdleRuntimeAnnouncement();
-    let settle!: (fire: boolean) => void;
-    let settled = false;
-    const wait = new Promise<boolean>((resolve) => {
-      settle = resolve;
-    });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      settle(true);
-    }, delay);
-    const attempt = {
-      sinceOffset: transition.sinceOffset,
-      cancel: () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        settle(false);
-      },
-    };
-    this.#idleRuntimeAnnouncement = attempt;
-    args.runInBackground(async () => {
-      try {
-        if (!(await wait)) return;
-        // Fire-time staleness check against the CURRENT committed fold (the
-        // runner-backed read the DO wires). A work-triggering event reduced
-        // and committed after this timer armed suppresses the stale zero here,
-        // even before the at-head pass announces the newer runtime. The
-        // consuming folds' sinceOffset guard remains the protection for the
-        // one window this cannot see: an event reduced in a frame whose
-        // commit has not landed yet.
-        const current = (await this.deps.reads.snapshot()).state.runtimeChange;
-        if (
-          current === undefined ||
-          !isAgentRuntimeZero(current.runtime) ||
-          current.sinceOffset !== attempt.sinceOffset
-        ) {
-          return;
-        }
-        await appendAnnouncement();
-      } finally {
-        if (this.#idleRuntimeAnnouncement === attempt) this.#idleRuntimeAnnouncement = undefined;
-      }
-    });
-  }
-
-  #cancelIdleRuntimeAnnouncement() {
-    this.#idleRuntimeAnnouncement?.cancel();
-    this.#idleRuntimeAnnouncement = undefined;
-  }
 
   /**
    * Open LLM obligations (the fold's `llmRequests`) against this incarnation's
@@ -1194,8 +1065,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
 // =============================================================================
 // The fold: one pure switch per consumed event (reduceAgentEventCore), plus
-// one post-switch stamp that records exact DERIVED runtime changes so the
-// announcement reconciler can key and time them.
+// one post-switch stamp exposing exact derived runtime transitions through the
+// processor's live state.
 // =============================================================================
 
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
@@ -1405,40 +1276,14 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
             ),
           }
         : state;
-    case AGENT_METADATA_CHANGED_EVENT_TYPE: {
-      const metadata = applyAgentMetadataPatch(state.metadata, event.payload);
-      const waitingForSinceOffset =
-        event.payload.waitingFor === undefined
-          ? state.waitingForSinceOffset
-          : event.payload.waitingFor === null
-            ? undefined
-            : event.offset;
-      if (metadata === state.metadata && waitingForSinceOffset === state.waitingForSinceOffset) {
-        return state;
-      }
-      return { ...state, metadata, waitingForSinceOffset };
-    }
-    case AGENT_WAITING_CLEARED_EVENT_TYPE: {
-      if (
-        state.metadata.waitingFor === undefined ||
-        state.waitingForSinceOffset === undefined ||
-        state.waitingForSinceOffset > event.payload.throughOffset
-      ) {
-        return state;
-      }
-      return {
-        ...state,
-        metadata: applyAgentMetadataPatch(state.metadata, { waitingFor: null }),
-        waitingForSinceOffset: undefined,
-      };
-    }
-    case AGENT_RUNTIME_CHANGED_EVENT_TYPE: {
-      const announcedRuntime = mergeAgentRuntimeChange(state.announcedRuntime, event.payload);
-      if (announcedRuntime === state.announcedRuntime) return state;
-      return {
-        ...state,
-        announcedRuntime,
-      };
+    case AGENT_SUMMARY_UPDATED_EVENT_TYPE: {
+      const projection = foldAgentSummaryUpdated({
+        summary: state.summary,
+        waitingForSinceOffset: state.waitingForSinceOffset,
+        update: event.payload,
+        atOffset: event.offset,
+      });
+      return projection === undefined ? state : { ...state, ...projection };
     }
     default:
       return state;
@@ -1495,7 +1340,7 @@ function contextTriggerSource(
 
 /** A later external input wakes the agent and retires its prior dependency.
  * Script results and platform feedback are continuations of the same turn,
- * so they deliberately do not clear waiting metadata. */
+ * so they deliberately do not clear the waiting summary. */
 function contextClearsWaitingFor(payload: AgentContextAddedEvent["payload"]): boolean {
   if (payload.role !== "user" && payload.role !== "developer") return false;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return false;

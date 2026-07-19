@@ -1,5 +1,6 @@
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * The html file's Code / Preview toggle: an html buffer renders in a sandboxed
@@ -38,7 +39,7 @@ test("toggle an html file between Code and its sandboxed Preview", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   // Code view first: the header shows the toggle, the buffer shows the source.
-  await page.locator('[data-item-path="index.html"]').click();
+  await openRepoTreeFile(page, "index.html");
   await page.locator(".cm-content").filter({ hasText: "Hello from the repo IDE" }).waitFor();
 
   // Preview renders the buffer in the sandboxed iframe, which carries the
