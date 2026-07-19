@@ -81,6 +81,20 @@ describe("LiveState", () => {
     expect(updates).toHaveLength(1); // only the initial snapshot
   });
 
+  it("reports whether any subscriber is currently observing the engine", () => {
+    const engine = new LiveState({ n: 1 });
+    expect(engine.observed).toBe(false);
+
+    const first = collect(engine).handle;
+    const second = collect(engine).handle;
+    expect(engine.observed).toBe(true);
+
+    first.unsubscribe();
+    expect(engine.observed).toBe(true);
+    second.unsubscribe();
+    expect(engine.observed).toBe(false);
+  });
+
   it("drops a subscriber whose sink throws", () => {
     const engine = new LiveState({ n: 1 }, { debounceMs: 100 });
     let calls = 0;

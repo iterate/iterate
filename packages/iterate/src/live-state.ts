@@ -10,6 +10,7 @@ import type {
   LiveStateSubscription,
 } from "./itx/live-state/engine.ts";
 import type { LiveUpdate } from "./itx/live-state/protocol.ts";
+import { isThenable } from "./itx/rpc/retain.ts";
 import type { LiveStateRpc, LiveStateSubscriptionHandle } from "./processors/rpc-types.ts";
 
 type LiveStateSource<State extends object> = Pick<LiveStateEngine<State>, "getState" | "subscribe">;
@@ -55,12 +56,14 @@ export class LiveStateRpcTarget<State extends object>
   }
 
   async get() {
-    await this.#beforeRead?.();
+    const loading = this.#beforeRead?.();
+    if (isThenable(loading)) await loading;
     return this.#live.getState();
   }
 
   async subscribe(onUpdate: (update: LiveUpdate<State>) => unknown) {
-    await this.#beforeRead?.();
+    const loading = this.#beforeRead?.();
+    if (isThenable(loading)) await loading;
     return new LiveStateSubscriptionRpcTarget(this.#live.subscribe(onUpdate));
   }
 }

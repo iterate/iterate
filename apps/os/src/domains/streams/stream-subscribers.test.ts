@@ -160,6 +160,8 @@ function makeHarness() {
   const repointedAlarms: (number | null)[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
+  let runtimeChanges = 0;
+  const pendingDeliveryStates: boolean[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
   const platformConfigured: Record<string, DurableSubscription> = {};
 
@@ -206,8 +208,9 @@ function makeHarness() {
   };
 
   let storageReads = 0;
-  const makeSubscribers = () =>
-    new StreamSubscribers({
+  const makeSubscribers = () => {
+    let instance!: StreamSubscribers;
+    instance = new StreamSubscribers({
       idleTeardownMs: 60_000,
       hooks: {
         readEvents: ({ afterOffset, limit }) => {
@@ -241,6 +244,14 @@ function makeHarness() {
           }
         },
         recordEgress: (count, bytes) => egress.push({ count, bytes }),
+        runtimeChanged: () => {
+          runtimeChanges += 1;
+          pendingDeliveryStates.push(
+            Object.values(instance.connectionRuntimeState()).some(
+              (connection) => connection.hasPendingDelivery,
+            ),
+          );
+        },
         now: () => now,
         random: () => 0.5,
         armAlarm: async (atMs) => {
@@ -253,6 +264,8 @@ function makeHarness() {
         keepAlive: (promise) => kept.push(promise),
       },
     });
+    return instance;
+  };
   const subscribers = makeSubscribers();
 
   /** Await every kept promise (and any it spawned), then flush microtask chains. */
@@ -272,6 +285,8 @@ function makeHarness() {
     armedAlarms,
     repointedAlarms,
     egress,
+    runtimeChanges: () => runtimeChanges,
+    pendingDeliveryStates: () => pendingDeliveryStates,
     pokes,
     pushes,
     pushOutcomes,
@@ -1704,6 +1719,7 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(connection.settleLatencyMs).toBeUndefined();
     // Delivery throughput landed in the stream-level egress hook.
     expect(h.egress).toEqual([{ count: 3, bytes: connection.bytesSent }]);
+    expect(h.runtimeChanges()).toBeGreaterThan(0);
   });
 
   it("push lane records delivery duration, commit→acked settle latency, and bytes", async () => {
@@ -1750,6 +1766,8 @@ describe("StreamSubscribers runtime metrics", () => {
     await h.settle();
     expect(settleBatch).toBeDefined();
     expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toBeUndefined();
+    expect(h.pendingDeliveryStates().slice(-2)).toEqual([false, true]);
+    const runtimeChangesBeforeSettle = h.runtimeChanges();
 
     h.advanceTo(600);
     settleBatch!();
@@ -1759,6 +1777,8 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 598,
       samples: 1,
     });
+    expect(h.pendingDeliveryStates().slice(-3)).toEqual([false, true, false]);
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforeSettle);
   });
 
   it("mutual ping: NTP math cancels responder clock skew; rounds are throttled", async () => {
@@ -1776,6 +1796,7 @@ describe("StreamSubscribers runtime metrics", () => {
 
     h.subscribers.samplePingsSoon();
     h.subscribers.samplePingsSoon(); // throttled: same round
+    const runtimeChangesBeforePing = h.runtimeChanges();
     await h.settle();
     expect(pings).toBe(1);
     // rtt = (t3−t0) − (t2−t1) = 40 − 5, regardless of the 100s skew.
@@ -1783,6 +1804,7 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 35,
       samples: 1,
     });
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforePing);
 
     h.advanceTo(h.now() + 5_001);
     h.subscribers.samplePingsSoon();

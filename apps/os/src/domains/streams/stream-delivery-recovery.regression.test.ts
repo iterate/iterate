@@ -156,6 +156,7 @@ test("a post-delivery cursor failure schedules durable redelivery", async () => 
       if (atMs !== null) armedAlarms.push(atMs);
     },
     keepAlive: (promise) => kept.push(promise),
+    runtimeChanged: () => undefined,
   };
   const createSubscribers = () => new StreamSubscribers({ idleTeardownMs: 60_000, hooks });
   const settle = async () => {

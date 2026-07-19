@@ -25,7 +25,7 @@
 // projection writes and its progress record in ONE SQLite transaction.
 
 import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { ProcessorRuntimeState, StreamEventBatch, SubscriptionKey } from "iterate/processors";
+import type { StreamEventBatch } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import {
   announceContract,
@@ -195,13 +195,10 @@ export type StreamRuntimeState = {
   coreProcessorState: unknown;
 };
 
-/** The full server runtime debug view (connections, subscriptions, throughput). */
-export type StreamServerRuntimeState = Awaited<ReturnType<Stream["runtimeState"]>>;
-
 /**
  * This browser's own REAL stream metrics — every value is measured, never
  * synthesized. `transportRttMs` samples come from timing RPCs the store makes
- * anyway (liveness probes, nudges, debug polls). `subscriber` is the hosted
+ * anyway (liveness probes and nudges). `subscriber` is the hosted
  * processor's self-measured consumption report (append round trip,
  * consume-own-append loop, ingest stats) — present only on the leader tab,
  * which is the tab that actually consumes; followers report `undefined` and
@@ -224,13 +221,7 @@ export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
   runtimeState(): StreamRpcResult<StreamRuntimeState>;
-  /**
-   * The full server runtime debug view, RTT-timed: each call also lands one
-   * transport-RTT sample in {@link StreamBrowserStore.metrics}. The processors
-   * panel polls this while open.
-   */
-  debugRuntimeState(): Promise<StreamServerRuntimeState>;
-  /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). Poll-friendly. */
+  /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). */
   metrics(): BrowserStreamMetrics;
   /** Current rendered agent state, including this connection's live-only ephemeral tail. */
   agentUiState(): AgentUiState | null;
@@ -242,9 +233,6 @@ export type StreamBrowserStore = Disposable & {
    * past the offset. `t0` is when the caller initiated the append.
    */
   noteExternalAppend(args: { maxCommittedOffset: number; t0: number }): void;
-  getProcessorRuntimeState(args: {
-    subscriptionKey: SubscriptionKey;
-  }): StreamRpcResult<ProcessorRuntimeState | null>;
   /** Clear local tables + checkpoint and reconnect, letting reconcile + replay rebuild the mirror from the server. */
   clearLocalDatabase(): Promise<void>;
   /**
@@ -460,8 +448,8 @@ function createStreamRuntime(
   let totalDeliveredEvents = 0;
   let lastBatchEvents = 0;
   let ingestFailures = 0;
-  // Real transport-RTT samples from RPCs the store makes anyway (probes,
-  // nudges, debug polls). Success-only: a timed-out call is not a sample.
+  // Real transport-RTT samples from RPCs the store makes anyway (probes and
+  // nudges). Success-only: a timed-out call is not a sample.
   const transportRtt = new LatencyRing();
   // The leader election's live composite drive. Its (primary member's)
   // `subscriberMetrics` is the ONE place this browser's consumption metrics
@@ -2210,11 +2198,6 @@ function createStreamRuntime(
     runtimeState() {
       return callWhenReady((rpc) => rpc.runtimeState() as Promise<StreamRuntimeState>);
     },
-    debugRuntimeState() {
-      return callWhenReady((rpc) =>
-        timed(Promise.resolve(rpc.runtimeState() as Promise<StreamServerRuntimeState>)),
-      );
-    },
     metrics: readMetrics,
     agentUiState: () => liveAgentUiState,
     noteExternalAppend({ maxCommittedOffset, t0 }) {
@@ -2224,11 +2207,6 @@ function createStreamRuntime(
         t0,
         atMs: Date.now(),
       });
-    },
-    getProcessorRuntimeState(args) {
-      return callWhenReady(
-        (rpc) => rpc.getProcessorRuntimeState(args) as Promise<ProcessorRuntimeState | null>,
-      );
     },
     async clearLocalDatabase() {
       stopSubscriptionElection();

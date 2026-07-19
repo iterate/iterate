@@ -18,7 +18,6 @@ import {
   useLiveState,
 } from "iterate/react";
 import type { Stream } from "../itx-api.generated.ts";
-import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useStreamMirror } from "~/domains/streams/client-libraries/browser/hooks/use-stream-mirror.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
@@ -33,10 +32,7 @@ import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel
 import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
 import { ScriptExecutionInspectorContent } from "~/components/script-execution-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
-import {
-  StreamStatePanel,
-  type StreamRuntimeDebugState,
-} from "~/components/stream-state-panel.tsx";
+import { StreamStatePanel } from "~/components/stream-state-panel.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
@@ -250,9 +246,8 @@ function MirroredProjectStreamView({
     window.location.reload();
   }
 
-  const { getProcessorRuntimeState, getStreamRuntimeState } = useProcessorsPanelDebugState({
+  const { getProcessorRuntimeState } = useProcessorsPanelDebugState({
     resolvedStreamSource,
-    store,
     streamPath,
   });
 
@@ -376,7 +371,7 @@ function MirroredProjectStreamView({
       onClose={panels.closeProcessorsPanel}
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
-      getStreamRuntimeState={getStreamRuntimeState}
+      projectId={projectId}
       streamPath={streamPath}
       tokenUsage={caps.agentFeed ? (presentedAgentUiState?.tokenUsage ?? null) : null}
     />
@@ -695,41 +690,23 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
 }
 
 /**
- * The processors sheet's on-demand debug accessors: server-side runtime state
- * for one processor subscription (plus the stream's max offset for lag math)
- * and for the stream itself. Dialed fresh per call — debug reads must see the
- * server's CURRENT state, not a cached snapshot.
+ * The processors sheet's one on-demand debug accessor: reduced state for the
+ * focused processor. Stream runtime diagnostics arrive separately through
+ * the LiveState subscription, including the head offset used for lag math.
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;
-  store: StreamBrowserStore;
   streamPath: string;
 }) {
-  const { resolvedStreamSource, store, streamPath } = args;
+  const { resolvedStreamSource, streamPath } = args;
   const getProcessorRuntimeState = useCallback(
     async (subscriptionKey: string) => {
       const stream = await resolvedStreamSource(streamPath);
-      const [runtimeState, streamRuntimeState] = await Promise.all([
-        stream.getProcessorRuntimeState({ subscriptionKey }),
-        stream.runtimeState(),
-      ]);
-      return {
-        runtimeState,
-        // The itx Stream.runtimeState() types coreProcessorState as
-        // unknown; parse out the slice this panel needs.
-        streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
-          .maxOffset,
-      };
+      return stream.getProcessorRuntimeState({ subscriptionKey });
     },
     [resolvedStreamSource, streamPath],
   );
-  // Through the store's leader socket, not a fresh dial: the same call then
-  // doubles as a transport-RTT sample for the header/panel metrics.
-  const getStreamRuntimeState = useCallback(
-    (): Promise<StreamRuntimeDebugState> => store.debugRuntimeState(),
-    [store],
-  );
-  return { getProcessorRuntimeState, getStreamRuntimeState };
+  return { getProcessorRuntimeState };
 }
 
 /**

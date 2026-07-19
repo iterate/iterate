@@ -210,7 +210,7 @@ new project stream
 ```
 
 The conventional subscription key is `iterate-platform-posthog`. It delivers
-from offset zero, explicitly includes ephemeral rows, parks rather than
+from offset zero, explicitly excludes ephemeral rows, parks rather than
 poison-skipping, and uses the fixed expression
 `["integrations", "posthog", "processEventBatch"]`. This is normal stream
 configuration: its key is not protected, and the subscription may be replaced
@@ -237,9 +237,9 @@ There is no recovery import or restoration lane. The shared streams example app
 has neither the OS credential nor the receiver and therefore does not acquire
 this OS-only subscription.
 
-“All events” means one PostHog occurrence for every committed row still owned
-by the stream, without a type selector, sampling, success/error filter,
-ephemeral exclusion, or payload allowlist. Its event name is `stream:append`.
+“All events” means one PostHog occurrence for every non-ephemeral committed row
+still owned by the stream, without a type selector, sampling, success/error
+filter, or payload allowlist. Its event name is `append:<type>`.
 The complete committed event is sent under `properties.stream_event`,
 including payload, metadata, source/cross-post provenance, idempotency key,
 ephemerality, offset, commit time, type, and raw path. It remains byte-for-byte
@@ -247,19 +247,17 @@ intact through 100 KiB of encoded JSON. Above that explicit boundary, a pure,
 deterministic JSON compactor chops the largest useful nested value and marks
 the lost tail; `stream_event_truncated` and
 `stream_event_original_json_bytes` make the loss queryable. This is size
-bounding, not an event-field allowlist: small siblings and all separately
-indexed coordinates remain, and no event is dropped. The raw stream path is
-also indexed separately as `stream_path`. Event producers own the obligation
-not to append secrets that must not reach our first-party analytics project.
+bounding, not an event-field allowlist: small siblings, promoted type and path,
+and loss metadata remain, and no oversized event is dropped. Event producers
+own the obligation not to append secrets that must not reach our first-party
+analytics project.
 PostHog asynchronous ingestion warnings remain an operational signal rather
 than a reason to silently filter or sample events.
 
 Each occurrence also contains indexed coordinates:
 
-- deployment worker name and immutable project id;
-- the raw stream path, an opaque stable stream id, and source offset;
-- original commit time, ephemerality, and stream high-water mark;
-- the exact event type, including custom project event types; and
+- `stream_path` and the exact `stream_event_type`, including custom project
+  event types; and
 - a stable UUID derived from an unambiguous JSON tuple of deployment, project,
   stream path, offset, and commit time, so at-least-once retries submit the
   same identity without path delimiter collisions or conflating a stream
@@ -313,19 +311,20 @@ That acknowledgement is deliberately described as **HTTP acceptance**, not
 proof of final indexing. PostHog validates and ingests public capture requests
 asynchronously; a 2xx can precede an ingestion warning, quota decision, or
 drop, and its UUID deduplication is not an exactly-once contract. The source
-stream is therefore the durable truth. Preview proves representative events
-arrive and checks the ingestion-warning surface, while ongoing operation must
-monitor PostHog ingestion warnings and compare source submissions with indexed
-events. This PR does not claim an impossible synchronous end-to-end guarantee.
+stream is therefore the durable truth. Production proof checks representative
+events and the ingestion-warning surface; preview proves that the cursor
+advances without exporting. Ongoing operation must compare source submissions
+with indexed events. This PR does not claim an impossible synchronous
+end-to-end guarantee.
 
 The capture request and custom `posthog.capture_stream_events` span expose only
 bounded project coordinates, an opaque stream id, delivery id, attempt, and
 event count.
-Preview acceptance proof must show: a fresh stream, durable and ephemeral
-custom events in the live PostHog feed under the same
-project group, stable occurrence UUIDs across a forced transport retry, no
-observed ingestion warning for the proof events, and the matching Cloudflare
-custom span. No sampling is permitted.
+Production acceptance proof must show a fresh durable custom event in the live
+PostHog feed under its project group, a stable occurrence UUID across a forced
+transport retry, no observed ingestion warning, and the matching Cloudflare
+custom span. Preview proof must show that its subscription advances without a
+PostHog capture span or exported event. No sampling is permitted.
 
 ### Worker exception ownership
 
@@ -460,18 +459,17 @@ alarm actions. Possible later operation adapters are:
 - [ ] A normal project script cannot call the first-party receiver directly;
       only the host-minted delivery purpose can resolve it, without protecting
       the subscription's key or lifecycle.
-- [ ] Every durable and ephemeral row is submitted as one project-grouped
+- [ ] Every non-ephemeral durable row is submitted as one project-grouped
       occurrence; no type, success/error, or sampling selector exists.
 - [ ] Only public-batch HTTP acceptance gates the durable cursor; transport
       failures eventually park, and the proof checks PostHog's asynchronous
       ingestion-warning surface without claiming exactly-once indexing.
-- [ ] Each `stream:append` request contains the complete committed event through
-      100 KiB, including payload, metadata, provenance, idempotency key, and raw
-      stream path. Larger JSON is visibly and deterministically chopped, with
-      original byte size and truncation indexed; no event-field allowlist,
-      sampling, or event drop exists.
-- [ ] Preview proof includes the PostHog live feed and its matching Cloudflare
-      capture span for a fresh stream's durable and ephemeral rows.
+- [ ] Each `append:<type>` occurrence contains the complete committed event
+      through 100 KiB, with type and path promoted for ordinary UI slicing.
+      Larger JSON is visibly and deterministically chopped, with original byte
+      size and truncation indexed; no event-field allowlist or sampling exists.
+- [ ] Production proof includes the PostHog live feed and matching Cloudflare
+      capture span; preview proof shows a healthy cursor with no export.
 
 ## Primary references
 

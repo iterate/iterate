@@ -63,7 +63,7 @@ import {
 import { waitForContainerRollouts } from "./container-rollout-readiness.ts";
 import { ensureWorkerQueues } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
-import { seedTemplateWorkerArtifact } from "./lib/seed-template-worker-artifact.ts";
+import { seedTemplateWorkerArtifacts } from "./lib/seed-template-worker-artifact.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 const OS_DEPLOY_LABEL = "apps/os";
@@ -306,11 +306,11 @@ export default async function deploy(
             compatibilityDate: COMPATIBILITY_DATE,
           }),
         ),
-        // Fresh projects use this trusted artifact instead of cold-starting a
-        // builder container during projects.create. Runtime config and this
-        // seed share the exact preview package spec set in prepare above.
-        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: template worker artifact", () =>
-          seedTemplateWorkerArtifact({
+        // Fresh projects use these trusted root-worker and Vite-app artifacts
+        // instead of cold-starting a builder container during projects.create.
+        // Runtime config and the seeds share the exact preview package spec.
+        runTimedDeployPhase(OS_DEPLOY_LABEL, "prepare: template worker artifacts", () =>
+          seedTemplateWorkerArtifacts({
             accountId: ctx.env.cloudflareAccountId,
             apiToken: credentials.CLOUDFLARE_API_TOKEN!,
             iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,

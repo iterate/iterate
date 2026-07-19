@@ -735,7 +735,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Stream",
     kind: "interface",
     sourceText:
-      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Durable rows after `afterOffset` are replayed. It can also match an\n   * `ephemeral: true` event appended after this wait opens, but historical\n   * ephemeral rows are never replayed.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling), so a polling debug UI sees RTTs populate.\n   */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, ConnectionRuntimeState>;\n      subscriptions: Record<string, SubscriptionRuntimeState>;\n      metrics: StreamThroughputMetrics;\n      /** SQLite database size in bytes (event log + spine rows + chunks). */\n      storageSizeBytes: number;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane):\n   * `processEventBatch` first receives durable history after\n   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only\n   * when appended after this exact subscription opens and are never replayed.\n   * Returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /**\n     * Atomically bind this open to the stream identity observed during\n     * catch-up. `null` means the caller observed a stream with no committed\n     * creation fact yet. A mismatch rejects before replacing any connection.\n     */\n    expectedIncarnation?: string | null;\n    /**\n     * Atomically reject instead of opening when the current raw-log head is\n     * more than this many offsets beyond `replayAfterOffset`.\n     */\n    maxReplayOffsetGap?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    /**\n     * Human-readable note for operators and the stream state panel (why this\n     * cross-post exists). Optional on the API; platform call sites always set it.\n     */\n    description?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
+      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Durable rows after `afterOffset` are replayed. It can also match an\n   * `ephemeral: true` event appended after this wait opens, but historical\n   * ephemeral rows are never replayed.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling); live debug surfaces should subscribe through `liveState`.\n   */\n  runtimeState(): Promise<StreamRuntimeDebugState>;\n  /** Push-driven stream runtime state for polling-free debug surfaces. */\n  liveState: LiveStateRpc<StreamRuntimeDebugState>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane):\n   * `processEventBatch` first receives durable history after\n   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only\n   * when appended after this exact subscription opens and are never replayed.\n   * Returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /**\n     * Atomically bind this open to the stream identity observed during\n     * catch-up. `null` means the caller observed a stream with no committed\n     * creation fact yet. A mismatch rejects before replacing any connection.\n     */\n    expectedIncarnation?: string | null;\n    /**\n     * Atomically reject instead of opening when the current raw-log head is\n     * more than this many offsets beyond `replayAfterOffset`.\n     */\n    maxReplayOffsetGap?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    /**\n     * Human-readable note for operators and the stream state panel (why this\n     * cross-post exists). Optional on the API; platform call sites always set it.\n     */\n    description?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
     summary: "Durable event stream capability.",
     memberSummaries: {
       append: "Commit events; resolves with the same events carrying offsets and timestamps.",
@@ -751,6 +751,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
         "The reduced-state snapshot (plus runtime debug info) of one configured processor.",
       runtimeState:
         "Live debug view of the stream Durable Object: core processor state, open connections with real delivery metrics (lag, bytes, commit→settled latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the stream's own throughput windows.",
+      liveState: "Push-driven stream runtime state for polling-free debug surfaces.",
       kill: "Abort the current Durable Object incarnation; the next request boots it again.",
       subscribe:
         'Session-scoped live event delivery (the "ephemeral" subscription lane): `processEventBatch` first receives durable history after `replayAfterOffset`, then new commits.',
@@ -768,9 +769,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamEventReadInput",
       "StreamEventPager",
       "ProcessorRuntimeState",
-      "ConnectionRuntimeState",
-      "SubscriptionRuntimeState",
-      "StreamThroughputMetrics",
+      "StreamRuntimeDebugState",
+      "LiveStateRpc",
       "ProcessEventBatch",
       "GetProcessorRuntimeState",
       "StreamSubscriberPing",
@@ -1811,32 +1811,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "ConnectionRuntimeState",
+    name: "StreamRuntimeDebugState",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the pulled batch result settling (the subscriber's\n   * ingest resolved). Durable (wake) lane only — ephemeral results are\n   * disposed unpulled, so ephemeral consumption is self-reported by the host\n   * through `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while the last batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
-    summary: "Serializable debug view of one live connection, for `runtimeState()`.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
-  },
-  {
-    name: "SubscriptionRuntimeState",
-    kind: "typeAlias",
-    sourceText:
-      "/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */\nexport type SubscriptionRuntimeState = {\n  mode: SubscriptionDelivery[\"mode\"];\n  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */\n  ackedOffset: number;\n  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */\n  lag: number;\n  attempt: number;\n  nextAttemptAt: number | null;\n  lastError: string | null;\n  parkedAtOffset: number | null;\n  /** Whether a live delivery connection currently exists (wake mode). */\n  connected: boolean;\n  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */\n  bytesSent?: number;\n  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */\n  settleLatencyMs?: LatencyStats;\n  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */\n  deliveryDurationMs?: LatencyStats;\n};",
+      "/** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */\nexport type StreamRuntimeDebugState = {\n  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */\n  coreProcessorState: unknown;\n  runtime: {\n    connections: Record<string, ConnectionRuntimeState>;\n    subscriptions: Record<string, SubscriptionRuntimeState>;\n    metrics: StreamThroughputMetrics;\n    /** SQLite database size in bytes (event log + spine rows + chunks). */\n    storageSizeBytes: number;\n  };\n};",
     summary:
-      "Serializable debug view of one durable subscription's spine row, for `runtimeState()`.",
+      "Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`.",
     memberSummaries: {},
-    referencedTypeNames: ["SubscriptionDelivery", "LatencyStats"],
-  },
-  {
-    name: "StreamThroughputMetrics",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `runtimeState()` reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
-    summary: "What `runtimeState()` reports for the stream's own throughput.",
-    memberSummaries: {},
-    referencedTypeNames: ["ThroughputReport"],
+    referencedTypeNames: [
+      "ConnectionRuntimeState",
+      "SubscriptionRuntimeState",
+      "StreamThroughputMetrics",
+    ],
   },
   {
     name: "ProcessEventBatch",
@@ -2127,53 +2113,32 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "StreamSubscriptionType",
+    name: "ConnectionRuntimeState",
     kind: "typeAlias",
     sourceText:
-      '/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */\nexport type StreamSubscriptionType = "configured" | "ephemeral";',
-    summary:
-      "How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket.",
+      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the pulled batch result settling (the subscriber's\n   * ingest resolved). Durable (wake) lane only — ephemeral results are\n   * disposed unpulled, so ephemeral consumption is self-reported by the host\n   * through `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while the last batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
+    summary: "Serializable debug view of one live connection, for `runtimeState()`.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
   },
   {
-    name: "LatencyStats",
+    name: "SubscriptionRuntimeState",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */\nexport type LatencyStats = {\n  /** Most recent sample (ms). */\n  last: number;\n  p50: number;\n  p95: number;\n  /** Samples currently in the ring (caps at the ring size). */\n  samples: number;\n  /** Epoch ms of the most recent sample. */\n  lastAt: number;\n};",
-    summary: "Serializable summary of a {@link LatencyRing}; `null` until a sample exists.",
+      "/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */\nexport type SubscriptionRuntimeState = {\n  mode: SubscriptionDelivery[\"mode\"];\n  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */\n  ackedOffset: number;\n  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */\n  lag: number;\n  attempt: number;\n  nextAttemptAt: number | null;\n  lastError: string | null;\n  parkedAtOffset: number | null;\n  /** Whether a live delivery connection currently exists (wake mode). */\n  connected: boolean;\n  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */\n  bytesSent?: number;\n  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */\n  settleLatencyMs?: LatencyStats;\n  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */\n  deliveryDurationMs?: LatencyStats;\n};",
+    summary:
+      "Serializable debug view of one durable subscription's spine row, for `runtimeState()`.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["SubscriptionDelivery", "LatencyStats"],
   },
   {
-    name: "StreamSubscriberDescriptor",
+    name: "StreamThroughputMetrics",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
-    summary:
-      "Serializable subscriber identity carried on presence facts and the runtime connection table.",
+      "/** What a stream runtime snapshot reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** ISO timestamp anchoring the trailing windows and final series bucket. */\n  reportedAt: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
+    summary: "What a stream runtime snapshot reports for the stream's own throughput.",
     memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "SubscriptionDelivery",
-    kind: "typeAlias",
-    sourceText:
-      '/** A durable subscription\'s delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */\nexport type SubscriptionDelivery =\n  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }\n  | { mode: "push"; expression: ItxExpression }\n  | { mode: "webhook"; url: string };',
-    summary:
-      "A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST).",
-    memberSummaries: {},
-    referencedTypeNames: ["ItxExpression"],
-  },
-  {
-    name: "ThroughputReport",
-    kind: "typeAlias",
-    sourceText:
-      "/**\n * One direction's throughput report: a responsive trailing-5s rate (the\n * number UIs show), the full-minute totals, and the raw 1s series for graphs.\n */\nexport type ThroughputReport = {\n  /** Events per second over the trailing 5 seconds. */\n  perSecond5s: number;\n  /** Payload bytes per second over the trailing 5 seconds. */\n  bytesPerSecond5s: number;\n  lastMinute: MinuteWindow;\n  series: ThroughputSeries;\n};",
-    summary:
-      "One direction's throughput report: a responsive trailing-5s rate (the number UIs show), the full-minute totals, and the raw 1s series for graphs.",
-    memberSummaries: {},
-    referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
+    referencedTypeNames: ["ThroughputReport"],
   },
   {
     name: "StreamEventBatch",
@@ -2300,22 +2265,53 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "MinuteWindow",
+    name: "StreamSubscriptionType",
     kind: "typeAlias",
     sourceText:
-      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
-    summary: "One rolling-minute throughput window.",
+      '/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */\nexport type StreamSubscriptionType = "configured" | "ephemeral";',
+    summary:
+      "How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "ThroughputSeries",
+    name: "LatencyStats",
     kind: "typeAlias",
     sourceText:
-      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
-    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
+      "/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */\nexport type LatencyStats = {\n  /** Most recent sample (ms). */\n  last: number;\n  p50: number;\n  p95: number;\n  /** Samples currently in the ring (caps at the ring size). */\n  samples: number;\n  /** Epoch ms of the most recent sample. */\n  lastAt: number;\n};",
+    summary: "Serializable summary of a {@link LatencyRing}; `null` until a sample exists.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "StreamSubscriberDescriptor",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
+    summary:
+      "Serializable subscriber identity carried on presence facts and the runtime connection table.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SubscriptionDelivery",
+    kind: "typeAlias",
+    sourceText:
+      '/** A durable subscription\'s delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */\nexport type SubscriptionDelivery =\n  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }\n  | { mode: "push"; expression: ItxExpression }\n  | { mode: "webhook"; url: string };',
+    summary:
+      "A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST).",
+    memberSummaries: {},
+    referencedTypeNames: ["ItxExpression"],
+  },
+  {
+    name: "ThroughputReport",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * One direction's throughput report: a responsive trailing-5s rate (the\n * number UIs show), the full-minute totals, and the raw 1s series for graphs.\n */\nexport type ThroughputReport = {\n  /** Events per second over the trailing 5 seconds. */\n  perSecond5s: number;\n  /** Payload bytes per second over the trailing 5 seconds. */\n  bytesPerSecond5s: number;\n  lastMinute: MinuteWindow;\n  series: ThroughputSeries;\n};",
+    summary:
+      "One direction's throughput report: a responsive trailing-5s rate (the number UIs show), the full-minute totals, and the raw 1s series for graphs.",
+    memberSummaries: {},
+    referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
   },
   {
     name: "CfImageTransformOptions",
@@ -2393,6 +2389,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       '/**\n * One overlay change: a local file that shadows a mount file ("modified" —\n * shadowed, not content-diffed), one the mount does not have ("added"), or a\n * mount file hidden by a local delete ("deleted").\n */\nexport type WorkspaceChange = {\n  change: "added" | "deleted" | "modified";\n  path: string;\n};',
     summary:
       'One overlay change: a local file that shadows a mount file ("modified" — shadowed, not content-diffed), one the mount does not have ("added"), or a mount file hidden by a local delete ("deleted").',
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "MinuteWindow",
+    kind: "typeAlias",
+    sourceText:
+      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
+    summary: "One rolling-minute throughput window.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ThroughputSeries",
+    kind: "typeAlias",
+    sourceText:
+      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
+    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
