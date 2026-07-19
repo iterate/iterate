@@ -98,10 +98,11 @@ export class GuestbookApp extends IterateDurableObject {
   }
 
   /** Signing IS appending: the idempotency-keyed creation batch (birth +
-   * wake subscription — every signer offers it; the stream collapses it to
-   * one of each) plus this entry. The spine delivers the append back into
-   * this object's runner, the fold absorbs it, and the registry republishes
-   * the live state to every subscribed tab — nothing else to do here. */
+   * current wake-subscription config — every signer offers it; the stream
+   * collapses each version and replaces older config at the same subscription
+   * key) plus this entry. The spine delivers the append back into this
+   * object's runner, the fold absorbs it, and the registry republishes the
+   * live state to every subscribed tab — nothing else to do here. */
   async sign(name: string, message: string): Promise<void> {
     const trimmedName = name.trim().slice(0, 80);
     const trimmedMessage = message.trim().slice(0, 500);

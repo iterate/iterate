@@ -8,6 +8,7 @@
 import { expect, test } from "vitest";
 import {
   guestbookAppRef,
+  guestbookCreationEvents,
   guestbookPageSource,
 } from "../../../config-repo-template/apps/guestbook/src/guestbook-ref.ts";
 import {
@@ -75,6 +76,25 @@ test("TanStack pages and stateful APIs have independent worker entries", () => {
     expect(statefulRef.source.options.minify).toBe(true);
     expect(statefulRef.updatePolicy).toBe("stale-while-rebuild");
   }
+});
+
+test("guestbook wake delivery replaces the legacy Vite-backed subscription", () => {
+  const subscription = guestbookCreationEvents()[1];
+
+  expect(subscription).toMatchObject({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: "app-guestbook#guestbook",
+      delivery: {
+        mode: "wake",
+        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
+      },
+    },
+  });
+  // The pre-split template committed the same subscription identity with
+  // this append idempotency key. A distinct event must reach the stream's
+  // replacement reducer while preserving its delivery cursor.
+  expect(subscription?.idempotencyKey).not.toBe("guestbook/subscription");
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {

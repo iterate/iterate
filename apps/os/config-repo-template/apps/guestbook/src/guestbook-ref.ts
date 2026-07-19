@@ -47,9 +47,10 @@ export const guestbookAppRef = {
  * via the dynamic capability fallback into the app's `processor` getter),
  * performs the wake handshake, and pushes event frames straight into the
  * registry's runner. Same machinery, same lane as the platform's own
- * domain processors. Both events are idempotency-keyed, so every creator
- * (the app's sign verb, a script, a test) offers this same batch and
- * the stream collapses it to one birth and one subscription.
+ * domain processors. Every creator (the app's sign verb, a script, a test)
+ * offers this same batch. The birth key is permanent; the subscription event
+ * key is versioned whenever its persisted expression changes. Its stable
+ * subscriptionKey then replaces the old config without resetting its cursor.
  */
 export function guestbookCreationEvents(): StreamEventInput[] {
   return [
@@ -68,7 +69,10 @@ export function guestbookCreationEvents(): StreamEventInput[] {
           processorSlug: "guestbook",
         },
       },
-      idempotencyKey: "guestbook/subscription",
+      // v2 migrates the original Vite-backed worker ref to the independent,
+      // small stateful entrypoint above. Keep subscriptionKey stable; bump
+      // this event key whenever the persisted delivery expression changes.
+      idempotencyKey: "guestbook/subscription:v2",
     },
   ];
 }

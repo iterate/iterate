@@ -324,10 +324,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /** Signing IS appending: the idempotency-keyed creation batch (birth +\n" +
-      "   * wake subscription — every signer offers it; the stream collapses it to\n" +
-      "   * one of each) plus this entry. The spine delivers the append back into\n" +
-      "   * this object's runner, the fold absorbs it, and the registry republishes\n" +
-      "   * the live state to every subscribed tab — nothing else to do here. */\n" +
+      "   * current wake-subscription config — every signer offers it; the stream\n" +
+      "   * collapses each version and replaces older config at the same subscription\n" +
+      "   * key) plus this entry. The spine delivers the append back into this\n" +
+      "   * object's runner, the fold absorbs it, and the registry republishes the\n" +
+      "   * live state to every subscribed tab — nothing else to do here. */\n" +
       "  async sign(name: string, message: string): Promise<void> {\n" +
       "    const trimmedName = name.trim().slice(0, 80);\n" +
       "    const trimmedMessage = message.trim().slice(0, 500);\n" +
@@ -423,9 +424,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       " * via the dynamic capability fallback into the app's `processor` getter),\n" +
       " * performs the wake handshake, and pushes event frames straight into the\n" +
       " * registry's runner. Same machinery, same lane as the platform's own\n" +
-      " * domain processors. Both events are idempotency-keyed, so every creator\n" +
-      " * (the app's sign verb, a script, a test) offers this same batch and\n" +
-      " * the stream collapses it to one birth and one subscription.\n" +
+      " * domain processors. Every creator (the app's sign verb, a script, a test)\n" +
+      " * offers this same batch. The birth key is permanent; the subscription event\n" +
+      " * key is versioned whenever its persisted expression changes. Its stable\n" +
+      " * subscriptionKey then replaces the old config without resetting its cursor.\n" +
       " */\n" +
       "export function guestbookCreationEvents(): StreamEventInput[] {\n" +
       "  return [\n" +
@@ -444,7 +446,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          processorSlug: \"guestbook\",\n" +
       "        },\n" +
       "      },\n" +
-      "      idempotencyKey: \"guestbook/subscription\",\n" +
+      "      // v2 migrates the original Vite-backed worker ref to the independent,\n" +
+      "      // small stateful entrypoint above. Keep subscriptionKey stable; bump\n" +
+      "      // this event key whenever the persisted delivery expression changes.\n" +
+      "      idempotencyKey: \"guestbook/subscription:v2\",\n" +
       "    },\n" +
       "  ];\n" +
       "}\n",
