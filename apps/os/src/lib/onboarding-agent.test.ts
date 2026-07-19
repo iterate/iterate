@@ -18,6 +18,7 @@ const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState
   devices: [],
   egressRules: [],
   humanApprovalKeys: [],
+  notificationReady: false,
   onboardingActive: false,
   onboardingCompletedAt: null,
   repos: [],

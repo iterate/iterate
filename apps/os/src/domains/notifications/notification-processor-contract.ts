@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { ProjectProcessorContract } from "../projects/project-processor-contract.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { NotificationIntentContract } from "./notification-intent-contract.ts";
 import { NotificationLifecycleContract } from "./notification-lifecycle-contract.ts";
 
@@ -14,7 +13,6 @@ export const NotificationProcessorContract = defineProcessorContract({
     ProjectProcessorContract,
     NotificationIntentContract,
     NotificationLifecycleContract,
-    CoreProcessorContract,
   ],
   stateSchema: z.object({
     birthCertificate: z
@@ -27,10 +25,7 @@ export const NotificationProcessorContract = defineProcessorContract({
     "events.iterate.com/notification/created",
     "events.iterate.com/project/human-approval-requested",
   ],
-  emits: [
-    "events.iterate.com/notification/requested",
-    "events.iterate.com/stream/subscription-configured",
-  ],
+  emits: ["events.iterate.com/notification/requested"],
 });
 
 export type NotificationProcessorContract = typeof NotificationProcessorContract;

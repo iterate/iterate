@@ -31,19 +31,11 @@ test("one held approval becomes one project notification intent", async () => {
 
   await driver.deliver();
 
-  expect(network.eventsAt("/")).toContainEqual(
-    expect.objectContaining({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: expect.objectContaining({
-        subscriptionKey: "notification-intent:/integrations/email",
-        selector: { eventTypes: ["events.iterate.com/notification/requested"] },
-        delivery: {
-          mode: "push",
-          expression: ["streams", ["get", "/integrations/email"], "acceptCrossPost"],
-        },
-      }),
-    }),
-  );
+  expect(network.eventsAt("/").map((event) => event.type)).toEqual([
+    "events.iterate.com/notification/created",
+    "events.iterate.com/project/human-approval-requested",
+    "events.iterate.com/notification/requested",
+  ]);
   expect(network.eventsAt("/").at(-1)).toMatchObject({
     type: "events.iterate.com/notification/requested",
     idempotencyKey: "notification/approval-requested@/:2",

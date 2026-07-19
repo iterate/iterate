@@ -21,25 +21,6 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
     event,
     state,
   }: Parameters<StreamProcessor<NotificationProcessorContract>["processEvent"]>[0]): undefined {
-    if (event?.type === "events.iterate.com/notification/created") {
-      blockProcessorWhile(() =>
-        append({
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: this.idempotencyKey("email-cross-post", event),
-          payload: {
-            subscriptionKey: "notification-intent:/integrations/email",
-            description:
-              "Copies project notification intents to the built-in email channel for recipient resolution and delivery.",
-            selector: { eventTypes: ["events.iterate.com/notification/requested"] },
-            delivery: {
-              mode: "push",
-              expression: ["streams", ["get", "/integrations/email"], "acceptCrossPost"],
-            },
-            deliver: "new",
-          },
-        }),
-      );
-    }
     if (
       event === null ||
       state.birthCertificate === null ||

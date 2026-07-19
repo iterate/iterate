@@ -95,7 +95,14 @@ export class EmailProcessor extends StreamProcessor<
         if (state.birthCertificate !== null) {
           throw new Error("Email processor received more than one email/created event");
         }
-        return { ...state, birthCertificate: event.payload };
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          notificationRecipients:
+            event.payload.config.notificationRecipient === undefined
+              ? state.notificationRecipients
+              : [event.payload.config.notificationRecipient.toLowerCase()],
+        };
       case "events.iterate.com/email/received": {
         const resolution = resolveEmailThread({
           offset: event.offset,
@@ -172,6 +179,17 @@ export class EmailProcessor extends StreamProcessor<
   ): undefined {
     const { append, appendTo, blockProcessorWhile, event, previousState, state } = args;
     if (state.birthCertificate === null) return;
+    if (
+      event?.type === "events.iterate.com/email/created" ||
+      event?.type === "events.iterate.com/email/notification-recipient-configured"
+    ) {
+      blockProcessorWhile(() =>
+        appendTo(
+          "/",
+          emailNotificationIntentCrossPost({ path: this.path, projectId: this.projectId }),
+        ),
+      );
+    }
     if (args.delivery.caughtUp) this.#reconcileNotifications(args);
     if (event === null || event.type === "events.iterate.com/email/created") return;
     if (event.type !== "events.iterate.com/email/received") return;
@@ -365,6 +383,26 @@ export class EmailProcessor extends StreamProcessor<
       this.#liveNotificationAttempts.delete(input.requestOffset);
     }
   }
+}
+
+function emailNotificationIntentCrossPost(input: { path: string; projectId: string | null }) {
+  if (input.projectId === null) {
+    throw new Error("Email notification delivery requires a project id.");
+  }
+  return {
+    type: "events.iterate.com/stream/subscription-configured" as const,
+    idempotencyKey: `email-notification-intent-cross-post:${input.projectId}`,
+    payload: {
+      subscriptionKey: `notification-intent:${input.path}`,
+      description: `Copies project notification intents to ${input.path} for email-owned delivery.`,
+      selector: { eventTypes: ["events.iterate.com/notification/requested"] },
+      delivery: {
+        mode: "push" as const,
+        expression: ["streams", ["get", input.path], "acceptCrossPost"],
+      },
+      deliver: "new" as const,
+    },
+  };
 }
 
 function emailAgentCreationEvents(input: {

@@ -141,6 +141,10 @@ export class ProjectProcessor extends StreamProcessor<
           ...(creatorEmail === undefined
             ? []
             : [
+                // Rollout bridge for projects whose email birth certificate
+                // predates notificationRecipient. Processing this event makes
+                // the email channel install its own root-stream subscription;
+                // new projects carry the recipient in email/created instead.
                 appendTo(EMAIL_INTEGRATION_STREAM_PATH, {
                   type: "events.iterate.com/email/notification-recipient-configured",
                   idempotencyKey: `email-notification-recipient:${this.deps.itx.projectId}:${creatorEmail.toLowerCase()}`,
@@ -280,7 +284,13 @@ export class ProjectProcessor extends StreamProcessor<
                 {
                   type: "events.iterate.com/email/created",
                   idempotencyKey: `email-created:${this.deps.itx.projectId}`,
-                  payload: { config: {} },
+                  payload: {
+                    config: {
+                      ...(config.creatorEmail === undefined
+                        ? {}
+                        : { notificationRecipient: config.creatorEmail }),
+                    },
+                  },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
@@ -300,14 +310,6 @@ export class ProjectProcessor extends StreamProcessor<
                         payload: {
                           pattern: config.creatorEmail,
                           reason: "project-owner",
-                        },
-                      },
-                      {
-                        type: "events.iterate.com/email/notification-recipient-configured" as const,
-                        idempotencyKey: `email-notification-recipient:${this.deps.itx.projectId}:${config.creatorEmail.toLowerCase()}`,
-                        payload: {
-                          email: config.creatorEmail,
-                          reason: "project-owner" as const,
                         },
                       },
                     ]),

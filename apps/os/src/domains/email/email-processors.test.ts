@@ -58,8 +58,45 @@ function newEmailAgent(
   return new EmailAgentProcessor(input);
 }
 
+test("the email channel registers itself for project notification intents", async () => {
+  const network = new MemoryStreamNetwork();
+  const stream = network.get("/integrations/email");
+  const driver = driveProcessor(
+    new EmailProcessor({
+      stream,
+      path: stream.path,
+      projectId: "prj_1",
+      now: () => Date.parse("2026-07-19T08:00:00Z"),
+      sendNotification: vi.fn(async () => ({ from: "test@iterate.test", messageId: null })),
+    }),
+    stream,
+  );
+  await stream.append({
+    type: "events.iterate.com/email/created",
+    payload: { config: { notificationRecipient: "owner@example.com" } },
+  });
+
+  await driver.deliver();
+
+  expect(network.eventsAt("/")).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: expect.objectContaining({
+        subscriptionKey: "notification-intent:/integrations/email",
+        selector: { eventTypes: ["events.iterate.com/notification/requested"] },
+        delivery: {
+          mode: "push",
+          expression: ["streams", ["get", "/integrations/email"], "acceptCrossPost"],
+        },
+      }),
+    }),
+  );
+  expect(driver.state.notificationRecipients).toEqual(["owner@example.com"]);
+});
+
 test("a project notification intent becomes one owner-email delivery obligation", async () => {
-  const stream = new MemoryStreamNetwork().get("/integrations/email");
+  const network = new MemoryStreamNetwork();
+  const stream = network.get("/integrations/email");
   const sendNotification = vi.fn(async () => ({
     from: "demo@iterate.test",
     messageId: "message-123",
@@ -101,6 +138,14 @@ test("a project notification intent becomes one owner-email delivery obligation"
     },
     to: "owner@example.com",
   });
+  expect(network.eventsAt("/")).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: expect.objectContaining({
+        subscriptionKey: "notification-intent:/integrations/email",
+      }),
+    }),
+  );
   expect(stream.events.map((event) => event.type)).toEqual([
     "events.iterate.com/email/created",
     "events.iterate.com/email/notification-recipient-configured",

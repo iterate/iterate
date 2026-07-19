@@ -464,8 +464,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     NotificationLifecycleContract,
   ],
   emits: [
-    // Seeded onto /integrations/email at project birth (the creator's email
-    // becomes the sender allowlist's first entry).
+    // The recipient event is a rollout bridge for email birth certificates
+    // created before notificationRecipient moved into email-owned config.
     "events.iterate.com/email/sender-allowed",
     "events.iterate.com/email/notification-recipient-configured",
     "events.iterate.com/email/created",

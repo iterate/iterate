@@ -13,7 +13,9 @@ import { NotificationIntentContract } from "../notifications/notification-intent
 import { NotificationRequest } from "../notifications/types.ts";
 
 const EmailBirthCertificate = z.object({
-  config: z.object({}),
+  config: z.object({
+    notificationRecipient: z.string().email().optional(),
+  }),
 });
 
 export const EmailAgentBirthCertificate = z.object({
