@@ -5,6 +5,7 @@
 
 import { Component } from "react";
 import { basicSetup } from "codemirror";
+import { vsCodeDark } from "@fsegurai/codemirror-theme-vscode-dark";
 import { css } from "@codemirror/lang-css";
 import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
@@ -36,6 +37,7 @@ export default class CodeEditor extends Component<Props> {
       parent: this.#root,
       extensions: [
         basicSetup,
+        vsCodeDark,
         EditorState.readOnly.of(!this.props.editable),
         EditorView.editable.of(this.props.editable),
         EditorView.lineWrapping,
@@ -45,7 +47,7 @@ export default class CodeEditor extends Component<Props> {
           spellcheck: "false",
         }),
         this.#language.of(languageForPath(this.props.path)),
-        editorTheme,
+        editorLayout,
         EditorView.updateListener.of((update) => {
           if (!this.#syncing && update.docChanged) {
             const content = update.state.doc.toString();
@@ -110,25 +112,11 @@ function languageForPath(path: string): Extension {
   return [];
 }
 
-const editorTheme = EditorView.theme(
-  {
-    "&": { height: "100%", backgroundColor: "#0b0b0f", color: "#ececf1" },
-    ".cm-content": {
-      caretColor: "#34d399",
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      fontSize: "15px",
-      lineHeight: "1.55",
-      padding: "12px 0 100px",
-    },
-    ".cm-cursor": { borderLeftColor: "#34d399" },
-    ".cm-activeLine": { backgroundColor: "#15151c" },
-    ".cm-activeLineGutter": { backgroundColor: "#15151c", color: "#ececf1" },
-    ".cm-gutters": { backgroundColor: "#0b0b0f", color: "#5a5a66", border: "none" },
-    ".cm-selectionBackground, ::selection": { backgroundColor: "#264a40 !important" },
-    ".cm-scroller": { overflow: "auto", WebkitOverflowScrolling: "touch" },
-  },
-  { dark: true },
-);
+const editorLayout = EditorView.theme({
+  "&": { height: "100%" },
+  ".cm-content": { padding: "12px 0 100px" },
+  ".cm-scroller": { overflow: "auto", WebkitOverflowScrolling: "touch" },
+});
 
 const styles = `
   * { box-sizing: border-box; }

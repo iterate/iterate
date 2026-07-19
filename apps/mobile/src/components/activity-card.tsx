@@ -7,7 +7,7 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { summarizeAgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { responseWithoutParsedCode } from "../lib/activity-display.ts";
+import { llmResponseForDisplay } from "../lib/activity-display.ts";
 import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
 import { summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
@@ -16,7 +16,7 @@ import CodeEditor from "./code-editor.tsx";
 export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
-  const parsedCodes = activity.steps.flatMap((step) => (step.kind === "code" ? [step.code] : []));
+  const hasParsedCode = activity.steps.some((step) => step.kind === "code");
   // Live activities stream open so you can watch the code being written;
   // settled ones collapse to their summary until tapped.
   const expanded = toggled ?? isLive;
@@ -35,7 +35,7 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
       </Pressable>
       {expanded
         ? activity.steps.map((step) => (
-            <StepView key={step.id} parsedCodes={parsedCodes} step={step} />
+            <StepView hasParsedCode={hasParsedCode} key={step.id} step={step} />
           ))
         : null}
     </View>
@@ -52,9 +52,9 @@ function liveSummary(activity: AgentUiActivity): string {
   return "working…";
 }
 
-function StepView({ parsedCodes, step }: { parsedCodes: string[]; step: AgentUiStep }) {
+function StepView({ hasParsedCode, step }: { hasParsedCode: boolean; step: AgentUiStep }) {
   const responseText =
-    step.kind === "llm" ? responseWithoutParsedCode(step.responseText, parsedCodes) : "";
+    step.kind === "llm" ? llmResponseForDisplay(step.responseText, hasParsedCode) : "";
   return (
     <View style={styles.step}>
       <Text style={styles.stepLabel}>
