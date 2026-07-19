@@ -90,8 +90,7 @@ jobs:
     # attempt absorbed a sub-second Playwright action timeout even though the
     # action completed; give that parallel shape real host capacity instead
     # of throttling it. Re-check with `depot ci metrics <attempt-id>`.
-    runs-on:
-      size: 8x32
+    runs-on: depot-ubuntu-24.04-32
     # Hard backstop on ONE attempt: slot acquisition may wait for 6 minutes,
     # while the eligible deploy+e2e critical path has its own 210s budget.
     # Builder-container work remains inside the per-lane watchdogs; it does
