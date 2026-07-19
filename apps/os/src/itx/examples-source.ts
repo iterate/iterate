@@ -851,8 +851,10 @@ return await itx.projects.get(pid).__describe();
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { agentPath?: string; message?: string }) => {
       const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
-      const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create();
+      // create() is idempotent and performs its own birth check. Calling
+      // snapshot() here first would duplicate the most expensive part of the
+      // creation path and widen the window for a transient processor stall.
+      await agent.create();
       // The returned value is the committed stream event — the durable record
       // the agent loop reduces into its context projection.
       const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");

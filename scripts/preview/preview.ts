@@ -5009,9 +5009,11 @@ async function waitForHttpReadiness(params: {
   url: URL;
   workerVersion?: { expected: string; probeQueryParam?: string; stableForMs: number };
 }) {
+  const startedAt = Date.now();
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "No response received yet.";
   let matchingWorkerVersionSince: number | null = null;
+  let lastReportedWorkerVersion: string | null | undefined;
   let deploymentProbeSequence = 0;
 
   while (Date.now() < deadline) {
@@ -5029,11 +5031,21 @@ async function waitForHttpReadiness(params: {
           return { ok: true as const };
         }
 
+        if (response.workerVersion !== lastReportedWorkerVersion) {
+          lastReportedWorkerVersion = response.workerVersion;
+          console.error(
+            `[preview] readiness ${params.url.origin}: observed Worker version ${response.workerVersion ?? "<missing>"} after ${formatDurationMs(Date.now() - startedAt)}; expected ${params.workerVersion.expected}`,
+          );
+        }
+
         if (response.workerVersion === params.workerVersion.expected) {
           const now = Date.now();
           matchingWorkerVersionSince ??= now;
           const stableForMs = now - matchingWorkerVersionSince;
           if (stableForMs >= params.workerVersion.stableForMs) {
+            console.error(
+              `[preview] readiness ${params.url.origin}: Worker version ${params.workerVersion.expected} remained stable for ${formatDurationMs(stableForMs)}; ready after ${formatDurationMs(now - startedAt)}`,
+            );
             return { ok: true as const };
           }
 

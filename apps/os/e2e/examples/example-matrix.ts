@@ -58,38 +58,78 @@ const APP_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 async function runInCli(input: {
   code: string;
+  id: string;
   projectId: string;
   timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   // tsx directly (not `pnpm cli`) so stdout is exactly the run command's one
   // JSON document, with no package-runner banner in front of it.
-  const { stdout } = await execFileAsync(
-    "pnpm",
-    [
-      "exec",
-      "tsx",
-      "./scripts/cli.ts",
-      "itx",
-      "run",
-      "--eval",
-      input.code,
-      "--context",
-      input.projectId,
-      "--vars",
-      JSON.stringify(input.vars),
-      "--base-url",
-      baseUrl(),
-    ],
-    {
-      cwd: APP_ROOT,
-      env: process.env,
-      killSignal: "SIGKILL",
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: input.timeoutMs,
-    },
-  );
-  return JSON.parse(stdout);
+  const startedAt = performance.now();
+  try {
+    const { stdout } = await execFileAsync(
+      "pnpm",
+      [
+        "exec",
+        "tsx",
+        "./scripts/cli.ts",
+        "itx",
+        "run",
+        "--eval",
+        input.code,
+        "--context",
+        input.projectId,
+        "--vars",
+        JSON.stringify(input.vars),
+        "--base-url",
+        baseUrl(),
+      ],
+      {
+        cwd: APP_ROOT,
+        env: process.env,
+        killSignal: "SIGKILL",
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: input.timeoutMs,
+      },
+    );
+    const elapsedMs = performance.now() - startedAt;
+    if (elapsedMs >= 10_000) {
+      console.warn(
+        `[e2e:matrix] CLI runtime for ${input.id} took ${String(Math.round(elapsedMs))}ms`,
+      );
+    }
+    return JSON.parse(stdout);
+  } catch (error) {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    const failure = error as Error & {
+      code?: number | string | null;
+      killed?: boolean;
+      signal?: string | null;
+      stderr?: Buffer | string;
+      stdout?: Buffer | string;
+    };
+    const stdout = decodeProcessOutput(failure.stdout);
+    const stderr = decodeProcessOutput(failure.stderr);
+    const timedOut = failure.killed === true && elapsedMs >= input.timeoutMs - 1_000;
+    const stderrTail = stderr.trim().slice(-2_000);
+    throw new Error(
+      [
+        timedOut
+          ? `CLI runtime for ${input.id} exceeded ${String(input.timeoutMs)}ms`
+          : `CLI runtime command for ${input.id} failed after ${String(elapsedMs)}ms`,
+        `(code=${String(failure.code ?? "unknown")}, signal=${String(failure.signal ?? "none")}, killed=${String(failure.killed ?? false)}, stdoutBytes=${String(Buffer.byteLength(stdout))}, stderrBytes=${String(Buffer.byteLength(stderr))})`,
+        stderrTail ? `stderr tail:\n${stderrTail}` : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" "),
+      { cause: error },
+    );
+  }
+}
+
+function decodeProcessOutput(output: Buffer | string | undefined): string {
+  if (output === undefined) return "";
+  return typeof output === "string" ? output : output.toString("utf8");
 }
 
 async function runInNode(input: {

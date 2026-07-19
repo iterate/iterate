@@ -211,11 +211,13 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     eventTypes: [WEB_MESSAGE_SENT],
     timeoutMs: 120_000,
   });
-  await page
-    .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
-    .first()
-    .waitFor({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page
+      .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
+      .first()
+      .waitFor({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+  });
 
   // Blackhole the transport WITHOUT a close event — what a suspend-killed TCP
   // connection looks like when the OS never surfaces the death. Every capnweb
