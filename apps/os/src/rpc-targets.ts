@@ -5629,6 +5629,7 @@ type ProjectRpcTargetProps = {
  */
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
+  notificationProcessor: PromiseLike<StreamProcessorRpc>;
   incrementLiveDemo(): Promise<void>;
   indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
 };
@@ -5795,6 +5796,18 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProcessorRelayRpcTarget<ProjectProcessorState>({
       auth: this.#props.auth,
       host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** @internal Wake door for the notification-policy processor hosted beside
+   * the public project processor. Persisted stream delivery resolves this
+   * member through the project itx, but generated user APIs must not expose
+   * processor-host plumbing as a product capability. */
+  get notificationProcessor(): WakeableStreamProcessorRpc {
+    return new ProcessorRelayRpcTarget({
+      auth: this.#props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      processorFacade: (host) => (host as unknown as ProjectDurableObjectRpc).notificationProcessor,
     });
   }
 
