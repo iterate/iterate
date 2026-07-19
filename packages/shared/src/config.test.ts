@@ -415,6 +415,16 @@ describe("public config helpers", () => {
     });
   });
 
+  it("extracts public fields from objects with defaults", () => {
+    const schema = z.object({
+      deployment: z
+        .object({ stage: publicValue(z.string()), privateToken: z.string() })
+        .default({ stage: "local", privateToken: "hidden" }),
+    });
+
+    expect(getPublicConfig(schema.parse({}), schema)).toEqual({ deployment: { stage: "local" } });
+  });
+
   it("exposes the correct public config types", () => {
     const config = Config.parse({
       pirateSecret: "ahoy",
