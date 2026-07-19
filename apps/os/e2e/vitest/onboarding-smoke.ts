@@ -6,9 +6,11 @@
  *
  *   doppler run -- pnpm exec tsx e2e/vitest/onboarding-smoke.ts [baseUrl]
  *
- * Two attempts, a fresh project each — an attempt IS this gate's "test", so
- * per the fleet retry policy (docs/testing.md#retries-and-timeouts) it gets
- * exactly one retry, same as every vitest/playwright test. It used to run
+ * Expected stream-incarnation rollover is recovered once inside each
+ * idempotent startup/wait operation. Two whole attempts, a fresh project each,
+ * remain for unexpected failures — an attempt IS this gate's "test", so per
+ * the fleet retry policy (docs/testing.md#retries-and-timeouts) it gets exactly
+ * one retry, same as every vitest/playwright test. It used to run
  * with none at all: a single 90s greeting tail took down the whole run, as
  * an uncaught remote rejection crashing the process no less
  * (docs/preview-e2e-flake-hunt.md run log, marathon6 run 26). A genuinely
@@ -18,7 +20,10 @@
  */
 import { fileURLToPath } from "node:url";
 import { connectItx } from "iterate/node";
-import { ensureOnboardingAgentReady } from "../../src/lib/onboarding-agent.ts";
+import {
+  ensureOnboardingAgentReady,
+  waitForOnboardingGreeting,
+} from "../../src/lib/onboarding-agent.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -42,10 +47,22 @@ async function attemptOnboardingSmoke(): Promise<void> {
   using agent = project.agents.get("/agents/onboarding");
   // Match the dashboard's explicit onboarding flow: agent birth is generic,
   // then this caller appends the onboarding prompt and startup input.
-  await ensureOnboardingAgentReady({ agent });
-  const greeting = await agent.stream.waitForEvent({
-    eventTypes: ["events.iterate.com/agents/web-message-sent"],
+  await ensureOnboardingAgentReady({
+    agent,
+    onRetry: (error) => {
+      console.info("onboarding startup stream rolled; replaying its idempotent facts once", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+  const greeting = await waitForOnboardingGreeting({
+    stream: agent.stream,
     timeoutMs: 90_000,
+    onRetry: (error) => {
+      console.info("onboarding greeting stream rolled; re-arming from its durable cursor once", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    },
   });
   console.log(`onboarding agent greeted in ${Date.now() - start}ms:`);
   console.log(JSON.stringify(greeting.payload, null, 2));
