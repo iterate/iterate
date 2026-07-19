@@ -41,7 +41,7 @@ export default function ChatListScreen() {
       return await enrollPushDevice(baseUrl, projectId);
     },
     retry: false,
-    staleTime: 60 * 60_000,
+    refetchOnWindowFocus: "always",
   });
 
   const openChat = (agentPath: string) =>
