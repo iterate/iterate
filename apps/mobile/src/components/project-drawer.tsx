@@ -55,13 +55,7 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
     });
   };
   const projectRoute =
-    (
-      pathname:
-        | "/project/[projectId]/examples"
-        | "/project/[projectId]/notifications"
-        | "/project/[projectId]/approvals",
-    ) =>
-    () =>
+    (pathname: "/project/[projectId]/examples" | "/project/[projectId]/approvals") => () =>
       router.push({ pathname, params: { projectId } });
 
   return (
@@ -124,10 +118,6 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                 <DrawerItem
                   label="Examples"
                   onPress={() => close(projectRoute("/project/[projectId]/examples"))}
-                />
-                <DrawerItem
-                  label="Notifications"
-                  onPress={() => close(projectRoute("/project/[projectId]/notifications"))}
                 />
                 <DrawerItem
                   label="Approvals"

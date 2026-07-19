@@ -124,13 +124,6 @@ Exists so testing a platform feature never needs a laptop CLI step first:
 every mobile feature here is built by agents, so it needs to be fully
 testable from the phone alone. See `tasks/mobile-examples-runner.md`.
 
-## Notifications
-
-The Notifications screen has a **Send test notification now** smoke test. It
-asks only for notification permission and posts an immediate local
-notification. Opening a project in the native build separately enrolls that
-installation for scriptable project push notifications.
-
 ## Verification
 
 | Lane                                                          | What it proves                                                                                                                                                                                                                  |
@@ -143,16 +136,16 @@ installation for scriptable project push notifications.
 
 ## Layout
 
-| Path                       | What                                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `src/lib/itx-core.ts`      | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)                     |
-| `src/lib/auth.ts`          | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh                        |
-| `src/lib/chat.ts`          | Pure: stream events → bubbles + working flag; agent path conventions                             |
-| `src/lib/live-thread.ts`   | Live subscription per thread feeding the tanstack-query cache                                    |
-| `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key               |
-| `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                                      |
-| `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts          |
-| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                               |
-| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread, approvals, examples, notifications |
+| Path                       | What                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `src/lib/itx-core.ts`      | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
+| `src/lib/auth.ts`          | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
+| `src/lib/chat.ts`          | Pure: stream events → bubbles + working flag; agent path conventions                    |
+| `src/lib/live-thread.ts`   | Live subscription per thread feeding the tanstack-query cache                           |
+| `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
+| `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
+| `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
+| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                      |
+| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread, approvals, examples       |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.
