@@ -48,3 +48,41 @@ test("one held approval becomes one project notification intent", async () => {
     },
   });
 });
+
+test("an unparseable approval URL remains visible without stalling notification delivery", async () => {
+  const network = new MemoryStreamNetwork();
+  const stream = network.get("/");
+  const driver = driveProcessor(
+    new NotificationProcessor({ stream, path: "/", projectId: "prj_test" }),
+    stream,
+  );
+  await stream.append(
+    {
+      type: "events.iterate.com/notification/created",
+      payload: { config: {} },
+    },
+    {
+      type: "events.iterate.com/project/human-approval-requested",
+      payload: {
+        method: "POST",
+        url: "buy milk near the supermarket",
+        headers: {},
+        bodySha256: null,
+        bodyPreview: null,
+        secretPaths: [],
+        ruleKey: "custom-action",
+        expiresAt: "2026-07-19T08:05:00.000Z",
+      },
+    },
+  );
+
+  await driver.deliver();
+
+  expect(network.eventsAt("/").at(-1)).toMatchObject({
+    type: "events.iterate.com/notification/requested",
+    payload: {
+      body: "POST buy milk near the supermarket is waiting for approval.",
+      destination: { kind: "approvals", approvalRequestEventOffset: 2 },
+    },
+  });
+});

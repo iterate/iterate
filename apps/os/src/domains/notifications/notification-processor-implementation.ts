@@ -35,7 +35,7 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
         payload: {
           audience: { kind: "project" },
           title: "Approval needed",
-          body: `${event.payload.method} ${new URL(event.payload.url).host} is waiting for approval.`,
+          body: `${event.payload.method} ${approvalRequestHost(event.payload.url)} is waiting for approval.`,
           destination: {
             kind: "approvals",
             approvalRequestEventOffset: event.offset,
@@ -44,5 +44,13 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
         },
       }),
     );
+  }
+}
+
+function approvalRequestHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
   }
 }

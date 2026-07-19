@@ -10,6 +10,7 @@ import {
   pushNotificationRoute,
   type PushNotificationData,
 } from "./notification-routing.ts";
+import { queryClient } from "./query.ts";
 import { DEFAULT_SERVER } from "./servers.ts";
 import { getServerBaseUrl } from "./storage.ts";
 
@@ -17,10 +18,8 @@ const PUSH_ENROLLMENTS_KEY = "iterate.pushEnrollments.v1";
 let enrollmentStorageWrites: Promise<void> = Promise.resolve();
 
 if (Platform.OS !== "web") {
-  Notifications.addNotificationResponseReceivedListener((response) => {
-    void handlePushNotificationResponse(response).catch((error) => {
-      console.error("Failed to record or route opened device notification", error);
-    });
+  Notifications.addNotificationResponseReceivedListener(() => {
+    void queryClient.invalidateQueries({ queryKey: ["initial-notification"] });
   });
 }
 
@@ -77,8 +76,8 @@ export async function routeInitialNotification(): Promise<void> {
   if (Platform.OS === "web") return;
   const response = await Notifications.getLastNotificationResponseAsync();
   if (response === null) return;
-  await Notifications.clearLastNotificationResponseAsync();
   await handlePushNotificationResponse(response);
+  await Notifications.clearLastNotificationResponseAsync();
 }
 
 async function handlePushNotificationResponse(response: Notifications.NotificationResponse) {
@@ -86,13 +85,11 @@ async function handlePushNotificationResponse(response: Notifications.Notificati
   const data = raw as PushNotificationData;
   const route = pushNotificationRoute(data);
   if (route === null || typeof data.projectId !== "string") return;
+  const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+  const itx = await getItxSession(baseUrl);
   router.push(route);
   if (typeof data.requestOffset === "number") {
-    const [baseUrl, deviceId] = await Promise.all([
-      getServerBaseUrl().then((value) => value || DEFAULT_SERVER),
-      getMobileDeviceId(),
-    ]);
-    const itx = await getItxSession(baseUrl);
+    const deviceId = await getMobileDeviceId();
     const project = await itx.projects.get(data.projectId);
     await project.devices
       .get(deviceId)

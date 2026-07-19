@@ -1,6 +1,6 @@
 import "react-native-url-polyfill/auto";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -23,12 +23,14 @@ export default function RootLayout() {
 }
 
 function RootStack() {
+  const segments = useSegments();
   useQuery({
     queryKey: ["initial-notification"],
     queryFn: async () => {
       await routeInitialNotification();
       return true;
     },
+    enabled: segments[0] === "project" || segments[0] === "projects",
     retry: false,
     staleTime: Infinity,
   });
