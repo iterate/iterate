@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * The jsonc lane: tsconfig-family files (and *.jsonc, .vscode/*.json) parse
@@ -44,7 +45,7 @@ test("a commented tsconfig still schema-validates (comments are tolerated)", asy
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
-  await page.locator('[data-item-path="tsconfig.json"]').click();
+  await openRepoTreeFile(page, "tsconfig.json");
   await page.locator(".cm-content").filter({ hasText: "// jsonc: comments are allowed" }).waitFor();
 
   // Once the tsconfig schema loads, the invalid `strict` value squiggles — which

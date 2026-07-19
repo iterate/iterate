@@ -3,10 +3,11 @@
  * writer (see build-key.ts).
  *
  * Every fresh project seeds its config repo from one deterministic template.
- * The deploy host prebuilds both template recipes under content-only trusted
- * keys: the root worker needed during project birth and the example Vite app.
- * Fresh projects therefore never cold-build repo-owned template code inside a
- * request; the project-scoped container lane remains for real config edits.
+ * The deploy host prebuilds every template recipe under content-only trusted
+ * keys: the root worker needed during project birth and the seeded Vite apps
+ * (tanstack todos, guestbook). Fresh projects therefore never cold-build
+ * repo-owned template code inside a request; the project-scoped container
+ * lane remains for real config edits.
  *
  * Everything here is shared with the runtime resolver — the seed file map
  * (projectRepoSeedFiles), the content hash (repoContentHash), the sdk virtual
@@ -70,6 +71,10 @@ export async function seedTemplateWorkerArtifacts(input: {
     {
       label: "TanStack app",
       options: { pipeline: "vite", rootDir: "apps/tanstack" },
+    },
+    {
+      label: "guestbook app",
+      options: { pipeline: "vite", rootDir: "apps/guestbook" },
     },
   ];
 
