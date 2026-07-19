@@ -832,6 +832,73 @@ describe("useItxSubscription liveness", () => {
     container.remove();
   });
 
+  test("useIterateSessionLiveState is inert while disabled and resets when its node changes", async () => {
+    const [{ useIterateSessionLiveState }, React, { createRoot }] = await Promise.all([
+      import("./itx-react.ts"),
+      import("react"),
+      import("react-dom/client"),
+    ]);
+    const { act, createElement } = React;
+    const sinks: Array<(update: unknown) => void> = [];
+    const unsubscribe = vi.fn();
+    const roots: unknown[] = [];
+    let enabled = false;
+    let node = "a";
+
+    function Harness() {
+      const { status, value } = useIterateSessionLiveState(
+        (session) => {
+          roots.push(session);
+          return {
+            subscribe: async (onUpdate: (update: unknown) => void) => {
+              sinks.push(onUpdate);
+              return { ping: () => true, unsubscribe };
+            },
+          } as never;
+        },
+        (state: { name: string }) => state.name,
+        [node],
+        { enabled },
+      );
+      return createElement("output", { "data-status": status }, value ?? "∅");
+    }
+
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    const render = () => act(async () => root.render(createElement(Harness)));
+    const rendered = () => container.querySelector("output")?.textContent;
+
+    await render();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(rendered()).toBe("∅");
+
+    enabled = true;
+    await render();
+    await act(async () => FakeWebSocket.instances.at(-1)!.fire("open"));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(roots).toEqual([control.lastRoot]);
+    expect(sinks).toHaveLength(1);
+    await act(async () => {
+      sinks[0]!({ type: "snapshot", revision: 0, state: { name: "alpha" } });
+    });
+    expect(rendered()).toBe("alpha");
+
+    node = "b";
+    await render();
+    expect(rendered()).toBe("∅");
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(sinks).toHaveLength(2);
+    await act(async () => {
+      sinks[1]!({ type: "snapshot", revision: 0, state: { name: "beta" } });
+    });
+    expect(rendered()).toBe("beta");
+
+    await act(async () => root.unmount());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
+    container.remove();
+  });
+
   test("regaining connectivity while HIDDEN still checks (a backgrounded tab recovers)", async () => {
     let handles = 0;
     const harness = await mountSubscription(() => {

@@ -45,7 +45,6 @@ import type {
   WakeableStreamProcessorRpc,
 } from "iterate/processors";
 import { StreamReceiverUnavailableError } from "iterate/processors";
-import type { StreamThroughputMetrics } from "iterate/processors";
 import {
   disposeIgnoredRpcResult,
   LiveState,
@@ -333,10 +332,7 @@ import type {
   SecretCreateInput,
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
-import type {
-  ConnectionRuntimeState,
-  SubscriptionRuntimeState,
-} from "./domains/streams/stream-subscribers.ts";
+import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -506,6 +502,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
         readEvents: "Create a pager for bounded event pages.",
         removeCrossPost: "Remove a cross-post configured by crossPostTo.",
+        liveState: "Subscribe to the stream core and delivery-runtime debug state.",
         subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
@@ -722,20 +719,19 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * been collecting); latency stats fields are absent until a real sample
    * exists — no value is ever synthesized. Calling this also requests a
    * throttled mutual-ping round over the live connections (observer-driven
-   * sampling), so a polling debug UI sees RTTs populate.
+   * sampling); live debug surfaces should subscribe through `liveState`.
    */
-  async runtimeState(): Promise<{
-    coreProcessorState: unknown;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  }> {
+  async runtimeState(): Promise<StreamRuntimeDebugState> {
     const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
+  }
+
+  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
+    return new LiveStateRelayRpcTarget<StreamRuntimeDebugState>(
+      () =>
+        this.durableObjectStub as unknown as LiveStateDurableObjectStub<StreamRuntimeDebugState>,
+    );
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

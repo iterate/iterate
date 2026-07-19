@@ -1387,18 +1387,11 @@ export interface Stream {
    * been collecting); latency stats fields are absent until a real sample
    * exists — no value is ever synthesized. Calling this also requests a
    * throttled mutual-ping round over the live connections (observer-driven
-   * sampling), so a polling debug UI sees RTTs populate.
+   * sampling); live debug surfaces should subscribe through `liveState`.
    */
-  runtimeState(): Promise<{
-    coreProcessorState: unknown;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  }>;
+  runtimeState(): Promise<StreamRuntimeDebugState>;
+  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
@@ -3527,71 +3520,17 @@ export type ProcessorRuntimeState<State = unknown> = {
   runtime?: Record<string, unknown>;
 };
 
-/** Serializable debug view of one live connection, for `runtimeState()`. */
-export type ConnectionRuntimeState = {
-  subscriptionType: StreamSubscriptionType;
-  startedAt: string;
-  cursor: number;
-  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
-  lag: number;
-  batchesSent: number;
-  eventsSent: number;
-  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
-  bytesSent: number;
-  lastDeliveredAt?: string;
-  /**
-   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the pulled batch result settling (the subscriber's
-   * ingest resolved). Durable (wake) lane only — ephemeral results are
-   * disposed unpulled, so ephemeral consumption is self-reported by the host
-   * through `getRuntimeState` instead. Absent until a sample exists.
-   */
-  settleLatencyMs?: LatencyStats;
-  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
-  pingRttMs?: LatencyStats;
-  /**
-   * The connect-time identity descriptor. The runtime table is the ONLY home
-   * for ephemeral identity — ephemeral connections don't fold into the
-   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
-   * read who's connected from here.
-   */
-  subscriber?: StreamSubscriberDescriptor;
-  /**
-   * True while the last batch handed to this connection's sink is unsettled —
-   * exactly the signal idle teardown consults to classify a sink as wedged.
-   */
-  hasPendingDelivery: boolean;
-};
-
-/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
-export type SubscriptionRuntimeState = {
-  mode: SubscriptionDelivery["mode"];
-  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
-  ackedOffset: number;
-  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
-  lag: number;
-  attempt: number;
-  nextAttemptAt: number | null;
-  lastError: string | null;
-  parkedAtOffset: number | null;
-  /** Whether a live delivery connection currently exists (wake mode). */
-  connected: boolean;
-  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
-  bytesSent?: number;
-  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
-  settleLatencyMs?: LatencyStats;
-  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
-  deliveryDurationMs?: LatencyStats;
-};
-
-/** What `runtimeState()` reports for the stream's own throughput. */
-export type StreamThroughputMetrics = {
-  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
-  measuredSince: string;
-  /** Appends committed (all producers). */
-  ingress: ThroughputReport;
-  /** Deliveries dispatched (all lanes, all subscribers). */
-  egress: ThroughputReport;
+/** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
+export type StreamRuntimeDebugState = {
+  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */
+  coreProcessorState: unknown;
+  runtime: {
+    connections: Record<string, ConnectionRuntimeState>;
+    subscriptions: Record<string, SubscriptionRuntimeState>;
+    metrics: StreamThroughputMetrics;
+    /** SQLite database size in bytes (event log + spine rows + chunks). */
+    storageSizeBytes: number;
+  };
 };
 
 /**
@@ -3985,55 +3924,73 @@ export type EditWorkspaceFileResult = {
   path: string;
 };
 
-/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
-export type StreamSubscriptionType = "configured" | "ephemeral";
-
-/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
-export type LatencyStats = {
-  /** Most recent sample (ms). */
-  last: number;
-  p50: number;
-  p95: number;
-  /** Samples currently in the ring (caps at the ring size). */
-  samples: number;
-  /** Epoch ms of the most recent sample. */
-  lastAt: number;
+/** Serializable debug view of one live connection, for `runtimeState()`. */
+export type ConnectionRuntimeState = {
+  subscriptionType: StreamSubscriptionType;
+  startedAt: string;
+  cursor: number;
+  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
+  lag: number;
+  batchesSent: number;
+  eventsSent: number;
+  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
+  bytesSent: number;
+  lastDeliveredAt?: string;
+  /**
+   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
+   * event in a batch → the pulled batch result settling (the subscriber's
+   * ingest resolved). Durable (wake) lane only — ephemeral results are
+   * disposed unpulled, so ephemeral consumption is self-reported by the host
+   * through `getRuntimeState` instead. Absent until a sample exists.
+   */
+  settleLatencyMs?: LatencyStats;
+  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
+  pingRttMs?: LatencyStats;
+  /**
+   * The connect-time identity descriptor. The runtime table is the ONLY home
+   * for ephemeral identity — ephemeral connections don't fold into the
+   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
+   * read who's connected from here.
+   */
+  subscriber?: StreamSubscriberDescriptor;
+  /**
+   * True while the last batch handed to this connection's sink is unsettled —
+   * exactly the signal idle teardown consults to classify a sink as wedged.
+   */
+  hasPendingDelivery: boolean;
 };
 
-/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
-export type StreamSubscriberDescriptor = {
-  description?: string | undefined;
-  processor?:
-    | {
-        announcement: {
-          slug: string;
-          version: string;
-          description: string;
-          consumes: string[];
-          emits: string[];
-          ownedEvents: { type: string; description?: string | undefined }[];
-        };
-      }
-    | undefined;
+/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
+export type SubscriptionRuntimeState = {
+  mode: SubscriptionDelivery["mode"];
+  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
+  ackedOffset: number;
+  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  lag: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  parkedAtOffset: number | null;
+  /** Whether a live delivery connection currently exists (wake mode). */
+  connected: boolean;
+  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  bytesSent?: number;
+  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
+  settleLatencyMs?: LatencyStats;
+  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  deliveryDurationMs?: LatencyStats;
 };
 
-/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
-export type SubscriptionDelivery =
-  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
-  | { mode: "push"; expression: ItxExpression }
-  | { mode: "webhook"; url: string };
-
-/**
- * One direction's throughput report: a responsive trailing-5s rate (the
- * number UIs show), the full-minute totals, and the raw 1s series for graphs.
- */
-export type ThroughputReport = {
-  /** Events per second over the trailing 5 seconds. */
-  perSecond5s: number;
-  /** Payload bytes per second over the trailing 5 seconds. */
-  bytesPerSecond5s: number;
-  lastMinute: MinuteWindow;
-  series: ThroughputSeries;
+/** What a stream runtime snapshot reports for the stream's own throughput. */
+export type StreamThroughputMetrics = {
+  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
+  measuredSince: string;
+  /** ISO timestamp anchoring the trailing windows and final series bucket. */
+  reportedAt: string;
+  /** Appends committed (all producers). */
+  ingress: ThroughputReport;
+  /** Deliveries dispatched (all lanes, all subscribers). */
+  egress: ThroughputReport;
 };
 
 /**
@@ -4206,20 +4163,55 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
-/** One rolling-minute throughput window. */
-export type MinuteWindow = {
-  /** Events in the last 60 seconds. */
-  count: number;
-  /** Payload bytes in the last 60 seconds. */
-  bytes: number;
-  /** `count / 60` — the "events/s over the last minute" number. */
-  perSecond: number;
+/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
+export type StreamSubscriptionType = "configured" | "ephemeral";
+
+/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
+export type LatencyStats = {
+  /** Most recent sample (ms). */
+  last: number;
+  p50: number;
+  p95: number;
+  /** Samples currently in the ring (caps at the ring size). */
+  samples: number;
+  /** Epoch ms of the most recent sample. */
+  lastAt: number;
 };
 
-/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
-export type ThroughputSeries = {
-  counts: number[];
-  bytes: number[];
+/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
+export type StreamSubscriberDescriptor = {
+  description?: string | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
+};
+
+/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
+export type SubscriptionDelivery =
+  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
+  | { mode: "push"; expression: ItxExpression }
+  | { mode: "webhook"; url: string };
+
+/**
+ * One direction's throughput report: a responsive trailing-5s rate (the
+ * number UIs show), the full-minute totals, and the raw 1s series for graphs.
+ */
+export type ThroughputReport = {
+  /** Events per second over the trailing 5 seconds. */
+  perSecond5s: number;
+  /** Payload bytes per second over the trailing 5 seconds. */
+  bytesPerSecond5s: number;
+  lastMinute: MinuteWindow;
+  series: ThroughputSeries;
 };
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
@@ -4275,6 +4267,22 @@ export type DynamicWorkerSource = {
 export type WorkspaceChange = {
   change: "added" | "deleted" | "modified";
   path: string;
+};
+
+/** One rolling-minute throughput window. */
+export type MinuteWindow = {
+  /** Events in the last 60 seconds. */
+  count: number;
+  /** Payload bytes in the last 60 seconds. */
+  bytes: number;
+  /** `count / 60` — the "events/s over the last minute" number. */
+  perSecond: number;
+};
+
+/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
+export type ThroughputSeries = {
+  counts: number[];
+  bytes: number[];
 };
 
 /**

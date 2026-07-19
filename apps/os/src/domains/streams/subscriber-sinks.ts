@@ -122,14 +122,20 @@ export function retainProcessEventBatch(
         pendingDeliveries += 1;
         void Promise.resolve(result)
           .then(
-            () => opts?.onSettled?.("ok"),
+            () => {
+              pendingDeliveries -= 1;
+              opts?.onSettled?.("ok");
+            },
             (error: unknown) => {
-              onDeliveryError(error);
-              opts?.onSettled?.("error");
+              pendingDeliveries -= 1;
+              try {
+                onDeliveryError(error);
+              } finally {
+                opts?.onSettled?.("error");
+              }
             },
           )
           .finally(() => {
-            pendingDeliveries -= 1;
             disposeIgnoredRpcResult(result);
           });
         return;
