@@ -268,7 +268,7 @@ export function createCloudflareAccountApi(input: {
   };
 }
 
-export class CloudflareAccountApiError extends Error {
+class CloudflareAccountApiError extends Error {
   readonly errors: unknown;
   readonly status: number;
 

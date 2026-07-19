@@ -52,12 +52,16 @@ watchdog.
   reports every target instance updated and healthy. Production keeps gradual
   rollout. Do not replace this API-backed barrier with a sleep or test
   serialization.
-- **Main and builder readiness share one immutable identity.** The route-less
-  dynamic-worker builder reports the same PR-head deployment ID baked into the
-  main OS worker. `/api/health` returns 503 until they match, and the existing
-  exact-version smoke must then remain stable for ten seconds. Repeating the
-  same immutable head skips an identical builder-sidecar deploy, avoiding a
-  needless deployment-global Durable Object reset; a changed head always
+- **Edge, Durable Object, and builder readiness agree.** Cloudflare releases
+  Worker and Durable Object code globally with eventual consistency, so a
+  current edge response alone is not a Durable Object rollout barrier.
+  `/api/health` calls a version-specific, read-only sentinel in the real
+  capability-host namespace and returns 503 until that incarnation reports the
+  edge's exact Worker version. In parallel, the route-less dynamic-worker
+  builder must report the same PR-head deployment ID baked into the main OS
+  worker. That combined result must remain stable for ten seconds. Repeating
+  the same immutable head skips an identical builder-sidecar deploy, avoiding
+  a needless deployment-global Durable Object reset; a changed head always
   deploys it. This is the reset barrier—do not replace it with a sleep.
 - **Parallelism is explicit per deployed slot, not accidental.** The OS
   Vitest catalogue uses sixteen workers with at most four concurrent tests

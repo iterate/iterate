@@ -124,6 +124,11 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return this.#registry.handleAlarm(alarmInfo);
   }
 
+  /** Report this incarnation's code version without reading or writing domain state. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): void {
     this.ctx.abort("kill requested");
