@@ -7,7 +7,7 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "TanStack todos" },
+      { title: "Guestbook" },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
@@ -28,7 +28,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
       <head>
         <HeadContent />
       </head>
-      <body className="min-h-screen bg-slate-100 text-slate-900 antialiased">
+      <body className="min-h-screen bg-stone-100 text-stone-900 antialiased">
         {children}
         <Scripts />
       </body>

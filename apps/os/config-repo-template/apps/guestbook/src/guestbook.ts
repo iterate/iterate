@@ -2,9 +2,10 @@
 // is a fold of durable events on the project stream at /guestbook, processed
 // by the SAME machinery that runs the platform's own domain objects
 // (agents, repos, schedulers — `iterate/processors`). Contrast CounterApp in
-// worker.ts, which keeps its number in Durable Object storage: this state is
-// a disposable cache of `reduce` over the journal — delete it and replay
-// rebuilds it, and every consequential outcome is an event you can read back.
+// the repo root's worker.ts, which keeps its number in Durable Object
+// storage: this state is a disposable cache of `reduce` over the journal —
+// delete it and replay rebuilds it, and every consequential outcome is an
+// event you can read back.
 //
 // GuestbookApp in worker.ts is the hosting half: a Durable Object registry
 // over an itx-dialed stream handle, woken by the durable wake subscription
@@ -22,8 +23,11 @@ import type { DynamicWorkerRef } from "iterate/sdk";
 export const guestbookStreamPath = "/guestbook";
 
 // One declarative ref for the guestbook host, shared by the HTTP route
-// (fetchDynamicWorker) and the wake subscription below — the same Durable
-// Object either way, addressed by its durableWorkerKey.
+// (fetchDynamicWorker in the repo root's worker.ts) and the wake subscription
+// below — the same Durable Object either way, addressed by its
+// durableWorkerKey. The source is this app's own Vite build: the platform's
+// "vite" pipeline runs `npm run build` under apps/guestbook and hosts the
+// built worker, Durable Object class included.
 export const guestbookAppRef = {
   type: "stateful",
   path: "/",
@@ -31,7 +35,7 @@ export const guestbookAppRef = {
   durableWorkerKey: "app-guestbook",
   source: {
     files: { type: "repo", repoPath: "/repos/config" },
-    options: { entryPoint: "worker.ts" },
+    options: { pipeline: "vite", rootDir: "apps/guestbook" },
   },
 } satisfies DynamicWorkerRef;
 
@@ -44,7 +48,7 @@ export const guestbookAppRef = {
  * performs the wake handshake, and pushes event frames straight into the
  * registry's runner. Same machinery, same lane as the platform's own
  * domain processors. Both events are idempotency-keyed, so every creator
- * (the app's /sign handler, a script, a test) offers this same batch and
+ * (the app's sign verb, a script, a test) offers this same batch and
  * the stream collapses it to one birth and one subscription.
  */
 export function guestbookCreationEvents(): StreamEventInput[] {
@@ -133,8 +137,18 @@ export const GuestbookProcessorContract = defineProcessorContract({
   emits: ["events.iterate.com/guestbook/milestone-reached"],
 });
 
+export type GuestbookFoldState = z.infer<typeof GuestbookProcessorContract.stateSchema>;
+
 export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {
   readonly contract = GuestbookProcessorContract;
+
+  /**
+   * Wired by the hosting Durable Object (worker.ts): called with the at-head
+   * fold after every caught-up delivery, so the host can mirror the fresh
+   * state into its live-state channel and every open tab repaints. Purely an
+   * observation hook — the fold and the journal never depend on it.
+   */
+  onAtHead?: (state: GuestbookFoldState) => void;
 
   protected override reduce({
     event,
@@ -167,6 +181,7 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
     delivery,
     state,
   }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>["processEvent"]>[0]): undefined {
+    if (delivery.caughtUp) this.onAtHead?.(state);
     // At-head reconcile: derive milestones from the WHOLE fold, never from
     // event-time state — a refold replays every historical event, and only
     // the at-head state has absorbed the milestones already journaled. One
