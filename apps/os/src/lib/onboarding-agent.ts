@@ -12,7 +12,7 @@ import {
 } from "../domains/streams/stream-unavailable.ts";
 
 export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
-export const ONBOARDING_GREETING_EVENT_TYPE = "events.iterate.com/agents/web-message-sent" as const;
+const ONBOARDING_GREETING_EVENT_TYPE = "events.iterate.com/agents/web-message-sent" as const;
 const ONBOARDING_START_REVISION = "1";
 
 export function onboardingStartEvent() {
