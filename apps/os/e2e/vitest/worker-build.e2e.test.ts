@@ -350,6 +350,8 @@ test(
               'import { DurableObject } from "cloudflare:workers";',
               "export class SwrMissProbe extends DurableObject {",
               '  version(): string { return "v2"; }',
+              "  readonly bootId = crypto.randomUUID();",
+              '  snapshot(): { bootId: string; version: string } { return { bootId: this.bootId, version: "v2" }; }',
               "}",
               `// cold build salt ${crypto.randomUUID()}`,
             ].join("\n"),
@@ -360,9 +362,11 @@ test(
       },
     } as const;
     using first = project.workers.get(v2Ref) as unknown as {
+      snapshot(): Promise<{ bootId: string; version: string }>;
       version(): Promise<string>;
     } & Disposable;
     using second = project.workers.get(v2Ref) as unknown as {
+      snapshot(): Promise<{ bootId: string; version: string }>;
       version(): Promise<string>;
     } & Disposable;
 
@@ -370,5 +374,16 @@ test(
     // waiter must classify that expected miss and join/fall through to the
     // blocking v2 build; none may leak the initializer's sentinel rejection.
     await expect(Promise.all([first.version(), second.version()])).resolves.toEqual(["v2", "v2"]);
+
+    // The source-key refresh started before the stale initializer discovered
+    // its miss. It must not later abort the facet that recovery mounted while
+    // that refresh awaited: all callers stay on the same recovered boot.
+    const [firstSnapshot, secondSnapshot] = await Promise.all([
+      first.snapshot(),
+      second.snapshot(),
+    ]);
+    expect(firstSnapshot).toEqual(secondSnapshot);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await first.snapshot()).toEqual(firstSnapshot);
   },
 );

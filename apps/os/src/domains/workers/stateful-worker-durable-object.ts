@@ -57,6 +57,21 @@ function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: st
   return JSON.stringify({ className: ref.className, sourceCacheKey });
 }
 
+/** Whether a background stale refresh still owns the durable marker it read
+ * before resolving source. Recovery and foreground loads can move that marker
+ * while the refresh awaits. */
+export function canCommitStaleFacetRefresh({
+  currentVersion,
+  previousVersion,
+  resolvedVersion,
+}: {
+  currentVersion: string | undefined;
+  previousVersion: string;
+  resolvedVersion: string;
+}): boolean {
+  return currentVersion === previousVersion && resolvedVersion !== previousVersion;
+}
+
 /**
  * Hosts one stateful dynamic worker facet.
  *
@@ -450,7 +465,15 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
           // mount — see DynamicWorkerRunner.resolveStatefulSourceCacheKey.
           const cacheKey = await this.#workerRunner.resolveStatefulSourceCacheKey(ref);
           const version = statefulWorkerVersion(ref, cacheKey);
-          if (version === previousVersion) return;
+          if (
+            !canCommitStaleFacetRefresh({
+              currentVersion: this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY),
+              previousVersion,
+              resolvedVersion: version,
+            })
+          ) {
+            return;
+          }
           this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
           this.ctx.facets.abort(
             FACET_NAME,
