@@ -102,45 +102,53 @@ export async function seedTemplateWorkerArtifacts(input: {
     // days) keeps its fast creates.
     { expirationTtlSeconds: 14 * 24 * 60 * 60 },
   );
-  const seeded: Array<{ buildKey: string; seeded: boolean }> = [];
-  for (const build of builds) {
-    const options = canonicalWorkerBuildOptions(build.options);
-    const buildKey = await workerBuildKey({
-      compatibilityDate: WORKER_COMPATIBILITY_DATE,
-      compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-      options,
-      source,
-    });
-    const existing = await store.get(buildKey);
-    if (existing !== null) {
-      // Same bytes, fresh write-time TTL — skips the build without letting a
-      // stable key's artifact quietly expire between deploys.
-      await store.put(existing);
-      log(
-        `${build.label} template artifact already seeded (${buildKey.slice(0, 12)}…) — TTL refreshed`,
-      );
-      seeded.push({ buildKey, seeded: false });
-      continue;
-    }
+  // These five recipes are independent, each runner owns a separate temporary
+  // directory, and preview CI deliberately has eight cores. A preview head
+  // pins a new pkg.pr.new URL, so even an OS-only change correctly gives the
+  // template a new content hash and usually misses every trusted key. Running
+  // those misses serially added the sum of four installs/builds (~55s in
+  // preview CI) to every OS deploy; bounded fan-out makes the deploy pay the
+  // slowest recipe instead. npm/nub's shared download caches are concurrency-
+  // safe, and Promise.all preserves the build declaration order in the
+  // returned evidence even though log lines may interleave.
+  return await Promise.all(
+    builds.map(async (build): Promise<{ buildKey: string; seeded: boolean }> => {
+      const options = canonicalWorkerBuildOptions(build.options);
+      const buildKey = await workerBuildKey({
+        compatibilityDate: WORKER_COMPATIBILITY_DATE,
+        compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
+        options,
+        source,
+      });
+      const existing = await store.get(buildKey);
+      if (existing !== null) {
+        // Same bytes, fresh write-time TTL — skips the build without letting a
+        // stable key's artifact quietly expire between deploys.
+        await store.put(existing);
+        log(
+          `${build.label} template artifact already seeded (${buildKey.slice(0, 12)}…) — TTL refreshed`,
+        );
+        return { buildKey, seeded: false };
+      }
 
-    log(`building ${build.label} template artifact ${buildKey.slice(0, 12)}…`);
-    const result = await runWorkerBuildRecipeOnHost(workerBuildRecipe({ files, options }));
-    if (result.status === "build-failed") {
-      throw new Error(`${build.label} template build failed:\n${result.message}`);
-    }
-    const artifact: WorkerBuildArtifact = {
-      buildKey,
-      mainModule: result.mainModule,
-      modules: result.modules,
-    };
-    await store.put(artifact);
-    log(
-      `seeded ${build.label} template artifact ${buildKey.slice(0, 12)}… ` +
-        `(${Object.keys(result.modules).length} modules)`,
-    );
-    seeded.push({ buildKey, seeded: true });
-  }
-  return seeded;
+      log(`building ${build.label} template artifact ${buildKey.slice(0, 12)}…`);
+      const result = await runWorkerBuildRecipeOnHost(workerBuildRecipe({ files, options }));
+      if (result.status === "build-failed") {
+        throw new Error(`${build.label} template build failed:\n${result.message}`);
+      }
+      const artifact: WorkerBuildArtifact = {
+        buildKey,
+        mainModule: result.mainModule,
+        modules: result.modules,
+      };
+      await store.put(artifact);
+      log(
+        `seeded ${build.label} template artifact ${buildKey.slice(0, 12)}… ` +
+          `(${Object.keys(result.modules).length} modules)`,
+      );
+      return { buildKey, seeded: true };
+    }),
+  );
 }
 
 /**
