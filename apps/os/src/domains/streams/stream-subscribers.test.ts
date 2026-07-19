@@ -145,7 +145,11 @@ type ConfiguredEntry = {
   parkedAtOffset?: number;
 };
 
-function makeHarness() {
+function makeHarness(
+  options: {
+    runDurable?: (work: () => Promise<unknown>) => void;
+  } = {},
+) {
   let now = 0;
   let assignedMaxOffset = 0;
   let streamCreatedAt: string | undefined = "stream-v1";
@@ -245,6 +249,7 @@ function makeHarness() {
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
+      runDurable: options.runDurable ?? ((work) => kept.push(work())),
       keepAlive: (promise) => kept.push(promise),
     },
   });
@@ -367,6 +372,22 @@ function makeSink() {
 }
 
 describe("StreamSubscribers", () => {
+  it("hands durable delivery to its scheduler without starting the receiver call", async () => {
+    const scheduled: (() => Promise<unknown>)[] = [];
+    const h = makeHarness({ runDurable: (work) => scheduled.push(work) });
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    h.subscribers.wake();
+
+    expect(scheduled).toHaveLength(1);
+    expect(h.pushes).toHaveLength(0);
+
+    await scheduled[0]!();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+  });
+
   it("a. push happy path: drains to the tail, acks, and resumes from the cursor", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);

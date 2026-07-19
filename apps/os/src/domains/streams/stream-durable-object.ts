@@ -67,6 +67,56 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
 }
 
 /**
+ * Cuts durable delivery out of the append request's actor-drain tree.
+ *
+ * A Stream append can itself be nested inside a subscriber processor. If its
+ * post-commit delivery is attached to that append with `ctx.waitUntil`, a
+ * delivery back to the caller closes a cycle: caller waits for append, append
+ * waits for delivery, and delivery waits for caller. Outside an alarm turn we
+ * therefore retain only the short `setAlarm(now)` operation. The alarm starts
+ * a fresh invocation, re-derives owed work from durable cursors, and may then
+ * retain the delivery attempt without holding any append caller open.
+ *
+ * The work closure is deliberately NOT remembered between turns. Its durable
+ * representation is the subscription cursor lag; `onAlarm()` reconciles that
+ * state and supplies a fresh closure even after isolate eviction.
+ */
+type StreamDeliveryAlarmBoundaryHooks = {
+  armAlarm(atMs: number): Promise<void>;
+  now(): number;
+  waitUntil(work: Promise<unknown>): void;
+};
+
+export class StreamDeliveryAlarmBoundary {
+  readonly #hooks: StreamDeliveryAlarmBoundaryHooks;
+  #inAlarmTurn = false;
+
+  constructor(hooks: StreamDeliveryAlarmBoundaryHooks) {
+    this.#hooks = hooks;
+  }
+
+  scheduleOrRun(work: () => Promise<unknown>): void {
+    if (this.#inAlarmTurn) {
+      this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
+      return;
+    }
+    this.#hooks.waitUntil(
+      settleStreamCoreBackgroundWork(() => this.#hooks.armAlarm(this.#hooks.now())),
+    );
+  }
+
+  runAlarmTurn(work: () => void): void {
+    const wasInAlarmTurn = this.#inAlarmTurn;
+    this.#inAlarmTurn = true;
+    try {
+      work();
+    } finally {
+      this.#inAlarmTurn = wasInAlarmTurn;
+    }
+  }
+}
+
+/**
  * The subscription key of the birth-certificate worker feed every
  * project-scoped stream configures on itself (see the constructor). Userspace
  * overrides it by re-appending `subscription-configured` with this same key.
@@ -115,6 +165,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
+  readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
+    armAlarm: (atMs) => this.#armAlarmNoLaterThan(atMs),
+    now: () => Date.now(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -165,7 +220,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       runtimeChanged: () => this.#refreshLiveState(),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#runInBackground(() => this.#armAlarmNoLaterThan(atMs)),
+      runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -235,8 +291,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
-    this.#flushCoreProcessorState();
+    this.#deliveryAlarmBoundary.runAlarmTurn(() => {
+      this.#subscribers.onAlarm();
+      this.#flushCoreProcessorState();
+    });
   }
 
   /**
@@ -246,17 +304,38 @@ export class StreamDurableObject extends DurableObject<Env> {
    * alarm fires; a stale-low value merely re-arms an already-set time.
    */
   #alarmArmedForMs: number | null = null;
+  #alarmArmInFlight: Promise<void> | null = null;
 
-  /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
-    }
+  /**
+   * Move the DO alarm earlier, never later (many rows share one alarm).
+   * Concurrent requests share one serialized reconciliation: an earlier
+   * desire that arrives while `setAlarm` is in flight gets a second pass and
+   * cannot be overwritten by the older, later deadline. A failed storage call
+   * rejects the retained operation and remains retryable by the next arm.
+   */
+  #armAlarmNoLaterThan(atMs: number): Promise<void> {
+    this.#alarmArmedForMs =
+      this.#alarmArmedForMs === null ? atMs : Math.min(this.#alarmArmedForMs, atMs);
+    if (this.#alarmArmInFlight !== null) return this.#alarmArmInFlight;
+
+    const reconcile = async () => {
+      try {
+        for (;;) {
+          const target = this.#alarmArmedForMs;
+          if (target === null) return;
+          const current = await this.ctx.storage.getAlarm();
+          if (current === null || target < current) await this.ctx.storage.setAlarm(target);
+          if (this.#alarmArmedForMs === target) return;
+        }
+      } catch (cause) {
+        throw new Error("stream alarm arming failed", { cause });
+      }
+    };
+    const inFlight = reconcile().finally(() => {
+      if (this.#alarmArmInFlight === inFlight) this.#alarmArmInFlight = null;
+    });
+    this.#alarmArmInFlight = inFlight;
+    return inFlight;
   }
 
   // ===========================================================================

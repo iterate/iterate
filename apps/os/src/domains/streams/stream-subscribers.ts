@@ -257,6 +257,12 @@ type StreamSubscribersHooks = {
   random(): number;
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
+  /**
+   * Run durable delivery in its alarm-owned invocation. The production Stream
+   * DO schedules an immediate alarm when called from an append and runs the
+   * closure only when reconciliation is already inside that alarm turn.
+   */
+  runDurable(work: () => Promise<unknown>): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
 };
@@ -463,8 +469,9 @@ export class StreamSubscribers {
       ...(delivery.processorSlug === undefined ? {} : { processorSlug: delivery.processorSlug }),
     };
 
-    this.#pokesInFlight.add(subscriptionKey);
-    const work = (async () => {
+    this.#hooks.runDurable(async () => {
+      if (this.#pokesInFlight.has(subscriptionKey)) return;
+      this.#pokesInFlight.add(subscriptionKey);
       try {
         // A poke that outlives its timeout still eventually settles with a
         // RETAINED sink; dropping that undisposed would leak a session-pinning
@@ -537,8 +544,7 @@ export class StreamSubscribers {
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
       }
-    })();
-    this.#hooks.keepAlive(work);
+    });
   }
 
   /**
@@ -550,8 +556,9 @@ export class StreamSubscribers {
    * can own their cursors. Push delivers per batch; webhook per event.
    */
   #drainPush(subscriptionKey: string): void {
-    this.#pushDrains.add(subscriptionKey);
-    const work = (async () => {
+    this.#hooks.runDurable(async () => {
+      if (this.#pushDrains.has(subscriptionKey)) return;
+      this.#pushDrains.add(subscriptionKey);
       try {
         for (;;) {
           const state = this.#hooks.coreState();
@@ -695,15 +702,12 @@ export class StreamSubscribers {
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }
+      } catch (error) {
+        console.error("stream push drain failed", { subscriptionKey, error });
       } finally {
         this.#pushDrains.delete(subscriptionKey);
       }
-    })();
-    this.#hooks.keepAlive(
-      work.catch((error: unknown) => {
-        console.error("stream push drain failed", { subscriptionKey, error });
-      }),
-    );
+    });
   }
 
   /**
