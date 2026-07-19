@@ -79,6 +79,7 @@ describe("workerBuildRecipe", () => {
     const collected = collectViteRecipeOutputs({
       "dist/server/index.js": "export default { fetch() {} }; export class TanstackTodos {}",
       "dist/server/assets/chunk-abc.js": "export {};",
+      "dist/server/assets/styles-server.css": "body { color: red; }",
       "dist/server/wrangler.json": "{}",
       "dist/client/assets/index-abc.js": "console.log(1)",
       "dist/client/.assetsignore": "",
@@ -96,6 +97,10 @@ describe("workerBuildRecipe", () => {
       'export * from "./dist/server/index.js"',
     );
     expect(collected.modules[".iterate-build.assets.js"]).toContain("/assets/index-abc.js");
+    // TanStack's SSR manifest can reference CSS emitted only under
+    // dist/server. It is still a browser asset and must be served at the
+    // URL embedded in the rendered document.
+    expect(collected.modules[".iterate-build.assets.js"]).toContain('"/assets/styles-server.css"');
 
     expect(() => collectViteRecipeOutputs({ "dist/server/other.js": "" })).toThrow(
       /did not produce "dist\/server\/index.js"/,

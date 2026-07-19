@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -59,12 +59,16 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
         status: 400,
       });
     }
-    if (taken.dispatch.ref.type !== "stateful") {
+    const ref = taken.dispatch.ref;
+    if (ref.type !== "stateful") {
       throw new Error("StatefulWorkerDurableObject.fetch dispatched with a non-stateful ref.");
     }
     let facet: unknown;
     try {
-      facet = await this.#facet(taken.dispatch.ref, taken.dispatch.buildBudgetMs);
+      facet = await tracing.enterSpan("dynamic_worker.stateful.resolve_facet", async (span) => {
+        span.setAttribute("iterate.worker.update_policy", ref.updatePolicy ?? "block");
+        return await this.#facet(ref, taken.dispatch.buildBudgetMs);
+      });
     } catch (error) {
       // Answer the building/failed cases HERE rather than relying on the
       // error name surviving the Durable Object fetch hop back to the
@@ -73,7 +77,11 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       if (buildStatus !== null) return buildStatus.response;
       throw error;
     }
-    return await (facet as Fetcher).fetch(taken.request);
+    return await tracing.enterSpan("dynamic_worker.stateful.target_fetch", async (span) => {
+      const response = await (facet as Fetcher).fetch(taken.request);
+      span.setAttribute("http.response.status_code", response.status);
+      return response;
+    });
   }
 
   async invokeCapability({
@@ -301,22 +309,40 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     }
     if (parsed.className !== ref.className) return null;
 
-    const cached = await this.#workerRunner.loadStatefulClassFromCacheKey(
-      ref,
-      parsed.sourceCacheKey,
-    );
-    if (cached === null) return null;
+    // Facet initializers are lazy: when the target is still running (for
+    // example it owns an open WebSocket while this outer DO hibernated), the
+    // callback is not invoked. Keeping the artifact lookup and Worker Loader
+    // materialization INSIDE it is the difference between a direct hot-facet
+    // dispatch and reloading the whole app before every reconnect.
+    let unavailable = false;
+    let facet: unknown;
+    try {
+      facet = await this.ctx.facets.get(FACET_NAME, async () => {
+        const cached = await this.#workerRunner.loadStatefulClassFromCacheKey(
+          ref,
+          parsed.sourceCacheKey,
+        );
+        if (cached === null) {
+          unavailable = true;
+          throw new Error("stateful worker's previous artifact is no longer cached");
+        }
 
-    // The KV read above is an interleave point: a background refresh may have
-    // completed meanwhile — new version written, facet aborted. Re-creating
-    // the facet with OUR (now old) class would wedge the DO on stale code
-    // forever (storage says new, facet runs old, nothing ever aborts again).
-    // The sync re-read plus facets.get below run in one DO turn, so this
-    // check cannot itself be interleaved.
-    if (this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) !== previous) return null;
+        // Loading the artifact is an interleave point: a background refresh
+        // may have written a newer version and aborted the old facet. Never
+        // mount this now-outranked class over the newer durable marker.
+        if (this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) !== previous) {
+          unavailable = true;
+          throw new Error("stateful worker version changed while mounting its cached facet");
+        }
+        return { class: cached.klass };
+      });
+    } catch (error) {
+      if (unavailable) return null;
+      throw error;
+    }
 
     this.#refreshFacetInBackground(ref, previous);
-    return this.ctx.facets.get(FACET_NAME, () => ({ class: cached.klass }));
+    return facet;
   }
 
   #refreshInFlight = false;

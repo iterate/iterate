@@ -4,10 +4,10 @@
  *
  * Every fresh project seeds its config repo from one deterministic template.
  * The deploy host prebuilds every template recipe under content-only trusted
- * keys: the root worker needed during project birth and the seeded Vite apps
- * (tanstack todos, guestbook). Fresh projects therefore never cold-build
- * repo-owned template code inside a request; the project-scoped container
- * lane remains for real config edits.
+ * keys: the root worker needed during project birth plus each seeded app's
+ * independent page and stateful-API builds. Fresh projects therefore never
+ * cold-build repo-owned template code inside a request; the project-scoped
+ * container lane remains for real config edits.
  *
  * Everything here is shared with the runtime resolver — the seed file map
  * (projectRepoSeedFiles), the content hash (repoContentHash), the sdk virtual
@@ -16,6 +16,14 @@
  * reimplementation would eventually fork and the miss is SILENT (birth just
  * quietly starts building in containers again).
  */
+import {
+  guestbookAppRef,
+  guestbookPageSource,
+} from "../../config-repo-template/apps/guestbook/src/guestbook-ref.ts";
+import {
+  tanstackPageSource,
+  tanstackTodosRef,
+} from "../../config-repo-template/apps/tanstack/src/todos-ref.ts";
 import { repoContentHash } from "../../src/domains/repos/checkout-files.ts";
 import { projectRepoSeedFiles } from "../../src/domains/repos/project-repo-seed.ts";
 import { defaultProjectWorkerRef } from "../../src/domains/repos/utils.ts";
@@ -69,12 +77,20 @@ export async function seedTemplateWorkerArtifacts(input: {
   const builds: Array<{ label: string; options: WorkerBuildOptions }> = [
     { label: "project worker", options: ref.source.options ?? {} },
     {
-      label: "TanStack app",
-      options: { pipeline: "vite", rootDir: "apps/tanstack" },
+      label: "TanStack pages",
+      options: tanstackPageSource.options,
     },
     {
-      label: "guestbook app",
-      options: { pipeline: "vite", rootDir: "apps/guestbook" },
+      label: "TanStack todo API",
+      options: tanstackTodosRef.source.options,
+    },
+    {
+      label: "guestbook pages",
+      options: guestbookPageSource.options,
+    },
+    {
+      label: "guestbook API",
+      options: guestbookAppRef.source.options,
     },
   ];
 

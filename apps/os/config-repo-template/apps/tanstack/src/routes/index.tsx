@@ -5,7 +5,7 @@ import { useTodos } from "../lib/use-todos.ts";
 export const Route = createFileRoute("/")({ component: Todos });
 
 // The project's shared todo list. Rows live in the app's Durable Object
-// SQLite (src/worker.ts); this page hydrates, authenticates /api from the
+// SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the
 // app cookie, and stays live — every project member's tab converges.
 function Todos() {
   const { todos, api, error } = useTodos();

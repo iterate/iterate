@@ -228,3 +228,75 @@ test(
     }
   },
 );
+
+test(
+  "Stateful stale-while-rebuild reuses a live facet before loading its old artifact",
+  { timeout: 120_000 },
+  async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `swr-live-${crypto.randomUUID().slice(0, 8)}` });
+    await project.__describe();
+
+    const durableWorkerKey = `swr-live-${crypto.randomUUID().slice(0, 8)}`;
+    const common = {
+      className: "SwrLiveProbe",
+      durableWorkerKey,
+      path: "/",
+      type: "stateful",
+      updatePolicy: "stale-while-rebuild",
+    } as const;
+    using v1 = project.workers.get({
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.js": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrLiveProbe extends DurableObject {",
+              '  version() { return "v1"; }',
+              "}",
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        // Loader-ready inline modules deliberately never enter the artifact
+        // store. A reconnect can reuse the live facet, but cannot reload v1
+        // from the artifact cache — exactly the ordering this test proves.
+        options: { bundle: false, entryPoint: "worker.js" },
+      },
+    }) as unknown as { version(): Promise<string> } & Disposable;
+    expect(await v1.version()).toBe("v1");
+
+    using v2 = project.workers.get({
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.ts": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrLiveProbe extends DurableObject {",
+              '  version(): string { return "v2"; }',
+              "}",
+              `// cold build salt ${crypto.randomUUID()}`,
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        options: { entryPoint: "worker.ts" },
+      },
+    }) as unknown as { version(): Promise<string> } & Disposable;
+
+    // The active facet answers first. An eager old-artifact lookup would miss
+    // (v1 was loader-ready), block on the v2 build, and return v2 here.
+    expect(await v2.version()).toBe("v1");
+
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const version = await v2.version();
+      if (version === "v2") break;
+      if (Date.now() > deadline) throw new Error("live-facet SWR never swapped to v2");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  },
+);

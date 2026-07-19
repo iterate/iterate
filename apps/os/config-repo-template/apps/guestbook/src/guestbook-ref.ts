@@ -1,29 +1,43 @@
 // The guestbook's shared IDENTITY, dependency-free on purpose (type-only
 // imports bundle to pure data): the repo root's worker.ts imports this module
-// for its HTTP route, the app's worker.ts for its sign verb, and the wake
+// for its HTTP route, guestbook-app.ts for its sign verb, and the wake
 // subscription persists the same ref — so ingress, spine delivery, and the
 // creation batch can never disagree about which Durable Object (and which
 // build) the guestbook is.
-import type { DynamicWorkerRef } from "iterate/sdk";
 import type { StreamEventInput } from "iterate/processors";
+import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from "iterate/sdk";
 
 export const guestbookStreamPath = "/guestbook";
 
+const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
+
+/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */
+export const guestbookPageSource = {
+  files: repoFiles,
+  options: { pipeline: "vite", rootDir: "apps/guestbook" },
+} satisfies DynamicWorkerSource;
+
 // One declarative ref for the guestbook host, shared by the HTTP routes and
 // the wake subscription below — the same Durable Object either way, addressed
-// by its durableWorkerKey. The source is this app's own Vite build: the
-// platform's "vite" pipeline runs `npm run build` under apps/guestbook and
-// hosts the built worker, Durable Object class included.
+// by its durableWorkerKey. Its small Wrangler entry excludes the independent
+// TanStack SSR build. The stale policy lets a still-running facet answer while
+// the host checks for a newer repo version in the background; a cold facet
+// mounts this exact cached artifact.
 export const guestbookAppRef = {
   type: "stateful",
   path: "/",
   className: "GuestbookApp",
   durableWorkerKey: "app-guestbook",
+  updatePolicy: "stale-while-rebuild",
   source: {
-    files: { type: "repo", repoPath: "/repos/config" },
-    options: { pipeline: "vite", rootDir: "apps/guestbook" },
+    files: repoFiles,
+    options: {
+      entryPoint: "src/guestbook-app.ts",
+      minify: true,
+      rootDir: "apps/guestbook",
+    },
   },
-} satisfies DynamicWorkerRef;
+} satisfies StatefulDynamicWorkerRef;
 
 /**
  * The guestbook's creation batch: the birth certificate plus the durable
