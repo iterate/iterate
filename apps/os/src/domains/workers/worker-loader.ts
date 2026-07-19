@@ -42,6 +42,14 @@ class RepoHeadResolutionDeadlineError extends Error {
   override readonly name = "RepoHeadResolutionDeadlineError";
 }
 
+/** Bounded authoritative Repo DO reads exhausted on a classified Workers RPC
+ * transport failure. This is distinct from a repo/source rejection: callers
+ * can report an infrastructure failure instead of pretending the source was
+ * invalid. */
+class RepoHeadRpcTransportError extends Error {
+  override readonly name = "RepoHeadRpcTransportError";
+}
+
 /** Name-based, because the error crosses Workers RPC (which preserves
  * `error.name` but not class identity). */
 export function isWorkerBuildInProgressError(error: unknown): boolean {
@@ -90,6 +98,8 @@ const REPO_HEAD_DEADLINE_MS = REPO_HEAD_ATTEMPT_TIMEOUTS_MS.reduce(
   (total, timeoutMs) => total + timeoutMs,
   0,
 );
+const WORKERS_RPC_CLONED_DATA_VERSION_ERROR =
+  "Unable to deserialize cloned data due to invalid or unsupported version.";
 
 export async function resolveWorkerSource({
   buildBudgetMs,
@@ -663,10 +673,12 @@ async function resolveFileSource({
 }
 
 /**
- * Read a late-bound repo head with sparse, bounded hedges. A call that rejects
- * keeps its original semantics and is not retried. A call that does not settle
- * inside its window gets a fresh-stub successor; the timed-out Promise remains
- * observed by Promise.race, so a later RPC rejection cannot become unhandled.
+ * Read a late-bound repo head with sparse, bounded hedges. Source/application
+ * rejections keep their original semantics and are not retried. The one known
+ * transient Workers RPC clone-version rejection gets the same fresh-stub
+ * successor as an unsettled call. Every other rejection propagates unchanged.
+ * Timed-out Promises remain observed, so a later RPC rejection cannot become
+ * unhandled.
  */
 async function resolveRepoHead({
   projectId,
@@ -678,29 +690,79 @@ async function resolveRepoHead({
   repoPath: string;
 }): Promise<RepoHead> {
   const startedAt = Date.now();
+  let cloneVersionFailures = 0;
+  let lastTransportError: unknown;
+  let lastRetryKind: "clone-version" | "hedge" | undefined;
   for (const [index, timeoutMs] of REPO_HEAD_ATTEMPT_TIMEOUTS_MS.entries()) {
     const attempt = index + 1;
-    const timeout = Symbol("repo-head-attempt-timeout");
-    const call = Promise.resolve().then(readHead);
+    const call = Promise.resolve()
+      .then(readHead)
+      .then(
+        (head) => ({ head, type: "resolved" }) as const,
+        (error: unknown) => ({ error, type: "rejected" }) as const,
+      );
     let timer: ReturnType<typeof setTimeout> | undefined;
     const outcome = await Promise.race([
       call,
-      new Promise<typeof timeout>((resolve) => {
-        timer = setTimeout(() => resolve(timeout), timeoutMs);
+      new Promise<{ type: "timeout" }>((resolve) => {
+        timer = setTimeout(() => resolve({ type: "timeout" }), timeoutMs);
       }),
     ]).finally(() => clearTimeout(timer));
-    if (outcome !== timeout) {
+
+    if (outcome.type === "resolved") {
       if (attempt > 1) {
-        console.warn("repo head RPC completed after a bounded hedge", {
+        console.warn(
+          lastRetryKind === "clone-version"
+            ? "repo head RPC recovered after a bounded clone-version transport retry"
+            : "repo head RPC completed after a bounded hedge",
+          {
+            attempt,
+            elapsedMs: Date.now() - startedAt,
+            projectId,
+            repoPath,
+          },
+        );
+      }
+      return outcome.head;
+    }
+
+    if (outcome.type === "rejected") {
+      if (
+        !(outcome.error instanceof Error) ||
+        !outcome.error.message.includes(WORKERS_RPC_CLONED_DATA_VERSION_ERROR)
+      ) {
+        throw outcome.error;
+      }
+      cloneVersionFailures += 1;
+      lastTransportError = outcome.error;
+      lastRetryKind = "clone-version";
+      if (attempt < REPO_HEAD_ATTEMPT_TIMEOUTS_MS.length) {
+        console.warn("repo head RPC hit a retryable clone-version transport failure", {
           attempt,
+          nextAttempt: attempt + 1,
           elapsedMs: Date.now() - startedAt,
           projectId,
           repoPath,
         });
+        continue;
       }
-      return outcome;
+
+      const error = new RepoHeadRpcTransportError(
+        `Repo head RPC exhausted ${attempt} attempts after ${cloneVersionFailures} clone-version transport failures for ${repoPath}.`,
+        { cause: lastTransportError },
+      );
+      console.error("repo head RPC exhausted its bounded clone-version transport retries", {
+        attempts: attempt,
+        cloneVersionFailures,
+        elapsedMs: Date.now() - startedAt,
+        projectId,
+        repoPath,
+      });
+      throw error;
     }
+
     if (attempt < REPO_HEAD_ATTEMPT_TIMEOUTS_MS.length) {
+      lastRetryKind = "hedge";
       console.warn("repo head RPC exceeded its hedge threshold", {
         attempt: attempt + 1,
         attemptTimeoutMs: timeoutMs,

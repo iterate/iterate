@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { Stream } from "../../src/itx-api.generated.ts";
+import { createTestProjectPool } from "../test-support/create-shared-test-project.ts";
+import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -52,6 +54,10 @@ type StreamRuntimeState = {
 };
 
 const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
+const lifecycleProjectPool = createTestProjectPool({
+  size: E2E_FILE_TEST_CONCURRENCY,
+  slugPrefix: "stream-lifecycle-family",
+});
 
 // These tests are intentionally about subscription lifecycle policy, not about
 // the old inbound/outbound transport direction. The current model has two
@@ -71,14 +77,13 @@ const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
 // prove the configured wake path is teardownable and re-wakeable, while direct
 // Cap'n Web subscriptions are cleaned up when their session is disposed.
 test("configured processor subscriptions are recorded as configured runtime connections", async () => {
-  const marker = crypto.randomUUID();
-
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-configured-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get("/");
 
   const { keys, state } = await waitForConfiguredProcessorConnections(stream);
@@ -99,14 +104,13 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
   // sometimes be safe to drop/re-wake and sometimes not. This test ties to the
   // guard in `StreamDurableObject.subscribe(...)` that rejects configured keys
   // on the public ephemeral path.
-  const marker = crypto.randomUUID();
-
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-key-reserved-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get("/");
 
   const { keys } = await waitForConfiguredProcessorConnections(stream);
@@ -143,7 +147,8 @@ test("delivery expressions must end in a property step, rejected before commit",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-call-tail-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get(`/configured-call-tail-${marker}`);
 
   await expect(
@@ -173,7 +178,8 @@ test("webhook subscriptions validate their URL before commit", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-webhook-url-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get(`/configured-webhook-url-${marker}`);
 
   await expect(
@@ -226,7 +232,8 @@ test("subscription and subscribe inputs are validated at the door", async () => 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-input-gates-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get(`/lifecycle-input-gates-${marker}`);
 
   await expect(
@@ -268,7 +275,8 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-dynamic-wake-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get(`/integrations/slack/${connection}`);
 
   const subscriptionKey = `dynamic-wake-${marker}`;
@@ -327,7 +335,8 @@ test("project streams are born with the project-worker push feed and replace it 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-worker-feed-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get(`/lifecycle-worker-feed-${marker}`);
 
   // Born configured: a fresh child stream's runtime subscription table shows
@@ -464,7 +473,8 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = observerItx.projects.create({ slug: `lifecycle-session-close-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(observerItx);
+  using project = observerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -526,7 +536,8 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = observerItx.projects.create({ slug: `lifecycle-wait-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(observerItx);
+  using project = observerItx.projects.get(projectLease.projectId);
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -580,7 +591,8 @@ test("a stream DO kill mid-call rejects with the stream-unavailable tag", async 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-kill-tag-${marker}` });
+  using projectLease = await lifecycleProjectPool.acquire(itx);
+  using project = itx.projects.get(projectLease.projectId);
   using stream = project.streams.get(`/lifecycle-kill-tag-${marker}`);
 
   const parked = (async () => {

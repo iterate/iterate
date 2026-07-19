@@ -32,6 +32,7 @@ const h = vi.hoisted(() => {
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
     headCalls: 0,
     headOutcomes: [] as Array<
+      | Error
       | Promise<{ branch: string; commitOid: string; contentHash: string }>
       | { branch: string; commitOid: string; contentHash: string }
     >,
@@ -60,7 +61,9 @@ const h = vi.hoisted(() => {
         getFilesSnapshot: async () => ({ files: state.files }),
         getHead: async () => {
           state.headCalls += 1;
-          return await (state.headOutcomes.shift() ?? state.head);
+          const outcome = state.headOutcomes.shift() ?? state.head;
+          if (outcome instanceof Error) throw outcome;
+          return await outcome;
         },
       }),
     },
@@ -123,6 +126,123 @@ describe("resolveWorkerSource serve matrix", () => {
       await Promise.allSettled(pending.splice(0));
       h.kv.data.clear();
       warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("the observed Workers RPC clone-version failure gets one fresh-stub retry", async () => {
+    setCommit("c1", "repo-head-clone-retry-v1", "HEAD CLONE RETRY");
+    const callsBefore = h.state.headCalls;
+    h.state.headOutcomes.push(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    );
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const resolved = await resolveWorkerSource({
+        projectId: "prj_head_clone_retry",
+        source: repoSource("/repos/head-clone-retry"),
+        waitUntil,
+      });
+
+      expect(h.state.headCalls).toBe(callsBefore + 2);
+      expect(resolved.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
+      expect(warning).toHaveBeenCalledWith(
+        "repo head RPC hit a retryable clone-version transport failure",
+        expect.objectContaining({
+          attempt: 1,
+          nextAttempt: 2,
+          projectId: "prj_head_clone_retry",
+        }),
+      );
+    } finally {
+      h.kv.data.clear();
+      warning.mockRestore();
+    }
+  });
+
+  test("ordinary repo-head rejections propagate without a retry", async () => {
+    const callsBefore = h.state.headCalls;
+    h.state.headOutcomes.push(new Error("repo access denied"));
+
+    await expect(
+      resolveWorkerSource({
+        projectId: "prj_head_rejection",
+        source: repoSource("/repos/head-rejection"),
+        waitUntil,
+      }),
+    ).rejects.toThrow("repo access denied");
+    expect(h.state.headCalls).toBe(callsBefore + 1);
+  });
+
+  test("repeated clone-version failures end in a classified bounded error", async () => {
+    const callsBefore = h.state.headCalls;
+    const cloneFailure = () =>
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version.");
+    h.state.headOutcomes.push(cloneFailure(), cloneFailure(), cloneFailure());
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        resolveWorkerSource({
+          projectId: "prj_head_clone_exhausted",
+          source: repoSource("/repos/head-clone-exhausted"),
+          waitUntil,
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("3 clone-version transport failures"),
+        name: "RepoHeadRpcTransportError",
+      });
+      expect(h.state.headCalls).toBe(callsBefore + 3);
+      expect(error).toHaveBeenCalledWith(
+        "repo head RPC exhausted its bounded clone-version transport retries",
+        expect.objectContaining({
+          attempts: 3,
+          cloneVersionFailures: 3,
+          projectId: "prj_head_clone_exhausted",
+        }),
+      );
+    } finally {
+      warning.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  test("mixed timeout and clone-version failures retain accurate exhaustion telemetry", async () => {
+    const callsBefore = h.state.headCalls;
+    const cloneFailure = () =>
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version.");
+    h.state.headOutcomes.push(new Promise(() => {}), cloneFailure(), cloneFailure());
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      const resolving = resolveWorkerSource({
+        projectId: "prj_head_mixed_exhausted",
+        source: repoSource("/repos/head-mixed-exhausted"),
+        waitUntil,
+      });
+      const rejected = expect(resolving).rejects.toMatchObject({
+        message: expect.stringContaining(
+          "exhausted 3 attempts after 2 clone-version transport failures",
+        ),
+        name: "RepoHeadRpcTransportError",
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejected;
+      expect(h.state.headCalls).toBe(callsBefore + 3);
+      expect(error).toHaveBeenCalledWith(
+        "repo head RPC exhausted its bounded clone-version transport retries",
+        expect.objectContaining({
+          attempts: 3,
+          cloneVersionFailures: 2,
+          projectId: "prj_head_mixed_exhausted",
+        }),
+      );
+    } finally {
+      h.state.headOutcomes.length = 0;
+      warning.mockRestore();
+      error.mockRestore();
       vi.useRealTimers();
     }
   });

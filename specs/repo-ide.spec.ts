@@ -103,7 +103,11 @@ test("discarding a new file confirms before permanently removing it", async ({
   expect(cancelDialog.message()).toBe("Are you sure? You may not be able to recover this file");
   await cancelDialog.dismiss();
   await cancelClickPromise;
-  await page.getByText("Content that has never been committed.").waitFor();
+  // CodeMirror does not expose its buffer as a stable accessibility text node.
+  // The source-control row and the still-actionable Discard control are the
+  // user-visible proof that cancelling preserved the untracked file.
+  await page.getByRole("button", { name: "draft.md" }).waitFor();
+  await discard.waitFor();
 
   const acceptDialogPromise = page.waitForEvent("dialog");
   const acceptClickPromise = discard.click();
