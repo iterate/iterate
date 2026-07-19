@@ -8,6 +8,7 @@ import type { StreamEventInput } from "iterate/processors";
 import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from "iterate/sdk";
 
 export const guestbookStreamPath = "/guestbook";
+export const guestbookSubscriptionConfigVersion = 3;
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 
@@ -27,7 +28,11 @@ export const guestbookAppRef = {
   type: "stateful",
   path: "/",
   className: "GuestbookApp",
-  durableWorkerKey: "app-guestbook",
+  // The split app cannot share the legacy host: that host's persisted wake
+  // recipe can resolve today's page-only Vite build, which no longer exports
+  // GuestbookApp, and poison its live facet before the new ref arrives. The
+  // fold's truth is the stream, so this new host safely rebuilds by replay.
+  durableWorkerKey: "app-guestbook-v2",
   updatePolicy: "stale-while-rebuild",
   source: {
     files: repoFiles,
@@ -62,6 +67,8 @@ export function guestbookCreationEvents(): StreamEventInput[] {
     {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
+        // Deliberately stable across the host migration: latest config for a
+        // subscriptionKey replaces the old target without leaving two wakes.
         subscriptionKey: "app-guestbook#guestbook",
         delivery: {
           mode: "wake",
@@ -69,10 +76,9 @@ export function guestbookCreationEvents(): StreamEventInput[] {
           processorSlug: "guestbook",
         },
       },
-      // v2 migrates the original Vite-backed worker ref to the independent,
-      // small stateful entrypoint above. Keep subscriptionKey stable; bump
-      // this event key whenever the persisted delivery expression changes.
-      idempotencyKey: "guestbook/subscription:v2",
+      // A new append key lets this config reach the replacement reducer. Bump
+      // the version whenever the persisted delivery expression changes.
+      idempotencyKey: `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,
     },
   ];
 }

@@ -227,6 +227,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
       "import {\n" +
+      "  type StreamEventInput,\n" +
       "  type StreamSubscriberWakeRequest,\n" +
       "  type StreamSubscriberWakeResponse,\n" +
       "} from \"iterate/processors\";\n" +
@@ -235,14 +236,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StreamProcessorRegistry,\n" +
       "} from \"iterate/processors/cloudflare\";\n" +
       "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
-      "import { guestbookCreationEvents, guestbookStreamPath } from \"./guestbook-ref.ts\";\n" +
+      "import {\n" +
+      "  guestbookCreationEvents,\n" +
+      "  guestbookStreamPath,\n" +
+      "  guestbookSubscriptionConfigVersion,\n" +
+      "} from \"./guestbook-ref.ts\";\n" +
       "import { GuestbookProcessor, type GuestbookFoldState } from \"./guestbook.ts\";\n" +
+      "\n" +
+      "const SUBSCRIPTION_VERSION_STORAGE_KEY = \"guestbook:subscription-config-version\";\n" +
       "\n" +
       "// The small, stateful half of the guestbook. It has its own Wrangler entry so\n" +
       "// a cold /api WebSocket loads only the processor host and Cap'n Web runtime,\n" +
       "// never the unrelated TanStack SSR bundle in worker.ts.\n" +
       "export class GuestbookApp extends IterateDurableObject {\n" +
       "  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;\n" +
+      "  #configurationInFlight: Promise<void> | undefined;\n" +
       "\n" +
       "  // Hosting is constructed lazily, not in the constructor: the registry and\n" +
       "  // the processor's provenance stamps need the owning project's id, which\n" +
@@ -303,6 +311,37 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    await registry.handleAlarm(alarmInfo);\n" +
       "  }\n" +
       "\n" +
+      "  /** Append through the one stream lane and record only a successful current\n" +
+      "   * subscription offer. The creation/config events are idempotent; entries\n" +
+      "   * supplied by a caller retain their own keys. */\n" +
+      "  async #appendWithCurrentSubscription(...events: StreamEventInput[]): Promise<void> {\n" +
+      "    using project = await this.env.ITX.get();\n" +
+      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);\n" +
+      "    this.ctx.storage.kv.put(SUBSCRIPTION_VERSION_STORAGE_KEY, guestbookSubscriptionConfigVersion);\n" +
+      "  }\n" +
+      "\n" +
+      "  /** A read-only visit must migrate the persisted wake target too. Waiting\n" +
+      "   * here is bounded by the ordinary append call; delivery itself starts in\n" +
+      "   * the stream's native alarm turn, so this cannot form an app↔stream actor\n" +
+      "   * cycle. The durable version makes the extra RPC once per config revision. */\n" +
+      "  async #ensureCurrentSubscription(): Promise<void> {\n" +
+      "    if (\n" +
+      "      this.ctx.storage.kv.get<number>(SUBSCRIPTION_VERSION_STORAGE_KEY) ===\n" +
+      "      guestbookSubscriptionConfigVersion\n" +
+      "    ) {\n" +
+      "      return;\n" +
+      "    }\n" +
+      "    if (this.#configurationInFlight === undefined) {\n" +
+      "      this.#configurationInFlight = this.#appendWithCurrentSubscription();\n" +
+      "    }\n" +
+      "    const pending = this.#configurationInFlight;\n" +
+      "    try {\n" +
+      "      await pending;\n" +
+      "    } finally {\n" +
+      "      if (this.#configurationInFlight === pending) this.#configurationInFlight = undefined;\n" +
+      "    }\n" +
+      "  }\n" +
+      "\n" +
       "  /** The wake door the stream spine dials — the subscription's persisted\n" +
       "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`, which\n" +
       "   * the platform's dynamic capability dispatch flattens into an\n" +
@@ -333,8 +372,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    const trimmedName = name.trim().slice(0, 80);\n" +
       "    const trimmedMessage = message.trim().slice(0, 500);\n" +
       "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
-      "    using project = await this.env.ITX.get();\n" +
-      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), {\n" +
+      "    await this.#appendWithCurrentSubscription({\n" +
       "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
       "      payload: { message: trimmedMessage, name: trimmedName },\n" +
       "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
@@ -345,6 +383,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * guestbook is deliberately public — same as its signing lane always was —\n" +
       "   * so the root target needs no authenticate step. */\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
+      "    await this.#ensureCurrentSubscription();\n" +
       "    const { registry } = await this.#freshHost();\n" +
       "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
       "  }\n" +
@@ -385,6 +424,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
       "\n" +
       "export const guestbookStreamPath = \"/guestbook\";\n" +
+      "export const guestbookSubscriptionConfigVersion = 3;\n" +
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
@@ -404,7 +444,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type: \"stateful\",\n" +
       "  path: \"/\",\n" +
       "  className: \"GuestbookApp\",\n" +
-      "  durableWorkerKey: \"app-guestbook\",\n" +
+      "  // The split app cannot share the legacy host: that host's persisted wake\n" +
+      "  // recipe can resolve today's page-only Vite build, which no longer exports\n" +
+      "  // GuestbookApp, and poison its live facet before the new ref arrives. The\n" +
+      "  // fold's truth is the stream, so this new host safely rebuilds by replay.\n" +
+      "  durableWorkerKey: \"app-guestbook-v2\",\n" +
       "  updatePolicy: \"stale-while-rebuild\",\n" +
       "  source: {\n" +
       "    files: repoFiles,\n" +
@@ -439,6 +483,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    {\n" +
       "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
       "      payload: {\n" +
+      "        // Deliberately stable across the host migration: latest config for a\n" +
+      "        // subscriptionKey replaces the old target without leaving two wakes.\n" +
       "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
       "        delivery: {\n" +
       "          mode: \"wake\",\n" +
@@ -446,10 +492,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          processorSlug: \"guestbook\",\n" +
       "        },\n" +
       "      },\n" +
-      "      // v2 migrates the original Vite-backed worker ref to the independent,\n" +
-      "      // small stateful entrypoint above. Keep subscriptionKey stable; bump\n" +
-      "      // this event key whenever the persisted delivery expression changes.\n" +
-      "      idempotencyKey: \"guestbook/subscription:v2\",\n" +
+      "      // A new append key lets this config reach the replacement reducer. Bump\n" +
+      "      // the version whenever the persisted delivery expression changes.\n" +
+      "      idempotencyKey: `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,\n" +
       "    },\n" +
       "  ];\n" +
       "}\n",

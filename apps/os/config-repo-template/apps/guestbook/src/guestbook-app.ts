@@ -1,6 +1,7 @@
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveStateRpcTarget, type LiveStateRpc } from "iterate/live-state";
 import {
+  type StreamEventInput,
   type StreamSubscriberWakeRequest,
   type StreamSubscriberWakeResponse,
 } from "iterate/processors";
@@ -9,14 +10,21 @@ import {
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
 import { IterateDurableObject, itxProjectStream } from "iterate/sdk";
-import { guestbookCreationEvents, guestbookStreamPath } from "./guestbook-ref.ts";
+import {
+  guestbookCreationEvents,
+  guestbookStreamPath,
+  guestbookSubscriptionConfigVersion,
+} from "./guestbook-ref.ts";
 import { GuestbookProcessor, type GuestbookFoldState } from "./guestbook.ts";
+
+const SUBSCRIPTION_VERSION_STORAGE_KEY = "guestbook:subscription-config-version";
 
 // The small, stateful half of the guestbook. It has its own Wrangler entry so
 // a cold /api WebSocket loads only the processor host and Cap'n Web runtime,
 // never the unrelated TanStack SSR bundle in worker.ts.
 export class GuestbookApp extends IterateDurableObject {
   #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;
+  #configurationInFlight: Promise<void> | undefined;
 
   // Hosting is constructed lazily, not in the constructor: the registry and
   // the processor's provenance stamps need the owning project's id, which
@@ -77,6 +85,37 @@ export class GuestbookApp extends IterateDurableObject {
     await registry.handleAlarm(alarmInfo);
   }
 
+  /** Append through the one stream lane and record only a successful current
+   * subscription offer. The creation/config events are idempotent; entries
+   * supplied by a caller retain their own keys. */
+  async #appendWithCurrentSubscription(...events: StreamEventInput[]): Promise<void> {
+    using project = await this.env.ITX.get();
+    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);
+    this.ctx.storage.kv.put(SUBSCRIPTION_VERSION_STORAGE_KEY, guestbookSubscriptionConfigVersion);
+  }
+
+  /** A read-only visit must migrate the persisted wake target too. Waiting
+   * here is bounded by the ordinary append call; delivery itself starts in
+   * the stream's native alarm turn, so this cannot form an app↔stream actor
+   * cycle. The durable version makes the extra RPC once per config revision. */
+  async #ensureCurrentSubscription(): Promise<void> {
+    if (
+      this.ctx.storage.kv.get<number>(SUBSCRIPTION_VERSION_STORAGE_KEY) ===
+      guestbookSubscriptionConfigVersion
+    ) {
+      return;
+    }
+    if (this.#configurationInFlight === undefined) {
+      this.#configurationInFlight = this.#appendWithCurrentSubscription();
+    }
+    const pending = this.#configurationInFlight;
+    try {
+      await pending;
+    } finally {
+      if (this.#configurationInFlight === pending) this.#configurationInFlight = undefined;
+    }
+  }
+
   /** The wake door the stream spine dials — the subscription's persisted
    * expression is `workers.get(ref).processor.wakeStreamSubscriber`, which
    * the platform's dynamic capability dispatch flattens into an
@@ -107,8 +146,7 @@ export class GuestbookApp extends IterateDurableObject {
     const trimmedName = name.trim().slice(0, 80);
     const trimmedMessage = message.trim().slice(0, 500);
     if (trimmedName.length === 0 || trimmedMessage.length === 0) return;
-    using project = await this.env.ITX.get();
-    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), {
+    await this.#appendWithCurrentSubscription({
       type: "events.iterate.com/guestbook/entry-signed",
       payload: { message: trimmedMessage, name: trimmedName },
       idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
@@ -119,6 +157,7 @@ export class GuestbookApp extends IterateDurableObject {
    * guestbook is deliberately public — same as its signing lane always was —
    * so the root target needs no authenticate step. */
   async fetch(request: Request): Promise<Response> {
+    await this.#ensureCurrentSubscription();
     const { registry } = await this.#freshHost();
     return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));
   }

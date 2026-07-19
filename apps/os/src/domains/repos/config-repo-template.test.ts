@@ -10,6 +10,7 @@ import {
   guestbookAppRef,
   guestbookCreationEvents,
   guestbookPageSource,
+  guestbookSubscriptionConfigVersion,
 } from "../../../config-repo-template/apps/guestbook/src/guestbook-ref.ts";
 import {
   tanstackPageSource,
@@ -81,6 +82,10 @@ test("TanStack pages and stateful APIs have independent worker entries", () => {
 test("guestbook wake delivery replaces the legacy Vite-backed subscription", () => {
   const subscription = guestbookCreationEvents()[1];
 
+  // The legacy wake recipe can be retried after the repository has already
+  // moved GuestbookApp out of its Vite build. It must not be able to poison
+  // the new app's host facet under the old durable identity.
+  expect(guestbookAppRef.durableWorkerKey).not.toBe("app-guestbook");
   expect(subscription).toMatchObject({
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
@@ -95,6 +100,9 @@ test("guestbook wake delivery replaces the legacy Vite-backed subscription", () 
   // this append idempotency key. A distinct event must reach the stream's
   // replacement reducer while preserving its delivery cursor.
   expect(subscription?.idempotencyKey).not.toBe("guestbook/subscription");
+  expect(subscription?.idempotencyKey).toBe(
+    `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,
+  );
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
