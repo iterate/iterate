@@ -23,6 +23,7 @@ import {
   type AuthenticatedSession,
   type SessionResponse,
 } from "./session.ts";
+import { verifyJwtWithBoundedHedges } from "./bounded-jwt-verify.ts";
 import { createSingleFlight } from "./single-flight.ts";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
@@ -96,9 +97,13 @@ async function verifyTokenSet(input: {
 }): Promise<VerifyTokenSetResult> {
   let rawAccessToken: unknown;
   try {
-    const { payload } = await jwtVerify(input.tokenSet.accessToken, input.jwks, {
-      issuer: input.issuer,
-      audience: input.audiences,
+    const { payload } = await verifyJwtWithBoundedHedges({
+      tokenKind: "access",
+      verify: () =>
+        jwtVerify(input.tokenSet.accessToken, input.jwks, {
+          issuer: input.issuer,
+          audience: input.audiences,
+        }),
     });
     rawAccessToken = payload;
   } catch (error) {
@@ -107,9 +112,13 @@ async function verifyTokenSet(input: {
 
   let rawIdToken: unknown;
   try {
-    const { payload } = await jwtVerify(input.tokenSet.idToken, input.jwks, {
-      issuer: input.issuer,
-      audience: input.clientId,
+    const { payload } = await verifyJwtWithBoundedHedges({
+      tokenKind: "id",
+      verify: () =>
+        jwtVerify(input.tokenSet.idToken, input.jwks, {
+          issuer: input.issuer,
+          audience: input.clientId,
+        }),
     });
     rawIdToken = payload;
   } catch (error) {
@@ -453,9 +462,13 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
       if (!token) return null;
 
       try {
-        const { payload } = await jwtVerify(token, jwks, {
-          issuer,
-          audience: audiences(),
+        const { payload } = await verifyJwtWithBoundedHedges({
+          tokenKind: "bearer",
+          verify: () =>
+            jwtVerify(token, jwks, {
+              issuer,
+              audience: audiences(),
+            }),
         });
         return AccessTokenClaims.parse(payload);
       } catch {
