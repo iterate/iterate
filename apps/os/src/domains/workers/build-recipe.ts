@@ -189,10 +189,10 @@ function applyRootDir(
  * layout (dist/server worker modules + dist/client browser assets). Unlike
  * the wrangler lane, the build EXECUTES project code (vite config, plugins,
  * the app's build script) inside the builder container — which is why
- * runtime artifacts are project-scoped (build-key.ts) and this lane is never
- * seeded into the trusted tier. Outputs are collected by
- * collectViteRecipeOutputs, which wraps the built worker with a generated
- * entry that serves the client assets.
+ * runtime artifacts are project-scoped (build-key.ts). The one exception is
+ * the repo-owned, deterministic fresh-project template, which deploy builds
+ * itself into the trusted tier. Outputs are collected by collectViteRecipeOutputs,
+ * which wraps the built worker with a generated entry that serves the client assets.
  */
 function viteAppRecipe(files: Record<string, string>): WorkerBuildRecipe {
   const packageJson = files["package.json"];

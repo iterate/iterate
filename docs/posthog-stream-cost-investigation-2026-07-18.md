@@ -267,9 +267,9 @@ The practical split is therefore:
 - PostHog for curated product analytics, browser identity, organization/project
   Group Analytics in the browser, and project Group Analytics for durable
   stream activity.
-- Grouped `stream:append` events while their product value justifies the full
-  base, identified-event, and Group Analytics cost, with ordinary `project_id`
-  retained for HogQL slicing.
+- Grouped `append:<type>` events while their product value justifies the full
+  base, identified-event, and Group Analytics cost. Use the native project
+  group for project slicing; type and path are promoted event properties.
 - R2/Iceberg as the better future home if exact long-retention raw history is
   required independently of PostHog.
 
@@ -339,8 +339,8 @@ ingestion filter is already active.
 The enabled staging-only PostHog `Drop Events` transformation is:
 
 - ID: `019f741a-2dd8-0000-61e9-73abda6505fe`
-- Name: `Emergency: drop preview stream:append`
-- Filter: event name exactly `stream:append`
+- Name: `Emergency: drop preview stream events`
+- Filter: `event = 'stream:append' OR event LIKE 'append:%'`
 - Execution order: `0`
 - Function: `return null`
 
@@ -362,23 +362,21 @@ never modified.
    and traces, not paid organization analytics. Ordinary browser analytics can
    remain separated in the existing development/staging projects.
 3. **Create daily event-volume alerts per PostHog project.** Alert on both total
-   events and `stream:append`, with breakdowns by `worker_name`, `project_id`,
+   events and `append:%`, with breakdowns by native project group slug,
    `stream_path`, and `stream_event_type`. A production warning at 50,000/day
    and intervention at 60,000/day leaves headroom below $20/day at the highest
    first-paid combined marginal rates. Non-production stream volume should be
    exactly zero.
 4. **Alert on source integrity.** Daily checks should assert zero ephemeral
-   rows, zero duplicate `stream_event_uuid` values, only `os-prd` in production,
-   and a bounded ingest delay between `stream_event_created_at` and
-   `created_at`.
+   rows, zero duplicate top-level event UUIDs, and bounded delay between the
+   source `timestamp` and PostHog's `created_at`.
 5. **Use `created_at` for billing investigations.** The event `timestamp` is the
    durable source commit time and can be old when a backlog is delivered;
    `created_at` is the PostHog ingestion time that explains the bill.
 6. **Use groups on every production event.** A browser person is the
    authenticated user. A machine-authored stream fact uses one stable synthetic
-   identity per project and carries only `project` group context plus ordinary
-   `project_id` for HogQL. Browser events carry both organization and project
-   context where available.
+   identity per project and carries only `project` group context. Browser
+   events carry both organization and project context where available.
 7. **Classify the production error rows.** Fix the two current
    `runtime.runningScripts` contract violations and track the old rollout/parked
    cases to explicit resolutions. Do not normalize them as expected noise.
