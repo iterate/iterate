@@ -25,13 +25,15 @@ export function Todos() {
       todos?.some((todo) => todo.id === pendingAdd.id)
     ) {
       setPendingAdd(null);
+      setMutationError(null);
     }
   }, [pendingAdd, todos]);
 
   useEffect(() => {
     if (pendingAdd === null) return;
     const timeout = window.setTimeout(() => {
-      setPendingAdd(null);
+      // The RPC cannot be cancelled. Keep the composer locked so a late
+      // success cannot leave a stale error or allow a duplicate submission.
       setMutationError("Adding this todo is taking too long. Reload before retrying.");
     }, 15_000);
     return () => window.clearTimeout(timeout);
@@ -107,7 +109,7 @@ export function Todos() {
         </button>
       </form>
 
-      {pendingAdd !== null ? (
+      {pendingAdd !== null && mutationError === null ? (
         <p className="mt-2 text-sm text-slate-500" data-spinner="true" aria-live="polite">
           adding “{pendingAdd.title}”…
         </p>

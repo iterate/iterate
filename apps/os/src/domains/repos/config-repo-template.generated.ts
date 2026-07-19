@@ -1343,13 +1343,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      todos?.some((todo) => todo.id === pendingAdd.id)\n" +
       "    ) {\n" +
       "      setPendingAdd(null);\n" +
+      "      setMutationError(null);\n" +
       "    }\n" +
       "  }, [pendingAdd, todos]);\n" +
       "\n" +
       "  useEffect(() => {\n" +
       "    if (pendingAdd === null) return;\n" +
       "    const timeout = window.setTimeout(() => {\n" +
-      "      setPendingAdd(null);\n" +
+      "      // The RPC cannot be cancelled. Keep the composer locked so a late\n" +
+      "      // success cannot leave a stale error or allow a duplicate submission.\n" +
       "      setMutationError(\"Adding this todo is taking too long. Reload before retrying.\");\n" +
       "    }, 15_000);\n" +
       "    return () => window.clearTimeout(timeout);\n" +
@@ -1425,7 +1427,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        </button>\n" +
       "      </form>\n" +
       "\n" +
-      "      {pendingAdd !== null ? (\n" +
+      "      {pendingAdd !== null && mutationError === null ? (\n" +
       "        <p className=\"mt-2 text-sm text-slate-500\" data-spinner=\"true\" aria-live=\"polite\">\n" +
       "          adding “{pendingAdd.title}”…\n" +
       "        </p>\n" +

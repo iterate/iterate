@@ -26,6 +26,7 @@ afterEach(async () => {
   });
   document.body.replaceChildren();
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 test("todo submission reports progress until its live-state row arrives", async () => {
@@ -89,4 +90,71 @@ test("todo submission reports progress until its live-state row arrives", async 
   expect(host.querySelector('[data-spinner="true"]')).toBeNull();
   expect(input.disabled).toBe(false);
   expect(host.textContent).toContain("observable work");
+});
+
+test("a timed-out add stays blocked and recovers from a late success", async () => {
+  vi.useFakeTimers();
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  mountedRoots.push(root);
+
+  let resolveAdd: ((id: string) => void) | undefined;
+  const add = vi.fn(
+    () =>
+      new Promise<string>((resolve) => {
+        resolveAdd = resolve;
+      }),
+  );
+  let todoState = {
+    api: { add },
+    error: null,
+    todos: [] as Array<{ createdAt: string; done: boolean; id: string; title: string }>,
+  };
+  mocks.useTodos.mockImplementation(() => todoState);
+
+  await act(async () => root.render(<Todos />));
+  const input = host.querySelector<HTMLInputElement>('input[aria-label="add a todo"]');
+  const form = input?.closest("form");
+  if (input === null || input === undefined || form === null || form === undefined) {
+    throw new Error("missing todo composer");
+  }
+
+  await act(async () => {
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (setValue === undefined) throw new Error("missing native input value setter");
+    setValue.call(input, "late work");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () => {
+    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+  });
+  await act(async () => vi.advanceTimersByTime(15_000));
+
+  expect(host.querySelector('[data-type="error"]')?.textContent).toContain("taking too long");
+  expect(host.querySelector('[data-spinner="true"]')).toBeNull();
+  expect(input.disabled).toBe(true);
+  await act(async () => {
+    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+  });
+  expect(add).toHaveBeenCalledTimes(1);
+
+  todoState = {
+    ...todoState,
+    todos: [
+      {
+        createdAt: "2026-07-19T20:00:00.000Z",
+        done: false,
+        id: "todo-late",
+        title: "late work",
+      },
+    ],
+  };
+  await act(async () => root.render(<Todos />));
+  await act(async () => resolveAdd?.("todo-late"));
+
+  expect(host.querySelector('[data-type="error"]')).toBeNull();
+  expect(input.disabled).toBe(false);
+  expect(host.textContent).toContain("late work");
 });
