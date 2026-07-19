@@ -15,6 +15,7 @@
     "./apps/internal-router-contract": "./src/apps/internal-router-contract.ts",
     "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
+    "./test-support/bounded-idempotent-attempts": "./src/test-support/bounded-idempotent-attempts.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
     "./test-support/reusable-project-identity": "./src/test-support/reusable-project-identity.ts",
     "./request-logging": "./src/request-logging.ts",

@@ -16,6 +16,48 @@ import { withOwnedRpcSession } from "./owned-rpc-session.ts";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 
+const WEBSOCKET_OPENING_DEADLINE_MS = 15_000;
+
+export class ItxWebSocketOpeningDeadlineError extends Error {
+  override readonly name = "ItxWebSocketOpeningDeadlineError";
+
+  constructor(timeoutMs: number) {
+    super(`itx WebSocket did not complete its HTTP upgrade within ${timeoutMs}ms`);
+  }
+}
+
+type OpeningWebSocketRequest = {
+  destroy(error?: Error): unknown;
+  end(): unknown;
+  once(event: string, listener: () => void): unknown;
+};
+
+/**
+ * Bound the entire opening request, including DNS lookup before Node assigns a
+ * socket. `ws`'s handshakeTimeout becomes a socket timeout internally, so by
+ * itself it cannot retire a lookup that never yields a socket.
+ */
+export function finishWebSocketRequestWithinDeadline(
+  request: OpeningWebSocketRequest,
+  timeoutMs = WEBSOCKET_OPENING_DEADLINE_MS,
+): void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clear = () => clearTimeout(timer);
+  for (const event of ["upgrade", "response", "error", "close"] as const) {
+    request.once(event, clear);
+  }
+  timer = setTimeout(() => {
+    request.destroy(new ItxWebSocketOpeningDeadlineError(timeoutMs));
+  }, timeoutMs);
+  timer.unref?.();
+  try {
+    request.end();
+  } catch (error) {
+    clear();
+    throw error;
+  }
+}
+
 type ConnectItxBaseInput = {
   /** OS deployment base URL, e.g. the config's APP_CONFIG_BASE_URL. */
   baseUrl: string;
@@ -61,7 +103,11 @@ function connect<T extends CapnRpcCompatible<T>>(
   // 15s: cold deployments answer the upgrade only after the worker chain has
   // loaded, but #1601's route-healing + the preview slot warmup mean the first
   // upgrade lands in a few seconds — 15s is headroom, not a hang budget.
-  const socket = new WebSocket(url, { handshakeTimeout: 15_000, headers });
+  const socket = new WebSocket(url, {
+    finishRequest: (request) => finishWebSocketRequestWithinDeadline(request),
+    handshakeTimeout: WEBSOCKET_OPENING_DEADLINE_MS,
+    headers,
+  });
 
   if (onWebSocketMessage) {
     const start = Date.now();

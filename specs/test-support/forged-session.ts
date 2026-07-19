@@ -4,6 +4,7 @@ import type {
   IterateAuthAccessTokenOrganizationClaim,
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
+import { runBoundedIdempotentAttempts } from "@iterate-com/shared/test-support/bounded-idempotent-attempts";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import {
   resolveReusableProjectGeneration,
@@ -53,6 +54,13 @@ export type MintedIterateSession = {
 export type ProjectIdentity = { id: string; slug: string };
 
 let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
+
+// A normal reusable-project bootstrap completes in ~7s in preview. The first
+// bound catches a one-shot Node dial stranded before its HTTP request exists;
+// later bounds let an idempotent replay converge on any server-side bootstrap
+// that committed before its acknowledgement was lost. Total: 77s, leaving the
+// 90s Playwright test budget time to report a classified failure.
+const REUSABLE_PROJECT_ATTEMPT_TIMEOUTS_MS = [12_000, 25_000, 40_000] as const;
 
 export async function createProjectFixture(
   slugPrefix: string,
@@ -183,14 +191,41 @@ export async function createReusableAdminProject(input: {
     generation,
   });
 
-  using session = connectItx({
-    auth: { type: "admin-secret", secret: config.adminApiSecret },
-    baseUrl: origin,
-  });
   // Admin callers may supply an id. create() is event-idempotent for that id,
-  // so two concurrent jobs cannot split one family slug across two projects.
-  using project = session.projects.create({ projectId, slug });
-  const identity = await project.identity();
+  // so concurrent jobs and a lost-ack replay cannot split one family slug
+  // across projects. Explicit server failures propagate immediately; only an
+  // attempt that never settles is retired and replayed over a fresh one-shot
+  // ITX transport.
+  const identity = await runBoundedIdempotentAttempts({
+    attemptTimeoutsMs: REUSABLE_PROJECT_ATTEMPT_TIMEOUTS_MS,
+    label: `Playwright family project ${slug}`,
+    onAttemptTimeout: ({ attempt, attempts, elapsedMs, timeoutMs }) => {
+      console.warn(
+        `[project-reuse] retired unsettled Playwright project attempt ${attempt}/${attempts} ` +
+          `after ${timeoutMs}ms (${elapsedMs}ms total): ${slug} (${projectId})`,
+      );
+    },
+    startAttempt: () => {
+      const session = connectItx({
+        auth: { type: "admin-secret", secret: config.adminApiSecret },
+        baseUrl: origin,
+      });
+      const project = session.projects.create({ projectId, slug });
+      return {
+        dispose() {
+          project[Symbol.dispose]();
+          session[Symbol.dispose]();
+        },
+        result: project.identity(),
+      };
+    },
+  });
+  if (identity.projectId !== projectId || identity.slug !== slug) {
+    throw new Error(
+      `Reusable Playwright project identity drifted: expected ${slug} (${projectId}), ` +
+        `got ${identity.slug} (${identity.projectId}).`,
+    );
+  }
   console.log(
     `[project-reuse] using Playwright family project ${identity.slug} (${projectId}) for generation ${generation}`,
   );
