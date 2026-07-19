@@ -7,6 +7,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 type RuntimeConnection = {
   subscriptionType?: "configured" | "ephemeral";
   startedAt?: string;
+  cursor?: number;
   hasPendingDelivery?: boolean;
   subscriber?: {
     description?: string;
@@ -388,21 +389,12 @@ test("stream idle teardown severs configured processor subscriptions", async () 
 
   await forceStreamIdleTeardown(stream);
 
-  await waitForCondition(
-    async () => {
-      const state = asStreamRuntimeState(await stream.runtimeState());
-      return keys.every((key) => state.runtime.connections[key] === undefined);
-    },
-    {
-      description: `configured processor connections to be severed by idle teardown (${keys.join(", ")})`,
-      // Severance is asynchronous fan-out across three cross-script RPC
-      // connections; 1.5s flaked under the CI-parallel lane profile (4 files x
-      // concurrency 3 on one slot). The assertion is about eventual severance,
-      // not a latency SLA.
-      timeoutMs: 10_000,
-    },
-  );
-
+  // Connection absence is deliberately not durable state: any event appended
+  // after teardown must immediately re-poke configured subscribers. Project
+  // bootstrap has asynchronous queue input, so a late artifact event can land
+  // between this operator call and a runtimeState() poll. Assert the durable
+  // disconnect facts produced synchronously by teardown instead of requiring
+  // the transient empty connection table to remain observable.
   const events = await stream.getEvents({ afterOffset: 0 });
   for (const key of keys) {
     expect(events).toEqual(
@@ -434,26 +426,31 @@ test("append after idle teardown re-wakes configured subscriber from its checkpo
 
   await forceStreamIdleTeardown(stream);
 
-  await waitForCondition(
-    async () => {
-      const state = asStreamRuntimeState(await stream.runtimeState());
-      return keys.every((key) => state.runtime.connections[key] === undefined);
-    },
-    {
-      description: `configured processor connections to be absent before re-wake (${keys.join(", ")})`,
-      // Same asynchronous fan-out as above — 1.5s flaked under CI-parallel load.
-      timeoutMs: 10_000,
-    },
-  );
-
-  await stream.append({
+  const [trigger] = await stream.append({
     type: "events.iterate.test/lifecycle-redial-trigger",
     payload: { marker },
   });
+  if (trigger === undefined) throw new Error("expected the redial trigger to commit");
 
-  const { state } = await waitForConfiguredProcessorConnections(stream, { expectedKeys: keys });
+  let state: StreamRuntimeState | undefined;
+  await waitForCondition(
+    async () => {
+      state = asStreamRuntimeState(await stream.runtimeState());
+      return keys.every(
+        (key) =>
+          state!.runtime.connections[key] !== undefined &&
+          (state!.runtime.connections[key]?.cursor ?? 0) >= trigger.offset &&
+          state!.runtime.connections[key]?.hasPendingDelivery === false,
+      );
+    },
+    {
+      description: `configured processors to reconnect and acknowledge the post-teardown append (${keys.join(", ")})`,
+      timeoutMs: 30_000,
+    },
+  );
+
   for (const key of keys) {
-    expect(state.runtime.connections[key]?.subscriptionType).toBe("configured");
+    expect(state!.runtime.connections[key]?.subscriptionType).toBe("configured");
   }
 });
 
