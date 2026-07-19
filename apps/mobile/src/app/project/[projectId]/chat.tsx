@@ -96,6 +96,12 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PickedImage[]>([]);
   const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
+  const copyStreamUrl = useMutation({
+    mutationFn: async (url: string) => Clipboard.setString(url),
+    onSuccess: () => {
+      setTimeout(() => copyStreamUrl.reset(), 1_800);
+    },
+  });
   const send = useMutation({
     mutationFn: async (input: { message: string; files: PickedImage[] }) => {
       const itx = await getItxSession(baseUrl!);
@@ -140,8 +146,7 @@ export default function ChatScreen() {
     if (action === "Show raw events") setViewMode("events");
     if (action === "Show chat") setViewMode("chat");
     if (action === "Copy stream URL" && streamUrl) {
-      Clipboard.setString(streamUrl);
-      Alert.alert("Stream URL copied");
+      copyStreamUrl.mutate(streamUrl);
     }
     if (action === "Open stream in browser" && streamUrl) {
       void WebBrowser.openBrowserAsync(streamUrl);
@@ -261,6 +266,16 @@ export default function ChatScreen() {
         <Text style={styles.sendError}>
           {send.error instanceof Error ? send.error.message : String(send.error)}
         </Text>
+      ) : null}
+      {copyStreamUrl.isSuccess ? (
+        <View
+          accessibilityLiveRegion="polite"
+          accessibilityRole="alert"
+          pointerEvents="none"
+          style={[styles.toast, { bottom: Math.max(insets.bottom, spacing.sm) + 68 }]}
+        >
+          <Text style={styles.toastText}>Stream URL copied</Text>
+        </View>
       ) : null}
     </KeyboardAvoidingView>
   );
@@ -546,4 +561,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.sm,
   },
+  toast: {
+    position: "absolute",
+    left: spacing.xl,
+    right: spacing.xl,
+    zIndex: 20,
+    alignItems: "center",
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  toastText: { color: colors.text, fontSize: 13, fontWeight: "600" },
 });
