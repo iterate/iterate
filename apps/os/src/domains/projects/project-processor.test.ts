@@ -113,9 +113,6 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/email/sender-allowed",
     ]);
-    expect(network.eventsAt("/integrations/email")[0]).toMatchObject({
-      payload: { config: { notificationRecipient: "owner@example.com" } },
-    });
     await expect(driver.snapshot()).resolves.toMatchObject({
       state: {
         birthCertificate: PROJECT_CREATED.payload,

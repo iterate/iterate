@@ -120,39 +120,23 @@ export class ProjectProcessor extends StreamProcessor<
       state.birthCertificate !== null &&
       !state.notificationReady
     ) {
-      const creatorEmail = state.birthCertificate.config.creatorEmail;
-      blockProcessorWhile(async () => {
-        await Promise.all([
-          append(
-            NotificationProcessorContract.buildEvent({
-              type: "events.iterate.com/notification/created",
-              idempotencyKey: `notification-created:${this.deps.itx.projectId}`,
-              payload: { config: {} },
+      blockProcessorWhile(() =>
+        append(
+          NotificationProcessorContract.buildEvent({
+            type: "events.iterate.com/notification/created",
+            idempotencyKey: `notification-created:${this.deps.itx.projectId}`,
+            payload: { config: {} },
+          }),
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName: DurableObjectNameCodec.stringify({
+              projectId: this.deps.itx.projectId,
+              path: "/",
             }),
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: "/",
-              }),
-              processor: ["notificationProcessor"],
-              processorSlug: NotificationProcessorContract.slug,
-            }),
-          ),
-          ...(creatorEmail === undefined
-            ? []
-            : [
-                // Rollout bridge for projects whose email birth certificate
-                // predates notificationRecipient. Processing this event makes
-                // the email channel install its own root-stream subscription;
-                // new projects carry the recipient in email/created instead.
-                appendTo(EMAIL_INTEGRATION_STREAM_PATH, {
-                  type: "events.iterate.com/email/notification-recipient-configured",
-                  idempotencyKey: `email-notification-recipient:${this.deps.itx.projectId}:${creatorEmail.toLowerCase()}`,
-                  payload: { email: creatorEmail, reason: "project-owner" },
-                }),
-              ]),
-        ]);
-      });
+            processor: ["notificationProcessor"],
+            processorSlug: NotificationProcessorContract.slug,
+          }),
+        ),
+      );
     }
     if (event === null) return;
     if (event.type !== "events.iterate.com/project/created" && state.birthCertificate === null) {
@@ -284,13 +268,7 @@ export class ProjectProcessor extends StreamProcessor<
                 {
                   type: "events.iterate.com/email/created",
                   idempotencyKey: `email-created:${this.deps.itx.projectId}`,
-                  payload: {
-                    config: {
-                      ...(config.creatorEmail === undefined
-                        ? {}
-                        : { notificationRecipient: config.creatorEmail }),
-                    },
-                  },
+                  payload: { config: {} },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
