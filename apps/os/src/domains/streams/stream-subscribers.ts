@@ -50,7 +50,10 @@ import type {
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
 } from "iterate/processors";
-import { isStreamReceiverUnavailableError } from "iterate/processors";
+import {
+  isStreamReceiverUnavailableError,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
@@ -260,20 +263,21 @@ type StreamSubscribersHooks = {
 
 export class StreamSubscribers {
   readonly #hooks: StreamSubscribersHooks;
-  /**
-   * How long the stream may hold idle durable delivery connections before
-   * severing them so it (and its subscribers) can hibernate instead of
-   * accruing billable duration on cross-isolate RPC sessions that pin both
-   * DOs. Tracked with an in-memory timer (NOT a DO alarm): the retained sinks
-   * we tear down are in-memory and die on eviction anyway, the DO is always
-   * resident while it holds them (so the timer is guaranteed to fire), and a
-   * durable alarm's only extra power — waking a hibernated DO — is exactly
-   * what we must never do FOR THIS. (The spine's retry alarm is the opposite
-   * case: its state is durable rows, so waking the DO is exactly the point.)
-   */
+  /** How long a quiet configured connection may stay open. */
   readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, Connection>();
-  #idleTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * In-memory deadline multiplexed onto the Stream DO's existing alarm.
+   *
+   * This MUST NOT be a setTimeout. Workerd adds every actor timer to the
+   * actor's drain set. An append reached from another Durable Object can
+   * return its value promptly while its JS-RPC session remains open waiting
+   * for that timer; the caller then waits on the nested session and can exceed
+   * wall time. An alarm schedules the future turn without retaining this one.
+   * If the Stream is evicted first, its RPC connections are already gone and
+   * the eventual alarm is a harmless no-op.
+   */
+  #idleTeardownAtMs: number | null = null;
 
   // Durable-lane in-memory state. All of it is reconstructible: a DO eviction
   // resets these and the durable rows + folded config re-derive every decision
@@ -347,6 +351,9 @@ export class StreamSubscribers {
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
+    if (this.#idleTeardownAtMs !== null && this.#idleTeardownAtMs <= this.#hooks.now()) {
+      this.runIdleTeardownNow();
+    }
     this.wake();
     this.#armAlarmFromStore();
   }
@@ -906,6 +913,7 @@ export class StreamSubscribers {
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
     if (next !== null) this.#hooks.armAlarm(next);
+    if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
   // ===========================================================================
@@ -1361,28 +1369,27 @@ export class StreamSubscribers {
   }
 
   /**
-   * Keep the in-memory idle timer armed only while durable delivery
-   * connections exist (the thing that pins the DO resident). Reset on every
-   * append; cleared once no durable connection remains. No storage writes,
-   * and nothing scheduled against a hibernated DO.
+   * Keep an idle deadline only while configured delivery connections exist.
+   * Every append restarts the quiet window. The owning DO multiplexes this
+   * deadline with delivery-retry deadlines on its single native alarm.
    */
-  armOrClearIdleTimer(): void {
-    if (this.#idleTimer !== undefined) {
-      clearTimeout(this.#idleTimer);
-      this.#idleTimer = undefined;
+  armOrClearIdleAlarm(): void {
+    if (this.#configuredConnectionKeys().length === 0) {
+      this.#idleTeardownAtMs = null;
+      return;
     }
-    if (this.#configuredConnectionKeys().length === 0) return;
-    this.#idleTimer = setTimeout(() => this.runIdleTeardownNow(), this.#idleTeardownMs);
+    this.#idleTeardownAtMs = this.#hooks.now() + this.#idleTeardownMs;
+    this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
   /**
    * Deliberately drops every live durable delivery connection so a quiet
    * stream stops pinning subscriber DOs with idle cross-isolate RPC sessions.
    * The durable subscription config is kept, so the next append re-pokes.
-   * The idle timer's action, also exposed for tests / operator use.
+   * The idle alarm's action, also exposed for tests / operator use.
    */
   runIdleTeardownNow(): void {
-    this.#idleTimer = undefined;
+    this.#idleTeardownAtMs = null;
     // Snapshot first: close() mutates the connection table. The whole loop is
     // one synchronous DO turn, so nothing foreign can interleave — the only
     // events appended during it are our own subscriber-disconnected facts.
@@ -1412,6 +1419,10 @@ export class StreamSubscribers {
       if (wedgedKeys.has(subscriptionKey)) continue;
       this.#hooks.store.ack(subscriptionKey, maxOffset);
     }
+    // Disconnect facts append re-entrantly while other connections in the
+    // snapshot may still exist, so their append turns can transiently arm a
+    // fresh idle deadline. The completed teardown owns the final state.
+    this.#idleTeardownAtMs = null;
     if (wedgedKeys.size > 0) queueMicrotask(() => this.wake());
   }
 
@@ -1426,11 +1437,14 @@ export class StreamSubscribers {
  * Bounds one delivery/poke attempt. Without it a wedged receiver (the worst
  * real case: a cold worker build that never completes) holds the drain slot
  * and pins the DO unboundedly, with no nack, no backoff, and no park. On
- * timeout the attempt counts as a failure — the spine backs off and retries;
+ * timeout the receiver is classified as unavailable — the spine backs off
+ * and retries the WHOLE batch without allowing `onPoison: "skip"` to turn a
+ * transport stall into a verdict about healthy events. The bound deliberately
+ * wins before the platform's roughly 30-second nested-RPC cancellation window;
  * a build that was merely slow continues server-side via waitUntil, so the
  * retry hits the warm cache (the same shape #1761's build budget had).
  */
-const DELIVERY_TIMEOUT_MS = 60_000;
+const DELIVERY_TIMEOUT_MS = 20_000;
 
 /**
  * Minimum interval between mutual-ping rounds. Sampling is observer-driven;
@@ -1472,7 +1486,7 @@ async function withDeliveryTimeout<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(new StreamReceiverUnavailableError(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);

@@ -383,10 +383,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
     );
 
-    // Re-arm (or clear) the idle timer against the post-append connection set,
+    // Re-arm (or clear) idle teardown against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
-    // and lets both DOs hibernate.
-    this.#subscribers.armOrClearIdleTimer();
+    // and lets both DOs hibernate. This uses the native DO alarm, never an
+    // actor setTimeout that would retain the current JS-RPC invocation.
+    this.#subscribers.armOrClearIdleAlarm();
 
     return events;
   }
