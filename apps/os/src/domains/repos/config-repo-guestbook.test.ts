@@ -1,13 +1,13 @@
-// The seeded guestbook processor (config-repo-template/guestbook.ts) driven
-// by the REAL runner over an in-memory journal — the same
-// `iterate/processors/testing` harness a project would use to test its own
-// worker-hosted processors in plain node.
+// The seeded guestbook processor (config-repo-template/apps/guestbook —
+// src/guestbook.ts) driven by the REAL runner over an in-memory journal — the
+// same `iterate/processors/testing` harness a project would use to test its
+// own worker-hosted processors in plain node.
 import { expect, test } from "vitest";
 import { driveProcessor, eventsOfType, MemoryStream } from "iterate/processors/testing";
 import {
   GuestbookProcessor,
   guestbookStreamPath,
-} from "../../../config-repo-template/guestbook.ts";
+} from "../../../config-repo-template/apps/guestbook/src/guestbook.ts";
 
 function guestbookDriver(stream: MemoryStream) {
   return driveProcessor(
