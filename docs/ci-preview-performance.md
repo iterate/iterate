@@ -55,9 +55,12 @@ watchdog.
 - **Edge, Durable Object, and builder readiness agree.** Cloudflare releases
   Worker and Durable Object code globally with eventual consistency, so a
   current edge response alone is not a Durable Object rollout barrier.
-  `/api/health` calls a version-specific, read-only sentinel in the real
-  capability-host namespace and returns 503 until that incarnation reports the
-  edge's exact Worker version. In parallel, the route-less dynamic-worker
+  `/api/health` calls a bounded rolling sample of version-specific, read-only
+  sentinels in the real capability-host namespace and returns 503 unless every
+  sampled incarnation reports the edge's exact Worker version. The ten-second
+  stability window rotates through ten waves of eight placements (80 bounded
+  names per deploy), preventing one lucky current object from hiding new
+  objects still receiving old code. In parallel, the route-less dynamic-worker
   builder must report the same PR-head deployment ID baked into the main OS
   worker. That combined result must remain stable for ten seconds. Repeating
   the same immutable head skips an identical builder-sidecar deploy, avoiding

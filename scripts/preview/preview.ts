@@ -1307,7 +1307,7 @@ export type CloudflarePreviewApp = {
    * edge Worker while Durable Objects are still rolling from the previous
    * version; this barrier keeps that reset window out of the test phase.
    */
-  previewReadyWorkerVersion?: { stableForMs: number };
+  previewReadyWorkerVersion?: { probeQueryParam?: string; stableForMs: number };
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
@@ -1539,7 +1539,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // propagating the new code to Durable Object nodes after wrangler exits.
     // Hold the exact deployed version steady at the edge before creating any
     // projects, otherwise the first object calls can be reset mid-saga.
-    previewReadyWorkerVersion: { stableForMs: 10_000 },
+    previewReadyWorkerVersion: {
+      probeQueryParam: "deployment-probe",
+      stableForMs: 10_000,
+    },
     paths: [
       "apps/os/**",
       // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
@@ -3483,6 +3486,7 @@ async function deployPreviewApp(input: {
       deployedWorkerVersion && input.app.previewReadyWorkerVersion
         ? {
             expected: deployedWorkerVersion,
+            probeQueryParam: input.app.previewReadyWorkerVersion.probeQueryParam,
             stableForMs: input.app.previewReadyWorkerVersion.stableForMs,
           }
         : undefined,
@@ -4861,7 +4865,7 @@ async function waitForPreviewAppReadiness(params: {
   readyUrlPath?: string;
   signal?: AbortSignal;
   timeoutMs: number;
-  workerVersion?: { expected: string; stableForMs: number };
+  workerVersion?: { expected: string; probeQueryParam?: string; stableForMs: number };
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
@@ -4908,15 +4912,23 @@ async function waitForHttpReadiness(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   url: URL;
-  workerVersion?: { expected: string; stableForMs: number };
+  workerVersion?: { expected: string; probeQueryParam?: string; stableForMs: number };
 }) {
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "No response received yet.";
   let matchingWorkerVersionSince: number | null = null;
+  let deploymentProbeSequence = 0;
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetchReadinessResponse(params.url, params.signal);
+      const requestUrl = new URL(params.url);
+      if (params.workerVersion?.probeQueryParam) {
+        requestUrl.searchParams.set(
+          params.workerVersion.probeQueryParam,
+          String(deploymentProbeSequence++),
+        );
+      }
+      const response = await fetchReadinessResponse(requestUrl, params.signal);
       if (response.status >= 200 && response.status < 300) {
         if (!params.workerVersion) {
           return { ok: true as const };

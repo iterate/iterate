@@ -562,12 +562,22 @@ describe("preview readiness URLs", () => {
         signal: undefined,
         timeoutMs: 10_000,
         url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: { expected: "expected-version", stableForMs: 2_000 },
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          stableForMs: 2_000,
+        },
       });
 
       await vi.advanceTimersByTimeAsync(3_000);
       await expect(readiness).resolves.toEqual({ ok: true });
       expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=0",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=1",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=2",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=3",
+      ]);
     } finally {
       fetchMock.mockRestore();
       vi.useRealTimers();

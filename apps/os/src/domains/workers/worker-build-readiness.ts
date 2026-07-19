@@ -5,10 +5,35 @@ import {
 
 const workerVersionHeader = "x-iterate-worker-version";
 
+/**
+ * The deploy orchestrator increments this query parameter on each readiness
+ * request. The health route folds it into the finite wave count below, so a
+ * caller can make us exercise placements over time without being able to mint
+ * an unbounded number of Durable Object names.
+ */
+export const deploymentReadinessProbeQueryParam = "deployment-probe";
+const deploymentReadinessProbeWaveCount = 10;
+const deploymentReadinessProbesPerWave = 8;
+
+/** Select one of the bounded rollout-probe waves from an untrusted query value. */
+export function deploymentReadinessProbeWave(value: string | null): number {
+  if (value === null || !/^\d+$/.test(value)) return 0;
+  const sequence = Number(value);
+  return Number.isSafeInteger(sequence) ? sequence % deploymentReadinessProbeWaveCount : 0;
+}
+
+/** Eight distinct placements per wave; ten waves bounds each deploy to 80 names. */
+export function deploymentReadinessProbeIndexes(wave: number): number[] {
+  const normalizedWave =
+    Number.isSafeInteger(wave) && wave >= 0 ? wave % deploymentReadinessProbeWaveCount : 0;
+  const first = normalizedWave * deploymentReadinessProbesPerWave;
+  return Array.from({ length: deploymentReadinessProbesPerWave }, (_, index) => first + index);
+}
+
 type WorkerBuildReadinessOptions = {
   expectedDeploymentId: string;
   readDeployment(): Promise<WorkerBuildDeployment>;
-  readDurableObjectVersion(): Promise<string>;
+  readDurableObjectVersions(): Promise<readonly string[]>;
   version: string;
 };
 
@@ -20,56 +45,73 @@ export async function workerBuildReadinessResponse(
     options.expectedDeploymentId === UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID
       ? Promise.resolve({ deploymentId: UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID })
       : options.readDeployment();
-  const [deploymentResult, durableObjectVersionResult] = await Promise.allSettled([
+  const [deploymentResult, durableObjectVersionsResult] = await Promise.allSettled([
     deploymentPromise,
-    options.readDurableObjectVersion(),
+    options.readDurableObjectVersions(),
   ]);
 
   if (deploymentResult.status === "rejected") {
     console.error("worker-build sidecar readiness RPC failed", deploymentResult.reason);
   }
-  if (durableObjectVersionResult.status === "rejected") {
+  if (durableObjectVersionsResult.status === "rejected") {
     // An old incarnation can legitimately lack this method while a new Worker
     // version is propagating. Keep that expected settling state out of error
     // telemetry; the 503 response remains the bounded readiness signal.
     console.info(
       "capability-host deployment readiness RPC is still settling",
-      durableObjectVersionResult.reason,
+      durableObjectVersionsResult.reason,
     );
   }
 
   const deploymentId =
     deploymentResult.status === "fulfilled" ? deploymentResult.value.deploymentId : null;
-  const durableObjectVersion =
-    durableObjectVersionResult.status === "fulfilled" ? durableObjectVersionResult.value : null;
+  const durableObjectVersions =
+    durableObjectVersionsResult.status === "fulfilled"
+      ? [...durableObjectVersionsResult.value]
+      : null;
+  const durableObjectsReady =
+    durableObjectVersions !== null &&
+    durableObjectVersions.length > 0 &&
+    durableObjectVersions.every((version) => version === options.version);
 
   return readinessResponse(
     options,
     deploymentId,
-    durableObjectVersion,
-    deploymentId === options.expectedDeploymentId && durableObjectVersion === options.version,
+    durableObjectVersions,
+    deploymentId === options.expectedDeploymentId && durableObjectsReady,
   );
 }
 
 function readinessResponse(
   options: WorkerBuildReadinessOptions,
   deploymentId: string | null,
-  durableObjectVersion: string | null,
+  durableObjectVersions: string[] | null,
   ready: boolean,
 ): Response {
+  const uniqueDurableObjectVersions =
+    durableObjectVersions === null ? [] : [...new Set(durableObjectVersions)];
+  const durableObjectsReady =
+    durableObjectVersions !== null &&
+    durableObjectVersions.length > 0 &&
+    uniqueDurableObjectVersions.length === 1 &&
+    uniqueDurableObjectVersions[0] === options.version;
+
   return Response.json(
     {
       ok: ready,
       app: "os",
       version: options.version,
-      durableObjectVersion,
+      // Keep the singular field for operators and scripts that already read
+      // it; the plural field is the full rollout proof for this wave.
+      durableObjectVersion:
+        uniqueDurableObjectVersions.length === 1 ? uniqueDurableObjectVersions[0] : null,
+      durableObjectVersions,
+      durableObjectProbeCount: durableObjectVersions?.length ?? 0,
       workerBuildDeploymentId: deploymentId,
       ...(deploymentId === options.expectedDeploymentId
         ? {}
         : { expectedWorkerBuildDeploymentId: options.expectedDeploymentId }),
-      ...(durableObjectVersion === options.version
-        ? {}
-        : { expectedDurableObjectVersion: options.version }),
+      ...(durableObjectsReady ? {} : { expectedDurableObjectVersion: options.version }),
     },
     {
       status: ready ? 200 : 503,

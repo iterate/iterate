@@ -1,7 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { DurableObjectNameCodec } from "../domains/durable-object-names.ts";
 import { workerBuildDeployment } from "../domains/workers/worker-build-capability.ts";
-import { workerBuildReadinessResponse } from "../domains/workers/worker-build-readiness.ts";
+import {
+  deploymentReadinessProbeIndexes,
+  deploymentReadinessProbeQueryParam,
+  deploymentReadinessProbeWave,
+  workerBuildReadinessResponse,
+} from "../domains/workers/worker-build-readiness.ts";
 import { itxEnv, workerVersion } from "../env.ts";
 
 /**
@@ -12,24 +17,37 @@ import { itxEnv, workerVersion } from "../env.ts";
 export const Route = createFileRoute("/api/health")({
   server: {
     handlers: {
-      GET: () => {
+      GET: ({ request }) => {
         const version = workerVersion(itxEnv);
-        // One read-only sentinel per Worker version exercises a freshly placed
-        // instance of the exact Durable Object class used by deployed e2e. It
-        // emits no domain events or writes. An old incarnation either lacks
-        // deploymentVersion() or reports its old version, so eventual-
-        // consistency during code rollout fails closed.
-        const capabilityHost = itxEnv.CAPABILITY_HOST.getByName(
-          DurableObjectNameCodec.stringify({
-            path: "/",
-            projectId: "prj_deployment_readiness",
-            props: { version },
-          }),
+        const probeSequence = new URL(request.url).searchParams.get(
+          deploymentReadinessProbeQueryParam,
+        );
+        const probeIndexes =
+          version === "unversioned"
+            ? [0]
+            : deploymentReadinessProbeIndexes(deploymentReadinessProbeWave(probeSequence));
+
+        // Each wave exercises eight version-specific, read-only placements of
+        // the exact Durable Object class used by deployed e2e. Successive
+        // preview polls rotate through ten bounded waves, so one lucky current
+        // incarnation cannot hide newly placed objects still receiving old
+        // code. These calls emit no domain events or storage writes.
+        const capabilityHosts = probeIndexes.map((probe) =>
+          itxEnv.CAPABILITY_HOST.getByName(
+            DurableObjectNameCodec.stringify({
+              path: "/",
+              projectId: "prj_deployment_readiness",
+              props: { probe: String(probe), version },
+            }),
+          ),
         );
         return workerBuildReadinessResponse({
           expectedDeploymentId: itxEnv.WORKER_BUILD_DEPLOYMENT_ID,
           readDeployment: workerBuildDeployment,
-          readDurableObjectVersion: () => capabilityHost.deploymentVersion(),
+          readDurableObjectVersions: () =>
+            Promise.all(
+              capabilityHosts.map((capabilityHost) => capabilityHost.deploymentVersion()),
+            ),
           version,
         });
       },

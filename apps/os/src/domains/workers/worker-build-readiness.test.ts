@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { workerBuildReadinessResponse } from "./worker-build-readiness.ts";
+import {
+  deploymentReadinessProbeIndexes,
+  deploymentReadinessProbeWave,
+  workerBuildReadinessResponse,
+} from "./worker-build-readiness.ts";
 
 async function body(response: Response): Promise<Record<string, unknown>> {
   return (await response.json()) as Record<string, unknown>;
@@ -8,17 +12,17 @@ async function body(response: Response): Promise<Record<string, unknown>> {
 describe("workerBuildReadinessResponse", () => {
   it("keeps unversioned local and manual deployments self-contained", async () => {
     const readDeployment = vi.fn();
-    const readDurableObjectVersion = vi.fn(async () => "local-version");
+    const readDurableObjectVersions = vi.fn(async () => ["local-version"]);
     const response = await workerBuildReadinessResponse({
       expectedDeploymentId: "unversioned",
       readDeployment,
-      readDurableObjectVersion,
+      readDurableObjectVersions,
       version: "local-version",
     });
 
     expect(response.status).toBe(200);
     expect(readDeployment).not.toHaveBeenCalled();
-    expect(readDurableObjectVersion).toHaveBeenCalledOnce();
+    expect(readDurableObjectVersions).toHaveBeenCalledOnce();
     expect(await body(response)).toMatchObject({
       ok: true,
       durableObjectVersion: "local-version",
@@ -30,7 +34,7 @@ describe("workerBuildReadinessResponse", () => {
     const matching = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
       readDeployment: async () => ({ deploymentId: "commit-123" }),
-      readDurableObjectVersion: async () => "worker-version",
+      readDurableObjectVersions: async () => Array(8).fill("worker-version"),
       version: "worker-version",
     });
     expect(matching.status).toBe(200);
@@ -39,7 +43,7 @@ describe("workerBuildReadinessResponse", () => {
     const stale = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
       readDeployment: async () => ({ deploymentId: "old-commit" }),
-      readDurableObjectVersion: async () => "worker-version",
+      readDurableObjectVersions: async () => Array(8).fill("worker-version"),
       version: "worker-version",
     });
     expect(stale.status).toBe(503);
@@ -54,14 +58,18 @@ describe("workerBuildReadinessResponse", () => {
     const response = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
       readDeployment: async () => ({ deploymentId: "commit-123" }),
-      readDurableObjectVersion: async () => "old-worker-version",
+      readDurableObjectVersions: async () => [
+        ...Array(7).fill("worker-version"),
+        "old-worker-version",
+      ],
       version: "worker-version",
     });
 
     expect(response.status).toBe(503);
     expect(await body(response)).toMatchObject({
       ok: false,
-      durableObjectVersion: "old-worker-version",
+      durableObjectVersion: null,
+      durableObjectVersions: expect.arrayContaining(["worker-version", "old-worker-version"]),
       expectedDurableObjectVersion: "worker-version",
       workerBuildDeploymentId: "commit-123",
     });
@@ -74,7 +82,7 @@ describe("workerBuildReadinessResponse", () => {
       readDeployment: async () => {
         throw new Error("sidecar unavailable");
       },
-      readDurableObjectVersion: async () => "worker-version",
+      readDurableObjectVersions: async () => Array(8).fill("worker-version"),
       version: "worker-version",
     });
 
@@ -96,7 +104,7 @@ describe("workerBuildReadinessResponse", () => {
     const response = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
       readDeployment: async () => ({ deploymentId: "commit-123" }),
-      readDurableObjectVersion: async () => {
+      readDurableObjectVersions: async () => {
         throw new Error("old code has no readiness method");
       },
       version: "worker-version",
@@ -114,5 +122,16 @@ describe("workerBuildReadinessResponse", () => {
       workerBuildDeploymentId: "commit-123",
     });
     infoLog.mockRestore();
+  });
+});
+
+describe("deployment readiness probe waves", () => {
+  it("maps an untrusted sequence into ten bounded waves of eight distinct placements", () => {
+    expect(deploymentReadinessProbeWave(null)).toBe(0);
+    expect(deploymentReadinessProbeWave("not-a-number")).toBe(0);
+    expect(deploymentReadinessProbeWave("10")).toBe(0);
+    expect(deploymentReadinessProbeWave("17")).toBe(7);
+    expect(deploymentReadinessProbeIndexes(7)).toEqual([56, 57, 58, 59, 60, 61, 62, 63]);
+    expect(deploymentReadinessProbeIndexes(17)).toEqual([56, 57, 58, 59, 60, 61, 62, 63]);
   });
 });
