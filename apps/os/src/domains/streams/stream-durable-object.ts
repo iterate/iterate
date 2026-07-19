@@ -97,10 +97,56 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
  * state and supplies a fresh closure even after isolate eviction.
  */
 type StreamDeliveryAlarmBoundaryHooks = {
-  armAlarm(atMs: number): Promise<void>;
+  armAlarm(atMs: number): void;
   now(): number;
   waitUntil(work: Promise<unknown>): void;
 };
+
+type StreamAlarmStorage = {
+  setAlarm(atMs: number): Promise<void>;
+};
+
+/**
+ * Issues the native alarm write in the same synchronous storage turn as the
+ * cursor/event write that made delivery necessary. Durable Object output
+ * gates make that load-bearing: a failed setAlarm resets the object and
+ * suppresses its outgoing response, so cursor lag cannot commit as an
+ * acknowledged success without its wakeup.
+ *
+ * Do not add a getAlarm/await before setAlarm. Multiple writes made without
+ * an intervening await coalesce into one implicit transaction. A fresh Stream
+ * incarnation appends `woken`, so its first useful arm is immediate and may
+ * safely replace an inherited later alarm.
+ *
+ * https://developers.cloudflare.com/durable-objects/reference/glossary/#output-gate
+ * https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#understand-how-input-and-output-gates-work
+ */
+export class StreamAlarmArmer {
+  readonly #storage: StreamAlarmStorage;
+  #armedForMs: number | null = null;
+
+  constructor(storage: StreamAlarmStorage) {
+    this.#storage = storage;
+  }
+
+  armNoLaterThan(atMs: number): void {
+    const previous = this.#armedForMs;
+    if (previous !== null && previous <= atMs) return;
+    this.#armedForMs = atMs;
+    try {
+      // Deliberately not awaited or caught: the native output gate owns the
+      // write and turns an asynchronous failure into an invocation failure.
+      void this.#storage.setAlarm(atMs);
+    } catch (cause) {
+      this.#armedForMs = previous;
+      throw new Error("stream alarm arming failed", { cause });
+    }
+  }
+
+  markFired(): void {
+    this.#armedForMs = null;
+  }
+}
 
 export class StreamDeliveryAlarmBoundary {
   readonly #hooks: StreamDeliveryAlarmBoundaryHooks;
@@ -115,9 +161,10 @@ export class StreamDeliveryAlarmBoundary {
       this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
       return;
     }
-    this.#hooks.waitUntil(
-      settleStreamCoreBackgroundWork(() => this.#hooks.armAlarm(this.#hooks.now())),
-    );
+    // setAlarm is itself an output-gated storage write. Issue it directly in
+    // this append turn: wrapping it in a settling waitUntil would cross the
+    // implicit-transaction boundary and could acknowledge lag without a wake.
+    this.#hooks.armAlarm(this.#hooks.now());
   }
 
   runAlarmTurn(work: () => void): void {
@@ -180,8 +227,9 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
+  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
   readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
-    armAlarm: (atMs) => this.#armAlarmNoLaterThan(atMs),
+    armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
     now: () => Date.now(),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
@@ -235,7 +283,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       runtimeChanged: () => this.#refreshLiveState(),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => this.#runInBackground(() => this.#armAlarmNoLaterThan(atMs)),
+      armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
@@ -302,7 +350,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
   alarm(): void {
-    this.#alarmArmedForMs = null;
+    this.#alarmArmer.markFired();
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
@@ -310,47 +358,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#subscribers.onAlarm();
       this.#flushCoreProcessorState();
     });
-  }
-
-  /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
-   */
-  #alarmArmedForMs: number | null = null;
-  #alarmArmInFlight: Promise<void> | null = null;
-
-  /**
-   * Move the DO alarm earlier, never later (many rows share one alarm).
-   * Concurrent requests share one serialized reconciliation: an earlier
-   * desire that arrives while `setAlarm` is in flight gets a second pass and
-   * cannot be overwritten by the older, later deadline. A failed storage call
-   * rejects the retained operation and remains retryable by the next arm.
-   */
-  #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    this.#alarmArmedForMs =
-      this.#alarmArmedForMs === null ? atMs : Math.min(this.#alarmArmedForMs, atMs);
-    if (this.#alarmArmInFlight !== null) return this.#alarmArmInFlight;
-
-    const reconcile = async () => {
-      try {
-        for (;;) {
-          const target = this.#alarmArmedForMs;
-          if (target === null) return;
-          const current = await this.ctx.storage.getAlarm();
-          if (current === null || target < current) await this.ctx.storage.setAlarm(target);
-          if (this.#alarmArmedForMs === target) return;
-        }
-      } catch (cause) {
-        throw new Error("stream alarm arming failed", { cause });
-      }
-    };
-    const inFlight = reconcile().finally(() => {
-      if (this.#alarmArmInFlight === inFlight) this.#alarmArmInFlight = null;
-    });
-    this.#alarmArmInFlight = inFlight;
-    return inFlight;
   }
 
   // ===========================================================================

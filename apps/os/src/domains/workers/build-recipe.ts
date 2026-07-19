@@ -403,6 +403,9 @@ export function collectRecipeOutputs(
  * Text assets only: the worker loader stores text modules, so a binary
  * client asset (png/ico/woff) is a build failure with a clear message — the
  * minimal seeded app ships none, and real ones belong in project files/R2.
+ * Unknown non-JS files under dist/server retain Vite's former collection
+ * behavior and are skipped: they may be server-only support outputs, not
+ * browser assets, and this string-only transfer cannot decode them safely.
  */
 export function collectViteRecipeOutputs(outputs: Record<string, string>): {
   mainModule: string;
@@ -412,7 +415,7 @@ export function collectViteRecipeOutputs(outputs: Record<string, string>): {
   const modules: Record<string, string> = {};
   const assets: Record<string, { contentType: string; body: string }> = {};
   const collectTextAsset = (name: string, path: string, content: string): void => {
-    const contentType = ASSET_CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)];
+    const contentType = textAssetContentType(name);
     if (contentType === undefined) {
       throw new Error(
         `Vite asset "${name}" is not a text type the dynamic worker lane can serve; ` +
@@ -434,7 +437,9 @@ export function collectViteRecipeOutputs(outputs: Record<string, string>): {
         continue;
       }
       if (name.endsWith(".js") || name.endsWith(".mjs")) modules[name] = content;
-      else collectTextAsset(name, name.slice("dist/server".length), content);
+      else if (textAssetContentType(name) !== undefined) {
+        collectTextAsset(name, name.slice("dist/server".length), content);
+      }
       continue;
     }
     if (name.startsWith("dist/client/")) {
@@ -485,6 +490,10 @@ const ASSET_CONTENT_TYPES: Record<string, string> = {
   txt: "text/plain; charset=utf-8",
   webmanifest: "application/manifest+json",
 };
+
+function textAssetContentType(name: string): string | undefined {
+  return ASSET_CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)];
+}
 
 /** Wrangler emits the entry under its own base name with a `.js` extension
  * (nested entry directories do not survive into the outdir). */

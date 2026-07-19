@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  StreamAlarmArmer,
   StreamDeliveryAlarmBoundary,
   settleStreamCoreBackgroundWork,
 } from "./stream-durable-object.ts";
@@ -71,9 +72,8 @@ describe("settleStreamCoreBackgroundWork", () => {
 
 describe("StreamDeliveryAlarmBoundary", () => {
   it("makes an append own only durable alarm arming, then gives delivery to the alarm turn", async () => {
-    const alarm = Promise.withResolvers<void>();
     const delivery = Promise.withResolvers<void>();
-    const armAlarm = vi.fn(() => alarm.promise);
+    const armAlarm = vi.fn(() => undefined);
     const startDelivery = vi.fn(() => delivery.promise);
     const kept: Promise<unknown>[] = [];
     const boundary = new StreamDeliveryAlarmBoundary({
@@ -86,26 +86,77 @@ describe("StreamDeliveryAlarmBoundary", () => {
 
     expect(armAlarm).toHaveBeenCalledWith(123);
     expect(startDelivery).not.toHaveBeenCalled();
-    expect(kept).toHaveLength(1);
-    expect(kept[0]).not.toBe(delivery.promise);
-
-    alarm.resolve();
-    await kept[0];
-    expect(startDelivery).not.toHaveBeenCalled();
+    // setAlarm is a storage write: the Durable Object output gate already
+    // retains it and atomically suppresses the append response if it fails.
+    // An extra waitUntil/catch would only turn that failure into a stranded
+    // committed cursor with no alarm.
+    expect(kept).toHaveLength(0);
 
     boundary.runAlarmTurn(() => boundary.scheduleOrRun(startDelivery));
 
     expect(startDelivery).toHaveBeenCalledOnce();
-    expect(kept).toHaveLength(2);
+    expect(kept).toHaveLength(1);
     let alarmTurnSettled = false;
-    void kept[1]!.then(() => {
+    void kept[0]!.then(() => {
       alarmTurnSettled = true;
     });
     await Promise.resolve();
     expect(alarmTurnSettled).toBe(false);
 
     delivery.resolve();
-    await kept[1];
+    await kept[0];
     expect(alarmTurnSettled).toBe(true);
+  });
+
+  it("does not swallow a synchronous alarm-arm failure or start delivery inline", () => {
+    const failure = new Error("setAlarm failed");
+    const startDelivery = vi.fn(async () => undefined);
+    const boundary = new StreamDeliveryAlarmBoundary({
+      armAlarm: () => {
+        throw failure;
+      },
+      now: () => 456,
+      waitUntil: vi.fn(),
+    });
+
+    expect(() => boundary.scheduleOrRun(startDelivery)).toThrow(failure);
+    expect(startDelivery).not.toHaveBeenCalled();
+  });
+});
+
+describe("StreamAlarmArmer", () => {
+  it("writes synchronously, never moves an alarm later, and can re-arm after it fires", () => {
+    const setAlarm = vi.fn(async () => undefined);
+    const armer = new StreamAlarmArmer({ setAlarm });
+
+    armer.armNoLaterThan(200);
+    expect(setAlarm).toHaveBeenLastCalledWith(200);
+
+    armer.armNoLaterThan(300);
+    expect(setAlarm).toHaveBeenCalledOnce();
+
+    armer.armNoLaterThan(100);
+    expect(setAlarm).toHaveBeenLastCalledWith(100);
+
+    armer.markFired();
+    armer.armNoLaterThan(400);
+    expect(setAlarm).toHaveBeenLastCalledWith(400);
+    expect(setAlarm).toHaveBeenCalledTimes(3);
+  });
+
+  it("restores its in-memory deadline when setAlarm throws synchronously", () => {
+    const failure = new Error("storage unavailable");
+    const setAlarm = vi
+      .fn<(atMs: number) => Promise<void>>()
+      .mockImplementationOnce(() => {
+        throw failure;
+      })
+      .mockResolvedValue(undefined);
+    const armer = new StreamAlarmArmer({ setAlarm });
+
+    expect(() => armer.armNoLaterThan(100)).toThrow("stream alarm arming failed");
+    armer.armNoLaterThan(100);
+
+    expect(setAlarm).toHaveBeenCalledTimes(2);
   });
 });
