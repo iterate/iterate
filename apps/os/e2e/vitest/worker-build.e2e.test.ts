@@ -300,3 +300,75 @@ test(
     }
   },
 );
+
+test(
+  "Stateful stale-while-rebuild makes every concurrent cache miss fall through to the blocking load",
+  { timeout: 120_000 },
+  async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `swr-miss-${crypto.randomUUID().slice(0, 8)}` });
+    await project.__describe();
+
+    const durableWorkerKey = `swr-miss-${crypto.randomUUID().slice(0, 8)}`;
+    const common = {
+      className: "SwrMissProbe",
+      durableWorkerKey,
+      path: "/",
+      type: "stateful",
+      updatePolicy: "stale-while-rebuild",
+    } as const;
+    using v1 = project.workers.get({
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.js": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrMissProbe extends DurableObject {",
+              '  version() { return "v1"; }',
+              "}",
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        // Loader-ready modules mount directly and are not stored as an
+        // artifact. Killing the host leaves a durable version marker whose
+        // old class is deliberately unavailable to the next incarnation.
+        options: { bundle: false, entryPoint: "worker.js" },
+      },
+    }) as unknown as { kill(): Promise<void>; version(): Promise<string> } & Disposable;
+    expect(await v1.version()).toBe("v1");
+    await v1.kill().catch(() => undefined);
+
+    const v2Ref = {
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.ts": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrMissProbe extends DurableObject {",
+              '  version(): string { return "v2"; }',
+              "}",
+              `// cold build salt ${crypto.randomUUID()}`,
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        options: { entryPoint: "worker.ts" },
+      },
+    } as const;
+    using first = project.workers.get(v2Ref) as unknown as {
+      version(): Promise<string>;
+    } & Disposable;
+    using second = project.workers.get(v2Ref) as unknown as {
+      version(): Promise<string>;
+    } & Disposable;
+
+    // Both requests share the same rejected lazy facet initialization. Every
+    // waiter must classify that expected miss and join/fall through to the
+    // blocking v2 build; none may leak the initializer's sentinel rejection.
+    await expect(Promise.all([first.version(), second.version()])).resolves.toEqual(["v2", "v2"]);
+  },
+);
