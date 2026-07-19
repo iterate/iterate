@@ -90,7 +90,19 @@ function healthProblems(health: ContainerHealth | undefined, expectedInstances?:
 
 function completedRolloutProblems(rollout: ContainerRollout): string[] {
   const progress = rollout.progress;
-  const problems = healthProblems(rollout.health, progress?.total_instances);
+  const problems: string[] = [];
+  if (!rollout.health) {
+    problems.push("health is absent");
+  } else {
+    if ((rollout.health.errors?.length ?? 0) > 0) {
+      problems.push(`errors=${JSON.stringify(rollout.health.errors)}`);
+    }
+    if (!rollout.health.instances) {
+      problems.push("instance health is absent");
+    } else if ((rollout.health.instances.failed ?? 0) > 0) {
+      problems.push(`failed=${rollout.health.instances.failed}`);
+    }
+  }
   if (!progress) return [...problems, "progress is absent"];
   if (progress.updated_instances !== progress.total_instances) {
     problems.push(
@@ -158,11 +170,11 @@ function isInProgress(state: RolloutState): boolean {
     if (state.rollout.status === "pending" || state.rollout.status === "progressing") return true;
     if (state.rollout.status !== "completed") return false;
 
-    // The rollout record can become `completed` a few polls before the
-    // assigned instances finish starting. Keep waiting for that transient
-    // convergence, but let assertTerminalState immediately classify explicit
-    // health errors or failed instances rather than disguising them as a
-    // timeout.
+    // A completed, fully updated rollout has finished replacing the old
+    // deployment. An updated instance can still be starting as part of its
+    // ordinary workload lifecycle; that cannot expose the previous image and
+    // is not rollout work. Keep health errors and failed instances terminal,
+    // while polling only incomplete rollout progress.
     const health = state.rollout.health;
     if ((health?.errors?.length ?? 0) > 0 || (health?.instances?.failed ?? 0) > 0) return false;
     return completedRolloutProblems(state.rollout).length > 0;
@@ -188,7 +200,9 @@ async function getLatestRollout(
  * Wrangler returns after it creates Container rollouts, not after those
  * rollouts replace every assigned instance. Preview tests create sandboxes
  * immediately, so they must not become eligible until every configured app
- * reports a completed, 100%-updated, healthy rollout.
+ * reports a completed, 100%-updated rollout without health errors or failed
+ * instances. Starting or scheduling an already-updated instance is ordinary
+ * workload lifecycle rather than evidence that the old deployment remains.
  */
 export async function waitForContainerRollouts(input: {
   applicationNames: readonly string[];

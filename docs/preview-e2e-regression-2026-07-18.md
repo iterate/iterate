@@ -811,7 +811,9 @@ observable.
   were still replacing assigned instances; the command overlapped the lite
   app's final 100% rollout step. Preview rollouts are now one-step and the OS
   deploy waits concurrently for all six authoritative rollout records to be
-  complete and healthy before tests become eligible.
+  complete, 100%-updated, and free of health errors or failed instances before
+  tests become eligible. Ordinary startup of an already-updated instance is
+  not treated as unfinished rollout work.
 - 2026-07-18: experiment 16 completed the full fleet in 3m08s (OS deploy 71.7s;
   parallel tests 91.4s) with zero retry telemetry in every app. Playwright ran
   57 tests in about 84s, Vitest ran 156 in 77.0s, and all other app suites

@@ -91,7 +91,7 @@ describe("waitForContainerRollouts", () => {
     );
   });
 
-  it("keeps polling when a completed rollout still has an instance starting", async () => {
+  it("accepts a fully updated rollout while an updated instance is still starting", async () => {
     const settling = rollout("completed");
     settling.health = {
       errors: [],
@@ -104,6 +104,34 @@ describe("waitForContainerRollouts", () => {
         return [{ health: healthy, id: "app-a", instances: 7, name: "sandbox-a" }];
       }
       if (path === "/containers/applications/app-a/rollouts?limit=1") return [settling];
+      if (path === "/containers/applications/app-a/rollouts/rollout-a") {
+        return rollout("completed");
+      }
+      throw new Error(`Unexpected path ${path}`);
+    });
+
+    await expect(
+      waitForContainerRollouts({
+        applicationNames: ["sandbox-a"],
+        cf,
+        sleep: async () => {},
+      }),
+    ).resolves.toEqual({ applications: 1, pendingApplications: 0 });
+    expect(calls).not.toContain("/containers/applications/app-a/rollouts/rollout-a");
+  });
+
+  it("keeps polling when completed status precedes full rollout progress", async () => {
+    const incomplete = rollout("completed");
+    incomplete.progress.updated_instances = 6;
+    incomplete.progress.version_distribution.target_version_percentage = 86;
+    incomplete.steps = [{ status: "progressing" }];
+    const calls: string[] = [];
+    const cf = vi.fn(async (path: string) => {
+      calls.push(path);
+      if (path === "/containers/applications?per_page=1000") {
+        return [{ health: healthy, id: "app-a", instances: 7, name: "sandbox-a" }];
+      }
+      if (path === "/containers/applications/app-a/rollouts?limit=1") return [incomplete];
       if (path === "/containers/applications/app-a/rollouts/rollout-a") {
         return rollout("completed");
       }

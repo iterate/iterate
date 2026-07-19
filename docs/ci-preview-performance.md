@@ -49,8 +49,11 @@ watchdog.
   for about 90 seconds after Wrangler returned and killed a test sandbox with
   exit 137. Preview Container changes therefore use one 100% step, and the OS
   deploy polls all six application rollouts concurrently until Cloudflare
-  reports every target instance updated and healthy. Production keeps gradual
-  rollout. Do not replace this API-backed barrier with a sleep or test
+  reports each rollout completed, every target instance updated, every step
+  complete, and no health error or failed instance. An already-updated instance
+  may still be starting as part of its ordinary workload lifecycle; that does
+  not expose the previous image and is not rollout work. Production keeps
+  gradual rollout. Do not replace this API-backed barrier with a sleep or test
   serialization.
 - **Edge, Durable Object, and builder readiness agree.** Cloudflare releases
   Worker and Durable Object code globally with eventual consistency, so a

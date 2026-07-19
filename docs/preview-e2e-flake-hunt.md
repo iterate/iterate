@@ -266,9 +266,11 @@ project creation, or a timeout assertion bug.
 The fix keeps the topology parallel: previews request one 100% Container
 rollout step, and `apps/os/scripts/deploy.ts` polls all six application
 rollouts concurrently before declaring OS ready. Completion requires 100% of
-target instances updated, every rollout step completed, and no unhealthy
-instance state. Missing, replaced, reverted, unhealthy, or 90-second-stalled
-rollouts fail with their exact last state. Production retains gradual rollout.
+target instances updated, every rollout step completed, and no rollout health
+error or failed instance. An already-updated instance may still be starting;
+that is ordinary workload lifecycle and cannot expose the previous image.
+Missing, replaced, reverted, unhealthy, or 90-second-stalled rollouts fail with
+their exact last state. Production retains gradual rollout.
 
 Experiment 16 (head `3f2f3e790`, Depot attempt
 [`b1lhqmfkt2`](https://depot.dev/orgs/0p91s0lz49/workflows/93xf5z9pcg?job=m4309znp2l&attempt=b1lhqmfkt2))
