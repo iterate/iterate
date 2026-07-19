@@ -1,14 +1,16 @@
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
-export async function sendTestReminderNotification(): Promise<void> {
+export async function sendTestNotification(): Promise<void> {
   if (Platform.OS === "web") {
-    throw new Error("Test reminders require the Iterate iOS development build.");
+    throw new Error("Test notifications require the Iterate iOS development build.");
   }
 
   const permission = await Notifications.requestPermissionsAsync();
   if (permission.status !== Notifications.PermissionStatus.GRANTED) {
-    throw new Error("Enable notifications for Iterate in iOS Settings to send a reminder.");
+    throw new Error(
+      "Enable notifications for Iterate in iOS Settings to send a test notification.",
+    );
   }
 
   await Notifications.scheduleNotificationAsync({

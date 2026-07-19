@@ -58,7 +58,7 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
     (
       pathname:
         | "/project/[projectId]/examples"
-        | "/project/[projectId]/reminders"
+        | "/project/[projectId]/notifications"
         | "/project/[projectId]/approvals",
     ) =>
     () =>
@@ -126,8 +126,8 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                   onPress={() => close(projectRoute("/project/[projectId]/examples"))}
                 />
                 <DrawerItem
-                  label="Reminders"
-                  onPress={() => close(projectRoute("/project/[projectId]/reminders"))}
+                  label="Notifications"
+                  onPress={() => close(projectRoute("/project/[projectId]/notifications"))}
                 />
                 <DrawerItem
                   label="Approvals"

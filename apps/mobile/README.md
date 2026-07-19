@@ -12,9 +12,9 @@ The non-native app still runs in Expo Go — no Xcode or Apple Developer account
 1. Install **Expo Go** from the App Store.
 2. `pnpm --dir apps/mobile start` (repo root) and scan the QR code.
 
-Day-to-day JS changes hot-reload through Metro. Location reminders are the
-first feature that needs Iterate's own development build; Expo Go cannot load
-the MapKit place-search module or run background geofencing.
+Day-to-day JS changes hot-reload through Metro. Remote push enrollment and
+delivery use Iterate's own development build so the app has its registered
+bundle identity and APNs entitlement.
 
 **The Expo SDK is deliberately pinned to 54**, not latest: the App Store's
 Expo Go (54.0.2, unchanged since 2025-09) only runs SDK 54 projects — newer
@@ -26,10 +26,9 @@ local Xcode).
 
 ## Run the native development build
 
-The development profile includes `expo-dev-client`, background location,
-notifications, and the local `IteratePlaceSearch` MapKit module. Building for
-a physical iPhone requires an Expo login, a paid Apple Developer membership,
-and that phone's registered UDID:
+The development profile includes `expo-dev-client` and notifications. Building
+for a physical iPhone requires an Expo login, a paid Apple Developer
+membership, and that phone's registered UDID:
 
 ```sh
 pnpm --dir apps/mobile dlx eas-cli@21.0.1 login
@@ -141,36 +140,12 @@ Exists so testing a platform feature never needs a laptop CLI step first:
 every mobile feature here is built by agents, so it needs to be fully
 testable from the phone alone. See `tasks/mobile-examples-runner.md`.
 
-## Location reminders
+## Notifications
 
-The Reminders screen also has a **Send test reminder now** smoke test. It asks
-only for notification permission and posts an immediate local notification;
-it does not request location access, create project state, or register a
-geofence.
-
-Agents create location reminders as durable events on
-`/mobile/location-reminders`. The Reminders screen resolves a phrase such as
-“supermarket” near the phone's current position with Apple's `MKLocalSearch`,
-then registers up to 20 iOS regions across the active reminders. Raw location
-stays on the phone; project state records the reminder, arming result, and
-eventual delivery receipt.
-
-The user must open Reminders and grant notification, When In Use, and Always
-location access before a new reminder is armed. Enabling claims an unclaimed
-project reminder to the authenticated user and this installation, preventing
-other project members' phones from arming it. The app then follows the reminder
-stream live and reconciles registrations on project open, foreground, reminder
-changes, and app restart. Entering a monitored region posts a one-shot local
-notification, removes that reminder's other regions, and stores an offline
-delivery receipt for the next project sync. Cancelling, choosing “Disable on
-this iPhone,” or signing out removes the corresponding device registrations.
-
-Current limitation: candidate places are selected within 25 km of the phone
-when reminders are enabled or the app returns to the foreground. A long trip
-while Iterate remains backgrounded does not refresh that candidate set until
-the next foreground reconciliation. Cold-start notification routing is wired
-but still needs a physical-device tap-through pass. The Reminders screen
-reports unarmed and failed states instead of claiming those cases work.
+The Notifications screen has a **Send test notification now** smoke test. It
+asks only for notification permission and posts an immediate local
+notification. Opening a project in the native build separately enrolls that
+installation for scriptable project push notifications.
 
 ## Verification
 
@@ -184,16 +159,16 @@ reports unarmed and failed states instead of claiming those cases work.
 
 ## Layout
 
-| Path                       | What                                                                                    |
-| -------------------------- | --------------------------------------------------------------------------------------- |
-| `src/lib/itx-core.ts`      | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
-| `src/lib/auth.ts`          | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
-| `src/lib/chat.ts`          | Pure: stream events → bubbles + working flag; agent path conventions                    |
-| `src/lib/live-thread.ts`   | Live subscription per thread feeding the tanstack-query cache                           |
-| `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
-| `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
-| `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
-| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                      |
-| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals → examples     |
+| Path                       | What                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------ |
+| `src/lib/itx-core.ts`      | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)                     |
+| `src/lib/auth.ts`          | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh                        |
+| `src/lib/chat.ts`          | Pure: stream events → bubbles + working flag; agent path conventions                             |
+| `src/lib/live-thread.ts`   | Live subscription per thread feeding the tanstack-query cache                                    |
+| `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key               |
+| `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                                      |
+| `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts          |
+| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                               |
+| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread, approvals, examples, notifications |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.

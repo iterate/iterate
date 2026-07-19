@@ -12,12 +12,6 @@ import { SignInRequiredError, signOut } from "../lib/auth.ts";
 import { getItxSession, resetItxSession } from "../lib/itx.ts";
 import { stopAllApprovals } from "../lib/live-approvals.ts";
 import { stopAllThreads } from "../lib/live-thread.ts";
-import { stopAllLocationReminders } from "../lib/location-reminder-runtime.ts";
-import {
-  loadAndFollowLocationReminders,
-  locationRemindersQueryKey,
-  stopAllLocationReminderSubscriptions,
-} from "../lib/location-reminder-sync.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
 import { revokeEnrolledPushDevices } from "../lib/push-device.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
@@ -50,10 +44,6 @@ export default function ProjectsScreen() {
       const itx = await getItxSession(baseUrl);
       await backfillProjectIfMissing(itx, project);
       await setLastProject(baseUrl, { id: project.id, slug: project.slug });
-      void queryClient.prefetchQuery({
-        queryKey: locationRemindersQueryKey(project.id),
-        queryFn: () => loadAndFollowLocationReminders(baseUrl, project.id),
-      });
       return project;
     },
     onSuccess: (project) => {
@@ -76,8 +66,6 @@ export default function ProjectsScreen() {
                 await revokeEnrolledPushDevices(baseUrl);
                 await signOut(baseUrl);
                 stopAllThreads();
-                stopAllLocationReminderSubscriptions();
-                await stopAllLocationReminders();
                 stopAllApprovals();
                 resetItxSession();
                 queryClient.clear();

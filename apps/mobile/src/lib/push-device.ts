@@ -5,7 +5,6 @@ import { router } from "expo-router";
 import { Platform } from "react-native";
 import { getMobileDeviceId } from "./device-identity.ts";
 import { getItxSession } from "./itx.ts";
-import { locationReminderRouteFromNotificationData } from "./location-reminders.ts";
 import {
   notificationOpenedEvent,
   pushNotificationRoute,
@@ -84,11 +83,6 @@ export async function routeInitialNotification(): Promise<void> {
 
 async function handlePushNotificationResponse(response: Notifications.NotificationResponse) {
   const raw = response.notification.request.content.data;
-  const locationRoute = locationReminderRouteFromNotificationData(raw);
-  if (locationRoute) {
-    router.push(locationRoute);
-    return;
-  }
   const data = raw as PushNotificationData;
   const route = pushNotificationRoute(data);
   if (route === null || typeof data.projectId !== "string") return;
