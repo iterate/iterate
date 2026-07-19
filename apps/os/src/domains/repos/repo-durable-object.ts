@@ -106,6 +106,11 @@ type RepoHead = {
 };
 
 export class RepoDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout barrier. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),

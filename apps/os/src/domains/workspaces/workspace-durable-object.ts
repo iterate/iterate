@@ -70,6 +70,11 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * is simply dropped.
  */
 export class WorkspaceV2DurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout barrier. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
