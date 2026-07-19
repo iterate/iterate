@@ -60,15 +60,16 @@ watchdog.
   current edge response alone is not a Durable Object rollout barrier.
   `/api/health` calls a bounded rolling sample of version-specific, read-only
   sentinels in the real capability-host namespace and returns 503 unless every
-  sampled incarnation reports the edge's exact Worker version. The ten-second
-  stability window rotates through ten waves of eight placements (80 bounded
-  names per deploy), preventing one lucky current object from hiding new
-  objects still receiving old code. In parallel, the route-less dynamic-worker
-  builder must report the same PR-head deployment ID baked into the main OS
-  worker. That combined result must remain stable for ten seconds. Repeating
-  the same immutable head skips an identical builder-sidecar deploy, avoiding
-  a needless deployment-global Durable Object reset; a changed head always
-  deploys it. This is the reset barrier—do not replace it with a sleep.
+  sampled incarnation reports the edge's exact Worker version. The deploy gate
+  warms all ten bounded placement waves concurrently, retries only waves still
+  returning 503, waits ten seconds after every wave has served the exact
+  version, then revalidates all ten waves concurrently. This proves the whole
+  finite sample twice; an elapsed-time heuristic cannot pass without revisiting
+  the last failed wave. In parallel, the route-less dynamic-worker builder must
+  report the same content-addressed deployment identity baked into the main OS
+  worker. Repeating a head whose builder inputs are unchanged skips an identical
+  builder-sidecar deploy, avoiding a needless deployment-global Durable Object
+  reset. This is the reset barrier—do not replace it with a sleep.
 - **Parallelism is explicit per deployed slot, not accidental.** The OS
   Vitest catalogue uses sixteen workers with at most four concurrent tests
   each; Playwright uses twenty-four fully-parallel workers. The

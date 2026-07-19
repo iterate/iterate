@@ -612,6 +612,55 @@ describe("preview readiness URLs", () => {
       vi.useRealTimers();
     }
   });
+
+  test("warms bounded deployment waves in parallel and revalidates the complete set", async () => {
+    vi.useFakeTimers();
+    const waveAttempts = new Map<string, number>();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      const wave = url.searchParams.get("deployment-probe") ?? "missing";
+      const attempt = (waveAttempts.get(wave) ?? 0) + 1;
+      waveAttempts.set(wave, attempt);
+      const stillSettling = wave === "1" && attempt === 1;
+      return new Response(null, {
+        status: stillSettling ? 503 : 200,
+        headers: { "x-iterate-worker-version": "expected-version" },
+      });
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 3,
+          stableForMs: 2_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=0",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=1",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=2",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=1",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=0",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=1",
+        "https://os.iterate-preview-8.com/api/health?deployment-probe=2",
+      ]);
+    } finally {
+      consoleError.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("preview compare base", () => {

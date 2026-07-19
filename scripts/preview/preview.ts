@@ -1328,11 +1328,18 @@ export type CloudflarePreviewApp = {
   previewReadyUrlPath?: string;
   /**
    * Require the readiness route to report wrangler's newly deployed Worker
-   * version continuously before tests start. Cloudflare can serve the new
-   * edge Worker while Durable Objects are still rolling from the previous
-   * version; this barrier keeps that reset window out of the test phase.
+   * version before tests start. Cloudflare can serve the new edge Worker while
+   * Durable Objects are still rolling from the previous version; this barrier
+   * keeps that reset window out of the test phase. A bounded probeWaveCount
+   * warms every server-defined Durable Object placement wave in parallel,
+   * retries only waves that are still settling, then revalidates the complete
+   * set after stableForMs.
    */
-  previewReadyWorkerVersion?: { probeQueryParam?: string; stableForMs: number };
+  previewReadyWorkerVersion?: {
+    probeQueryParam?: string;
+    probeWaveCount?: number;
+    stableForMs: number;
+  };
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
@@ -1566,6 +1573,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // projects, otherwise the first object calls can be reset mid-saga.
     previewReadyWorkerVersion: {
       probeQueryParam: "deployment-probe",
+      probeWaveCount: 10,
       stableForMs: 10_000,
     },
     paths: [
@@ -1869,6 +1877,7 @@ const defaultPreviewLeaseMs = 3 * 60 * 60 * 1000;
 // Keep this long enough for first issuance of supported hostnames while still
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
+const previewReadinessRequestTimeoutMs = 10_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
@@ -3512,6 +3521,7 @@ async function deployPreviewApp(input: {
         ? {
             expected: deployedWorkerVersion,
             probeQueryParam: input.app.previewReadyWorkerVersion.probeQueryParam,
+            probeWaveCount: input.app.previewReadyWorkerVersion.probeWaveCount,
             stableForMs: input.app.previewReadyWorkerVersion.stableForMs,
           }
         : undefined,
@@ -4960,7 +4970,12 @@ async function waitForPreviewAppReadiness(params: {
   readyUrlPath?: string;
   signal?: AbortSignal;
   timeoutMs: number;
-  workerVersion?: { expected: string; probeQueryParam?: string; stableForMs: number };
+  workerVersion?: {
+    expected: string;
+    probeQueryParam?: string;
+    probeWaveCount?: number;
+    stableForMs: number;
+  };
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
@@ -5007,10 +5022,31 @@ async function waitForHttpReadiness(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   url: URL;
-  workerVersion?: { expected: string; probeQueryParam?: string; stableForMs: number };
+  workerVersion?: {
+    expected: string;
+    probeQueryParam?: string;
+    probeWaveCount?: number;
+    stableForMs: number;
+  };
 }) {
   const startedAt = Date.now();
   const deadline = Date.now() + params.timeoutMs;
+
+  if (params.workerVersion?.probeQueryParam && params.workerVersion.probeWaveCount !== undefined) {
+    return await waitForWorkerVersionProbeWaves({
+      deadline,
+      signal: params.signal,
+      startedAt,
+      url: params.url,
+      workerVersion: {
+        expected: params.workerVersion.expected,
+        probeQueryParam: params.workerVersion.probeQueryParam,
+        probeWaveCount: params.workerVersion.probeWaveCount,
+        stableForMs: params.workerVersion.stableForMs,
+      },
+    });
+  }
+
   let lastFailure = "No response received yet.";
   let matchingWorkerVersionSince: number | null = null;
   let lastReportedWorkerVersion: string | null | undefined;
@@ -5076,16 +5112,159 @@ async function waitForHttpReadiness(params: {
   };
 }
 
+type WorkerVersionProbeResult = {
+  failure: string | null;
+  wave: number;
+};
+
+/**
+ * Exercise every bounded Durable Object readiness wave concurrently. A wave
+ * that has already reported the exact deployment stays out of the hot retry
+ * set; once every wave has passed, one complete set is checked again after the
+ * stability interval. This is a stricter barrier than measuring elapsed time
+ * while visiting one wave at a time: a slow request can no longer let the
+ * timer expire without revisiting the last failed wave.
+ */
+async function waitForWorkerVersionProbeWaves(params: {
+  deadline: number;
+  signal?: AbortSignal;
+  startedAt: number;
+  url: URL;
+  workerVersion: {
+    expected: string;
+    probeQueryParam: string;
+    probeWaveCount: number;
+    stableForMs: number;
+  };
+}) {
+  const { probeWaveCount } = params.workerVersion;
+  if (!Number.isSafeInteger(probeWaveCount) || probeWaveCount < 1 || probeWaveCount > 64) {
+    throw new Error(`Worker-version readiness probeWaveCount must be an integer from 1 to 64.`);
+  }
+
+  const allWaves = Array.from({ length: probeWaveCount }, (_, wave) => wave);
+  let pendingWaves = new Set(allWaves);
+  let lastFailure = "No probe wave has completed yet.";
+  let lastProgress = "";
+  let lastProgressAt = 0;
+
+  while (Date.now() < params.deadline) {
+    const results = await probeWorkerVersionWaves({
+      expectedWorkerVersion: params.workerVersion.expected,
+      probeQueryParam: params.workerVersion.probeQueryParam,
+      signal: params.signal,
+      url: params.url,
+      waves: [...pendingWaves],
+    });
+    for (const result of results) {
+      if (result.failure === null) {
+        pendingWaves.delete(result.wave);
+      }
+    }
+
+    if (pendingWaves.size > 0) {
+      const failures = results.filter((result) => result.failure !== null);
+      lastFailure = describeWorkerVersionProbeFailures(failures);
+      const progress = `${probeWaveCount - pendingWaves.size}/${probeWaveCount}`;
+      const now = Date.now();
+      if (progress !== lastProgress || now - lastProgressAt >= 10_000) {
+        console.error(
+          `[preview] readiness ${params.url.origin}: ${progress} Worker/Durable Object probe waves have served version ${params.workerVersion.expected}; ${lastFailure}`,
+        );
+        lastProgress = progress;
+        lastProgressAt = now;
+      }
+      await sleep(1_000, params.signal);
+      continue;
+    }
+
+    console.error(
+      `[preview] readiness ${params.url.origin}: all ${probeWaveCount} Worker/Durable Object probe waves served version ${params.workerVersion.expected}; revalidating the complete set after ${formatDurationMs(params.workerVersion.stableForMs)}`,
+    );
+    await sleep(params.workerVersion.stableForMs, params.signal);
+    if (Date.now() >= params.deadline) break;
+
+    const validationResults = await probeWorkerVersionWaves({
+      expectedWorkerVersion: params.workerVersion.expected,
+      probeQueryParam: params.workerVersion.probeQueryParam,
+      signal: params.signal,
+      url: params.url,
+      waves: allWaves,
+    });
+    const validationFailures = validationResults.filter((result) => result.failure !== null);
+    if (validationFailures.length === 0) {
+      console.error(
+        `[preview] readiness ${params.url.origin}: all ${probeWaveCount} waves remained exact; ready after ${formatDurationMs(Date.now() - params.startedAt)}`,
+      );
+      return { ok: true as const };
+    }
+
+    pendingWaves = new Set(validationFailures.map((result) => result.wave));
+    lastFailure = describeWorkerVersionProbeFailures(validationFailures);
+    console.error(
+      `[preview] readiness ${params.url.origin}: complete-set revalidation found ${lastFailure}; retrying only those waves`,
+    );
+    lastProgress = "";
+    await sleep(1_000, params.signal);
+  }
+
+  return {
+    message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
+    ok: false as const,
+  };
+}
+
+async function probeWorkerVersionWaves(params: {
+  expectedWorkerVersion: string;
+  probeQueryParam: string;
+  signal?: AbortSignal;
+  url: URL;
+  waves: readonly number[];
+}): Promise<WorkerVersionProbeResult[]> {
+  return await Promise.all(
+    params.waves.map(async (wave) => {
+      const requestUrl = new URL(params.url);
+      requestUrl.searchParams.set(params.probeQueryParam, String(wave));
+      try {
+        const response = await fetchReadinessResponse(requestUrl, params.signal);
+        if (response.status < 200 || response.status >= 300) {
+          return { failure: `wave ${wave} returned HTTP ${response.status}`, wave };
+        }
+        if (response.workerVersion !== params.expectedWorkerVersion) {
+          return {
+            failure: `wave ${wave} served Worker version ${response.workerVersion ?? "<missing>"}`,
+            wave,
+          };
+        }
+        return { failure: null, wave };
+      } catch (error) {
+        return { failure: `wave ${wave} failed: ${formatPreviewErrorMessage(error)}`, wave };
+      }
+    }),
+  );
+}
+
+function describeWorkerVersionProbeFailures(results: readonly WorkerVersionProbeResult[]) {
+  const descriptions = results
+    .map((result) => result.failure)
+    .filter((failure): failure is string => failure !== null);
+  return descriptions.length === 0 ? "no failed waves" : descriptions.join("; ");
+}
+
 async function fetchReadinessResponse(
   url: URL,
   signal: AbortSignal | undefined,
 ): Promise<{ status: number; workerVersion: string | null }> {
+  const requestTimeoutSignal = AbortSignal.timeout(previewReadinessRequestTimeoutMs);
+  const requestSignal = signal
+    ? AbortSignal.any([signal, requestTimeoutSignal])
+    : requestTimeoutSignal;
   try {
     const response = await fetch(url, {
       cache: "no-store",
       method: "GET",
       redirect: "follow",
-      signal,
+      signal: requestSignal,
     });
     return {
       status: response.status,
@@ -5096,7 +5275,7 @@ async function fetchReadinessResponse(
       throw error;
     }
 
-    return await requestReadinessWithDnsResolve(url, signal);
+    return await requestReadinessWithDnsResolve(url, requestSignal);
   }
 }
 
