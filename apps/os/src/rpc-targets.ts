@@ -62,6 +62,7 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
+import { mintProjectIdWithBoundedHedges } from "./auth/project-id-mint.ts";
 import { itxEnv as env } from "./env.ts";
 import {
   listProjectDirectory,
@@ -5306,7 +5307,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     if (args.projectId !== undefined) {
       return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
-    const minted = await env.AUTH.mintProjectId();
+    const minted = await mintProjectIdWithBoundedHedges({
+      mint: () => env.AUTH.mintProjectId(),
+      slug: args.slug,
+    });
     return { organizationId: null, projectId: minted.id, slug: args.slug };
   }
 
