@@ -19,13 +19,8 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
     append,
     blockProcessorWhile,
     event,
-    state,
   }: Parameters<StreamProcessor<NotificationProcessorContract>["processEvent"]>[0]): undefined {
-    if (
-      event === null ||
-      state.birthCertificate === null ||
-      event.type !== "events.iterate.com/project/human-approval-requested"
-    ) {
+    if (event === null || event.type !== "events.iterate.com/project/human-approval-requested") {
       return;
     }
     blockProcessorWhile(() =>

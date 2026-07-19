@@ -181,8 +181,12 @@ export class DeviceDurableObject extends DurableObject<Env> {
     throw new Error("unreachable device enrollment retry state");
   }
 
-  async append(...events: DeviceAppendInput[]) {
-    await this.#assertCreated();
+  async append(ownerId: string, ...events: DeviceAppendInput[]) {
+    const snapshot = await this.#snapshot();
+    if (snapshot.state.birthCertificate === null) throw new Error("device has not been enrolled");
+    if (snapshot.state.birthCertificate.config.ownerId !== ownerId) {
+      throw new Error("only the enrolling user can append device events");
+    }
     const parsed = events.map((event) => {
       const consumed = DeviceProcessorContract.parseConsumedInput(event);
       if (!PUBLIC_DEVICE_EVENT_TYPES.has(consumed.type as never)) {
@@ -213,11 +217,6 @@ export class DeviceDurableObject extends DurableObject<Env> {
 
   async describe(): Promise<DeviceDescription> {
     return describeDeviceState((await this.#snapshot()).state, this.#deviceId);
-  }
-
-  async #assertCreated() {
-    const snapshot = await this.#snapshot();
-    if (snapshot.state.birthCertificate === null) throw new Error("device has not been enrolled");
   }
 
   async #snapshot() {

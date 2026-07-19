@@ -55,5 +55,28 @@ test("public itx discovers an enrolled device and appends a notification request
       },
     }),
   );
+
+  using collaboratorSession = withItxSession();
+  using collaboratorItx = collaboratorSession.authenticate({
+    type: "impersonate",
+    secret: adminSecret(),
+    token: {
+      type: "user",
+      principal: "device-e2e-collaborator",
+      projectScopes: [projectId],
+    },
+  });
+  using collaboratorProject = collaboratorItx.projects.get(projectId);
+  using collaboratorPhone = collaboratorProject.devices.get("phone-test-installation");
+
+  await expect(
+    collaboratorPhone.append({
+      type: "events.iterate.com/device/notification-opened",
+      payload: {
+        openedAt: new Date().toISOString(),
+        requestOffset: request.offset,
+      },
+    }),
+  ).rejects.toThrow("only the enrolling user can append device events");
   expect(projectId).toMatch(/^prj_/);
 });

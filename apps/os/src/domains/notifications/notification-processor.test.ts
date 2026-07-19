@@ -49,6 +49,44 @@ test("one held approval becomes one project notification intent", async () => {
   });
 });
 
+test("an approval recorded before notification setup is delivered during replay", async () => {
+  const network = new MemoryStreamNetwork();
+  const stream = network.get("/");
+  const driver = driveProcessor(
+    new NotificationProcessor({ stream, path: "/", projectId: "prj_test" }),
+    stream,
+  );
+  await stream.append(
+    {
+      type: "events.iterate.com/project/human-approval-requested",
+      payload: {
+        method: "POST",
+        url: "https://api.stripe.com/v1/transfers",
+        headers: {},
+        bodySha256: null,
+        bodyPreview: null,
+        secretPaths: ["/secrets/stripe/prod"],
+        ruleKey: "stripe-mutations",
+        expiresAt: "2026-07-19T08:05:00.000Z",
+      },
+    },
+    {
+      type: "events.iterate.com/notification/created",
+      payload: { config: {} },
+    },
+  );
+
+  await driver.deliver();
+
+  expect(network.eventsAt("/").at(-1)).toMatchObject({
+    type: "events.iterate.com/notification/requested",
+    idempotencyKey: "notification/approval-requested@/:1",
+    payload: {
+      destination: { kind: "approvals", approvalRequestEventOffset: 1 },
+    },
+  });
+});
+
 test("an unparseable approval URL remains visible without stalling notification delivery", async () => {
   const network = new MemoryStreamNetwork();
   const stream = network.get("/");
