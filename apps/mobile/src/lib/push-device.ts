@@ -15,7 +15,7 @@ import { DEFAULT_SERVER } from "./servers.ts";
 import { getServerBaseUrl } from "./storage.ts";
 
 const PUSH_ENROLLMENTS_KEY = "iterate.pushEnrollments.v1";
-let enrollmentStorageWrites: Promise<void> = Promise.resolve();
+let pushLifecycle: Promise<void> = Promise.resolve();
 
 if (Platform.OS !== "web") {
   Notifications.addNotificationResponseReceivedListener(() => {
@@ -25,51 +25,54 @@ if (Platform.OS !== "web") {
 
 export async function enrollPushDevice(baseUrl: string, projectId: string) {
   if (Platform.OS === "web") return null;
-  const permission = await Notifications.requestPermissionsAsync();
-  if (permission.status !== Notifications.PermissionStatus.GRANTED) {
-    throw new Error("Enable notifications for Iterate to make this phone scriptable.");
-  }
-  const easProjectId = Constants.expoConfig?.extra?.eas?.projectId;
-  const appVersion = Constants.expoConfig?.version;
-  if (typeof easProjectId !== "string" || typeof appVersion !== "string") {
-    throw new Error("The Iterate development build is missing its EAS project or app version.");
-  }
-  const [deviceId, token, itx] = await Promise.all([
-    getMobileDeviceId(),
-    Notifications.getExpoPushTokenAsync({ projectId: easProjectId }),
-    getItxSession(baseUrl),
-  ]);
-  const project = await itx.projects.get(projectId);
-  const enrolled = await project.devices.get(deviceId).enroll({
-    appVersion,
-    expoPushToken: token.data,
-    label: Platform.OS === "ios" ? "Iterate on iPhone" : "Iterate on Android",
-    notificationsStatus: "granted",
-    platform: Platform.OS === "ios" ? "ios" : "android",
+  return await runPushLifecycle(async () => {
+    const permission = await Notifications.requestPermissionsAsync();
+    if (permission.status !== Notifications.PermissionStatus.GRANTED) {
+      throw new Error("Enable notifications for Iterate to make this phone scriptable.");
+    }
+    const easProjectId = Constants.expoConfig?.extra?.eas?.projectId;
+    const appVersion = Constants.expoConfig?.version;
+    if (typeof easProjectId !== "string" || typeof appVersion !== "string") {
+      throw new Error("The Iterate development build is missing its EAS project or app version.");
+    }
+    const [deviceId, token, itx] = await Promise.all([
+      getMobileDeviceId(),
+      Notifications.getExpoPushTokenAsync({ projectId: easProjectId }),
+      getItxSession(baseUrl),
+    ]);
+    const project = await itx.projects.get(projectId);
+    const enrolled = await project.devices.get(deviceId).enroll({
+      appVersion,
+      expoPushToken: token.data,
+      label: Platform.OS === "ios" ? "Iterate on iPhone" : "Iterate on Android",
+      notificationsStatus: "granted",
+      platform: Platform.OS === "ios" ? "ios" : "android",
+    });
+    await rememberPushEnrollment(baseUrl, projectId);
+    return enrolled;
   });
-  await rememberPushEnrollment(baseUrl, projectId);
-  return enrolled;
 }
 
 export async function revokeEnrolledPushDevices(baseUrl: string): Promise<void> {
   if (Platform.OS === "web") return;
-  await enrollmentStorageWrites;
-  const enrollments = await readPushEnrollments();
-  const projectIds = enrollments
-    .filter((enrollment) => enrollment.baseUrl === baseUrl)
-    .map((enrollment) => enrollment.projectId);
-  if (projectIds.length === 0) return;
-  const [deviceId, itx] = await Promise.all([getMobileDeviceId(), getItxSession(baseUrl)]);
-  await Promise.all(
-    projectIds.map(async (projectId) => {
-      const project = await itx.projects.get(projectId);
-      await project.devices.get(deviceId).revoke("sign-out");
-    }),
-  );
-  await AsyncStorage.setItem(
-    PUSH_ENROLLMENTS_KEY,
-    JSON.stringify(enrollments.filter((enrollment) => enrollment.baseUrl !== baseUrl)),
-  );
+  await runPushLifecycle(async () => {
+    const enrollments = await readPushEnrollments();
+    const projectIds = enrollments
+      .filter((enrollment) => enrollment.baseUrl === baseUrl)
+      .map((enrollment) => enrollment.projectId);
+    if (projectIds.length === 0) return;
+    const [deviceId, itx] = await Promise.all([getMobileDeviceId(), getItxSession(baseUrl)]);
+    await Promise.all(
+      projectIds.map(async (projectId) => {
+        const project = await itx.projects.get(projectId);
+        await project.devices.get(deviceId).revoke("sign-out");
+      }),
+    );
+    await AsyncStorage.setItem(
+      PUSH_ENROLLMENTS_KEY,
+      JSON.stringify(enrollments.filter((enrollment) => enrollment.baseUrl !== baseUrl)),
+    );
+  });
 }
 
 export async function routeInitialNotification(): Promise<void> {
@@ -98,25 +101,27 @@ async function handlePushNotificationResponse(response: Notifications.Notificati
 }
 
 async function rememberPushEnrollment(baseUrl: string, projectId: string): Promise<void> {
-  const write = enrollmentStorageWrites.then(async () => {
-    const enrollments = await readPushEnrollments();
-    if (
-      enrollments.some(
-        (enrollment) => enrollment.baseUrl === baseUrl && enrollment.projectId === projectId,
-      )
-    ) {
-      return;
-    }
-    await AsyncStorage.setItem(
-      PUSH_ENROLLMENTS_KEY,
-      JSON.stringify([...enrollments, { baseUrl, projectId }]),
-    );
-  });
-  enrollmentStorageWrites = write.then(
+  const enrollments = await readPushEnrollments();
+  if (
+    enrollments.some(
+      (enrollment) => enrollment.baseUrl === baseUrl && enrollment.projectId === projectId,
+    )
+  ) {
+    return;
+  }
+  await AsyncStorage.setItem(
+    PUSH_ENROLLMENTS_KEY,
+    JSON.stringify([...enrollments, { baseUrl, projectId }]),
+  );
+}
+
+async function runPushLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+  const result = pushLifecycle.then(operation);
+  pushLifecycle = result.then(
     () => undefined,
     () => undefined,
   );
-  return await write;
+  return await result;
 }
 
 async function readPushEnrollments(): Promise<Array<{ baseUrl: string; projectId: string }>> {
