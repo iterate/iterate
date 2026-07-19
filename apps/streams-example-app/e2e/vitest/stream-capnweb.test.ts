@@ -155,12 +155,19 @@ describe("stream capnweb protocol", () => {
     const base = e2eStreamPathLabel("e2e/resolve-child");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const [viaBare] = await parent.stream
-      .at("child")
-      .append({ type: "test.stream.resolve", payload: { kind: "bare" } });
-    const [viaDot] = await parent.stream
-      .at("./child")
-      .append({ type: "test.stream.resolve", payload: { kind: "dot" } });
+    // This test isolates path resolution, not the deliberately one-shot
+    // semantics of unkeyed appends. Keys let the Stream facade safely replay
+    // a commit whose acknowledgement was lost to a DO incarnation reset.
+    const [viaBare] = await parent.stream.at("child").append({
+      type: "test.stream.resolve",
+      idempotencyKey: "resolve-child-bare",
+      payload: { kind: "bare" },
+    });
+    const [viaDot] = await parent.stream.at("./child").append({
+      type: "test.stream.resolve",
+      idempotencyKey: "resolve-child-dot",
+      payload: { kind: "dot" },
+    });
 
     // Both forms resolve to the same `${base}/child` stream the reader connects to.
     using child = withStreamConnectionFromNode({

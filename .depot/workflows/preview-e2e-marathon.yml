@@ -60,6 +60,12 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # Match the normal preview lane: the iterate terminal is an OpenTUI
+      # application whose built CLI launches under Bun.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
       - name: Install dependencies
         run: pnpm install
       - name: Install Doppler CLI

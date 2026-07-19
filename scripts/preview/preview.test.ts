@@ -472,6 +472,8 @@ describe("preview test commands", () => {
     expect(workflow).toContain("scripts/preview/collect-test-artifacts.sh test-results");
     expect(workflow).toContain("path: test-results");
     expect(workflow).toContain("include-hidden-files: true");
+    expect(workflow).toContain("uses: oven-sh/setup-bun@v2");
+    expect(workflow).toContain("bun-version-file: .bun-version");
     expect(workflow).not.toContain("            /tmp/os-e2e-*");
     expect(workflow).not.toContain("            /tmp/marathon");
 
