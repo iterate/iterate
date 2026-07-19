@@ -117,9 +117,9 @@ export function CodeBlock({
   const lineCount = text.split("\n").length;
   const height = Math.min(260, Math.max(58, lineCount * 19 + 24));
   return (
-    <View style={[styles.codeViewer, muted && styles.codeMuted]}>
+    <View style={[styles.codeViewer, { height }, muted && styles.codeMuted]}>
       <CodeEditor
-        dom={{ scrollEnabled: true, style: { height } }}
+        dom={{ scrollEnabled: true, style: { flex: 1, height } }}
         editable={false}
         onChange={async () => {
           throw new Error("A read-only code block attempted to change.");
