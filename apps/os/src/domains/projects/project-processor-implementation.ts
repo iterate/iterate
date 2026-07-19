@@ -13,6 +13,7 @@ import {
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
+import { NotificationProcessorContract } from "../notifications/notification-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -55,11 +56,15 @@ export class ProjectProcessor extends StreamProcessor<
         return { ...state, ready: true };
       case "events.iterate.com/project/onboarding-completed":
         return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
+      case "events.iterate.com/notification/created":
+        return { ...state, notificationReady: true };
       case "events.iterate.com/stream/created":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
         return recordPhysicalStream(state, event.payload.path, event.createdAt);
       case "events.iterate.com/stream/child-stream-created":
         return recordPhysicalStream(state, event.payload.childPath, event.createdAt);
+      case "events.iterate.com/device/created":
+        return recordDomainObject(state, "devices", event);
       case "events.iterate.com/repo/created":
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
@@ -101,12 +106,36 @@ export class ProjectProcessor extends StreamProcessor<
     state,
     append,
     appendTo,
+    delivery,
   }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
     // Project worker delivery is NOT here: every project stream (this one
     // included) pumps its own events into the worker's `processEventBatch`
     // with a durable checkpoint (see streams/project-worker-delivery.ts).
 
-    // Event-less at-head pass: this processor has no at-head work.
+    if (
+      delivery.caughtUp &&
+      event?.type !== "events.iterate.com/project/created" &&
+      state.birthCertificate !== null &&
+      !state.notificationReady
+    ) {
+      blockProcessorWhile(() =>
+        append(
+          NotificationProcessorContract.buildEvent({
+            type: "events.iterate.com/notification/created",
+            idempotencyKey: `notification-created:${this.deps.itx.projectId}`,
+            payload: { config: {} },
+          }),
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName: DurableObjectNameCodec.stringify({
+              projectId: this.deps.itx.projectId,
+              path: "/",
+            }),
+            processor: ["notificationProcessor"],
+            processorSlug: NotificationProcessorContract.slug,
+          }),
+        ),
+      );
+    }
     if (event === null) return;
     if (event.type !== "events.iterate.com/project/created" && state.birthCertificate === null) {
       return;
@@ -149,6 +178,19 @@ export class ProjectProcessor extends StreamProcessor<
                   }),
                   processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
+                }),
+                NotificationProcessorContract.buildEvent({
+                  type: "events.iterate.com/notification/created",
+                  idempotencyKey: `notification-created:${this.deps.itx.projectId}`,
+                  payload: { config: {} },
+                }),
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: "/",
+                  }),
+                  processor: ["notificationProcessor"],
+                  processorSlug: NotificationProcessorContract.slug,
                 }),
               ),
             ),
@@ -391,10 +433,11 @@ function recordPhysicalStream<
 
 function recordDomainObject<
   State extends {
+    devices: StreamListItem[];
     repos: StreamListItem[];
     secrets: StreamListItem[];
   },
-  Key extends "repos" | "secrets",
+  Key extends "devices" | "repos" | "secrets",
 >(state: State, key: Key, event: StreamEvent): State {
   const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
   if (path === undefined) return state;

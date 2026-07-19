@@ -80,6 +80,67 @@ test("summarizes a settled activity", () => {
   expect(summarizeActivity(activity)).toBe("Ran code 1× · 1 request · 4 s");
 });
 
+test("a late durable script result replaces its provisional activity", () => {
+  const feed = reduceFeed(PATH, [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+    event(2, "events.iterate.com/agent/llm-request-requested", {}),
+    event(3, "events.iterate.com/agent/llm-request-completed", {
+      llmRequestOffset: 2,
+      result: { status: "success" },
+    }),
+    event(4, "events.iterate.com/capability-host/script-run-requested", {
+      executionId: "slow-script",
+      code: "async () => 'done'",
+      expiresAt: Date.UTC(2026, 0, 1, 0, 0, 5),
+    }),
+    // The visible reply lands at the script deadline. The reducer closes the
+    // activity with an explicit inferred outcome so the UI cannot spin forever.
+    event(5, "events.iterate.com/agents/web-message-sent", { message: "Done." }),
+    // The real stream can receive the durable settlement later (an approval
+    // held the script in production). This correction carries the same activity id.
+    event(6, "events.iterate.com/capability-host/script-run-settled", {
+      executionId: "slow-script",
+      settlement: { status: "succeeded", result: "done" },
+    }),
+  ]);
+
+  expect(feed.items.map((item) => item.id)).toEqual(["user-1", "activity-2", "assistant-5"]);
+  expect(feed.items[1]).toMatchObject({
+    kind: "activity",
+    steps: [
+      { kind: "llm", status: "done" },
+      { kind: "code", success: true },
+    ],
+  });
+});
+
+test("a historical stream without an idle boundary still shows its completed reply", () => {
+  const feed = reduceFeed(PATH, [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+    event(2, "events.iterate.com/agent/llm-request-requested", {}),
+    event(3, "events.iterate.com/agent/llm-request-completed", {
+      llmRequestOffset: 2,
+      result: { status: "success" },
+    }),
+    event(4, "events.iterate.com/capability-host/script-run-requested", {
+      executionId: "script",
+      code: "async () => 'done'",
+      expiresAt: Date.UTC(2026, 0, 1, 0, 2),
+    }),
+    // Old deployments could emit the visible message before the script's
+    // settlement, then end without the newer authoritative runtime-idle fact.
+    event(5, "events.iterate.com/agents/web-message-sent", { message: "Done." }),
+    event(6, "events.iterate.com/capability-host/script-run-settled", {
+      executionId: "script",
+      settlement: { status: "succeeded", result: "done" },
+    }),
+  ]);
+
+  expect(feed.items.map((item) => item.id)).toEqual(["user-1", "activity-2", "assistant-5"]);
+  expect(feed).toMatchObject({ working: false, live: null });
+  expect(feed.items[1]).toMatchObject({ kind: "activity", status: "done" });
+});
+
 function event(offset: number, type: string, payload: Record<string, unknown>): StreamEvent {
   return {
     type,

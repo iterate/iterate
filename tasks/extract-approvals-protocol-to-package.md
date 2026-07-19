@@ -24,7 +24,7 @@ exists; the extraction is mechanical.
   inside the package (`approve-core.ts` → `domains/projects/egress-approvals.ts`)
   — decide whether the egress-approvals types move too or get re-exported.
 
-Distinct from `tasks/mobile-approver-upgrades.md` (Secure Enclave hardware
+Distinct from `tasks/mobile-native-capabilities.md` (Secure Enclave hardware
 signing) — this is about the duplicated protocol code, not the key storage.
 
 Context: PR #2063's consolidation-sweep findings; `approve-core.test.ts` (13
