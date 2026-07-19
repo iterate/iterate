@@ -75,15 +75,17 @@ export class TanstackTodos extends IterateDurableObject {
     this.#live.setState({ todos: this.#load() });
   }
 
-  addTodo(title: string): void {
+  addTodo(title: string): string | undefined {
     const trimmed = title.trim().slice(0, 500);
     if (trimmed.length === 0) return;
+    const id = crypto.randomUUID();
     this.#db.insert({
-      id: crypto.randomUUID(),
+      id,
       title: trimmed,
       createdAt: new Date().toISOString(),
     });
     this.#refresh();
+    return id;
   }
 
   setTodoDone(id: string, done: boolean): void {
@@ -143,8 +145,8 @@ class TodoSession extends RpcTarget {
     return this.app.liveStateTarget();
   }
 
-  async add(title: string): Promise<void> {
-    this.app.addTodo(title);
+  async add(title: string): Promise<string | undefined> {
+    return this.app.addTodo(title);
   }
 
   async setDone(id: string, done: boolean): Promise<void> {

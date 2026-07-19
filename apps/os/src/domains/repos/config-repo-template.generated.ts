@@ -1111,7 +1111,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "/** What the browser holds after authenticating the /api Cap'n Web session. */\n" +
       "export type TodoSessionApi = {\n" +
       "  liveState: LiveStateRpc<TodoListState>;\n" +
-      "  add(title: string): Promise<void>;\n" +
+      "  add(title: string): Promise<string | undefined>;\n" +
       "  setDone(id: string, done: boolean): Promise<void>;\n" +
       "  rename(id: string, title: string): Promise<void>;\n" +
       "  remove(id: string): Promise<void>;\n" +
@@ -1317,7 +1317,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/tanstack/src/routes/index.tsx",
     content:
       "import { createFileRoute } from \"@tanstack/react-router\";\n" +
-      "import { useState } from \"react\";\n" +
+      "import { useEffect, useState } from \"react\";\n" +
       "import { useTodos } from \"../lib/use-todos.ts\";\n" +
       "\n" +
       "export const Route = createFileRoute(\"/\")({ component: Todos });\n" +
@@ -1325,10 +1325,35 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// The project's shared todo list. Rows live in the app's Durable Object\n" +
       "// SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the\n" +
       "// app cookie, and stays live — every project member's tab converges.\n" +
-      "function Todos() {\n" +
+      "export function Todos() {\n" +
       "  const { todos, api, error } = useTodos();\n" +
       "  const [draft, setDraft] = useState(\"\");\n" +
+      "  const [pendingAdd, setPendingAdd] = useState<{\n" +
+      "    id: string | null;\n" +
+      "    title: string;\n" +
+      "  } | null>(null);\n" +
+      "  const [mutationError, setMutationError] = useState<string | null>(null);\n" +
       "  const remaining = todos?.filter((todo) => !todo.done).length ?? 0;\n" +
+      "  const visibleError = error ?? mutationError;\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    if (\n" +
+      "      pendingAdd?.id !== null &&\n" +
+      "      pendingAdd?.id !== undefined &&\n" +
+      "      todos?.some((todo) => todo.id === pendingAdd.id)\n" +
+      "    ) {\n" +
+      "      setPendingAdd(null);\n" +
+      "    }\n" +
+      "  }, [pendingAdd, todos]);\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    if (pendingAdd === null) return;\n" +
+      "    const timeout = window.setTimeout(() => {\n" +
+      "      setPendingAdd(null);\n" +
+      "      setMutationError(\"Adding this todo is taking too long. Reload before retrying.\");\n" +
+      "    }, 15_000);\n" +
+      "    return () => window.clearTimeout(timeout);\n" +
+      "  }, [pendingAdd]);\n" +
       "\n" +
       "  return (\n" +
       "    <main className=\"mx-auto max-w-xl px-4 py-12\">\n" +
@@ -1350,9 +1375,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              : `${remaining} of ${todos.length} left`}\n" +
       "      </p>\n" +
       "\n" +
-      "      {error !== null ? (\n" +
-      "        <p className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\">\n" +
-      "          {error}\n" +
+      "      {visibleError !== null ? (\n" +
+      "        <p\n" +
+      "          className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\"\n" +
+      "          data-type=\"error\"\n" +
+      "        >\n" +
+      "          {visibleError}\n" +
       "        </p>\n" +
       "      ) : null}\n" +
       "\n" +
@@ -1360,10 +1388,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        className=\"mt-8 flex gap-3\"\n" +
       "        onSubmit={(event) => {\n" +
       "          event.preventDefault();\n" +
-      "          if (api && draft.trim()) {\n" +
-      "            void api.add(draft);\n" +
-      "            setDraft(\"\");\n" +
-      "          }\n" +
+      "          const title = draft.trim().slice(0, 500);\n" +
+      "          if (api === null || title === \"\" || pendingAdd !== null) return;\n" +
+      "          setMutationError(null);\n" +
+      "          setPendingAdd({\n" +
+      "            id: null,\n" +
+      "            title,\n" +
+      "          });\n" +
+      "          setDraft(\"\");\n" +
+      "          void api\n" +
+      "            .add(title)\n" +
+      "            .then((id) => {\n" +
+      "              if (id === undefined) throw new Error(\"The todo was not added.\");\n" +
+      "              setPendingAdd((current) => (current === null ? null : { ...current, id }));\n" +
+      "            })\n" +
+      "            .catch((thrown: unknown) => {\n" +
+      "              setPendingAdd(null);\n" +
+      "              setMutationError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
+      "            });\n" +
       "        }}\n" +
       "      >\n" +
       "        <input\n" +
@@ -1372,16 +1414,22 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          onChange={(event) => setDraft(event.target.value)}\n" +
       "          placeholder=\"add a todo\"\n" +
       "          aria-label=\"add a todo\"\n" +
-      "          disabled={api === null}\n" +
+      "          disabled={api === null || pendingAdd !== null}\n" +
       "        />\n" +
       "        <button\n" +
       "          type=\"submit\"\n" +
       "          className=\"rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40\"\n" +
-      "          disabled={api === null || draft.trim() === \"\"}\n" +
+      "          disabled={api === null || draft.trim() === \"\" || pendingAdd !== null}\n" +
       "        >\n" +
       "          add\n" +
       "        </button>\n" +
       "      </form>\n" +
+      "\n" +
+      "      {pendingAdd !== null ? (\n" +
+      "        <p className=\"mt-2 text-sm text-slate-500\" data-spinner=\"true\" aria-live=\"polite\">\n" +
+      "          adding “{pendingAdd.title}”…\n" +
+      "        </p>\n" +
+      "      ) : null}\n" +
       "\n" +
       "      {todos !== undefined && todos.length > 0 ? (\n" +
       "        <ul className=\"mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-sm\">\n" +
@@ -1507,15 +1555,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    this.#live.setState({ todos: this.#load() });\n" +
       "  }\n" +
       "\n" +
-      "  addTodo(title: string): void {\n" +
+      "  addTodo(title: string): string | undefined {\n" +
       "    const trimmed = title.trim().slice(0, 500);\n" +
       "    if (trimmed.length === 0) return;\n" +
+      "    const id = crypto.randomUUID();\n" +
       "    this.#db.insert({\n" +
-      "      id: crypto.randomUUID(),\n" +
+      "      id,\n" +
       "      title: trimmed,\n" +
       "      createdAt: new Date().toISOString(),\n" +
       "    });\n" +
       "    this.#refresh();\n" +
+      "    return id;\n" +
       "  }\n" +
       "\n" +
       "  setTodoDone(id: string, done: boolean): void {\n" +
@@ -1575,8 +1625,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return this.app.liveStateTarget();\n" +
       "  }\n" +
       "\n" +
-      "  async add(title: string): Promise<void> {\n" +
-      "    this.app.addTodo(title);\n" +
+      "  async add(title: string): Promise<string | undefined> {\n" +
+      "    return this.app.addTodo(title);\n" +
       "  }\n" +
       "\n" +
       "  async setDone(id: string, done: boolean): Promise<void> {\n" +

@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTodos } from "../lib/use-todos.ts";
 
 export const Route = createFileRoute("/")({ component: Todos });
@@ -7,10 +7,35 @@ export const Route = createFileRoute("/")({ component: Todos });
 // The project's shared todo list. Rows live in the app's Durable Object
 // SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the
 // app cookie, and stays live — every project member's tab converges.
-function Todos() {
+export function Todos() {
   const { todos, api, error } = useTodos();
   const [draft, setDraft] = useState("");
+  const [pendingAdd, setPendingAdd] = useState<{
+    id: string | null;
+    title: string;
+  } | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const remaining = todos?.filter((todo) => !todo.done).length ?? 0;
+  const visibleError = error ?? mutationError;
+
+  useEffect(() => {
+    if (
+      pendingAdd?.id !== null &&
+      pendingAdd?.id !== undefined &&
+      todos?.some((todo) => todo.id === pendingAdd.id)
+    ) {
+      setPendingAdd(null);
+    }
+  }, [pendingAdd, todos]);
+
+  useEffect(() => {
+    if (pendingAdd === null) return;
+    const timeout = window.setTimeout(() => {
+      setPendingAdd(null);
+      setMutationError("Adding this todo is taking too long. Reload before retrying.");
+    }, 15_000);
+    return () => window.clearTimeout(timeout);
+  }, [pendingAdd]);
 
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
@@ -32,9 +57,12 @@ function Todos() {
               : `${remaining} of ${todos.length} left`}
       </p>
 
-      {error !== null ? (
-        <p className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
+      {visibleError !== null ? (
+        <p
+          className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          data-type="error"
+        >
+          {visibleError}
         </p>
       ) : null}
 
@@ -42,10 +70,24 @@ function Todos() {
         className="mt-8 flex gap-3"
         onSubmit={(event) => {
           event.preventDefault();
-          if (api && draft.trim()) {
-            void api.add(draft);
-            setDraft("");
-          }
+          const title = draft.trim().slice(0, 500);
+          if (api === null || title === "" || pendingAdd !== null) return;
+          setMutationError(null);
+          setPendingAdd({
+            id: null,
+            title,
+          });
+          setDraft("");
+          void api
+            .add(title)
+            .then((id) => {
+              if (id === undefined) throw new Error("The todo was not added.");
+              setPendingAdd((current) => (current === null ? null : { ...current, id }));
+            })
+            .catch((thrown: unknown) => {
+              setPendingAdd(null);
+              setMutationError(thrown instanceof Error ? thrown.message : String(thrown));
+            });
         }}
       >
         <input
@@ -54,16 +96,22 @@ function Todos() {
           onChange={(event) => setDraft(event.target.value)}
           placeholder="add a todo"
           aria-label="add a todo"
-          disabled={api === null}
+          disabled={api === null || pendingAdd !== null}
         />
         <button
           type="submit"
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={api === null || draft.trim() === ""}
+          disabled={api === null || draft.trim() === "" || pendingAdd !== null}
         >
           add
         </button>
       </form>
+
+      {pendingAdd !== null ? (
+        <p className="mt-2 text-sm text-slate-500" data-spinner="true" aria-live="polite">
+          adding “{pendingAdd.title}”…
+        </p>
+      ) : null}
 
       {todos !== undefined && todos.length > 0 ? (
         <ul className="mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-sm">
