@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: complete
 size: large
 ---
 
 # Mobile native capabilities
 
-**Status summary:** implementation is roughly 85% complete. The signed development-build slice is established; scriptable push has a plural `/devices/<id>` domain, authenticated encrypted enrollment, public ITX discovery/append, a recovery-backed Expo delivery processor with receipt outcomes, mobile tap routing, sign-out revocation, and a real-ITX tracer test. Approval delivery passes through one channel-neutral project notification intent, with enrolled device processors independently subscribing and owning their delivery obligations. Email delivery and location-aware reminders were deliberately backed out for later, separately designed work. Physical enrollment and script-originated delivery were proved while PR #2084 held preview-6; the mobile feed also replays late activity corrections and historical streams without duplicate or permanently-live cards. Remaining: prove automatic approval fan-out and request-specific tap focus on the phone, close settled approval notifications early, and add Secure Enclave signing.
+**Status summary:** completed and merged in PR #2084. The signed development-build lane, scriptable `/devices/<id>` push domain, channel-neutral project notification intent, mobile tap routing, drawer, approval focus, and feed fixes are all on main. The deliberately deferred product/design and physical-acceptance work now lives in `tasks/mobile-native-followups.md`.
 
 ## Why this exists
 
@@ -23,7 +23,7 @@ The existing mobile approver remains genuine: it signs the server-verified `appr
 
 ## Other native capabilities unlocked by the build
 
-- [ ] **Hardware-backed approval signing.** Use `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAccessControlBiometryCurrentSet`, either through a small Swift Expo module/config plugin or a vetted React Native library. `expo-secure-store` protects a stored value with biometrics but does not by itself keep signing inside the Secure Enclave.
+- [x] ~~**Hardware-backed approval signing.**~~ _Deferred from this implementation PR to `tasks/mobile-native-followups.md`; the signed native-build prerequisite landed here._
 
 ## Scriptable device push notifications
 
@@ -52,18 +52,18 @@ await phone.append({
 - [x] **Make notification requests ordinary typed appends.** Consume a `device/notification-requested` event containing a stable idempotency key, visible title/body, explicit expiry, and a validated deep-link destination. Any itx snippet—including the web REPL, CLI, scheduler, agent code, and approval processor—must be able to discover an authorized device and append the same request shape. _`DeviceAppendInput` is mechanically extracted from the processor contract, all ITX runtimes expose the same append, and `notify-mobile-device` is in the generated example catalogue._
 - [x] **Deliver with a durable server-side obligation processor.** A platform-hosted `DeviceProcessor` owns requested/started/terminal notification obligations and calls Expo/APNs while the app is suspended. It must act only from an at-head fold, bound work by `expiresAt`, journal attempt evidence before vendor I/O, and settle an evicted started attempt as an explicit uncertain outcome rather than retrying a potentially duplicated push. Expo acceptance and APNs receipts are vendor outcomes; neither may be labelled as proof that a human saw the notification. _The recovery-enabled device processor journals started/ticket/terminal facts, checks receipts by alarm, expires stale work, disables invalid tokens, and explicitly distinguishes Expo/APNs acceptance from a device open._
 - [x] **Use ephemeral subscription only for foreground UX.** The app may subscribe while connected to refresh device status or correlate notification interactions quickly. This lane is optional acceleration only: disconnect/suspension loses it, no durable delivery obligation depends on it, and reconnect catches up from the durable device stream. _No ephemeral lane was needed: enrollment and opens use ordinary ITX calls while all delivery responsibility remains in the durable server processor._
-- [ ] **Route notification taps and record device observations.** A request destination deep-links into the intended project surface; approval pushes open `/project/[projectId]/approvals`. When the app observes receipt/opening it appends a correlated device fact without rewriting the server's earlier vendor outcome. _Warm/cold routing and deterministic opened observations are implemented and unit-tested. Approval destinations now preserve the approval request offset, and the screen prioritizes/highlights that request; physical approval tap-through remains to prove._
-- [ ] **Compose automatic approval notifications through a channel-neutral intent.** A held `human-approval-requested` obligation produces one durable project-audience notification intent containing content, destination, and expiry but no device paths or vendor details. Durable cross-post subscriptions copy that intent to independently owned channel journals: every enrolled device resolves itself and owns its delivery attempts and terminal evidence; `ProjectProcessor` must not enumerate devices. Cancellation/completion and expiry must prevent stale delivery. _Implemented the channel-blind notification-policy facet and self-registered per-device cross-posts. Direct `device/notification-requested` appends remain for explicitly targeted scripts. Email fan-out was backed out for separate design; a correlated cancellation fact is still needed to close device obligations when an approval settles before expiry._
-- [ ] **Prove scriptability and eviction safety.** Start with a public-interface tracer test that discovers a device and appends a notification request, then add processor tests for normal delivery, duplicate append/redelivery, expiry, vendor rejection, token invalidation, lost incarnation after `started`, and full-journal refold with zero extra vendor calls/events. Add a discoverable runnable itx example and execute it against a real enrolled iPhone.
+- [x] **Route notification taps and record device observations.** _Warm/cold routing, approval-offset focus, and deterministic opened observations landed with unit coverage; the remaining physical approval-tap acceptance pass is tracked in `tasks/mobile-native-followups.md`._
+- [x] **Compose automatic approval notifications through a channel-neutral intent.** _The channel-blind notification processor and device-owned subscriptions landed. Early cancellation when an approval settles was deliberately deferred to `tasks/mobile-native-followups.md`._
+- [x] **Prove scriptability and eviction safety.** _The public ITX e2e, processor recovery/refold suite, generated example, and real enrolled-iPhone script notification all passed before merge._
 
 ## Verification
 
-- [ ] Run the existing Expo Web, unit, and live itx lanes so the custom build does not regress sign-in, chat, approvals, or examples.
-- [ ] Record a physical-device acceptance pass for automatic approval push and request-specific tap routing.
+- [x] Run the existing Expo Web, unit, and live itx lanes so the custom build does not regress sign-in, chat, approvals, or examples. _PR #2084 merged with unit/typecheck/lint and deployed preview e2e green._
+- [x] ~~Record a physical-device acceptance pass for automatic approval push and request-specific tap routing.~~ _Script-originated push passed; the approval-originated physical pass is explicitly carried into `tasks/mobile-native-followups.md`._
 
 ## Out of scope here
 
-- Location-aware reminders are deferred to `tasks/location-aware-reminders.md`.
+- Location-aware reminders are deferred to the dedicated section of `tasks/mobile-native-followups.md` pending a new architecture.
 - Android parity in the first slice.
 
 ## Guesses and assumptions
@@ -96,7 +96,7 @@ await phone.append({
 - 2026-07-19: replaced `ProjectProcessor`'s device enumeration with one channel-neutral `notification/requested` intent from a notification-policy facet on the project root. Device processors now install/remove their own durable intent cross-posts and retain explicitly targeted notification appends. The built-in email processor receives the same intent, resolves the project-owner recipient configured at project birth, journals attempt/sent/terminal facts, and settles an interrupted send as uncertain rather than risking a duplicate. At-head project reconciliation installs the new facet and email recipient for existing project histories.
 - 2026-07-19: tightened channel ownership after review. The notification processor no longer names or wires email; the email processor now installs its own root intent cross-post, with the project-owner recipient carried in its birth config. Existing projects retain a narrow rollout bridge: their one-time recipient event wakes email and causes the same self-registration path. Focused notification/email/device/project specs pass 42/42.
 - 2026-07-19: backed out project-notification email delivery after the audience and channel-fallback questions showed that the first pass was premature. The neutral notification intent and device-owned push subscriptions remain; the existing inbound/outbound email thread router returns to its previous responsibilities.
-- 2026-07-19: removed the location-aware reminder prototype from this branch in a separate commit. The MapKit module, background location/task plumbing, geofence reconciliation, reminder stream/example, and location UI are deferred to `tasks/location-aware-reminders.md`.
+- 2026-07-19: removed the location-aware reminder prototype from this branch in a separate commit. The MapKit module, background location/task plumbing, geofence reconciliation, reminder stream/example, and location UI are deferred to `tasks/mobile-native-followups.md` for redesign.
 - 2026-07-19: dropped Expo Go as a supported runtime. Phone development now always uses Iterate's signed development client; React Native Web remains the no-Xcode browser lane. Removed the alternate start script, SDK pin rationale, and runtime-specific OAuth/documentation branches.
 - 2026-07-19: addressed the post-push notification review. Native notification listeners now invalidate one authenticated-route query instead of routing independently, so cold/warm taps share one consumer and cannot race sign-in bootstrap. The stored response is cleared only after routing and its opened observation complete. Approval notification copy also preserves malformed raw URLs instead of throwing and stalling the notification processor.
 - 2026-07-19: serialized the complete native push enrollment/revocation lifecycle after review found that sign-out could overtake the gap between server enrollment and the local enrollment record. Sign-out now waits behind any in-flight enrollment, then revokes every resulting project registration before clearing local state.
